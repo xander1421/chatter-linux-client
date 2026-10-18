@@ -15,9 +15,11 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
-import { SearchResultChannel, SearchResultItem } from "join_channel.slint";
+import { SearchResultChannel } from "join_channel.slint";
+import { ChannelAccessChoices } from "channel_access_choices.slint";
+import { ChannelIdentityFields } from "channel_identity_fields.slint";
+import { JoinChannelTab } from "join_channel_tab.slint";
 import { AiIntegrationGlobal } from "../ai/ai_global.slint";
-import { MembershipGlobal } from "../chat/membership_global.slint";
 
 // Friend data for private group selection (matches FriendData)
 export struct PrivateGroupFriend {
@@ -116,13 +118,9 @@ export component CreateChannelModal inherits Rectangle {
     // Derived flags
     property <bool> is-private-group: root.access-mode == "private-group";
     property <bool> is-invite: root.access-mode == "invite";
-    property <bool> is-open: root.access-mode == "open";
 
     // Collapsible "More options"
     property <bool> more-options-expanded: false;
-
-    // Bumped by the name field's Done to move focus to Description.
-    property <int> description-focus-requests: 0;
 
     // Reset on close
     changed show-modal => {
@@ -240,274 +238,18 @@ export component CreateChannelModal inherits Rectangle {
             create-body := VerticalLayout {
             spacing: Spacing.lg;
 
-            // ============================================================
-            // Identity row: icon + name + description
-            // ============================================================
-            HorizontalLayout {
-                spacing: Spacing.md;
-
-                // Icon upload (64px)
-                VerticalLayout {
-                    horizontal-stretch: 0;
-                    alignment: center;
-                    spacing: Spacing.xs;
-
-                    Rectangle {
-                        width: 64px;
-                        height: 64px;
-                        border-radius: Spacing.radius-md;
-                        background: Colors.inset;
-                        clip: true;
-
-                        if root.has-icon-preview: Image {
-                            source: root.icon-preview;
-                            width: 100%;
-                            height: 100%;
-                            image-fit: cover;
-                        }
-
-                        if !root.has-icon-preview: Image {
-                            source: Icons.image;
-                            width: 24px;
-                            height: 24px;
-                            colorize: Colors.text-muted;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        icon-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.pick-channel-icon(); }
-                        }
-                    }
-
-                    Text {
-                        text: root.has-icon-preview ? "Change" : "Upload";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
-                        width: 64px;
-                    }
-                }
-
-                // Name + description stack
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: Spacing.sm;
-
-                    // The IME's Done/Enter arrives as `accepted`. Without a
-                    // handler it did nothing, and on a phone the keyboard then
-                    // could not be dismissed over "Who can join?". Done moves
-                    // to Description; Done there (or on a group's name, which
-                    // has none) puts the keyboard away.
-                    name-input := Input {
-                        placeholder: root.is-private-group ? "Group name" : "Channel name";
-                        text <=> root.channel-name;
-                        error: root.error-message != "" && root.channel-name == "";
-                        error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
-                        accepted => {
-                            if root.is-private-group {
-                                modal.release-focus();
-                            } else {
-                                root.description-focus-requests += 1;
-                            }
-                        }
-                    }
-
-                    // Inside an `if`, so the name field cannot call its
-                    // focus() directly; it bumps this counter instead.
-                    Input {
-                        visible: !root.is-private-group;
-                        height: root.is-private-group ? 0px : Spacing.button-height;
-                        property <int> focus-requests: root.description-focus-requests;
-                        changed focus-requests => { self.focus(); }
-                        placeholder: "Description (optional)";
-                        text <=> root.channel-description;
-                        accepted => { modal.release-focus(); }
-                    }
-                }
+            identity := ChannelIdentityFields {
+                channel-name <=> root.channel-name;
+                channel-description <=> root.channel-description;
+                error-message: root.error-message;
+                is-private-group: root.is-private-group;
+                icon-preview: root.icon-preview;
+                has-icon-preview: root.has-icon-preview;
+                pick-channel-icon => { root.pick-channel-icon(); }
+                release-focus => { modal.release-focus(); }
             }
 
-            // ============================================================
-            // Access model — 3 options, stacked as full-width rows. Side by
-            // side at a fixed height their descriptions overflowed on a phone.
-            // ============================================================
-            VerticalLayout {
-                spacing: Spacing.xs;
-
-                Text {
-                    text: "Who can join?";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
-                }
-
-                VerticalLayout {
-                    spacing: Spacing.sm;
-
-                    // Open
-                    Rectangle {
-                        border-radius: Spacing.radius-md;
-                        border-width: root.is-open ? Spacing.stroke : 0px;
-                        border-color: Colors.primary;
-                        background: root.is-open ? Colors.inset : (open-touch.pressed ? Materials.pressed : open-touch.has-hover ? Colors.surface-hover : Colors.surface);
-                        transform-scale-x: open-touch.pressed ? 0.985 : 1;
-                        transform-scale-y: open-touch.pressed ? 0.96 : 1;
-                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
-                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-
-                        VerticalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.xxs;
-                            alignment: center;
-
-                            HorizontalLayout {
-                                spacing: Spacing.xs;
-                                Image {
-                                    source: Icons.globe;
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: root.is-open ? Colors.primary : Colors.text-secondary;
-                                }
-                                Text {
-                                    text: "Open";
-                                    color: root.is-open ? Colors.primary : Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.semibold;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "Anyone finds and joins. New members see messages from when they join.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
-                            }
-                        }
-
-                        open-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.access-mode = "open"; }
-                        }
-                    }
-
-                    // Invite-only
-                    Rectangle {
-                        border-radius: Spacing.radius-md;
-                        border-width: root.is-invite ? Spacing.stroke : 0px;
-                        border-color: Colors.primary;
-                        background: root.is-invite ? Colors.inset : (invite-touch.pressed ? Materials.pressed : invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
-                        transform-scale-x: invite-touch.pressed ? 0.985 : 1;
-                        transform-scale-y: invite-touch.pressed ? 0.96 : 1;
-                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
-                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-
-                        VerticalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.xxs;
-                            alignment: center;
-
-                            HorizontalLayout {
-                                spacing: Spacing.xs;
-                                Image {
-                                    source: Icons.lock;
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: root.is-invite ? Colors.primary : Colors.text-secondary;
-                                }
-                                Text {
-                                    text: "Invite-only";
-                                    color: root.is-invite ? Colors.primary : Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.semibold;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "Hidden from discovery. Invite or password to join.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
-                            }
-                        }
-
-                        invite-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.access-mode = "invite"; }
-                        }
-                    }
-
-                    // Private group
-                    Rectangle {
-                        border-radius: Spacing.radius-md;
-                        border-width: root.is-private-group ? Spacing.stroke : 0px;
-                        border-color: Colors.primary;
-                        background: root.is-private-group ? Colors.inset : (pg-touch.pressed ? Materials.pressed : pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
-                        transform-scale-x: pg-touch.pressed ? 0.985 : 1;
-                        transform-scale-y: pg-touch.pressed ? 0.96 : 1;
-                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
-                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-
-                        VerticalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.xxs;
-                            alignment: center;
-
-                            HorizontalLayout {
-                                spacing: Spacing.xs;
-                                Image {
-                                    source: Icons.shield;
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: root.is-private-group ? Colors.group-accent : Colors.text-secondary;
-                                }
-                                Text {
-                                    text: "Anon group";
-                                    color: root.is-private-group ? Colors.group-accent : Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.semibold;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Text {
-                                text: "End-to-end encrypted. Server can't see it exists.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
-                            }
-                        }
-
-                        pg-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.access-mode = "private-group"; }
-                        }
-                    }
-                }
-
-                // Encryption badge (open = no badge; invite/private-group = encrypted badge)
-                if root.is-invite || root.is-private-group: HorizontalLayout {
-                    spacing: Spacing.xs;
-                    alignment: start;
-                    Image {
-                        source: Icons.shield;
-                        width: 12px;
-                        height: 12px;
-                        colorize: Colors.success;
-                        y: 2px;
-                    }
-                    Text {
-                        text: "End-to-end encrypted";
-                        color: Colors.success;
-                        font-size: Typography.xs;
-                    }
-                }
-            }
+            ChannelAccessChoices { access-mode <=> root.access-mode; }
 
             // ============================================================
             // Invite-only → password reveal
@@ -993,11 +735,11 @@ export component CreateChannelModal inherits Rectangle {
                 if root.is-private-group: Button {
                     text: root.loading ? "" : "Create group";
                     variant: "primary";
-                    disabled: name-input.composed-text == "" || root.selected-friend-count == 0 || root.loading;
+                    disabled: identity.composed-name == "" || root.selected-friend-count == 0 || root.loading;
                     loading: root.loading;
                     clicked => {
-                        if name-input.composed-text != "" && root.selected-friend-count > 0 && !root.loading {
-                            root.create-private-group(name-input.composed-text, root.available-friends);
+                        if identity.composed-name != "" && root.selected-friend-count > 0 && !root.loading {
+                            root.create-private-group(identity.composed-name, root.available-friends);
                         }
                     }
                 }
@@ -1006,12 +748,12 @@ export component CreateChannelModal inherits Rectangle {
                 if !root.is-private-group: Button {
                     text: root.loading ? "" : "Create";
                     variant: "primary";
-                    disabled: name-input.composed-text == "" || root.loading || (root.use-ai && (root.ai-provider == "" || root.ai-model == ""));
+                    disabled: identity.composed-name == "" || root.loading || (root.use-ai && (root.ai-provider == "" || root.ai-model == ""));
                     loading: root.loading;
                     clicked => {
-                        if name-input.composed-text != "" && !root.loading && !(root.use-ai && (root.ai-provider == "" || root.ai-model == "")) {
+                        if identity.composed-name != "" && !root.loading && !(root.use-ai && (root.ai-provider == "" || root.ai-model == "")) {
                             root.create(
-                                name-input.composed-text,
+                                identity.composed-name,
                                 root.channel-description,
                                 root.use-ai ? "ai-assistant" : (root.use-ephemeral ? "ephemeral" : "general"),
                                 {
@@ -1031,213 +773,16 @@ export component CreateChannelModal inherits Rectangle {
             }
             }
 
-            // ============================================================
-            // JOIN TAB
-            // ============================================================
-            if root.active-tab == 1: VerticalLayout {
-                spacing: Spacing.md;
-
-                // Search input
-                VerticalLayout {
-                    spacing: Spacing.xs;
-                    vertical-stretch: 0;
-
-                    Text {
-                        text: "Search channels, or paste a channel ID or invite link";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                    }
-
-                    Input {
-                        placeholder: "Name, channel ID or chatter://join/ link";
-                        text <=> root.join-search-query;
-
-                        edited(text) => {
-                            root.join-search(text);
-                        }
-
-                        accepted(text) => {
-                            if root.join-search-query.character-count >= 32 {
-                                root.join-channel(root.join-search-query);
-                            }
-                        }
-                    }
-                }
-
-                // Results take the sheet's spare height, keeping Create and
-                // Join the same size while the selection slides between them.
-                Rectangle {
-                    vertical-stretch: 1;
-                    // The children below are free-positioned at height: 100%,
-                    // so on a phone-height dialog this box shrinks and its
-                    // centred text spilled straight over the Cancel/Join
-                    // footer (§112r). Floor the height and clip the overflow.
-                    min-height: 104px;
-                    clip: true;
-
-                    // Loading state
-                    if root.join-searching: Rectangle {
-                        width: 100%;
-                        height: 100%;
-
-                        Text {
-                            text: "Searching...";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: 100%;
-                            height: 100%;
-                        }
-                    }
-
-                    // Error state
-                    if !root.join-searching && root.join-error != "": Rectangle {
-                        width: 100%;
-                        height: 100%;
-
-                        Text {
-                            text: root.join-error;
-                            color: Colors.error;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: 100%;
-                            height: 100%;
-                        }
-                    }
-
-                    // Empty state
-                    // A pasted invite link: nothing to search, Join uses it.
-                    if !root.join-searching && root.join-error == "" && MembershipGlobal.join-input-is-link: Rectangle {
-                        width: 100%;
-                        height: 100%;
-
-                        VerticalLayout {
-                            spacing: Spacing.sm;
-                            alignment: center;
-
-                            Text {
-                                text: "Invite link";
-                                color: Colors.text-primary;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Press Join to use it. Anyone holding this link can join the channel.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                horizontal-alignment: center;
-                                width: 100%;
-                                wrap: word-wrap;
-                            }
-                        }
-                    }
-
-                    if !root.join-searching && root.join-error == "" && root.join-results.length == 0 && root.join-search-query != "" && !MembershipGlobal.join-input-is-link: Rectangle {
-                        width: 100%;
-                        height: 100%;
-
-                        VerticalLayout {
-                            spacing: Spacing.sm;
-                            alignment: center;
-
-                            Text {
-                                text: "No channels found";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Try a different search or paste a channel ID";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                horizontal-alignment: center;
-                                width: 100%;
-                                wrap: word-wrap;
-                            }
-                        }
-                    }
-
-                    // Initial state (no search yet)
-                    if !root.join-searching && root.join-search-query == "" && root.join-results.length == 0: Rectangle {
-                        width: 100%;
-                        height: 100%;
-
-                        VerticalLayout {
-                            spacing: Spacing.sm;
-                            alignment: center;
-
-                            Text {
-                                text: "Search for public channels";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-
-                            Text {
-                                text: "Enter a channel name or paste a channel ID to join directly";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                horizontal-alignment: center;
-                                width: 100%;
-                                wrap: word-wrap;
-                            }
-                        }
-                    }
-
-                    // Results list
-                    if !root.join-searching && root.join-results.length > 0: Flickable {
-                        viewport-height: join-results-layout.preferred-height;
-
-                        join-results-layout := VerticalLayout {
-                            spacing: Spacing.sm;
-
-                            for channel in root.join-results: SearchResultItem {
-                                channel-id: channel.id;
-                                name: channel.name;
-                                description: channel.description;
-                                member-count: channel.member-count;
-                                icon: channel.icon;
-                                has-icon: channel.has-icon;
-                                selected: channel.id == root.join-selected-id;
-
-                                clicked => {
-                                    root.join-selected-id = channel.id;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Footer with action buttons
-                HorizontalLayout {
-                    spacing: Spacing.md;
-                    height: 40px;
-
-                    Rectangle { horizontal-stretch: 1; }
-
-                    Button {
-                        text: "Cancel";
-                        variant: "secondary";
-                        clicked => { root.close(); }
-                    }
-
-                    Button {
-                        text: root.join-joining ? "" : "Join";
-                        variant: "primary";
-                        disabled: root.join-selected-id == "" || root.join-joining;
-                        loading: root.join-joining;
-
-                        clicked => {
-                            if root.join-selected-id != "" && !root.join-joining {
-                                root.join-channel(root.join-selected-id);
-                            }
-                        }
-                    }
-                }
+            if root.active-tab == 1: JoinChannelTab {
+                join-search-query <=> root.join-search-query;
+                join-results: root.join-results;
+                join-searching: root.join-searching;
+                join-error: root.join-error;
+                join-selected-id <=> root.join-selected-id;
+                join-joining: root.join-joining;
+                join-search(query) => { root.join-search(query); }
+                join-channel(id) => { root.join-channel(id); }
+                close => { root.close(); }
             }
         }
     }
