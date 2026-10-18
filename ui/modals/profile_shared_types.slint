@@ -1,0 +1,33 @@
+import { Icons } from "../theme/icons.slint";
+
+// One tile (Media/GIFs) or row (Files/Links/Voice/Music) of the shared-content
+// tabs. Built by `chatter_core::ui::SharedContentItemData` — every string here
+// arrives display-ready.
+export struct SharedContentItem {
+    message-id: string,
+    attachment-id: string,
+    category: string,
+    title: string,
+    subtitle: string,
+    thumbnail: image,
+    has-thumbnail: bool,
+    is-video: bool,
+}
+
+// One segment of the tab strip. Core decides which tabs exist (only non-empty
+// ones) and in what order.
+export struct SharedTab {
+    id: string,
+    label: string,
+    count: int,
+}
+
+export global ProfileSharedIcons {
+    // Category glyph for a list row / a media tile with no thumbnail.
+    public pure function category-icon(c: string) -> image {
+        if c == "link" { return Icons.link; }
+        else if c == "voice" || c == "music" { return Icons.mic; }
+        else if c == "media" || c == "gif" { return Icons.image; }
+        else { return Icons.file; }
+    }
+}
