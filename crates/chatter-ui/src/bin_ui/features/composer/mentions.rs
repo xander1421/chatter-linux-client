@@ -11,76 +11,90 @@ use crate::{MainWindow, MentionSuggestion};
 pub(crate) fn wire_mention_triggered(window: &MainWindow, ui_ctx: Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
-    window.on_mention_triggered(move |query: SharedString| {
-        let query_str = query.to_string();
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::ChatPane>()
+        .on_mention_triggered(move |query: SharedString| {
+            let query_str = query.to_string();
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
 
-        if query_str.is_empty() {
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_mention_autocomplete_visible(false);
-                }
-            });
-            return;
-        }
-
-        tracing::debug!("Mention triggered with query: {}", query_str);
-
-        // Spawn async task to fetch channel members
-        tokio::spawn(async move {
-            // Fetch raw suggestion data (Send-safe)
-            let raw_suggestions = fetch_mention_suggestions_raw(&query_str, &ui_ctx).await;
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    if raw_suggestions.is_empty() {
-                        w.set_mention_autocomplete_visible(false);
-                    } else {
-                        let suggestions: Vec<MentionSuggestion> = raw_suggestions
-                            .into_iter()
-                            .map(|(id, name, mention_type, has_avatar)| MentionSuggestion {
-                                id: id.into(),
-                                name: name.into(),
-                                mention_type: mention_type.into(),
-                                avatar: slint::Image::default(),
-                                has_avatar,
-                            })
-                            .collect();
-
-                        w.set_mention_suggestions(slint::ModelRc::new(slint::VecModel::from(
-                            suggestions,
-                        )));
-                        w.set_mention_selected_index(0);
-                        w.set_mention_autocomplete_visible(true);
-                        w.set_composer_emoji_picker_visible(false);
-                        w.set_composer_gif_picker_visible(false);
+            if query_str.is_empty() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::ChatPane>()
+                            .set_mention_autocomplete_visible(false);
                     }
-                }
+                });
+                return;
+            }
+
+            tracing::debug!("Mention triggered with query: {}", query_str);
+
+            // Spawn async task to fetch channel members
+            tokio::spawn(async move {
+                // Fetch raw suggestion data (Send-safe)
+                let raw_suggestions = fetch_mention_suggestions_raw(&query_str, &ui_ctx).await;
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if raw_suggestions.is_empty() {
+                            w.global::<crate::ChatPane>()
+                                .set_mention_autocomplete_visible(false);
+                        } else {
+                            let suggestions: Vec<MentionSuggestion> = raw_suggestions
+                                .into_iter()
+                                .map(|(id, name, mention_type, has_avatar)| MentionSuggestion {
+                                    id: id.into(),
+                                    name: name.into(),
+                                    mention_type: mention_type.into(),
+                                    avatar: slint::Image::default(),
+                                    has_avatar,
+                                })
+                                .collect();
+
+                            w.global::<crate::ChatPane>().set_mention_suggestions(
+                                slint::ModelRc::new(slint::VecModel::from(suggestions)),
+                            );
+                            w.global::<crate::ChatPane>().set_mention_selected_index(0);
+                            w.global::<crate::ChatPane>()
+                                .set_mention_autocomplete_visible(true);
+                            w.global::<crate::ChatPane>()
+                                .set_composer_emoji_picker_visible(false);
+                            w.global::<crate::ChatPane>()
+                                .set_composer_gif_picker_visible(false);
+                        }
+                    }
+                });
             });
         });
-    });
 }
 
 pub(crate) fn wire_mention_selected(window: &MainWindow) {
     let weak_window = window.as_weak();
 
-    window.on_mention_suggestion_selected(move |_id: SharedString, display: SharedString| {
-        let weak = weak_window.clone();
-        let display_str = display.to_string();
-        tracing::debug!("Mention selected: {}", display_str);
+    window
+        .global::<crate::ChatPane>()
+        .on_mention_suggestion_selected(move |_id: SharedString, display: SharedString| {
+            let weak = weak_window.clone();
+            let display_str = display.to_string();
+            tracing::debug!("Mention selected: {}", display_str);
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let current_text = w.get_composer_text().to_string();
-                if let Some(at_pos) = current_text.rfind('@') {
-                    let new_text = format!("{}{} ", &current_text[..at_pos], display_str);
-                    w.set_composer_text(new_text.into());
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let current_text = w
+                        .global::<crate::ChatPane>()
+                        .get_composer_text()
+                        .to_string();
+                    if let Some(at_pos) = current_text.rfind('@') {
+                        let new_text = format!("{}{} ", &current_text[..at_pos], display_str);
+                        w.global::<crate::ChatPane>()
+                            .set_composer_text(new_text.into());
+                    }
+                    w.global::<crate::ChatPane>()
+                        .set_mention_autocomplete_visible(false);
                 }
-                w.set_mention_autocomplete_visible(false);
-            }
+            });
         });
-    });
 }
 
 type RawMentionSuggestion = (String, String, String, bool);

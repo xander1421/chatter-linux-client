@@ -163,7 +163,8 @@ pub fn init_gl_video(window: &MainWindow) -> bool {
                                 match fetch_next_frame(video_state) {
                                     Some(image) => {
                                         if let Some(w) = weak.upgrade() {
-                                            w.set_video_player_frame(image);
+                                            w.global::<crate::ChatPane>()
+                                                .set_video_player_frame(image);
                                         }
                                     }
                                     None => {

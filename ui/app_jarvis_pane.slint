@@ -1,0 +1,32 @@
+import { Colors } from "theme/colors.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
+import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { EmojiData } from "components/emoji_picker.slint";
+import { GifData } from "components/gif_picker.slint";
+import { MentionSuggestion } from "components/mention_autocomplete.slint";
+import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { SharedContentItem, SharedTab } from "modals/mod.slint";
+import { FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { ForwardTarget } from "modals/forward_message.slint";
+import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
+import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
+import { InviteUser } from "modals/invite_member.slint";
+import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { PinnedItem } from "modals/pinned_messages.slint";
+import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
+import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+
+export global JarvisPane {
+    // ========== Jarvis AI Assistant properties ==========
+    in-out property <bool> jarvis-thinking: false;
+    in property <[MemoryFactData]> jarvis-memory-facts: [];
+    in property <[MemoryEntityData]> jarvis-memory-entities: [];
+    in property <[MemoryGraphNodeData]> jarvis-memory-graph-nodes: [];
+    in property <[MemoryGraphEdgeData]> jarvis-memory-graph-edges: [];
+    in property <string> jarvis-memory-stats: "";
+    callback jarvis-memory-refresh();
+    callback jarvis-memory-select-entity(string);
+}

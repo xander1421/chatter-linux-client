@@ -1,3 +1,14 @@
+import { AppViewTransition } from "app_view_transition.slint";
+import { AppCallLifecycle } from "app_call_lifecycle.slint";
+import { AppModalTransitions } from "app_modal_transitions.slint";
+import { JarvisPane } from "app_jarvis_pane.slint";
+import { CallView } from "app_call_view.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SearchPane } from "app_search_pane.slint";
+import { SettingsPane } from "app_settings_pane.slint";
+import { AuthFlow } from "app_auth_flow.slint";
 import { AppBottomChrome } from "app_bottom_chrome.slint";
 import { AppShortcuts } from "app_shortcuts.slint";
 import { AppTopOverlays } from "app_top_overlays.slint";
@@ -70,6 +81,10 @@ export component MainWindow inherits Window {
     preferred-height: 600px;
     default-font-family: Typography.font-family;
     default-font-size: Typography.sm;
+
+    modal-transitions := AppModalTransitions { active-modal: root.active-modal; }
+    AppCallLifecycle {}
+    view-transition := AppViewTransition { current-view: root.current-view; }
 
     // ========== Safe area insets (Android status bar / nav bar / IME) ==========
     // Slint 1.15 splits two separate out-props on the Window:
@@ -161,7 +176,6 @@ export component MainWindow inherits Window {
     // transparent/unified (platform::macos::apply_unified_titlebar). 0 on
     // every other platform, which is what makes the bindings below no-ops
     // there.
-    //
     // The app does NOT reserve a row for the titlebar: the whole point of the
     // unified look is that the traffic lights sit *inside* the app's own top
     // row, level with the sidebar's first row and the conversation header —
@@ -184,11 +198,11 @@ export component MainWindow inherits Window {
     // Settings is a pushed full-screen page, not a tab, so it covers the bar
     // the same way a pushed conversation does.
     property <bool> bottom-nav-visible: root.compact-layout && root.current-view == "main"
-        && !root.keyboard-open && !root.mobile-show-chat && !root.settings-open;
+        && !root.keyboard-open && !SidebarPane.mobile-show-chat && !ModalHostState.settings-open;
     // The Chats tab's floating create button: only on the list itself, never
     // over a pushed screen, a dialog, the search palette or selection mode.
-    property <bool> fab-visible: root.bottom-nav-visible && root.active-tab == "chats"
-        && root.active-modal == "none" && !root.unified-search-open && !root.selection-mode;
+    property <bool> fab-visible: root.bottom-nav-visible && SidebarPane.active-tab == "chats"
+        && root.active-modal == "none" && !SearchPane.unified-search-open && !ChatPane.selection-mode;
     // Its top edge: above the dock and, during a call, the return-to-call
     // bar stacked on it — the same strip the main column reserves for them.
     // In the main content layer's coordinates (it and the dock both live
@@ -198,77 +212,11 @@ export component MainWindow inherits Window {
     property <length> fab-y: root.height - root.safe-area-top - root.safe-area-bottom
         - Spacing.fab-size - Spacing.xl
         - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
-        - (root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
+        - (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
 
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
-    private property <string> previous-view: "loading";
-    private property <string> exiting-view: "";
-    private property <bool> view-appearing: true;
-    private property <float> view-progress: 1;
-    animate view-progress {
-        duration: root.view-appearing ? Materials.motion-standard : 0ms;
-        easing: Materials.glide;
-    }
-    view-arrive := Timer {
-        interval: 1ms;
-        running: false;
-        triggered => { self.running = false; root.view-appearing = true; root.view-progress = 1; }
-    }
-    view-leave := Timer {
-        interval: Materials.motion-standard + 40ms;
-        running: false;
-        triggered => { self.running = false; root.exiting-view = ""; }
-    }
-
-    // ========== Unified search (top bar) ==========
-    in property <[QuickSwitcherItem]> unified-search-conversations: [];
-    in property <[SearchResult]> unified-search-messages: [];
-    in property <bool> unified-search-searching: false;
-    in-out property <string> unified-search-query: "";
-    in-out property <bool> unified-search-open: false;
-    in-out property <int> unified-search-selected-index: 0;
-    in-out property <string> unified-search-category: "all";
-    in-out property <string> unified-search-sort: "relevance";
-    in-out property <string> unified-search-date: "any";
-    in-out property <string> unified-search-from: "";
-    in-out property <string> unified-search-in: "";
-    in-out property <string> unified-search-from-label: "";
-    in-out property <string> unified-search-in-label: "";
-    in property <[QuickSwitcherItem]> unified-search-picker-options: [];
-    in property <[string]> unified-search-recents: [];
-    in property <string> unified-search-calendar-month: "";
-    in property <[CalendarDay]> unified-search-calendar-days: [];
-    in property <[int]> unified-search-counts: [0, 0, 0, 0, 0, 0, 0];
-    in property <[int]> unified-search-page-limits: [50, 50, 50, 50, 50, 50, 50];
-    in property <[image]> unified-search-thumbnails: [];
-    in property <[bool]> unified-search-has-thumbnails: [];
-    in property <[string]> unified-search-message-kinds: [];
-    // Loaded from SettingsRepository at startup: "k" | "f" | "both".
-    in-out property <string> search-shortcut-pref: "both";
-    callback unified-search-opened();
-    callback unified-search-closed();
-    callback unified-search-changed(string);
-    callback unified-search-filters-changed(string, string, string, string, string);
-    callback unified-search-recent-selected(string);
-    callback unified-search-recent-clear();
-    callback unified-search-recent-remove(string);
-    callback unified-search-calendar-shift(int);
-    callback unified-search-picker-request(string, string);
-    callback unified-search-show-more(string);
-    callback unified-search-conversation-selected(string, string);
-    callback unified-search-message-selected(string);
-    // People (exact-handle resolve-on-Enter)
-    in property <bool> unified-search-query-is-handle: false;
-    in property <string> unified-search-person-status: "";
-    in property <string> unified-search-person-error: "";
-    in property <string> unified-search-person-id: "";
-    in property <string> unified-search-person-name: "";
-    in property <string> unified-search-person-handle: "";
-    callback unified-search-resolve(string);
-    callback unified-search-person-selected(string);
-
     // ========== Connection status ==========
     // "connected", "connecting", "reconnecting", "disconnected", "failed".
     // Pushed from `bin_ui::features::connection`, which reads chatter-core's
@@ -302,364 +250,38 @@ export component MainWindow inherits Window {
     // Whether there is a chatter session. False is a supported state of the main
     // view, not a transient one: a user who came in over the mesh has no account
     // and may never get one.
-    in property <bool> is-signed-in: false;
-    callback continue-without-account();
-
-    // ========== Loading page properties ==========
-    in property <string> loading-message: "Loading...";
-    in property <string> loading-secondary-message: "";
-
-    // ========== Auth page properties ==========
-    in-out property <string> login-username: "";
-    in-out property <string> login-password: "";
-    in-out property <string> login-pin: "";
-    in property <bool> login-loading: false;
-    in property <string> login-error: "";
-    // The login is solving the server's proof of work (chatter-core
-    // AuthStateData::login_verifying). Set from Rust.
-    in property <bool> login-verifying: false;
-    in property <bool> login-identity-reset-available: false;
-    callback accept-new-identity();
-
-    in-out property <string> register-display-name: "";
-    in-out property <string> register-username: "";
-    in-out property <string> register-password: "";
-    in-out property <string> register-confirm-password: "";
-    in-out property <string> register-pin: "";
-    in-out property <string> register-server-url: "";
-    in-out property <string> login-server-url: "";
-    in-out property <string> configured-server-url: "";
-    in property <bool> register-loading: false;
-    in property <string> register-error: "";
-    in property <image> register-avatar-source;
-    in property <[AvatarOption]> avatar-options: [];
-    in property <bool> register-has-avatar: false;
-    in-out property <int> register-selected-default-idx: 0;
-    in-out property <color> register-avatar-color: Colors.avatar-teal;
-    in property <int> register-password-strength: 0;
-    in property <int> register-pin-strength: 0;
-    callback register-select-avatar();
-    callback register-select-default-avatar(int);
-    callback register-remove-avatar();
-    pure callback register-username-validation(string) -> string;
-    pure callback register-pin-validation(string) -> string;
-    callback register-clear-error();
-    callback register-password-changed(string);
-    callback register-pin-changed(string);
-
-    // ========== Link Device page properties (new device side) ==========
-    in property <image> link-device-qr;
-    in property <string> link-device-url: "";
-    in property <string> link-device-status: "Generate a QR to begin.";
-    in property <string> link-device-error: "";
-    in property <bool> link-device-active: false;
-    in property <bool> link-device-has-local-identity: false;
-    callback link-device-start();
-    callback link-device-cancel();
-    callback link-device-copy();
-
-    // ========== Link Device Approve modal (primary side) ==========
-    in-out property <string> link-approve-url: "";
-    in-out property <string> link-approve-password: "";
-    in property <string> link-approve-preview-name: "";
-    in property <string> link-approve-preview-server: "";
-    // 6-char code derived from the new device's ephemeral pubkey. Must
-    // match the value displayed on the new device — this is the user's
-    // gate against MITM substitution of the QR ephemeral key.
-    in property <string> link-approve-verification-code: "";
-    in property <bool> link-approve-preview-ready: false;
-    in property <string> link-approve-status: "";
-    in property <string> link-approve-error: "";
-    in property <bool> link-approve-busy: false;
-    callback link-approve-paste-changed(string);
-    callback link-approve-submit(string);  // password (pending link is
-                                            // already stashed on paste)
-    callback link-approve-open();
-    callback link-approve-close();
-    callback link-approve-scan();
-
-    // ========== Recovery codes modal properties ==========
-    in property <[string]> recovery-codes: [];
-    // Set when the codes came from Settings › Regenerate: Continue returns to
-    // Settings instead of carrying on into registration's onboarding.
-    in-out property <bool> recovery-codes-regenerated: false;
-    callback recovery-codes-confirmed() -> bool;
-    callback recovery-codes-copy-all();
-
-    // Sealed sender onboarding explainer (shown after recovery codes).
-    // Fired when the user confirms; carries their initial "allow from anyone"
-    // choice so the caller can persist it to the server.
-    callback sealed-sender-intro-confirmed(bool);
-
-    // ========== Account recovery page properties ==========
-    in-out property <string> recovery-username: "";
-    in-out property <string> recovery-code: "";
-    in-out property <string> recovery-new-password: "";
-    in-out property <string> recovery-confirm-password: "";
-    in-out property <string> recovery-new-pin: "";
-    in property <bool> recovery-loading: false;
-    in property <string> recovery-error: "";
-    in property <string> recovery-success: "";
-    callback recover-account(string, string, string, string);  // username, recovery_code, new_password, new_pin
-
-    // ========== Sidebar properties ==========
-    in property <[ChatRowData]> chat-rows: [];
-    in-out property <bool> chat-rows-loading: true;
-    in property <[CustomSectionData]> custom-sections: [];
-    in property <int> total-unread-count: 0;
-    in property <string> user-display-name: "User";
-    in property <image> user-avatar-source;
-    in property <string> user-initials: "";
-    in property <string> user-presence-status: "online";
-    // Manual presence mode chosen in the status picker ("auto" default).
-    in-out property <string> user-presence-mode: "auto";
-    in-out property <bool> sidebar-collapsed: false;
     // The ONE definition of "the panel is a rail right now". The Sidebar
     // collapses on either signal, so anything else deciding based on collapse
     // state has to read the same expression — checking `sidebar-collapsed`
     // alone reports "expanded" on a phone that is showing a rail, which removed
     // the entire chat column and left a blank screen.
-    property <bool> sidebar-is-rail: root.is-small-screen || root.sidebar-collapsed;
-    in-out property <bool> sidebar-hidden: false;
-    // The current top-level destination: "chats", "calls", "contacts" or
-    // "profile" (the account menu). Separate from `modal-stack` below — a
-    // screen pushed over a tab (someone's profile, Settings, Sessions) never
-    // changes which tab you are on, so the bar's highlight and Back both stay
-    // truthful. On a two-pane layout the sidebar's Calls / Contacts / avatar
-    // select it.
-    // Navigation rules: crates/chatter-ui/src/bin_ui/features/back.rs.
-    in-out property <string> active-tab: "chats";
-    // Single-pane routing on mobile: false = conversation list, true = the
-    // conversation itself. The two are mutually exclusive and each takes the
-    // whole width — there is no rail beside them, because the bottom tab bar
-    // is what keeps navigation always-available now. Desktop ignores this
-    // entirely and keeps the side-by-side panel it has always had.
-    in-out property <bool> mobile-show-chat: false;
+    property <bool> sidebar-is-rail: root.is-small-screen || SidebarPane.sidebar-collapsed;
     // Both phone panes stay mounted until the push settles. The message list
     // therefore keeps its scroll position while the header and composer travel
     // with the conversation, and Back reverses the same movement.
-    property <float> chat-push-progress: 0;
     // Keep capture protection through the pane's reverse slide.
     out property <bool> chat-content-visible:
-        !root.compact-layout || root.mobile-show-chat || root.chat-push-progress > 0;
+        !root.compact-layout || SidebarPane.mobile-show-chat || root.chat-push-progress > 0;
     changed chat-content-visible => { root.refresh-screen-protection(); }
-    property <bool> chat-edge-swiping: false;
-    property <length> chat-edge-start: 0px;
+    property <float> chat-push-progress: 0;
     animate chat-push-progress {
-        duration: root.chat-edge-swiping ? 0ms : Materials.motion-standard;
+        duration: SidebarPane.chat-edge-swiping ? 0ms : Materials.motion-standard;
         easing: Materials.glide;
     }
 
-    // ========== Chat properties ==========
-    in property <string> channel-id: "";
-    in property <string> channel-name: "";
-    in property <ConversationKind> conversation-kind;
-    in property <bool> chat-can-forward: false;
-    in property <bool> private-channel: false;
-    in property <string> privacy-line-override: "";
-    in property <bool> privacy-line-exposed: false;
-    in-out property <bool> is-dm: false;  // True for DM conversations (hides avatars/names in messages)
-    in property <int> member-count: 0;
-    in property <int> invited-count: 0;
-    in property <string> topic: "";
-    in property <string> typing-indicator: "";
-    in property <string> header-presence-status: "offline";
-    in property <image> channel-avatar-source;
-    in property <bool> channel-has-avatar: false;
-    in property <[MessageItemData]> messages: [];
-    in property <bool> loading-messages: false;
-    in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
-    in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
-    in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
-    in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
-    in-out property <int> message-last-visible-row: -1;
-    // ChatLayout.list-scrolling, mirrored here for the SelectionBar, which sits
-    // over the message list but is not inside ChatLayout.
-    property <bool> chat-list-scrolling: false;
-    // Which rows the chat header's ⋯ menu offers, set by the header as it opens it.
-    property <bool> chat-menu-video: false;
-    property <bool> chat-menu-settings: false;
-    property <bool> chat-menu-secret-chat: false;
-    in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
-    // The last older-history page failed to read (header.rs `load_older`);
-    // the list shows a Retry chip until a page loads or the conversation changes.
-    in-out property <bool> history-load-failed: false;
-    // Unread boundary from core — see MessageList.
-    in-out property <int> unread-index: -1;
-    in-out property <int> unread-count: 0;
-    in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
-    in-out property <string> composer-text: "";
-    // The unsent draft, held while the composer is borrowed to edit a message.
-    in-out property <string> composer-stash: "";
-    in-out property <bool> composer-stash-held: false;
-    in property <string> composer-placeholder: "Type a message...";
-    in property <string> composer-notice: "";
-    // A channel we are no longer in (core's `is_former_channel`): read-only.
-    in property <bool> conversation-read-only: false;
-    in-out property <bool> header-can-call: false;
-    in-out property <bool> header-can-invite: false;
-    in-out property <bool> header-can-open-settings: false;
-    in-out property <bool> header-can-open-pinned-list: false;
-    in property <bool> secret-request-actions: false;
-    in-out property <string> private-request-decision: "";
-    callback secret-request-accept-clicked();
-    callback secret-request-decline-clicked();
-    in property <[PendingAttachmentData]> pending-attachments: [];
-    in-out property <bool> composer-is-editing: false;
-    in-out property <string> composer-edit-message-id: "";
-
-    // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
-    in-out property <bool> composer-is-replying: false;
     private property <int> reply-focus-serial: 0;
-    in-out property <string> composer-reply-to-sender: "";       // Sender UUID (for protocol)
-    in-out property <string> composer-reply-to-sender-name: ""; // Sender display name (for UI)
-    in-out property <string> composer-reply-to-timestamp: "";
-    in-out property <string> composer-reply-preview: "";
-    in-out property <bool> composer-reply-has-thumbnail: false;
-    in-out property <image> composer-reply-thumbnail;
 
-    // ========== Audio playback state ==========
-    in-out property <string> current-playing-attachment-id: "";
-    in-out property <bool> is-media-playing: false;  // True when audio is actively playing (not paused)
-    in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
-    in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
-
-    // ========== Image viewer state ==========
-    in-out property <bool> image-viewer-visible: false;
-    in property <image> image-viewer-source;
-    in property <string> image-viewer-filename: "";
-    in property <string> image-viewer-size: "";
     private property <length> viewer-origin-x: 0px;
     private property <length> viewer-origin-y: 0px;
     private property <length> viewer-origin-width: 0px;
     private property <length> viewer-origin-height: 0px;
-    callback close-image-viewer();
-    in-out property <string> media-viewer-attachment-id: "";
-    in-out property <string> media-viewer-position: "";
-    in-out property <bool> media-viewer-has-previous: false;
-    in-out property <bool> media-viewer-has-next: false;
-    in-out property <image> media-viewer-previous-thumbnail;
-    in-out property <image> media-viewer-next-thumbnail;
-    callback media-viewer-navigate(int);
-    callback media-viewer-export(bool); // true = copy image, false = download
-    callback media-viewer-open-downloads();
 
-
-    // ========== Code preview state ==========
-    in-out property <bool> code-preview-visible: false;
-    in property <string> code-preview-filename: "";
-    in property <string> code-preview-language: "";
-    in property <int> code-preview-line-count: 0;
-    in property <string> code-preview-plain-text: "";
-    callback close-code-preview();
-    callback copy-code();
-    callback open-code-external();
-
-    // ========== PDF preview state ==========
-    in-out property <bool> pdf-preview-visible: false;
-    in property <string> pdf-preview-filename: "";
-    in property <int> pdf-preview-page-count: 0;
-    in property <int> pdf-preview-current-page: 1;
-    in property <string> pdf-preview-error: "";
-    in property <bool> pdf-preview-external-only: false;
-    in property <image> pdf-preview-image;
-    callback close-pdf-preview();
-    callback open-pdf-external();
-    callback pdf-page-prev();
-    callback pdf-page-next();
-
-    // ========== Video player state ==========
-    in-out property <bool> video-player-visible: false;
-    in property <image> video-player-frame;
-    in property <string> video-player-filename: "";
-    in property <float> video-player-progress: 0.0;
-    in property <string> video-player-elapsed: "0:00";
-    in property <string> video-player-duration: "0:00";
-    in property <bool> video-player-is-playing: false;
-    in-out property <float> video-player-volume: 1.0;
-    callback close-video-player();
-    callback video-player-toggle-play-pause();
-    callback video-player-seek(float);
-    callback video-player-set-volume(float);
-
-    // ========== Reaction picker state ==========
-    in-out property <bool> reaction-picker-visible: false;
-    in-out property <string> reaction-picker-message-id: "";
-    in-out property <string> reaction-picker-sender-id: "";
-    in-out property <string> reaction-picker-timestamp-ns: "";
-    in-out property <length> reaction-picker-anchor-x: 0px;
-    in-out property <length> reaction-picker-anchor-y: 0px;
-    in property <[EmojiData]> reaction-picker-emojis: [];
-    in-out property <int> reaction-picker-selected-category: 0;
-    in-out property <string> reaction-picker-search-query: "";
-    callback reaction-selected(string, string, string, string);  // (sender_id, timestamp_ns, message_id, emoji)
-    callback reaction-picker-category-changed(int);
-    callback reaction-picker-search-changed(string);
-
-    // ========== Composer emoji picker state ==========
-    in-out property <bool> composer-emoji-picker-visible: false;
-    in property <[EmojiData]> composer-emoji-list: [];
-    in-out property <int> composer-emoji-category: 0;
-    in-out property <string> composer-emoji-search: "";
-    in-out property <int> composer-emoji-skin-tone: 0;  // 0=default, 1-5=Fitzpatrick
-    // The composer's text or reply target changed: the app autosaves the draft.
-    callback composer-draft-changed();
-    // The thread panel's text changed: autosaved under its thread the same way.
-    callback thread-draft-changed();
-    callback composer-emoji-selected(string);      // emoji to insert
-    callback composer-emoji-category-changed(int); // category index
-    callback composer-emoji-search-changed(string); // search query
-    callback composer-emoji-skin-tone-changed(int); // skin tone index
-
-    // ========== Composer GIF picker state ==========
-    in-out property <bool> composer-gif-picker-visible: false;
-    // Set with the conversation kind from core (`gif_picker_available`).
-    in property <bool> composer-gifs-available: true;
-    changed composer-gifs-available => {
-        if !root.composer-gifs-available { root.composer-gif-picker-visible = false; }
+    private property <bool> observed-composer-gifs-available: ChatPane.composer-gifs-available;
+    changed observed-composer-gifs-available => {
+        if !ChatPane.composer-gifs-available { ChatPane.composer-gif-picker-visible = false; }
     }
-    in property <bool> composer-gif-picker-loading: false;
-    in property <bool> composer-gif-picker-failed: false;
-    in property <[GifData]> composer-gif-picker-results: [];
-    // The signed-in account's sent GIFs, shown above Trending.
-    in property <[GifData]> composer-gif-picker-recent: [];
-    in-out property <string> composer-gif-picker-search: "";
-    callback composer-gif-selected(string, string);
-    callback composer-gif-search-changed(string);
 
-    // ========== Mention autocomplete state ==========
-    in-out property <bool> mention-autocomplete-visible: false;
-    in property <[MentionSuggestion]> mention-suggestions: [];
-    in-out property <int> mention-selected-index: 0;
-    callback mention-suggestion-selected(string, string);  // (id, display_text)
 
-    // ========== Message multi-select ==========
-    // Entered by the long hold on a bubble (tier 2) or by "Select" in the
-    // message menu. While active, a plain tap toggles selection instead of
-    // doing whatever a tap normally does, and Android Back exits the mode
-    // before it closes any modal — see the back-press handler in Rust.
-    //
-    // The set of selected ids lives in Rust (the per-row `selected` flag on
-    // MessageItemData is what the UI renders); Slint holds only the mode flag
-    // and the count, so there is one owner of the set.
-    in-out property <bool> selection-mode: false;
-    in property <int> selected-message-count: 0;
-    callback message-selection-toggled(string);   // (message_id)
-    callback selection-cleared();
-    callback selection-delete-clicked();
-    callback selection-copy-clicked();
-    callback selection-forward-clicked();
-
-    // ========== Message context menu state ==========
-    in-out property <bool> context-menu-visible: false;
-    in-out property <string> context-menu-sender-id: "";
-    in-out property <string> context-menu-timestamp-ns: "";
-    // Thread and selection are keyed by message id, not (sender, timestamp).
-    in-out property <string> context-menu-message-id: "";
-    in-out property <length> context-menu-x: 0px;
-    in-out property <length> context-menu-y: 0px;
-    // Where the open conversation's content starts; the menu stays below it.
-    in-out property <length> context-menu-content-top: 0px;
     private property <length> context-menu-anchor-top: 0px;
     private property <length> context-menu-anchor-bottom: 0px;
     private property <length> context-menu-anchor-left: 0px;
@@ -670,470 +292,21 @@ export component MainWindow inherits Window {
     private property <length> context-menu-preview-row-width: 0px;
     private property <bool> context-menu-preview-mobile: false;
     private property <bool> context-menu-preview-from-thread: false;
-    // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
-    callback reply-message(string, string);
-    callback edit-message(string, string);
-    callback delete-message(string, string);         // (delete for me)
-    // A delete waiting on its confirm: how many messages (0 = none), for a
-    // single one which (sender, timestamp-ns), and whether it is a delete for
-    // both ("Delete for both?") or for me ("Delete message?").
-    in-out property <int> delete-confirm-count: 0;
-    property <string> delete-confirm-sender;
-    property <string> delete-confirm-timestamp;
-    property <bool> delete-confirm-everyone: false;
-    property <bool> delete-choosing: false;
-    property <bool> delete-choice-everyone: false;
-    property <bool> delete-choice-me: true;
-    callback delete-everyone-message(string, string); // (delete for everyone)
-    callback pin-message(string, string);
-    callback forward-message-action(string, string);
-    callback copy-message(string, string);
-    callback download-message(string, string);       // Download attachments
 
-    // ========== Peer identity change (conversation wedged) ==========
-    in property <bool> identity-change-visible: false;
-    in property <string> identity-change-title: "";
-    in property <string> identity-change-detail: "";
-    in property <bool> identity-change-attributed: false;
-    callback identity-change-accept-clicked();
-
-    // ========== Pinned bar state ==========
-    in property <bool> has-pinned-messages: false;
-    in property <string> pinned-message-preview: "";
-    in property <int> pinned-current-index: 1;
-    in property <int> pinned-total-count: 1;
-    callback pinned-prev-clicked();
-    callback pinned-next-clicked();
-    callback pinned-dismiss-clicked();
-    callback pinned-show-clicked();
-    callback pinned-item-selected(string);
-    callback sender-profile-requested(string);
-    in property <[PinnedItem]> pinned-items;
-    in property <image> pinned-thumbnail;
-
-    callback pinned-go-to-message();
-
-    // ========== Thread panel state ==========
-    in property <bool> thread-panel-visible: false;
-    in property <string> thread-root-message-id: "";
-    in property <string> thread-root-sender-name: "";
-    in property <string> thread-root-content-preview: "";
-    in property <int> thread-reply-count: 0;
-    in property <[MessageItemData]> thread-replies: [];
-    in property <bool> thread-loading: false;
-    in-out property <string> thread-composer-text: "";
-    callback close-thread-clicked();
-    callback send-thread-reply(string);
-    callback load-more-thread-replies();
-
-    // ========== Modal state ==========
-    // Screens and dialogs pushed over the current tab, top last. Changed only
-    // through nav-push / nav-close / nav-pop (Rust: features/back.rs), so
-    // closing one reveals the one it was pushed over.
-    in-out property <[string]> modal-stack: [];
     // The top of the stack, or "none". Each modal's `if` reads this.
-    out property <string> active-modal: root.modal-stack.length > 0
-        ? root.modal-stack[root.modal-stack.length - 1] : "none";
-    // Presentation lags logic by one exit. The identity that just left the
-    // top of the stack (pop, close-at-top, replace) keeps its surface with
-    // `show-modal: false` — it fades, accepts no input and holds no focus —
-    // until the sheet duration has passed, then unmounts. The destination
-    // (the dialog under it, or nothing) is presented at once, so a pop never
-    // waits and a push never waits. One exit is retained at a time: a second
-    // close during the fade replaces it. Reduced motion unmounts at once.
-    // Each dialog's `if` reads `is-presented`.
-    private property <string> presented-modal: "none";
-    private property <string> exiting-modal: "none";
-    private property <int> presented-depth: 0;
-    function is-presented(name: string) -> bool {
-        return root.presented-modal == name || root.exiting-modal == name;
-    }
-    function present-active-modal() {
-        // Grew: the old top is still on the stack under the new one, nothing
-        // left. Otherwise the old top is gone and gets its exit.
-        if root.presented-modal != "none" && root.presented-modal != root.active-modal
-            && root.modal-stack.length <= root.presented-depth && !Appearance.reduce-motion {
-            root.exiting-modal = root.presented-modal;
-            modal-exit.running = true;
-            modal-exit.restart();
-        }
-        root.presented-modal = root.active-modal;
-        root.presented-depth = root.modal-stack.length;
-    }
-    modal-exit := Timer {
-        interval: Materials.sheet-duration + 40ms;
-        running: false;
-        triggered => {
-            self.running = false;
-            root.exiting-modal = "none";
-        }
-    }
-    // The same contract for the incoming-call card.
-    private property <bool> incoming-shown: root.incoming-call-visible && !root.incoming-call-minimized;
-    private property <bool> incoming-presented: false;
-    changed incoming-shown => {
-        if root.incoming-shown {
-            root.incoming-presented = true;
-            incoming-exit.running = false;
-        } else if Appearance.reduce-motion {
-            root.incoming-presented = false;
-        } else {
-            incoming-exit.running = true;
-        }
-    }
-    incoming-exit := Timer {
-        interval: Materials.motion-standard + 40ms;
-        running: false;
-        triggered => {
-            self.running = false;
-            if !root.incoming-shown { root.incoming-presented = false; }
-        }
-    }
-    // And for the device picker, which is not on the modal stack.
-    private property <bool> device-picker-presented: false;
-    changed device-picker-visible => {
-        if root.device-picker-visible {
-            root.device-picker-presented = true;
-            device-picker-exit.running = false;
-        } else if Appearance.reduce-motion {
-            root.device-picker-presented = false;
-        } else {
-            device-picker-exit.running = true;
-        }
-    }
-    device-picker-exit := Timer {
-        interval: Materials.motion-standard + 40ms;
-        running: false;
-        triggered => {
-            self.running = false;
-            if !root.device-picker-visible { root.device-picker-presented = false; }
-        }
-    }
-    // "settings" is anywhere on the stack. Settings stays mounted under what
-    // it opens (Sessions, Link device, ...), so it cannot key off
-    // `active-modal`; written by back.rs alongside the stack.
-    in-out property <bool> settings-open: false;
-    callback nav-push(string);
-
-    // Shared by every entry to Create Channel / New Section (sidebar, the
-    // create menu, the account menu), so they cannot open it differently.
-    function start-create-channel() {
-        root.create-channel-initial-tab = 0;
-        root.nav-push("create-channel");
-    }
-    function start-create-section() {
-        root.create-section-rename-mode = false;
-        root.create-section-name = "";
-        root.create-section-emoji = "📁";
-        root.create-section-id = "";
-        root.nav-push("create-section");
-    }
-    // Close that screen and everything pushed above it.
-    callback nav-close(string);
-    callback nav-pop();
-
-    // Create channel modal properties
-    in-out property <string> create-channel-name: "";
-    in-out property <string> create-channel-description: "";
-    in-out property <string> create-channel-template: "";
-    in property <string> create-channel-error: "";
-    in property <bool> create-channel-loading: false;
-
-    // Create channel AI config properties
-    in-out property <string> create-channel-ai-provider: "";
-    in-out property <string> create-channel-ai-model: "";
-    in property <[AIModelOption]> create-channel-ai-models: [];
-    in property <bool> create-channel-ai-models-loading: false;
-    in property <string> create-channel-ai-models-error: "";
-
-    // Create channel private group properties
-    in-out property <[PrivateGroupFriend]> create-channel-available-friends: [];
-    in-out property <int> create-channel-selected-friend-count: 0;
-
-    // Create channel icon upload properties
-    in-out property <string> create-channel-icon-url: "";
-    in-out property <image> create-channel-icon-preview;
-    in-out property <bool> create-channel-has-icon-preview: false;
-    callback create-channel-pick-icon();
-
-    // Invite to private group modal properties
-    in-out property <string> invite-private-group-id: "";
-    in-out property <[PrivateGroupFriend]> invite-private-group-friends: [];
-    in-out property <int> invite-private-group-selected-count: 0;
-    in property <bool> invite-private-group-loading: false;
-
-    // Invite member to channel modal properties
-    in-out property <string> invite-member-channel-id: "";
-    in-out property <string> invite-member-channel-name: "";
-    in-out property <[InviteUser]> invite-member-users: [];
-    in-out property <int> invite-member-selected-count: 0;
-    in property <bool> invite-member-loading: false;
-
-    // Create/rename section modal properties
-    in-out property <bool> create-section-rename-mode: false;
-    in-out property <string> create-section-name: "";
-    in-out property <string> create-section-emoji: "📁";
-    in-out property <string> create-section-id: "";  // set for rename
-    in-out property <bool> create-section-loading: false;
-
-    // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
-    in-out property <int> create-channel-initial-tab: 0;
-
-    // Join channel modal properties
-    in-out property <string> join-channel-search-query: "";
-    in property <[SearchResultChannel]> join-channel-results: [];
-    in property <bool> join-channel-searching: false;
-    in property <string> join-channel-error: "";
-    in-out property <string> join-channel-selected-id: "";
-    in property <bool> join-channel-joining: false;
-
-    // User profile modal properties
-    in property <string> profile-user-id: "";
-    in property <bool> profile-is-anonymous: false;
-    in property <bool> profile-scoped-member: false;
-    in property <string> profile-display-name: "";
-    in property <string> profile-username: "";
-    in property <image> profile-avatar-source;
-    in property <string> profile-initials: "";
-    in property <string> profile-status-text: "";
-    in property <string> profile-presence: "offline";
-    in property <string> profile-bio: "";
-    in property <bool> profile-is-friend: false;
-    in property <bool> profile-is-blocked: false;
-    in property <bool> profile-is-self: false;
-    in property <bool> profile-loading: false;
-    in property <bool> profile-is-verified: false;
-    in property <string> profile-safety-number: "";
-    in-out property <bool> profile-show-safety-number: false;
-    // Username link (self view)
-    // Profile shared-content drawer (Media/Files/Links/Voice/GIFs/Music).
-    // Rows, tab labels and counts are all built by chatter-core.
-    in property <[SharedTab]> profile-shared-tabs: [];
-    in-out property <string> profile-shared-tab: "";
-    in property <[SharedContentItem]> profile-shared-items: [];
-    in property <bool> profile-shared-loading: false;
-    // Presence as words ("last seen yesterday 4:12 pm"), shaped by core.
-    in property <string> profile-last-seen: "";
-    in property <bool> profile-is-muted: false;
-    in property <string> profile-share-link: "";
-    in property <image> profile-share-qr;
-    in property <string> profile-share-status: "";
-
-    // Edit Profile data
-    in-out property <string> edit-profile-display-name: "";
-    in-out property <string> edit-profile-bio: "";
-    in property <image> edit-profile-avatar;
-    in property <color> edit-profile-avatar-color: Colors.avatar-teal;
-    in property <int> edit-profile-selected-default-idx: -1;
-    in property <bool> edit-profile-has-photo: false;
-    in property <bool> edit-profile-loading: false;
-    in property <string> edit-profile-error: "";
-
-    // Friends modal properties
-    in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
-    in property <[FriendData]> friends-list: [];
-    in-out property <string> friends-requests-sub-tab: "received";
-    in property <[FriendRequestData]> friends-received-requests: [];
-    in property <[FriendRequestData]> friends-sent-requests: [];
-    in property <[FriendRequestData]> friends-private-requests: [];
-    in property <[FriendRequestData]> friends-group-invites: [];
-    in-out property <string> group-invite-decision: "";
-    in-out property <string> group-invite-error-id: "";
-    in-out property <string> group-invite-error: "";
-    in property <[FriendRequestData]> friends-channel-invites: [];
-    in property <[BlockedUserData]> friends-blocked-users: [];
-    in property <bool> friends-loading: false;
-    // Pending message requests count (for sidebar badge)
-    in property <int> pending-message-requests: 0;
-    // Pending group invites count (for sidebar badge)
-    in property <int> pending-group-invites: 0;
-    // Pending channel invites count (for sidebar badge)
-    in property <int> pending-channel-invites: 0;
-    // Friend code (privacy-first discovery)
-    in-out property <string> friends-my-code: "";
-    in-out property <string> friends-code-input: "";
-    in-out property <string> friends-code-status: "";
-    in-out property <string> friends-request-note: "";
-    in-out property <image> friends-qr-code-image;
-    in-out property <bool> friends-show-qr: false;
-
-    // Forward message modal properties
-    in property <string> forward-message-preview: "";
-    // Source messages, stashed at modal-open, read by the confirm handler:
-    // Messages being forwarded, as "sender_id:timestamp_ns" keys in send order
-    // (one from the message menu, several from the selection bar).
-    in-out property <[string]> forward-sources: [];
-    in-out property <string> forward-search-text: "";
-    in property <[ForwardTarget]> forward-targets: [];
-    in property <bool> forward-loading: false;
-
-    // Sessions modal properties
-    in property <[SessionInfo]> sessions: [];
-    in-out property <int> sessions-generation: 0;
-    in-out property <int> modal-generation: 0;
-    in property <string> sessions-error: "";
-    in property <bool> sessions-loaded: false;
-    in property <bool> sessions-loading: false;
-    in property <bool> sessions-revoking: false;
-    in property <[PendingLinkInfo]> sessions-pending-links: [];
-
-    // Channel settings modal properties
-    in property <string> channel-settings-id: "";
-    in property <string> channel-settings-name: "";
-    in property <string> channel-settings-description: "";
-    in property <bool> channel-settings-saving: false;
-    // Editable drafts, reset by Rust on open (open_channel_settings).
-    in-out property <string> channel-settings-name-draft: "";
-    in-out property <string> channel-settings-description-draft: "";
-    // Icon picker state (Rust sets path+preview on pick; Save reads path).
-    in-out property <string> channel-settings-icon-path: "";
-    in-out property <image> channel-settings-icon-preview;
-    in-out property <bool> channel-settings-has-icon-preview: false;
-    in property <string> channel-settings-type: "public";
-    in property <bool> channel-settings-archived: false;
-    in property <string> channel-settings-created-at: "";
-    in property <int> channel-settings-member-count: 0;
-    in property <int> channel-settings-invited-count: 0;
-    in property <bool> channel-settings-can-edit: false;
-    in property <bool> channel-settings-can-manage-members: false;
-    in property <bool> channel-settings-can-archive: false;
-    in property <bool> channel-settings-can-delete: false;
-    in property <bool> channel-settings-is-owner: false;
-    in property <bool> channel-settings-can-leave: false;
-    in property <bool> channel-settings-group-blocked: false;
-    in-out property <string> channel-settings-notification-pref: "all";
-    in-out property <bool> channel-settings-muted: false;
-    in-out property <bool> channel-settings-ai-enabled: false;
-    in property <[ChannelMemberData]> channel-settings-members: [];
-    in property <[BannedMemberData]> channel-settings-banned-members: [];
-    in property <bool> channel-settings-can-view-bans: false;
-    in property <bool> channel-settings-loading: false;
-    in property <string> channel-settings-error: "";
-
-    // Settings properties
-    in property <string> settings-display-name: "";
-    in property <string> settings-username: "";
-    in property <int> settings-session-count: 0;
-    in-out property <string> settings-current-password: "";
-    in-out property <string> settings-new-password: "";
-    in-out property <string> settings-confirm-password: "";
-    in property <bool> settings-password-changing: false;
-    in property <string> settings-password-error: "";
-    // Delete-account confirmation
-    in-out property <string> settings-delete-password: "";
-    in property <bool> settings-delete-loading: false;
-    in property <string> settings-delete-error: "";
-    // Settings › Account › Recovery Codes › Regenerate
-    in-out property <string> settings-recovery-regen-password: "";
-    in property <bool> settings-recovery-regen-loading: false;
-    in property <string> settings-recovery-regen-error: "";
-    in-out property <bool> settings-read-receipts: true;
-    in-out property <bool> settings-typing-indicators: true;
-    // "none" | "name_only" | "name_and_message" (NotificationDetailLevel::as_str)
-    in-out property <string> settings-notification-detail: "none";
-    // "everyone" | "contacts" | "nobody" (core ProfileVisibility::as_str)
-    in property <string> settings-profile-visibility: "everyone";
-    in property <string> settings-profile-visibility-pending: "";
-    in property <bool> settings-profile-visibility-busy: false;
-    in property <string> settings-profile-visibility-error: "";
-    in-out property <string> settings-profile-visibility-pin: "";
-    in property <string> settings-identity-fingerprint: "";
-    in-out property <bool> settings-sealed-sender-unrestricted: false;
-    in-out property <bool> settings-username-discoverable: true;
-
-    // Settings security (Change PIN / Key Backup)
-    in-out property <string> settings-change-pin-current: "";
-    in-out property <string> settings-change-pin-new: "";
-    in-out property <string> settings-change-pin-confirm: "";
-    in property <bool> settings-change-pin-loading: false;
-    in property <string> settings-change-pin-error: "";
-    in property <string> settings-change-pin-success: "";
-    in property <string> settings-backup-status: "unknown";
-    in-out property <string> settings-backup-retry-pin: "";
-    in property <bool> settings-backup-retry-loading: false;
-    in property <string> settings-backup-retry-error: "";
-
-    // AI settings properties
-    in-out property <bool> settings-local-ai-enabled: false;
-    // Cloud AI (off-device)
-    in-out property <bool> settings-ai-prefer-cloud: false;
-    in-out property <string> settings-cloud-ai-mode: "direct-anthropic";
-    in-out property <string> settings-cloud-ai-api-key: "";
-    in property <bool> settings-cloud-ai-configured: false;
-    in property <string> settings-cloud-ai-status: "";
-    in property <string> settings-cloud-ai-balance: "";
-    in-out property <string> settings-local-ai-model-id: "";
-    in property <bool> settings-local-ai-loading: false;
-    in property <string> settings-local-ai-status: "";
-    in property <string> settings-local-ai-error: "";
-    in property <string> settings-local-ai-hardware-summary: "";
-    in property <bool> settings-local-ai-detecting: false;
-    in property <[LocalAIProviderData]> settings-local-ai-providers: [];
-    in property <string> settings-local-ai-active-provider: "";
-    in property <[string]> settings-local-ai-models: [];
-    in property <string> settings-local-ai-active-model: "";
-    in property <[CatalogModelData]> settings-local-ai-catalog: [];
-
-    // ========== Call properties ==========
-    in-out property <bool> incoming-call-visible: false;
-    // Back while ringing hides the full-screen ring (Signal): the call keeps
-    // ringing and the notification keeps Accept / Decline. Separate from
-    // `incoming-call-visible`, which is "a call is ringing" to the call code.
-    in-out property <bool> incoming-call-minimized: false;
-    in property <IncomingCallData> incoming-call-data;
-    /// True when a newly arrived incoming call will replace the active call
-    /// if accepted — driven by the call orchestrator.
-    in-out property <bool> incoming-call-replaces-active: false;
-    in-out property <bool> active-call-visible: false;
-    in-out property <string> active-channel-call-id: "";
-    in-out property <bool> active-channel-call-video: false;
-    in-out property <int> active-channel-call-participants: 0;
-    // True when the call dock has been expanded to fill the chat column.
-    // Bound to ActiveCallView.fullscreen. Hides the ChatLayout sibling.
-    in-out property <bool> active-call-fullscreen: false;
-    in property <ActiveCallData> active-call-data;
-    in-out property <bool> call-is-muted: false;
-    in-out property <bool> call-is-video-enabled: true;
-    in-out property <bool> call-is-screen-sharing: false;
-    // Android call audio route (platform/android/audio_route.rs). Desktop never
-    // sets `call-speaker-toggle`, so its speaker button stays the output picker.
-    in property <bool> call-speaker-toggle: false;
-    in property <bool> call-speaker-on: false;
-    callback call-toggle-speaker();
-    // A call screen opened (true) or closed (false), and whether the local
-    // camera is on at that moment; then camera changes mid-call.
-    callback call-audio-session(bool, bool);
-    callback call-audio-video(bool);
-    changed active-call-visible => {
-        if root.active-call-visible { VoiceRecording.cancel(); }
-        root.call-audio-session(root.active-call-visible, root.call-is-video-enabled);
-        // Fullscreen hides the sidebar and chat; left set after the call it
-        // would hide them with nothing in their place.
-        if !root.active-call-visible {
-            root.active-call-fullscreen = false;
-            // Back to where the user was before the call (Signal): if answering
-            // raised the phone pane (`open_call_screen`), drop it again —
-            // whatever chat was left behind it is stale, not where they were.
-            // Every end path lands here.
-            if root.call-raised-pane {
-                root.call-raised-pane = false;
-                root.mobile-show-chat = false;
-            }
-        }
-    }
-    // Set by `open_call_screen` (calls/incoming.rs) when answering raised the
-    // phone pane over the list; the call's end lowers it again.
-    in-out property <bool> call-raised-pane: false;
+    out property <string> active-modal: ModalHostState.modal-stack.length > 0
+        ? ModalHostState.modal-stack[ModalHostState.modal-stack.length - 1] : "none";
     // Leaving the pane (Back on a phone) leaves the call screen too; the
     // return-to-call bar then stands in for it. The user has navigated for
     // themselves, so the call's end no longer owes them a trip to the list.
-    changed mobile-show-chat => {
+    private property <bool> observed-mobile-show-chat: SidebarPane.mobile-show-chat;
+    changed observed-mobile-show-chat => {
         root.refresh-screen-protection();
-        root.chat-push-progress = root.mobile-show-chat ? 1 : 0;
-        if !root.mobile-show-chat {
+        root.chat-push-progress = SidebarPane.mobile-show-chat ? 1 : 0;
+        if !SidebarPane.mobile-show-chat {
             root.cancel-composer-keyboard-handover();
-            root.active-call-fullscreen = false;
-            root.call-raised-pane = false;
+            CallView.active-call-fullscreen = false;
+            CallView.call-raised-pane = false;
             // Once a TextInput has had focus, popping the screen it lived on leaves
             // NOTHING focused — and `WindowInner::process_key_input` delivers only to
             // the focus item and its ancestors, so Back is dropped on the floor. The
@@ -1147,316 +320,17 @@ export component MainWindow inherits Window {
             // The pickers belong to the conversation's composer; they are
             // app-level overlays, so leaving the chat has to close them or
             // they float over whatever screen comes next.
-            root.composer-gif-picker-visible = false;
-            root.composer-emoji-picker-visible = false;
+            ChatPane.composer-gif-picker-visible = false;
+            ChatPane.composer-emoji-picker-visible = false;
             VoiceRecording.cancel();
             root.chat-pane-closed();
         }
     }
-    changed call-is-video-enabled => {
-        if root.active-call-visible {
-            root.call-audio-video(root.call-is-video-enabled);
-        }
-    }
-    in property <image> call-local-video-frame;
-    in property <[image]> call-remote-video-frames;
-
-    // Device picker properties
-    in-out property <bool> device-picker-visible: false;
-    in-out property <string> device-picker-type: "audio"; // "audio", "audio_output", or "screen"
-    in property <[AudioDeviceData]> audio-devices: [];
-    in-out property <string> selected-audio-device-id: "";
-    in property <[AudioDeviceData]> audio-output-devices: [];
-    in-out property <string> selected-audio-output-id: "";
-    in property <[ScreenSourceData]> screen-sources: [];
-    in-out property <string> selected-screen-source-id: "";
-
-    // ========== Jarvis AI Assistant properties ==========
-    in-out property <bool> jarvis-thinking: false;
-    in property <[MemoryFactData]> jarvis-memory-facts: [];
-    in property <[MemoryEntityData]> jarvis-memory-entities: [];
-    in property <[MemoryGraphNodeData]> jarvis-memory-graph-nodes: [];
-    in property <[MemoryGraphEdgeData]> jarvis-memory-graph-edges: [];
-    in property <string> jarvis-memory-stats: "";
-    callback jarvis-memory-refresh();
-    callback jarvis-memory-select-entity(string);
-
-    // ========== Auth callbacks ==========
-    callback login(string, string, string, string);  // username, password, server_url, pin
-    callback register(string, string, string, string, string);  // username, password, display_name, pin, server_url
-    callback go-to-register();
-    callback go-to-login();
-    callback go-to-recovery();
-    callback go-to-link-device();
-
-    // Welcome page callbacks
-    callback welcome-add-friends();
-    callback welcome-browse-channels();
-    callback welcome-get-started();
-
-    // ========== Sidebar callbacks ==========
-    callback channel-selected(string);
-    callback refresh-channel-call();
-    callback dm-selected(string);
-    callback private-group-selected(string);
-    callback saved-messages-clicked();
-    callback settings-clicked();
-    callback profile-clicked();
-    callback change-user-status(string /* status */);
-    pure callback get-user-status() -> string;
-    callback toggle-sidebar();
-    callback section-toggle-expanded(/* section-id */ string);
-    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
-    callback delete-section-clicked(/* section-id */ string);
-    callback rename-section-clicked(/* section-id */ string);
-    callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
-    callback remove-from-section(/* conversation-id */ string);
-    callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
-    callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
-    callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
-    callback move-section(/* section-id */ string, /* delta */ int);
-    callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
-
     // ========== Toast notification properties ==========
     in-out property <bool> toast-visible: false;
     in-out property <int> secret-chat-starts-pending: 0;
     in property <string> toast-message: "";
     in property <string> toast-variant: "info";  // "success", "error", "warning", "info"
-
-    // ========== Chat callbacks ==========
-    callback chat-settings-clicked();
-    callback invite-member();
-    callback open-message-link(string);
-    callback message-clicked(string);
-    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
-    callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
-    callback thread-clicked(string);
-    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
-    callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
-    callback view-attachment(string);  // attachment ID - for viewing/opening attachments
-    callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
-    callback load-more();
-    callback visible-media-rows(int, int);
-    callback send(string) -> bool;
-    callback send-edit(string, string);  // (message_id, new_text)
-    callback cancel-edit();
-    callback cancel-reply();
-    callback attachment-clicked();
-    callback paste-image();
-    callback emoji-clicked();
-    callback gif-clicked();
-    callback mention-triggered(string);
-    callback remove-attachment(string);
-    callback typing-changed(bool);  // true when started typing, false when stopped
-    callback list-geometry(float, float, bool);
-    callback start-voice-call();  // Start voice call in current channel
-    callback start-video-call();  // Start video call in current channel
-
-    // ========== Modal callbacks ==========
-    // Create channel (name, description, template, ai_provider, ai_model)
-    callback create-channel(string, string, string, CreateChannelConfig, string, string);
-    callback create-channel-provider-selected(string);
-    // Private group creation
-    callback create-private-group(string, [PrivateGroupFriend]);
-    callback toggle-friend-selection(int);
-    callback toggle-friend-role(int);  // toggle role between member/admin
-    callback create-channel-template-selected(string);
-    // Invite to private group
-    callback invite-to-private-group([PrivateGroupFriend]);
-    callback toggle-invite-friend-selection(int);
-    callback toggle-invite-friend-role(int);  // toggle role for invite modal
-
-    // Create/rename section
-    callback create-section(/* name */ string, /* emoji */ string);
-    callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string);
-
-    // Join channel
-    callback search-channels(string);
-    callback join-channel(string);
-
-    // User profile
-    callback profile-send-message();
-    // Profile › Start secret chat: core starts (or finds) the secret chat
-    // with `profile-user-id` and the chat pane opens it.
-    callback profile-start-secret-chat();
-    in property <bool> profile-can-start-secret-chat: false;
-    // Chat header ⋯ › Start secret chat, for the open regular DM's peer.
-    // Asked of core when the menu opens (`can_start_secret_chat`).
-    callback chat-menu-can-start-secret-chat() -> bool;
-    callback chat-menu-start-secret-chat();
-    callback secret-timer-set(int);
-    callback profile-add-friend();
-    callback profile-remove-friend();
-    callback profile-block-user();
-    callback profile-edit-profile();
-    callback profile-view-safety-number();
-    callback profile-toggle-verified();
-    callback profile-toggle-mute();
-    callback profile-start-call(bool /* is-video */);
-    callback profile-shared-tab-selected(string /* category */);
-    callback profile-shared-load-more();
-    // message-id, attachment-id, category, selected-url
-    callback profile-open-shared-item(string, string, string, string);
-    callback profile-generate-share-link();
-    callback profile-copy-share-link();
-    callback profile-reset-share-link();
-    callback edit-profile-save(string, string);
-    callback edit-profile-change-avatar();
-    callback edit-profile-select-default-avatar(int);
-    callback edit-profile-remove-avatar();
-
-    // Friends modal
-    callback friends-modal-switch-tab(string);
-    callback friends-view-profile(string);
-    callback friends-start-dm(string);
-    callback friends-accept-request(string);
-    callback friends-decline-request(string);
-    callback friends-cancel-request(string);
-    callback friends-unblock-user(string);
-    callback friends-remove-blocked-user(string);
-    // Friend code callbacks (privacy-first discovery)
-    callback friends-generate-code(bool);   // bool = private mode
-    callback friends-generate-qr(bool);     // bool = private mode
-    callback friends-copy-code();
-    // Paste the system clipboard into the friend-code input. Slint's
-    // built-in `Ctrl+V` reads via copypasta (winit), which uses a
-    // different Wayland selection protocol than `wl-copy` / arboard's
-    // `wayland-data-control` — so paste from another app silently
-    // returns empty on most Wayland compositors. This callback routes
-    // through chatter-ui's arboard handle to bypass the mismatch.
-    callback friends-paste-code();
-    callback friends-scan-code();
-    callback friends-connect-via-code(string);
-    callback friends-accept-private-request(string);   // Accept anon DM request
-    callback friends-decline-private-request(string);  // Decline anon DM request
-    callback friends-block-private-request(string);    // Block anon DM request
-    callback friends-accept-group-invite(string);      // Accept anon group invite
-    callback friends-decline-group-invite(string);     // Decline anon group invite
-    callback friends-accept-channel-invite(string);    // Accept channel invite
-    callback friends-decline-channel-invite(string);   // Decline channel invite
-    // Message requests (anon DM)
-    callback message-requests-clicked();
-    // Group invites (anon groups)
-    callback group-invites-clicked();
-    // Channel invites
-    callback channel-invites-clicked();
-
-    // Forward message
-    callback forward-message(string);
-    callback forward-search-changed(string);
-
-    // Sessions
-    callback revoke-session(int);
-    callback revoke-all-sessions();
-    callback cancel-pending-link(string);  // provisioning uuid
-
-
-    // Settings
-    callback settings-edit-profile();
-    callback settings-change-password(string, string);
-    callback settings-view-sessions();
-    callback settings-logout();
-    callback settings-delete-account();
-    callback settings-delete-account-confirmed(string);  // password
-    callback settings-regenerate-recovery-codes(string);  // password
-    callback settings-read-receipts-changed(bool);
-    callback settings-typing-indicators-changed(bool);
-    callback settings-notification-detail-changed(string);
-    callback settings-profile-visibility-selected(string);
-    callback settings-profile-visibility-confirmed(string, string);  // key, PIN
-    callback settings-profile-visibility-cancelled();
-    callback settings-search-shortcut-changed(string);
-    callback settings-copy-fingerprint();
-    callback settings-sealed-sender-changed(bool);
-    callback settings-username-discoverable-changed(bool);
-    callback settings-change-pin(string, string);  // current_pin, new_pin
-    callback settings-retry-backup(string);  // pin
-
-    // Message-history backup
-    callback settings-export-message-backup(string);   // passphrase
-    callback settings-import-message-backup(string);   // passphrase
-    callback settings-server-message-backup(string);   // pin
-    callback settings-restore-message-backup(string);  // pin
-    in-out property <string> settings-message-backup-status: "";
-
-    // AI settings callbacks
-    callback settings-local-ai-enabled-changed(bool);
-    callback settings-local-ai-load-model(string);
-    callback settings-local-ai-unload-model();
-    callback settings-local-ai-refresh();
-    callback settings-local-ai-select-provider(string);
-    callback settings-local-ai-select-model(string);
-    callback settings-local-ai-download(string);
-
-    // Cloud AI settings callbacks
-    callback settings-ai-prefer-cloud-changed(bool);
-    callback settings-cloud-ai-mode-changed(string);
-    callback settings-cloud-ai-api-key-changed(string);
-    callback settings-cloud-ai-refresh-quota();
-
-    // ========== Channel settings callbacks ==========
-    callback channel-settings-save(string, string);  // name, description
-    callback channel-settings-pick-icon();  // opens native file picker for the channel icon
-    callback channel-settings-change-notification(string);   // preference
-    callback channel-settings-toggle-mute(bool);
-    callback channel-settings-toggle-ai(bool);
-    callback channel-settings-change-member-role(string, string);  // user-id, new-role
-    callback channel-settings-remove-member(string);  // user-id
-    callback channel-settings-ban-member(string);  // user-id
-    callback channel-settings-set-member-muted(string, bool, int);  // user-id, muted, minutes (0 = until unmuted)
-    callback channel-settings-unban-member(string);  // user-id
-    callback channel-settings-transfer-ownership(string);  // new owner's user-id
-    callback channel-settings-block-member(string, bool);  // user-id, block
-    callback channel-settings-block-group(bool);  // block
-    callback channel-settings-invite-members();  // opens invite modal for private groups
-    callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
-    callback invite-member-toggle-user(int);  // index - toggles selection
-    callback invite-member-confirm();  // confirms invite for all selected users
-    callback invite-member-search-changed(string);  // fired on every search keystroke
-    callback channel-settings-archive();
-    callback channel-settings-leave();
-    callback channel-settings-delete();
-
-    // ========== Call callbacks ==========
-    callback calls-tab-clicked();  // mobile nav "Calls" tab — loads call history
-    // Call history (Calls screen). Rows come from core pre-formatted.
-    in property <[CallHistoryRow]> call-history-rows: [];
-    in property <bool> call-history-loading: false;
-    // Automatic paging stopped at its empty-page budget with older calls left.
-    in property <bool> call-history-paging-paused: false;
-    in-out property <string> call-history-error: "";
-    // Shared with the Calls screen so root Back dismisses its local overlay first.
-    in-out property <bool> calls-more-menu-visible: false;
-    in-out property <string> call-history-filter: "all";  // "all" | "missed"
-    in property <int> missed-call-count: 0;
-    callback call-history-filter-changed(string);
-    callback call-history-open(string, string);        // conversation-id, conversation-type
-    callback call-history-redial(string, string, bool); // conversation-id, conversation-type, is-video
-    callback call-history-clear();
-    callback call-history-retry();
-    callback call-history-load-more();  // list within a screen of its loaded end
-    // Calls-screen row selection (features/calls/history.rs owns the marks).
-    in-out property <bool> call-history-selecting: false;
-    in property <int> call-history-selected-count: 0;
-    callback call-history-toggle-select(string);  // row id
-    callback call-history-select-all(bool);
-    callback call-history-end-selection();
-    callback call-history-delete-selected();
-    callback accept-incoming-call(string);  // call_id
-    callback decline-incoming-call(string); // call_id
-    callback call-toggle-mute();
-    callback call-toggle-video();
-    callback call-toggle-screen-share();
-    callback call-end();
-    callback call-peer-audio-mute-toggle(string);
-    callback call-peer-video-pause-toggle(string);
-    callback show-audio-device-picker();
-    callback show-audio-output-picker();
-    callback show-screen-source-picker();
-    callback audio-device-selected(string);   // device_id
-    callback audio-output-selected(string);   // device_id
-    callback screen-source-selected(string);  // source_id
-
 
     // ========== Anon mode (PIN modal + toggle) ==========
     in-out property <string> anon-mode-pin: "";
@@ -1484,13 +358,13 @@ export component MainWindow inherits Window {
 
     // Update sidebar collapsed/hidden state when screen size changes
     changed is-small-screen => {
-        if (root.is-small-screen && !root.sidebar-collapsed) {
+        if (root.is-small-screen && !SidebarPane.sidebar-collapsed) {
             // Auto-collapse on small screen — don't mark as user choice
-            root.sidebar-collapsed = true;
+            SidebarPane.sidebar-collapsed = true;
         }
-        if (!root.is-small-screen && root.sidebar-collapsed && !root.sidebar-user-collapsed) {
+        if (!root.is-small-screen && SidebarPane.sidebar-collapsed && !root.sidebar-user-collapsed) {
             // Auto-expand when screen grows, unless user explicitly collapsed
-            root.sidebar-collapsed = false;
+            SidebarPane.sidebar-collapsed = false;
         }
     }
     changed compact-layout => { root.refresh-screen-protection(); }
@@ -1511,36 +385,38 @@ export component MainWindow inherits Window {
     // routed directly from MainActivity when no Slint item has focus.
     forward-focus: back-scope;
 
-    changed channel-id => {
-        root.calls-more-menu-visible = false;
+    private property <string> observed-channel-id: ChatPane.channel-id;
+    changed observed-channel-id => {
+        CallView.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
         VoiceRecording.cancel();
-        root.composer-emoji-picker-visible = false;
-        root.composer-gif-picker-visible = false;
+        ChatPane.composer-emoji-picker-visible = false;
+        ChatPane.composer-gif-picker-visible = false;
     }
     private property <string> inserted-emoji;
     private property <int> insert-serial;
     public function insert-composer-emoji(emoji: string) { root.inserted-emoji = emoji; root.insert-serial += 1; }
-    changed conversation-kind => { root.calls-more-menu-visible = false; VoiceRecording.cancel(); }
-    changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
-    changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
-    changed composer-text => { root.composer-draft-changed(); }
-    changed thread-composer-text => { root.thread-draft-changed(); }
-    changed thread-panel-visible => { VoiceRecording.cancel(); }
-    changed active-tab => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); root.refresh-screen-protection(); }
+    private property <ConversationKind> observed-conversation-kind: ChatPane.conversation-kind;
+    changed observed-conversation-kind => { CallView.calls-more-menu-visible = false; VoiceRecording.cancel(); }
+    private property <bool> observed-selection-mode: ChatPane.selection-mode;
+    changed observed-selection-mode => { if ChatPane.selection-mode { VoiceRecording.cancel(); } }
+    private property <bool> observed-composer-is-editing: ChatPane.composer-is-editing;
+    changed observed-composer-is-editing => { if ChatPane.composer-is-editing { VoiceRecording.cancel(); } }
+    private property <string> observed-composer-text: ChatPane.composer-text;
+    changed observed-composer-text => { ChatPane.composer-draft-changed(); }
+    private property <string> observed-thread-composer-text: ChatPane.thread-composer-text;
+    changed observed-thread-composer-text => { ChatPane.thread-draft-changed(); }
+    private property <bool> observed-thread-panel-visible: ChatPane.thread-panel-visible;
+    changed observed-thread-panel-visible => { VoiceRecording.cancel(); }
+    private property <string> observed-active-tab: SidebarPane.active-tab;
+    changed observed-active-tab => { CallView.calls-more-menu-visible = false; CallView.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); root.refresh-screen-protection(); }
     changed current-view => {
         root.refresh-screen-protection();
-        root.calls-more-menu-visible = false;
-        root.call-history-selecting = false;
+        CallView.calls-more-menu-visible = false;
+        CallView.call-history-selecting = false;
         root.cancel-composer-keyboard-handover();
         VoiceRecording.cancel();
         back-scope.focus();
-        root.exiting-view = Appearance.reduce-motion ? "" : root.previous-view;
-        root.previous-view = root.current-view;
-        root.view-appearing = false;
-        root.view-progress = 0;
-        view-arrive.start();
-        view-leave.start();
     }
     // Drop whatever text field holds focus (hiding the soft keyboard with it)
     // without leaving the window focus-less: Back keeps arriving at
@@ -1556,7 +432,7 @@ export component MainWindow inherits Window {
     public function finish-attachment-picker(restore: bool) {
         root.composer-attachment-picker-open = false;
         if restore && root.current-view == "main" && root.active-modal == "none"
-            && (!root.compact-layout || root.mobile-show-chat) {
+            && (!root.compact-layout || SidebarPane.mobile-show-chat) {
             root.attachment-restore-serial += 1;
         }
     }
@@ -1588,7 +464,7 @@ export component MainWindow inherits Window {
         root.composer-composing = false;
         root.composer-settled-text = root.composer-composed-text;
         back-scope.focus();
-        root.composer-text = root.composer-settled-text;
+        ChatPane.composer-text = root.composer-settled-text;
     }
     private property <string> composer-settled-text;
 
@@ -1600,7 +476,7 @@ export component MainWindow inherits Window {
     // The drawer suspends text input on every platform. Give Back/Escape a
     // focus owner until search or the keyboard toggle takes focus.
     private property <bool> composer-drawer-visible:
-        root.composer-emoji-picker-visible || root.composer-gif-picker-visible;
+        ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible;
     changed composer-drawer-visible => {
         if root.composer-drawer-visible {
             root.cancel-composer-keyboard-handover();
@@ -1609,8 +485,9 @@ export component MainWindow inherits Window {
     }
     callback composer-gif-closed();
     in-out property <int> composer-gif-generation;
-    changed composer-gif-picker-visible => {
-        if !root.composer-gif-picker-visible {
+    private property <bool> observed-composer-gif-picker-visible: ChatPane.composer-gif-picker-visible;
+    changed observed-composer-gif-picker-visible => {
+        if !ChatPane.composer-gif-picker-visible {
             root.composer-gif-generation += 1;
             root.composer-gif-closed();
         }
@@ -1618,19 +495,20 @@ export component MainWindow inherits Window {
     // Same hole for the search palette: its field holds focus, and picking a
     // result closes the palette, so Back from the chat it opened did nothing
     // (RC20, 3/3). Back from that chat returns to the list, like the header ←.
-    changed unified-search-open => {
-        if (!root.unified-search-open) {
-            root.unified-search-closed();
+    private property <bool> observed-unified-search-open: SearchPane.unified-search-open;
+    changed observed-unified-search-open => {
+        if (!SearchPane.unified-search-open) {
+            SearchPane.unified-search-closed();
             back-scope.focus();
         }
     }
     changed active-modal => {
         root.refresh-screen-protection();
-        root.modal-generation += 1;
-        root.sessions-generation += 1;
-        if root.active-modal == "sessions" { root.settings-view-sessions(); }
-        root.present-active-modal();
-        root.calls-more-menu-visible = false;
+        ModalHostState.modal-generation += 1;
+        ModalHostState.sessions-generation += 1;
+        if root.active-modal == "sessions" { SettingsPane.settings-view-sessions(); }
+        modal-transitions.present-active-modal();
+        CallView.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
         if root.active-modal != "" { VoiceRecording.cancel(); }
         // On open too: taking focus off the composer is what hides the soft
@@ -1665,7 +543,6 @@ export component MainWindow inherits Window {
 
     // Catches Back/Escape delivered to Slint (including desktop keyboard
     // input). Android's Activity handles system Back before it reaches Slint.
-    //
     // focus-on-click / focus-on-tab-navigation are both off on purpose: this
     // scope must never take focus AWAY from the composer or a text field. It
     // receives focus from `forward-focus` above and from the two `changed`
@@ -1681,8 +558,8 @@ export component MainWindow inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
-                && (root.delete-confirm-count > 0 || root.calls-more-menu-visible || root.call-history-selecting || root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
-                if (event.text == Key.Escape && (root.calls-more-menu-visible || root.call-history-selecting || root.delete-confirm-count > 0)) {
+                && (ChatPane.delete-confirm-count > 0 || CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible))) {
+                if (event.text == Key.Escape && (CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0)) {
                     self.calls-menu-escape-consumed = true;
                 }
                 root.back-pressed();
@@ -1705,25 +582,12 @@ export component MainWindow inherits Window {
             }
             return event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
-                && (root.composer-emoji-picker-visible || root.composer-gif-picker-visible)) ? accept : reject;
+                && (ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible)) ? accept : reject;
         }
 
         AppShortcuts {
             current-view: root.current-view;
-            search-shortcut-pref: root.search-shortcut-pref;
-            unified-search-selected-index <=> root.unified-search-selected-index;
-            unified-search-open <=> root.unified-search-open;
             active-modal: root.active-modal;
-            active-tab <=> root.active-tab;
-            calls-more-menu-visible: root.calls-more-menu-visible;
-            call-history-selecting: root.call-history-selecting;
-            delete-confirm-count: root.delete-confirm-count;
-            channel-selected(id) => { root.channel-selected(id); }
-            unified-search-opened() => { root.unified-search-opened(); }
-            nav-push(page) => { root.nav-push(page); }
-            nav-close(page) => { root.nav-close(page); }
-            nav-pop() => { root.nav-pop(); }
-            settings-clicked() => { root.settings-clicked(); }
             back-pressed() => { root.back-pressed(); }
         }
 
@@ -1743,79 +607,15 @@ export component MainWindow inherits Window {
                 width: parent.width;
                 height: parent.height;
                 account-free-surfaces : root.account-free-surfaces;
-                avatar-options : root.avatar-options;
-                configured-server-url : root.configured-server-url;
                 current-view : root.current-view;
-                exiting-view: root.exiting-view;
+                exiting-view: view-transition.exiting-view;
                 is-mobile-platform : root.is-mobile-platform;
-                link-device-active : root.link-device-active;
-                link-device-error : root.link-device-error;
-                link-device-has-local-identity : root.link-device-has-local-identity;
-                link-device-qr : root.link-device-qr;
-                link-device-status : root.link-device-status;
-                link-device-url : root.link-device-url;
-                loading-message : root.loading-message;
-                loading-secondary-message : root.loading-secondary-message;
-                login-error : root.login-error;
-                login-identity-reset-available : root.login-identity-reset-available;
-                login-loading : root.login-loading;
-                login-password <=> root.login-password;
-                login-pin <=> root.login-pin;
-                login-server-url <=> root.login-server-url;
-                login-username <=> root.login-username;
-                login-verifying : root.login-verifying;
-                recovery-code <=> root.recovery-code;
-                recovery-confirm-password <=> root.recovery-confirm-password;
-                recovery-error : root.recovery-error;
-                recovery-loading : root.recovery-loading;
-                recovery-new-password <=> root.recovery-new-password;
-                recovery-new-pin <=> root.recovery-new-pin;
-                recovery-success : root.recovery-success;
-                recovery-username <=> root.recovery-username;
-                register-avatar-color <=> root.register-avatar-color;
-                register-avatar-source : root.register-avatar-source;
-                register-confirm-password <=> root.register-confirm-password;
-                register-display-name <=> root.register-display-name;
-                register-error : root.register-error;
-                register-has-avatar : root.register-has-avatar;
-                register-loading : root.register-loading;
-                register-password <=> root.register-password;
-                register-password-strength : root.register-password-strength;
-                register-pin <=> root.register-pin;
-                register-pin-strength : root.register-pin-strength;
-                register-selected-default-idx <=> root.register-selected-default-idx;
-                register-server-url <=> root.register-server-url;
-                register-username <=> root.register-username;
                 server-unreachable : root.server-unreachable;
-                user-display-name : root.user-display-name;
-                view-progress : root.view-progress;
-                accept-new-identity() => { root.accept-new-identity(); }
-                continue-without-account() => { root.continue-without-account(); }
-                go-to-link-device() => { root.go-to-link-device(); }
-                go-to-login() => { root.go-to-login(); }
-                go-to-recovery() => { root.go-to-recovery(); }
-                go-to-register() => { root.go-to-register(); }
-                link-device-cancel() => { root.link-device-cancel(); }
-                link-device-copy() => { root.link-device-copy(); }
-                link-device-start() => { root.link-device-start(); }
-                login(arg0, arg1, arg2, arg3) => { root.login(arg0, arg1, arg2, arg3); }
-                recover-account(arg0, arg1, arg2, arg3) => { root.recover-account(arg0, arg1, arg2, arg3); }
-                register(arg0, arg1, arg2, arg3, arg4) => { root.register(arg0, arg1, arg2, arg3, arg4); }
-                register-clear-error() => { root.register-clear-error(); }
-                register-password-changed(arg0) => { root.register-password-changed(arg0); }
-                register-pin-changed(arg0) => { root.register-pin-changed(arg0); }
-                register-pin-validation(arg0) => { return root.register-pin-validation(arg0); }
-                register-remove-avatar() => { root.register-remove-avatar(); }
-                register-select-avatar() => { root.register-select-avatar(); }
-                register-select-default-avatar(arg0) => { root.register-select-default-avatar(arg0); }
-                register-username-validation(arg0) => { return root.register-username-validation(arg0); }
-                welcome-add-friends() => { root.welcome-add-friends(); }
-                welcome-browse-channels() => { root.welcome-browse-channels(); }
-                welcome-get-started() => { root.welcome-get-started(); }
+                view-progress : view-transition.view-progress;
             }
 
             // During the brief visual handoff, neither page accepts a stray tap.
-            if root.exiting-view != "": TouchArea {
+            if view-transition.exiting-view != "": TouchArea {
                 z: 3;
                 width: parent.width;
                 height: parent.height;
@@ -1825,67 +625,16 @@ export component MainWindow inherits Window {
             // Main chat layout — parent Rectangle already accounts for all insets.
             if current-view == "main": MainChatShell {
                 z: -2;
+                chat-push-progress <=> root.chat-push-progress;
                 width: 100%;
                 height: parent.height;
-                active-call-data : root.active-call-data;
-                active-call-fullscreen <=> root.active-call-fullscreen;
-                active-call-visible : root.active-call-visible;
-                active-channel-call-id : root.active-channel-call-id;
-                active-channel-call-participants : root.active-channel-call-participants;
-                active-channel-call-video : root.active-channel-call-video;
-                active-tab <=> root.active-tab;
                 attachment-prepare-serial : root.attachment-prepare-serial;
                 attachment-restore-serial : root.attachment-restore-serial;
-                audio-elapsed : root.audio-elapsed;
-                audio-progress : root.audio-progress;
                 bottom-nav-visible : root.bottom-nav-visible;
-                call-is-muted : root.call-is-muted;
-                call-is-screen-sharing : root.call-is-screen-sharing;
-                call-is-video-enabled : root.call-is-video-enabled;
-                call-local-video-frame : root.call-local-video-frame;
-                call-remote-video-frames : root.call-remote-video-frames;
-                call-speaker-on : root.call-speaker-on;
-                call-speaker-toggle : root.call-speaker-toggle;
-                channel-avatar-source : root.channel-avatar-source;
-                channel-has-avatar : root.channel-has-avatar;
-                channel-id : root.channel-id;
-                channel-name : root.channel-name;
-                chat-can-forward : root.chat-can-forward;
-                chat-edge-start <=> root.chat-edge-start;
-                chat-edge-swiping <=> root.chat-edge-swiping;
-                chat-list-scrolling <=> root.chat-list-scrolling;
-                chat-menu-secret-chat <=> root.chat-menu-secret-chat;
-                chat-menu-settings <=> root.chat-menu-settings;
-                chat-menu-video <=> root.chat-menu-video;
-                chat-push-progress <=> root.chat-push-progress;
-                chat-rows : root.chat-rows;
-                chat-rows-loading : root.chat-rows-loading;
                 chat-traffic-lights-lead : root.chat-traffic-lights-lead;
                 compact-layout : root.compact-layout;
                 composer-composed-text <=> root.composer-composed-text;
                 composer-composing <=> root.composer-composing;
-                composer-edit-message-id <=> root.composer-edit-message-id;
-                composer-emoji-category <=> root.composer-emoji-category;
-                composer-emoji-list : root.composer-emoji-list;
-                composer-emoji-picker-visible <=> root.composer-emoji-picker-visible;
-                composer-emoji-search <=> root.composer-emoji-search;
-                composer-emoji-skin-tone <=> root.composer-emoji-skin-tone;
-                composer-gif-picker-failed : root.composer-gif-picker-failed;
-                composer-gif-picker-loading : root.composer-gif-picker-loading;
-                composer-gif-picker-recent : root.composer-gif-picker-recent;
-                composer-gif-picker-results : root.composer-gif-picker-results;
-                composer-gif-picker-search <=> root.composer-gif-picker-search;
-                composer-gif-picker-visible <=> root.composer-gif-picker-visible;
-                composer-gifs-available : root.composer-gifs-available;
-                composer-is-editing <=> root.composer-is-editing;
-                composer-is-replying : root.composer-is-replying;
-                composer-notice : root.composer-notice;
-                composer-placeholder : root.composer-placeholder;
-                composer-reply-has-thumbnail : root.composer-reply-has-thumbnail;
-                composer-reply-preview : root.composer-reply-preview;
-                composer-reply-thumbnail : root.composer-reply-thumbnail;
-                composer-reply-to-sender-name : root.composer-reply-to-sender-name;
-                composer-text <=> root.composer-text;
                 connection-banner-dismissed <=> root.connection-banner-dismissed;
                 connection-reconnect-attempt : root.connection-reconnect-attempt;
                 connection-status : root.connection-status;
@@ -1893,210 +642,36 @@ export component MainWindow inherits Window {
                 context-menu-anchor-left <=> root.context-menu-anchor-left;
                 context-menu-anchor-right <=> root.context-menu-anchor-right;
                 context-menu-anchor-top <=> root.context-menu-anchor-top;
-                context-menu-content-top <=> root.context-menu-content-top;
                 context-menu-preview-from-thread <=> root.context-menu-preview-from-thread;
                 context-menu-preview-message <=> root.context-menu-preview-message;
                 context-menu-preview-mobile <=> root.context-menu-preview-mobile;
                 context-menu-preview-row-width <=> root.context-menu-preview-row-width;
                 context-menu-preview-row-x <=> root.context-menu-preview-row-x;
                 context-menu-preview-row-y <=> root.context-menu-preview-row-y;
-                context-menu-visible <=> root.context-menu-visible;
-                conversation-kind : root.conversation-kind;
-                conversation-read-only : root.conversation-read-only;
-                create-channel-initial-tab <=> root.create-channel-initial-tab;
-                create-section-id <=> root.create-section-id;
-                create-section-rename-mode <=> root.create-section-rename-mode;
-                current-playing-attachment-id : root.current-playing-attachment-id;
-                custom-sections : root.custom-sections;
-                delete-choice-everyone <=> root.delete-choice-everyone;
-                delete-choice-me <=> root.delete-choice-me;
-                delete-choosing <=> root.delete-choosing;
-                delete-confirm-count <=> root.delete-confirm-count;
-                delete-confirm-everyone <=> root.delete-confirm-everyone;
-                delete-confirm-sender <=> root.delete-confirm-sender;
                 drawer-keyboard-height : root.drawer-keyboard-height;
-                friends-modal-tab <=> root.friends-modal-tab;
-                friends-received-requests : root.friends-received-requests;
-                friends-requests-sub-tab <=> root.friends-requests-sub-tab;
-                has-pinned-messages : root.has-pinned-messages;
-                header-can-call : root.header-can-call;
-                header-can-invite : root.header-can-invite;
-                header-can-open-pinned-list : root.header-can-open-pinned-list;
-                header-can-open-settings : root.header-can-open-settings;
-                header-presence-status : root.header-presence-status;
-                highlighted-message-id : root.highlighted-message-id;
-                history-load-failed <=> root.history-load-failed;
-                identity-change-attributed : root.identity-change-attributed;
-                identity-change-detail : root.identity-change-detail;
-                identity-change-title : root.identity-change-title;
-                identity-change-visible : root.identity-change-visible;
                 insert-serial : root.insert-serial;
                 inserted-emoji : root.inserted-emoji;
-                invited-count : root.invited-count;
-                is-at-bottom <=> root.is-at-bottom;
-                is-dm : root.is-dm;
-                is-media-playing : root.is-media-playing;
                 is-mobile-platform : root.is-mobile-platform;
-                is-signed-in : root.is-signed-in;
                 is-small-screen : root.is-small-screen;
-                jarvis-thinking : root.jarvis-thinking;
                 keyboard-open : root.keyboard-open;
-                loading-messages : root.loading-messages;
                 macos-titlebar-height : root.macos-titlebar-height;
                 macos-traffic-lights-width : root.macos-traffic-lights-width;
-                member-count : root.member-count;
-                message-first-visible-row <=> root.message-first-visible-row;
-                message-last-visible-row <=> root.message-last-visible-row;
-                message-scroll-position <=> root.message-scroll-position;
-                messages : root.messages;
-                missed-call-count : root.missed-call-count;
-                mobile-show-chat <=> root.mobile-show-chat;
-                pending-attachments : root.pending-attachments;
-                pending-channel-invites : root.pending-channel-invites;
-                pending-group-invites : root.pending-group-invites;
-                pending-message-requests : root.pending-message-requests;
-                pinned-current-index : root.pinned-current-index;
-                pinned-message-preview : root.pinned-message-preview;
-                pinned-thumbnail : root.pinned-thumbnail;
-                pinned-total-count : root.pinned-total-count;
-                privacy-line-exposed : root.privacy-line-exposed;
-                privacy-line-override : root.privacy-line-override;
-                private-channel : root.private-channel;
-                private-request-decision : root.private-request-decision;
-                reaction-picker-anchor-x <=> root.reaction-picker-anchor-x;
-                reaction-picker-anchor-y <=> root.reaction-picker-anchor-y;
-                reaction-picker-sender-id <=> root.reaction-picker-sender-id;
-                reaction-picker-timestamp-ns <=> root.reaction-picker-timestamp-ns;
-                reaction-picker-visible <=> root.reaction-picker-visible;
                 reply-focus-serial <=> root.reply-focus-serial;
                 return-to-call-height : root.return-to-call-height;
                 safe-area-bottom : root.safe-area-bottom;
-                scroll-to-message-index : root.scroll-to-message-index;
-                secret-request-actions : root.secret-request-actions;
-                selected-message-count : root.selected-message-count;
-                selection-mode <=> root.selection-mode;
                 server-unreachable : root.server-unreachable;
-                should-auto-scroll : root.should-auto-scroll;
-                sidebar-collapsed : root.sidebar-collapsed;
-                sidebar-hidden : root.sidebar-hidden;
                 sidebar-is-rail : root.sidebar-is-rail;
                 sidebar-user-collapsed <=> root.sidebar-user-collapsed;
-                thread-composer-text <=> root.thread-composer-text;
-                thread-loading : root.thread-loading;
-                thread-panel-visible : root.thread-panel-visible;
-                thread-replies : root.thread-replies;
-                thread-reply-count : root.thread-reply-count;
-                thread-root-content-preview : root.thread-root-content-preview;
-                thread-root-message-id : root.thread-root-message-id;
-                thread-root-sender-name : root.thread-root-sender-name;
-                topic : root.topic;
-                typing-indicator : root.typing-indicator;
-                unified-search-open <=> root.unified-search-open;
-                unified-search-selected-index <=> root.unified-search-selected-index;
-                unread-count <=> root.unread-count;
-                unread-index <=> root.unread-index;
-                user-avatar-source : root.user-avatar-source;
-                user-display-name : root.user-display-name;
-                user-initials : root.user-initials;
-                user-presence-status : root.user-presence-status;
                 viewer-origin-height <=> root.viewer-origin-height;
                 viewer-origin-width <=> root.viewer-origin-width;
                 viewer-origin-x <=> root.viewer-origin-x;
                 viewer-origin-y <=> root.viewer-origin-y;
                 window-height: root.height;
                 keyboard-inset: root.virtual-keyboard-size.height;
-                attachment-clicked() => { root.attachment-clicked(); }
-                audio-seek(arg0, arg1) => { root.audio-seek(arg0, arg1); }
-                call-end() => { root.call-end(); }
-                call-peer-audio-mute-toggle(arg0) => { root.call-peer-audio-mute-toggle(arg0); }
-                call-peer-video-pause-toggle(arg0) => { root.call-peer-video-pause-toggle(arg0); }
-                call-toggle-mute() => { root.call-toggle-mute(); }
-                call-toggle-screen-share() => { root.call-toggle-screen-share(); }
-                call-toggle-speaker() => { root.call-toggle-speaker(); }
-                call-toggle-video() => { root.call-toggle-video(); }
-                calls-tab-clicked() => { root.calls-tab-clicked(); }
-                cancel-edit() => { root.cancel-edit(); }
-                cancel-reply() => { root.cancel-reply(); }
-                channel-invites-clicked() => { root.channel-invites-clicked(); }
-                channel-selected(arg0) => { root.channel-selected(arg0); }
-                chat-menu-can-start-secret-chat() => { return root.chat-menu-can-start-secret-chat(); }
-                chat-settings-clicked() => { root.chat-settings-clicked(); }
-                close-thread-clicked() => { root.close-thread-clicked(); }
-                composer-emoji-category-changed(arg0) => { root.composer-emoji-category-changed(arg0); }
-                composer-emoji-search-changed(arg0) => { root.composer-emoji-search-changed(arg0); }
-                composer-emoji-selected(arg0) => { root.composer-emoji-selected(arg0); }
-                composer-emoji-skin-tone-changed(arg0) => { root.composer-emoji-skin-tone-changed(arg0); }
-                composer-gif-search-changed(arg0) => { root.composer-gif-search-changed(arg0); }
-                composer-gif-selected(arg0, arg1) => { root.composer-gif-selected(arg0, arg1); }
-                delete-conversation(arg0, arg1) => { root.delete-conversation(arg0, arg1); }
-                delete-section-clicked(arg0) => { root.delete-section-clicked(arg0); }
-                dm-selected(arg0) => { root.dm-selected(arg0); }
-                emoji-clicked() => { root.emoji-clicked(); }
-                forward-message-action(arg0, arg1) => { root.forward-message-action(arg0, arg1); }
-                gif-clicked() => { root.gif-clicked(); }
-                go-to-login() => { root.go-to-login(); }
-                group-invites-clicked() => { root.group-invites-clicked(); }
-                identity-change-accept-clicked() => { root.identity-change-accept-clicked(); }
-                invite-member() => { root.invite-member(); }
-                leave-conversation(arg0, arg1) => { root.leave-conversation(arg0, arg1); }
-                list-geometry(arg0, arg1, arg2) => { root.list-geometry(arg0, arg1, arg2); }
-                load-more() => { root.load-more(); }
-                load-more-thread-replies() => { root.load-more-thread-replies(); }
-                mention-triggered(arg0) => { root.mention-triggered(arg0); }
-                message-clicked(arg0) => { root.message-clicked(arg0); }
-                message-requests-clicked() => { root.message-requests-clicked(); }
-                message-selection-toggled(arg0) => { root.message-selection-toggled(arg0); }
-                more-clicked(arg0, arg1, arg2, arg3) => { root.more-clicked(arg0, arg1, arg2, arg3); }
-                move-section(arg0, arg1) => { root.move-section(arg0, arg1); }
-                move-to-section(arg0, arg1, arg2) => { root.move-to-section(arg0, arg1, arg2); }
-                nav-push(arg0) => { root.nav-push(arg0); }
-                open-message-link(arg0) => { root.open-message-link(arg0); }
-                paste-image() => { root.paste-image(); }
-                pinned-dismiss-clicked() => { root.pinned-dismiss-clicked(); }
-                pinned-go-to-message() => { root.pinned-go-to-message(); }
-                pinned-next-clicked() => { root.pinned-next-clicked(); }
-                pinned-prev-clicked() => { root.pinned-prev-clicked(); }
-                pinned-show-clicked() => { root.pinned-show-clicked(); }
-                private-group-selected(arg0) => { root.private-group-selected(arg0); }
-                quote-clicked(arg0) => { root.quote-clicked(arg0); }
-                react-clicked(arg0, arg1, arg2, arg3) => { root.react-clicked(arg0, arg1, arg2, arg3); }
-                reaction-selected(arg0, arg1, arg2, arg3) => { root.reaction-selected(arg0, arg1, arg2, arg3); }
-                refresh-channel-call() => { root.refresh-channel-call(); }
                 release-text-focus() => { root.release-text-focus(); }
-                remove-attachment(arg0) => { root.remove-attachment(arg0); }
-                remove-from-section(arg0) => { root.remove-from-section(arg0); }
-                rename-section-clicked(arg0) => { root.rename-section-clicked(arg0); }
-                reply-clicked(arg0, arg1) => { root.reply-clicked(arg0, arg1); }
                 request-composer-keyboard(arg0) => { root.request-composer-keyboard(arg0); }
-                saved-messages-clicked() => { root.saved-messages-clicked(); }
-                secret-request-accept-clicked() => { root.secret-request-accept-clicked(); }
-                secret-request-decline-clicked() => { root.secret-request-decline-clicked(); }
-                section-conversation-selected(arg0, arg1) => { root.section-conversation-selected(arg0, arg1); }
-                section-toggle-expanded(arg0) => { root.section-toggle-expanded(arg0); }
-                selection-cleared() => { root.selection-cleared(); }
-                selection-copy-clicked() => { root.selection-copy-clicked(); }
-                selection-forward-clicked() => { root.selection-forward-clicked(); }
-                send(arg0) => { return root.send(arg0); }
-                send-edit(arg0, arg1) => { root.send-edit(arg0, arg1); }
-                send-thread-reply(arg0) => { root.send-thread-reply(arg0); }
-                sender-profile-requested(arg0) => { root.sender-profile-requested(arg0); }
-                set-conversation-pinned(arg0, arg1) => { root.set-conversation-pinned(arg0, arg1); }
-                set-section-sort-mode(arg0, arg1) => { root.set-section-sort-mode(arg0, arg1); }
                 settle-composer() => { root.settle-composer(); }
-                show-audio-device-picker() => { root.show-audio-device-picker(); }
-                show-audio-output-picker() => { root.show-audio-output-picker(); }
-                show-screen-source-picker() => { root.show-screen-source-picker(); }
-                start-create-channel() => { root.start-create-channel(); }
-                start-create-section() => { root.start-create-section(); }
-                start-video-call() => { root.start-video-call(); }
-                start-voice-call() => { root.start-voice-call(); }
-                thread-clicked(arg0) => { root.thread-clicked(arg0); }
                 toggle-anon-mode() => { root.toggle-anon-mode(); }
-                toggle-sidebar() => { root.toggle-sidebar(); }
-                typing-changed(arg0) => { root.typing-changed(arg0); }
-                unified-search-opened() => { root.unified-search-opened(); }
-                view-attachment(arg0) => { root.view-attachment(arg0); }
-                visible-media-rows(arg0, arg1) => { root.visible-media-rows(arg0, arg1); }
                 watch-composer-keyboard() => { root.watch-composer-keyboard(); }
             }
 
@@ -2105,224 +680,21 @@ export component MainWindow inherits Window {
             width: parent.width;
             height: parent.height;
             active-modal : root.active-modal;
-            active-tab <=> root.active-tab;
-            avatar-options : root.avatar-options;
             compact-layout : root.compact-layout;
-            create-channel-ai-model <=> root.create-channel-ai-model;
-            create-channel-ai-models : root.create-channel-ai-models;
-            create-channel-ai-models-error : root.create-channel-ai-models-error;
-            create-channel-ai-models-loading : root.create-channel-ai-models-loading;
-            create-channel-ai-provider <=> root.create-channel-ai-provider;
-            create-channel-available-friends <=> root.create-channel-available-friends;
-            create-channel-description <=> root.create-channel-description;
-            create-channel-error : root.create-channel-error;
-            create-channel-has-icon-preview <=> root.create-channel-has-icon-preview;
-            create-channel-icon-preview <=> root.create-channel-icon-preview;
-            create-channel-icon-url <=> root.create-channel-icon-url;
-            create-channel-initial-tab : root.create-channel-initial-tab;
-            create-channel-loading : root.create-channel-loading;
-            create-channel-name <=> root.create-channel-name;
-            create-channel-selected-friend-count <=> root.create-channel-selected-friend-count;
-            create-channel-template <=> root.create-channel-template;
-            edit-profile-avatar : root.edit-profile-avatar;
-            edit-profile-avatar-color : root.edit-profile-avatar-color;
-            edit-profile-bio <=> root.edit-profile-bio;
-            edit-profile-display-name <=> root.edit-profile-display-name;
-            edit-profile-error : root.edit-profile-error;
-            edit-profile-has-photo : root.edit-profile-has-photo;
-            edit-profile-loading : root.edit-profile-loading;
-            edit-profile-selected-default-idx : root.edit-profile-selected-default-idx;
-            exiting-modal : root.exiting-modal;
-            friends-modal-tab <=> root.friends-modal-tab;
-            friends-requests-sub-tab <=> root.friends-requests-sub-tab;
-            invite-member-channel-name : root.invite-member-channel-name;
-            invite-member-loading : root.invite-member-loading;
-            invite-member-selected-count <=> root.invite-member-selected-count;
-            invite-member-users <=> root.invite-member-users;
-            invite-private-group-friends <=> root.invite-private-group-friends;
-            invite-private-group-loading : root.invite-private-group-loading;
-            invite-private-group-selected-count <=> root.invite-private-group-selected-count;
+            exiting-modal : modal-transitions.exiting-modal;
             is-mobile-platform : root.is-mobile-platform;
-            join-channel-error : root.join-channel-error;
-            join-channel-joining : root.join-channel-joining;
-            join-channel-results : root.join-channel-results;
-            join-channel-search-query <=> root.join-channel-search-query;
-            join-channel-searching : root.join-channel-searching;
-            join-channel-selected-id <=> root.join-channel-selected-id;
-            link-approve-busy : root.link-approve-busy;
-            link-approve-error : root.link-approve-error;
-            link-approve-password <=> root.link-approve-password;
-            link-approve-preview-name : root.link-approve-preview-name;
-            link-approve-preview-ready : root.link-approve-preview-ready;
-            link-approve-preview-server : root.link-approve-preview-server;
-            link-approve-status : root.link-approve-status;
-            link-approve-url <=> root.link-approve-url;
-            link-approve-verification-code : root.link-approve-verification-code;
-            mobile-show-chat <=> root.mobile-show-chat;
-            presented-modal : root.presented-modal;
-            profile-avatar-source : root.profile-avatar-source;
-            profile-bio : root.profile-bio;
-            profile-can-start-secret-chat : root.profile-can-start-secret-chat;
-            profile-display-name : root.profile-display-name;
-            profile-initials : root.profile-initials;
-            profile-is-anonymous : root.profile-is-anonymous;
-            profile-is-blocked : root.profile-is-blocked;
-            profile-is-friend : root.profile-is-friend;
-            profile-is-muted : root.profile-is-muted;
-            profile-is-self : root.profile-is-self;
-            profile-is-verified : root.profile-is-verified;
-            profile-last-seen : root.profile-last-seen;
-            profile-loading : root.profile-loading;
-            profile-presence : root.profile-presence;
-            profile-safety-number : root.profile-safety-number;
-            profile-scoped-member : root.profile-scoped-member;
-            profile-share-link : root.profile-share-link;
-            profile-share-qr : root.profile-share-qr;
-            profile-share-status : root.profile-share-status;
-            profile-shared-items : root.profile-shared-items;
-            profile-shared-loading : root.profile-shared-loading;
-            profile-shared-tab <=> root.profile-shared-tab;
-            profile-shared-tabs : root.profile-shared-tabs;
-            profile-show-safety-number <=> root.profile-show-safety-number;
-            profile-status-text : root.profile-status-text;
-            profile-user-id : root.profile-user-id;
-            profile-username : root.profile-username;
-            recovery-codes : root.recovery-codes;
-            recovery-codes-regenerated <=> root.recovery-codes-regenerated;
-            settings-sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
-            user-presence-mode <=> root.user-presence-mode;
-            change-user-status(arg0) => { root.change-user-status(arg0); }
-            channel-selected(arg0) => { root.channel-selected(arg0); }
-            create-channel(arg0, arg1, arg2, arg3, arg4, arg5) => { root.create-channel(arg0, arg1, arg2, arg3, arg4, arg5); }
-            create-channel-pick-icon() => { root.create-channel-pick-icon(); }
-            create-channel-provider-selected(arg0) => { root.create-channel-provider-selected(arg0); }
-            create-channel-template-selected(arg0) => { root.create-channel-template-selected(arg0); }
-            create-private-group(arg0, arg1) => { root.create-private-group(arg0, arg1); }
-            edit-profile-change-avatar() => { root.edit-profile-change-avatar(); }
-            edit-profile-remove-avatar() => { root.edit-profile-remove-avatar(); }
-            edit-profile-save(arg0, arg1) => { root.edit-profile-save(arg0, arg1); }
-            edit-profile-select-default-avatar(arg0) => { root.edit-profile-select-default-avatar(arg0); }
-            friends-modal-switch-tab(arg0) => { root.friends-modal-switch-tab(arg0); }
-            friends-start-dm(arg0) => { root.friends-start-dm(arg0); }
-            friends-view-profile(arg0) => { root.friends-view-profile(arg0); }
-            invite-member-confirm() => { root.invite-member-confirm(); }
-            invite-member-search-changed(arg0) => { root.invite-member-search-changed(arg0); }
-            invite-member-toggle-user(arg0) => { root.invite-member-toggle-user(arg0); }
-            invite-to-private-group(arg0) => { root.invite-to-private-group(arg0); }
-            join-channel(arg0) => { root.join-channel(arg0); }
-            link-approve-close() => { root.link-approve-close(); }
-            link-approve-paste-changed(arg0) => { root.link-approve-paste-changed(arg0); }
-            link-approve-scan() => { root.link-approve-scan(); }
-            link-approve-submit(arg0) => { root.link-approve-submit(arg0); }
-            nav-close(arg0) => { root.nav-close(arg0); }
-            nav-pop() => { root.nav-pop(); }
-            nav-push(arg0) => { root.nav-push(arg0); }
-            profile-add-friend() => { root.profile-add-friend(); }
-            profile-block-user() => { root.profile-block-user(); }
-            profile-copy-share-link() => { root.profile-copy-share-link(); }
-            profile-edit-profile() => { root.profile-edit-profile(); }
-            profile-generate-share-link() => { root.profile-generate-share-link(); }
-            profile-open-shared-item(arg0, arg1, arg2, arg3) => { root.profile-open-shared-item(arg0, arg1, arg2, arg3); }
-            profile-remove-friend() => { root.profile-remove-friend(); }
-            profile-reset-share-link() => { root.profile-reset-share-link(); }
-            profile-send-message() => { root.profile-send-message(); }
-            profile-shared-load-more() => { root.profile-shared-load-more(); }
-            profile-shared-tab-selected(arg0) => { root.profile-shared-tab-selected(arg0); }
-            profile-start-call(arg0) => { root.profile-start-call(arg0); }
-            profile-start-secret-chat() => { root.profile-start-secret-chat(); }
-            profile-toggle-mute() => { root.profile-toggle-mute(); }
-            profile-toggle-verified() => { root.profile-toggle-verified(); }
-            profile-view-safety-number() => { root.profile-view-safety-number(); }
-            recovery-codes-confirmed() => { return root.recovery-codes-confirmed(); }
-            recovery-codes-copy-all() => { root.recovery-codes-copy-all(); }
-            sealed-sender-intro-confirmed(arg0) => { root.sealed-sender-intro-confirmed(arg0); }
-            search-channels(arg0) => { root.search-channels(arg0); }
-            toggle-friend-role(arg0) => { root.toggle-friend-role(arg0); }
-            toggle-friend-selection(arg0) => { root.toggle-friend-selection(arg0); }
-            toggle-invite-friend-role(arg0) => { root.toggle-invite-friend-role(arg0); }
-            toggle-invite-friend-selection(arg0) => { root.toggle-invite-friend-selection(arg0); }
+            presented-modal : modal-transitions.presented-modal;
         }
 
         AppTabScreens {
             z: -1;
             width: parent.width;
             height: parent.height;
-            active-call-visible : root.active-call-visible;
-            active-tab <=> root.active-tab;
             bottom-nav-visible : root.bottom-nav-visible;
-            call-history-error : root.call-history-error;
-            call-history-filter <=> root.call-history-filter;
-            call-history-loading : root.call-history-loading;
-            call-history-paging-paused : root.call-history-paging-paused;
-            call-history-rows : root.call-history-rows;
-            call-history-selected-count : root.call-history-selected-count;
-            call-history-selecting : root.call-history-selecting;
-            calls-more-menu-visible <=> root.calls-more-menu-visible;
             compact-layout : root.compact-layout;
-            friends-blocked-users : root.friends-blocked-users;
-            friends-channel-invites : root.friends-channel-invites;
-            friends-code-input <=> root.friends-code-input;
-            friends-code-status <=> root.friends-code-status;
-            friends-group-invites : root.friends-group-invites;
-            friends-list : root.friends-list;
-            friends-loading : root.friends-loading;
-            friends-modal-tab <=> root.friends-modal-tab;
-            friends-my-code <=> root.friends-my-code;
-            friends-private-requests : root.friends-private-requests;
-            friends-qr-code-image <=> root.friends-qr-code-image;
-            friends-received-requests : root.friends-received-requests;
-            friends-request-note <=> root.friends-request-note;
-            friends-requests-sub-tab <=> root.friends-requests-sub-tab;
-            friends-sent-requests : root.friends-sent-requests;
-            friends-show-qr <=> root.friends-show-qr;
-            group-invite-decision : root.group-invite-decision;
-            group-invite-error : root.group-invite-error;
-            group-invite-error-id : root.group-invite-error-id;
             is-mobile-platform : root.is-mobile-platform;
-            mobile-show-chat <=> root.mobile-show-chat;
-            private-request-decision : root.private-request-decision;
             return-to-call-height : root.return-to-call-height;
             safe-area-bottom : root.safe-area-bottom;
-            settings-username : root.settings-username;
-            user-avatar-source : root.user-avatar-source;
-            user-display-name : root.user-display-name;
-            user-initials : root.user-initials;
-            call-history-clear() => { root.call-history-clear(); }
-            call-history-delete-selected() => { root.call-history-delete-selected(); }
-            call-history-end-selection() => { root.call-history-end-selection(); }
-            call-history-filter-changed(arg0) => { root.call-history-filter-changed(arg0); }
-            call-history-load-more() => { root.call-history-load-more(); }
-            call-history-open(arg0, arg1) => { root.call-history-open(arg0, arg1); }
-            call-history-redial(arg0, arg1, arg2) => { root.call-history-redial(arg0, arg1, arg2); }
-            call-history-retry() => { root.call-history-retry(); }
-            call-history-select-all(arg0) => { root.call-history-select-all(arg0); }
-            call-history-toggle-select(arg0) => { root.call-history-toggle-select(arg0); }
-            friends-accept-channel-invite(arg0) => { root.friends-accept-channel-invite(arg0); }
-            friends-accept-group-invite(arg0) => { root.friends-accept-group-invite(arg0); }
-            friends-accept-private-request(arg0) => { root.friends-accept-private-request(arg0); }
-            friends-accept-request(arg0) => { root.friends-accept-request(arg0); }
-            friends-block-private-request(arg0) => { root.friends-block-private-request(arg0); }
-            friends-cancel-request(arg0) => { root.friends-cancel-request(arg0); }
-            friends-connect-via-code(arg0) => { root.friends-connect-via-code(arg0); }
-            friends-copy-code() => { root.friends-copy-code(); }
-            friends-decline-channel-invite(arg0) => { root.friends-decline-channel-invite(arg0); }
-            friends-decline-group-invite(arg0) => { root.friends-decline-group-invite(arg0); }
-            friends-decline-private-request(arg0) => { root.friends-decline-private-request(arg0); }
-            friends-decline-request(arg0) => { root.friends-decline-request(arg0); }
-            friends-generate-code(arg0) => { root.friends-generate-code(arg0); }
-            friends-generate-qr(arg0) => { root.friends-generate-qr(arg0); }
-            friends-modal-switch-tab(arg0) => { root.friends-modal-switch-tab(arg0); }
-            friends-paste-code() => { root.friends-paste-code(); }
-            friends-remove-blocked-user(arg0) => { root.friends-remove-blocked-user(arg0); }
-            friends-scan-code() => { root.friends-scan-code(); }
-            friends-start-dm(arg0) => { root.friends-start-dm(arg0); }
-            friends-unblock-user(arg0) => { root.friends-unblock-user(arg0); }
-            friends-view-profile(arg0) => { root.friends-view-profile(arg0); }
-            nav-push(arg0) => { root.nav-push(arg0); }
-            profile-clicked() => { root.profile-clicked(); }
-            saved-messages-clicked() => { root.saved-messages-clicked(); }
-            settings-clicked() => { root.settings-clicked(); }
-            start-create-channel() => { root.start-create-channel(); }
         }
 
         AppSecondaryModals {
@@ -2333,154 +705,16 @@ export component MainWindow inherits Window {
             anon-mode-pin <=> root.anon-mode-pin;
             anon-mode-pin-error : root.anon-mode-pin-error;
             anon-mode-verifying : root.anon-mode-verifying;
-            channel-avatar-source : root.channel-avatar-source;
-            channel-has-avatar : root.channel-has-avatar;
-            channel-id : root.channel-id;
-            channel-settings-ai-enabled <=> root.channel-settings-ai-enabled;
-            channel-settings-archived : root.channel-settings-archived;
-            channel-settings-banned-members : root.channel-settings-banned-members;
-            channel-settings-can-archive : root.channel-settings-can-archive;
-            channel-settings-can-delete : root.channel-settings-can-delete;
-            channel-settings-can-edit : root.channel-settings-can-edit;
-            channel-settings-can-leave : root.channel-settings-can-leave;
-            channel-settings-can-manage-members : root.channel-settings-can-manage-members;
-            channel-settings-can-view-bans : root.channel-settings-can-view-bans;
-            channel-settings-created-at : root.channel-settings-created-at;
-            channel-settings-description : root.channel-settings-description;
-            channel-settings-description-draft <=> root.channel-settings-description-draft;
-            channel-settings-error : root.channel-settings-error;
-            channel-settings-group-blocked : root.channel-settings-group-blocked;
-            channel-settings-has-icon-preview <=> root.channel-settings-has-icon-preview;
-            channel-settings-icon-preview <=> root.channel-settings-icon-preview;
-            channel-settings-id : root.channel-settings-id;
-            channel-settings-invited-count : root.channel-settings-invited-count;
-            channel-settings-is-owner : root.channel-settings-is-owner;
-            channel-settings-loading : root.channel-settings-loading;
-            channel-settings-member-count : root.channel-settings-member-count;
-            channel-settings-members : root.channel-settings-members;
-            channel-settings-muted <=> root.channel-settings-muted;
-            channel-settings-name : root.channel-settings-name;
-            channel-settings-name-draft <=> root.channel-settings-name-draft;
-            channel-settings-notification-pref <=> root.channel-settings-notification-pref;
-            channel-settings-saving : root.channel-settings-saving;
-            channel-settings-type : root.channel-settings-type;
-            chat-menu-secret-chat : root.chat-menu-secret-chat;
-            chat-menu-settings : root.chat-menu-settings;
-            chat-menu-video : root.chat-menu-video;
             compact-layout : root.compact-layout;
-            conversation-kind : root.conversation-kind;
-            create-section-emoji <=> root.create-section-emoji;
-            create-section-id : root.create-section-id;
-            create-section-loading : root.create-section-loading;
-            create-section-name <=> root.create-section-name;
-            create-section-rename-mode : root.create-section-rename-mode;
-            exiting-modal : root.exiting-modal;
+            exiting-modal : modal-transitions.exiting-modal;
             fab-y : root.fab-y;
-            forward-loading : root.forward-loading;
-            forward-message-preview : root.forward-message-preview;
-            forward-search-text <=> root.forward-search-text;
-            forward-targets : root.forward-targets;
-            friends-list : root.friends-list;
             is-mobile-platform : root.is-mobile-platform;
-            jarvis-memory-entities : root.jarvis-memory-entities;
-            jarvis-memory-facts : root.jarvis-memory-facts;
-            jarvis-memory-graph-edges : root.jarvis-memory-graph-edges;
-            jarvis-memory-graph-nodes : root.jarvis-memory-graph-nodes;
-            jarvis-memory-stats : root.jarvis-memory-stats;
             macos-titlebar-height : root.macos-titlebar-height;
-            pinned-items : root.pinned-items;
-            pinned-total-count : root.pinned-total-count;
-            presented-modal : root.presented-modal;
+            presented-modal : modal-transitions.presented-modal;
             safe-area-top : root.safe-area-top;
-            sessions : root.sessions;
-            sessions-error : root.sessions-error;
-            sessions-loaded : root.sessions-loaded;
-            sessions-loading : root.sessions-loading;
-            sessions-pending-links : root.sessions-pending-links;
-            sessions-revoking : root.sessions-revoking;
             sidebar-is-rail : root.sidebar-is-rail;
-            unified-search-calendar-days : root.unified-search-calendar-days;
-            unified-search-calendar-month : root.unified-search-calendar-month;
-            unified-search-category <=> root.unified-search-category;
-            unified-search-conversations : root.unified-search-conversations;
-            unified-search-counts : root.unified-search-counts;
-            unified-search-date <=> root.unified-search-date;
-            unified-search-from <=> root.unified-search-from;
-            unified-search-from-label <=> root.unified-search-from-label;
-            unified-search-has-thumbnails : root.unified-search-has-thumbnails;
-            unified-search-in <=> root.unified-search-in;
-            unified-search-in-label <=> root.unified-search-in-label;
-            unified-search-message-kinds : root.unified-search-message-kinds;
-            unified-search-messages : root.unified-search-messages;
-            unified-search-open <=> root.unified-search-open;
-            unified-search-page-limits : root.unified-search-page-limits;
-            unified-search-person-error : root.unified-search-person-error;
-            unified-search-person-handle : root.unified-search-person-handle;
-            unified-search-person-id : root.unified-search-person-id;
-            unified-search-person-name : root.unified-search-person-name;
-            unified-search-person-status : root.unified-search-person-status;
-            unified-search-picker-options : root.unified-search-picker-options;
-            unified-search-query <=> root.unified-search-query;
-            unified-search-query-is-handle : root.unified-search-query-is-handle;
-            unified-search-recents : root.unified-search-recents;
-            unified-search-searching : root.unified-search-searching;
-            unified-search-selected-index <=> root.unified-search-selected-index;
-            unified-search-sort <=> root.unified-search-sort;
-            unified-search-thumbnails : root.unified-search-thumbnails;
             window-height: root.height;
-            cancel-pending-link(arg0) => { root.cancel-pending-link(arg0); }
-            channel-settings-archive() => { root.channel-settings-archive(); }
-            channel-settings-ban-member(arg0) => { root.channel-settings-ban-member(arg0); }
-            channel-settings-block-group(arg0) => { root.channel-settings-block-group(arg0); }
-            channel-settings-block-member(arg0, arg1) => { root.channel-settings-block-member(arg0, arg1); }
-            channel-settings-change-member-role(arg0, arg1) => { root.channel-settings-change-member-role(arg0, arg1); }
-            channel-settings-change-notification(arg0) => { root.channel-settings-change-notification(arg0); }
-            channel-settings-delete() => { root.channel-settings-delete(); }
-            channel-settings-invite-channel-members() => { root.channel-settings-invite-channel-members(); }
-            channel-settings-invite-members() => { root.channel-settings-invite-members(); }
-            channel-settings-leave() => { root.channel-settings-leave(); }
-            channel-settings-pick-icon() => { root.channel-settings-pick-icon(); }
-            channel-settings-remove-member(arg0) => { root.channel-settings-remove-member(arg0); }
-            channel-settings-save(arg0, arg1) => { root.channel-settings-save(arg0, arg1); }
-            channel-settings-set-member-muted(arg0, arg1, arg2) => { root.channel-settings-set-member-muted(arg0, arg1, arg2); }
-            channel-settings-toggle-ai(arg0) => { root.channel-settings-toggle-ai(arg0); }
-            channel-settings-toggle-mute(arg0) => { root.channel-settings-toggle-mute(arg0); }
-            channel-settings-transfer-ownership(arg0) => { root.channel-settings-transfer-ownership(arg0); }
-            channel-settings-unban-member(arg0) => { root.channel-settings-unban-member(arg0); }
-            chat-menu-start-secret-chat() => { root.chat-menu-start-secret-chat(); }
-            chat-settings-clicked() => { root.chat-settings-clicked(); }
-            create-section(arg0, arg1) => { root.create-section(arg0, arg1); }
-            forward-message(arg0) => { root.forward-message(arg0); }
-            forward-search-changed(arg0) => { root.forward-search-changed(arg0); }
-            friends-start-dm(arg0) => { root.friends-start-dm(arg0); }
-            jarvis-memory-refresh() => { root.jarvis-memory-refresh(); }
-            jarvis-memory-select-entity(arg0) => { root.jarvis-memory-select-entity(arg0); }
-            link-approve-open() => { root.link-approve-open(); }
-            nav-close(arg0) => { root.nav-close(arg0); }
-            nav-push(arg0) => { root.nav-push(arg0); }
-            pinned-item-selected(arg0) => { root.pinned-item-selected(arg0); }
-            pinned-show-clicked() => { root.pinned-show-clicked(); }
-            rename-section(arg0, arg1, arg2) => { root.rename-section(arg0, arg1, arg2); }
-            revoke-all-sessions() => { root.revoke-all-sessions(); }
-            revoke-session(arg0) => { root.revoke-session(arg0); }
-            secret-timer-set(arg0) => { root.secret-timer-set(arg0); }
-            start-create-channel() => { root.start-create-channel(); }
-            start-create-section() => { root.start-create-section(); }
-            start-video-call() => { root.start-video-call(); }
             submit-anon-mode-pin(arg0) => { root.submit-anon-mode-pin(arg0); }
-            unified-search-calendar-shift(arg0) => { root.unified-search-calendar-shift(arg0); }
-            unified-search-changed(arg0) => { root.unified-search-changed(arg0); }
-            unified-search-closed() => { root.unified-search-closed(); }
-            unified-search-conversation-selected(arg0, arg1) => { root.unified-search-conversation-selected(arg0, arg1); }
-            unified-search-filters-changed(arg0, arg1, arg2, arg3, arg4) => { root.unified-search-filters-changed(arg0, arg1, arg2, arg3, arg4); }
-            unified-search-message-selected(arg0) => { root.unified-search-message-selected(arg0); }
-            unified-search-person-selected(arg0) => { root.unified-search-person-selected(arg0); }
-            unified-search-picker-request(arg0, arg1) => { root.unified-search-picker-request(arg0, arg1); }
-            unified-search-recent-clear() => { root.unified-search-recent-clear(); }
-            unified-search-recent-remove(arg0) => { root.unified-search-recent-remove(arg0); }
-            unified-search-recent-selected(arg0) => { root.unified-search-recent-selected(arg0); }
-            unified-search-resolve(arg0) => { root.unified-search-resolve(arg0); }
-            unified-search-show-more(arg0) => { root.unified-search-show-more(arg0); }
         }
 
         AppSettingsHost {
@@ -2490,110 +724,6 @@ export component MainWindow inherits Window {
             compact-layout : root.compact-layout;
             is-mobile-platform : root.is-mobile-platform;
             safe-area-bottom : root.safe-area-bottom;
-            search-shortcut-pref <=> root.search-shortcut-pref;
-            sessions : root.sessions;
-            sessions-error : root.sessions-error;
-            sessions-loaded : root.sessions-loaded;
-            sessions-loading : root.sessions-loading;
-            sessions-pending-links : root.sessions-pending-links;
-            sessions-revoking : root.sessions-revoking;
-            settings-ai-prefer-cloud <=> root.settings-ai-prefer-cloud;
-            settings-backup-retry-error : root.settings-backup-retry-error;
-            settings-backup-retry-loading : root.settings-backup-retry-loading;
-            settings-backup-retry-pin <=> root.settings-backup-retry-pin;
-            settings-backup-status : root.settings-backup-status;
-            settings-change-pin-confirm <=> root.settings-change-pin-confirm;
-            settings-change-pin-current <=> root.settings-change-pin-current;
-            settings-change-pin-error : root.settings-change-pin-error;
-            settings-change-pin-loading : root.settings-change-pin-loading;
-            settings-change-pin-new <=> root.settings-change-pin-new;
-            settings-change-pin-success : root.settings-change-pin-success;
-            settings-cloud-ai-api-key <=> root.settings-cloud-ai-api-key;
-            settings-cloud-ai-balance : root.settings-cloud-ai-balance;
-            settings-cloud-ai-configured : root.settings-cloud-ai-configured;
-            settings-cloud-ai-mode <=> root.settings-cloud-ai-mode;
-            settings-cloud-ai-status : root.settings-cloud-ai-status;
-            settings-confirm-password <=> root.settings-confirm-password;
-            settings-current-password <=> root.settings-current-password;
-            settings-delete-error : root.settings-delete-error;
-            settings-delete-loading : root.settings-delete-loading;
-            settings-delete-password <=> root.settings-delete-password;
-            settings-display-name : root.settings-display-name;
-            settings-identity-fingerprint : root.settings-identity-fingerprint;
-            settings-local-ai-active-model : root.settings-local-ai-active-model;
-            settings-local-ai-active-provider : root.settings-local-ai-active-provider;
-            settings-local-ai-catalog : root.settings-local-ai-catalog;
-            settings-local-ai-detecting : root.settings-local-ai-detecting;
-            settings-local-ai-enabled <=> root.settings-local-ai-enabled;
-            settings-local-ai-error : root.settings-local-ai-error;
-            settings-local-ai-hardware-summary : root.settings-local-ai-hardware-summary;
-            settings-local-ai-loading : root.settings-local-ai-loading;
-            settings-local-ai-model-id <=> root.settings-local-ai-model-id;
-            settings-local-ai-models : root.settings-local-ai-models;
-            settings-local-ai-providers : root.settings-local-ai-providers;
-            settings-local-ai-status : root.settings-local-ai-status;
-            settings-message-backup-status : root.settings-message-backup-status;
-            settings-new-password <=> root.settings-new-password;
-            settings-notification-detail <=> root.settings-notification-detail;
-            settings-open : root.settings-open;
-            settings-password-changing : root.settings-password-changing;
-            settings-password-error : root.settings-password-error;
-            settings-profile-visibility : root.settings-profile-visibility;
-            settings-profile-visibility-busy : root.settings-profile-visibility-busy;
-            settings-profile-visibility-error : root.settings-profile-visibility-error;
-            settings-profile-visibility-pending : root.settings-profile-visibility-pending;
-            settings-profile-visibility-pin <=> root.settings-profile-visibility-pin;
-            settings-read-receipts <=> root.settings-read-receipts;
-            settings-recovery-regen-error : root.settings-recovery-regen-error;
-            settings-recovery-regen-loading : root.settings-recovery-regen-loading;
-            settings-recovery-regen-password <=> root.settings-recovery-regen-password;
-            settings-sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
-            settings-session-count : root.settings-session-count;
-            settings-typing-indicators <=> root.settings-typing-indicators;
-            settings-username : root.settings-username;
-            settings-username-discoverable <=> root.settings-username-discoverable;
-            user-avatar-source : root.user-avatar-source;
-            cancel-pending-link(arg0) => { root.cancel-pending-link(arg0); }
-            jarvis-memory-refresh() => { root.jarvis-memory-refresh(); }
-            link-approve-open() => { root.link-approve-open(); }
-            nav-close(arg0) => { root.nav-close(arg0); }
-            nav-push(arg0) => { root.nav-push(arg0); }
-            open-message-link(arg0) => { root.open-message-link(arg0); }
-            revoke-session(arg0) => { root.revoke-session(arg0); }
-            settings-ai-prefer-cloud-changed(arg0) => { root.settings-ai-prefer-cloud-changed(arg0); }
-            settings-change-password(arg0, arg1) => { root.settings-change-password(arg0, arg1); }
-            settings-change-pin(arg0, arg1) => { root.settings-change-pin(arg0, arg1); }
-            settings-cloud-ai-api-key-changed(arg0) => { root.settings-cloud-ai-api-key-changed(arg0); }
-            settings-cloud-ai-mode-changed(arg0) => { root.settings-cloud-ai-mode-changed(arg0); }
-            settings-cloud-ai-refresh-quota() => { root.settings-cloud-ai-refresh-quota(); }
-            settings-copy-fingerprint() => { root.settings-copy-fingerprint(); }
-            settings-delete-account() => { root.settings-delete-account(); }
-            settings-delete-account-confirmed(arg0) => { root.settings-delete-account-confirmed(arg0); }
-            settings-edit-profile() => { root.settings-edit-profile(); }
-            settings-export-message-backup(arg0) => { root.settings-export-message-backup(arg0); }
-            settings-import-message-backup(arg0) => { root.settings-import-message-backup(arg0); }
-            settings-local-ai-download(arg0) => { root.settings-local-ai-download(arg0); }
-            settings-local-ai-enabled-changed(arg0) => { root.settings-local-ai-enabled-changed(arg0); }
-            settings-local-ai-load-model(arg0) => { root.settings-local-ai-load-model(arg0); }
-            settings-local-ai-refresh() => { root.settings-local-ai-refresh(); }
-            settings-local-ai-select-model(arg0) => { root.settings-local-ai-select-model(arg0); }
-            settings-local-ai-select-provider(arg0) => { root.settings-local-ai-select-provider(arg0); }
-            settings-local-ai-unload-model() => { root.settings-local-ai-unload-model(); }
-            settings-logout() => { root.settings-logout(); }
-            settings-notification-detail-changed(arg0) => { root.settings-notification-detail-changed(arg0); }
-            settings-profile-visibility-cancelled() => { root.settings-profile-visibility-cancelled(); }
-            settings-profile-visibility-confirmed(arg0, arg1) => { root.settings-profile-visibility-confirmed(arg0, arg1); }
-            settings-profile-visibility-selected(arg0) => { root.settings-profile-visibility-selected(arg0); }
-            settings-read-receipts-changed(arg0) => { root.settings-read-receipts-changed(arg0); }
-            settings-regenerate-recovery-codes(arg0) => { root.settings-regenerate-recovery-codes(arg0); }
-            settings-restore-message-backup(arg0) => { root.settings-restore-message-backup(arg0); }
-            settings-retry-backup(arg0) => { root.settings-retry-backup(arg0); }
-            settings-sealed-sender-changed(arg0) => { root.settings-sealed-sender-changed(arg0); }
-            settings-search-shortcut-changed(arg0) => { root.settings-search-shortcut-changed(arg0); }
-            settings-server-message-backup(arg0) => { root.settings-server-message-backup(arg0); }
-            settings-typing-indicators-changed(arg0) => { root.settings-typing-indicators-changed(arg0); }
-            settings-username-discoverable-changed(arg0) => { root.settings-username-discoverable-changed(arg0); }
-            settings-view-sessions() => { root.settings-view-sessions(); }
             toggle-anon-mode() => { root.toggle-anon-mode(); }
         }
 
@@ -2601,141 +731,29 @@ export component MainWindow inherits Window {
             width: parent.width;
             height: parent.height;
             active-modal: root.active-modal;
-            audio-devices: root.audio-devices;
-            audio-elapsed: root.audio-elapsed;
-            audio-output-devices: root.audio-output-devices;
-            audio-progress: root.audio-progress;
-            code-preview-filename: root.code-preview-filename;
-            code-preview-language: root.code-preview-language;
-            code-preview-line-count: root.code-preview-line-count;
-            code-preview-plain-text: root.code-preview-plain-text;
-            code-preview-visible <=> root.code-preview-visible;
             context-menu-anchor-bottom: root.context-menu-anchor-bottom;
             context-menu-anchor-left: root.context-menu-anchor-left;
             context-menu-anchor-right: root.context-menu-anchor-right;
             context-menu-anchor-top: root.context-menu-anchor-top;
-            context-menu-content-top: root.context-menu-content-top;
-            context-menu-message-id: root.context-menu-message-id;
             context-menu-preview-from-thread: root.context-menu-preview-from-thread;
             context-menu-preview-message: root.context-menu-preview-message;
             context-menu-preview-mobile: root.context-menu-preview-mobile;
             context-menu-preview-row-width: root.context-menu-preview-row-width;
             context-menu-preview-row-x: root.context-menu-preview-row-x;
             context-menu-preview-row-y: root.context-menu-preview-row-y;
-            context-menu-sender-id: root.context-menu-sender-id;
-            context-menu-timestamp-ns: root.context-menu-timestamp-ns;
-            context-menu-visible <=> root.context-menu-visible;
-            context-menu-x: root.context-menu-x;
-            context-menu-y: root.context-menu-y;
-            conversation-kind: root.conversation-kind;
-            current-playing-attachment-id: root.current-playing-attachment-id;
-            delete-choice-everyone <=> root.delete-choice-everyone;
-            delete-choice-me <=> root.delete-choice-me;
-            delete-choosing <=> root.delete-choosing;
-            delete-confirm-count <=> root.delete-confirm-count;
-            delete-confirm-everyone <=> root.delete-confirm-everyone;
-            delete-confirm-sender <=> root.delete-confirm-sender;
-            delete-confirm-timestamp <=> root.delete-confirm-timestamp;
-            device-picker-presented: root.device-picker-presented;
-            device-picker-type: root.device-picker-type;
-            device-picker-visible <=> root.device-picker-visible;
-            exiting-modal: root.exiting-modal;
-            image-viewer-filename: root.image-viewer-filename;
-            image-viewer-size: root.image-viewer-size;
-            image-viewer-source: root.image-viewer-source;
-            image-viewer-visible <=> root.image-viewer-visible;
-            incoming-call-data: root.incoming-call-data;
-            incoming-call-replaces-active: root.incoming-call-replaces-active;
-            incoming-presented: root.incoming-presented;
-            incoming-shown: root.incoming-shown;
-            is-dm: root.is-dm;
-            is-media-playing: root.is-media-playing;
+            device-picker-presented: modal-transitions.device-picker-presented;
+            exiting-modal: modal-transitions.exiting-modal;
+            incoming-presented: modal-transitions.incoming-presented;
+            incoming-shown: modal-transitions.incoming-shown;
             is-mobile-platform: root.is-mobile-platform;
-            media-viewer-has-next: root.media-viewer-has-next;
-            media-viewer-has-previous: root.media-viewer-has-previous;
-            media-viewer-next-thumbnail: root.media-viewer-next-thumbnail;
-            media-viewer-position: root.media-viewer-position;
-            media-viewer-previous-thumbnail: root.media-viewer-previous-thumbnail;
-            mention-autocomplete-visible <=> root.mention-autocomplete-visible;
-            mention-selected-index: root.mention-selected-index;
-            mention-suggestions: root.mention-suggestions;
-            pdf-preview-current-page: root.pdf-preview-current-page;
-            pdf-preview-error: root.pdf-preview-error;
-            pdf-preview-external-only: root.pdf-preview-external-only;
-            pdf-preview-filename: root.pdf-preview-filename;
-            pdf-preview-image: root.pdf-preview-image;
-            pdf-preview-page-count: root.pdf-preview-page-count;
-            pdf-preview-visible <=> root.pdf-preview-visible;
-            presented-modal: root.presented-modal;
-            reaction-picker-anchor-x <=> root.reaction-picker-anchor-x;
-            reaction-picker-anchor-y <=> root.reaction-picker-anchor-y;
-            reaction-picker-emojis: root.reaction-picker-emojis;
-            reaction-picker-message-id <=> root.reaction-picker-message-id;
-            reaction-picker-search-query <=> root.reaction-picker-search-query;
-            reaction-picker-selected-category <=> root.reaction-picker-selected-category;
-            reaction-picker-sender-id <=> root.reaction-picker-sender-id;
-            reaction-picker-timestamp-ns <=> root.reaction-picker-timestamp-ns;
-            reaction-picker-visible <=> root.reaction-picker-visible;
+            presented-modal: modal-transitions.presented-modal;
             reply-focus-serial <=> root.reply-focus-serial;
             safe-area-top: root.safe-area-top;
-            screen-sources: root.screen-sources;
-            selected-audio-device-id <=> root.selected-audio-device-id;
-            selected-audio-output-id <=> root.selected-audio-output-id;
-            selected-screen-source-id <=> root.selected-screen-source-id;
-            selection-mode <=> root.selection-mode;
-            sidebar-collapsed: root.sidebar-collapsed;
-            sidebar-hidden: root.sidebar-hidden;
-            video-player-duration: root.video-player-duration;
-            video-player-elapsed: root.video-player-elapsed;
-            video-player-filename: root.video-player-filename;
-            video-player-frame: root.video-player-frame;
-            video-player-is-playing: root.video-player-is-playing;
-            video-player-progress: root.video-player-progress;
-            video-player-visible <=> root.video-player-visible;
-            video-player-volume <=> root.video-player-volume;
             viewer-origin-height: root.viewer-origin-height;
             viewer-origin-width: root.viewer-origin-width;
             viewer-origin-x: root.viewer-origin-x;
             viewer-origin-y: root.viewer-origin-y;
             window-height: root.height;
-            accept-incoming-call(arg0) => { root.accept-incoming-call(arg0); }
-            audio-device-selected(arg0) => { root.audio-device-selected(arg0); }
-            audio-output-selected(arg0) => { root.audio-output-selected(arg0); }
-            close-code-preview() => { root.close-code-preview(); }
-            close-image-viewer() => { root.close-image-viewer(); }
-            close-pdf-preview() => { root.close-pdf-preview(); }
-            close-video-player() => { root.close-video-player(); }
-            copy-code() => { root.copy-code(); }
-            copy-message(arg0, arg1) => { root.copy-message(arg0, arg1); }
-            decline-incoming-call(arg0) => { root.decline-incoming-call(arg0); }
-            delete-everyone-message(arg0, arg1) => { root.delete-everyone-message(arg0, arg1); }
-            delete-message(arg0, arg1) => { root.delete-message(arg0, arg1); }
-            download-message(arg0, arg1) => { root.download-message(arg0, arg1); }
-            edit-message(arg0, arg1) => { root.edit-message(arg0, arg1); }
-            forward-message-action(arg0, arg1) => { root.forward-message-action(arg0, arg1); }
-            media-viewer-export(arg0) => { root.media-viewer-export(arg0); }
-            media-viewer-navigate(arg0) => { root.media-viewer-navigate(arg0); }
-            media-viewer-open-downloads() => { root.media-viewer-open-downloads(); }
-            mention-suggestion-selected(arg0, arg1) => { root.mention-suggestion-selected(arg0, arg1); }
-            message-clicked(arg0) => { root.message-clicked(arg0); }
-            message-selection-toggled(arg0) => { root.message-selection-toggled(arg0); }
-            nav-close(arg0) => { root.nav-close(arg0); }
-            open-code-external() => { root.open-code-external(); }
-            open-pdf-external() => { root.open-pdf-external(); }
-            pdf-page-next() => { root.pdf-page-next(); }
-            pdf-page-prev() => { root.pdf-page-prev(); }
-            pin-message(arg0, arg1) => { root.pin-message(arg0, arg1); }
-            react-clicked(arg0, arg1, arg2, arg3) => { root.react-clicked(arg0, arg1, arg2, arg3); }
-            reaction-picker-category-changed(arg0) => { root.reaction-picker-category-changed(arg0); }
-            reaction-picker-search-changed(arg0) => { root.reaction-picker-search-changed(arg0); }
-            reaction-selected(arg0, arg1, arg2, arg3) => { root.reaction-selected(arg0, arg1, arg2, arg3); }
-            reply-message(arg0, arg1) => { root.reply-message(arg0, arg1); }
-            screen-source-selected(arg0) => { root.screen-source-selected(arg0); }
-            selection-delete-clicked() => { root.selection-delete-clicked(); }
-            thread-clicked(arg0) => { root.thread-clicked(arg0); }
-            video-player-seek(arg0) => { root.video-player-seek(arg0); }
-            video-player-set-volume(arg0) => { root.video-player-set-volume(arg0); }
-            video-player-toggle-play-pause() => { root.video-player-toggle-play-pause(); }
             focus-back-scope => { back-scope.focus(); }
         }
 
@@ -2743,33 +761,16 @@ export component MainWindow inherits Window {
             z: -1;
             width: parent.width;
             height: parent.height;
-            active-call-data: root.active-call-data;
-            active-call-fullscreen <=> root.active-call-fullscreen;
-            active-call-visible: root.active-call-visible;
             active-modal: root.active-modal;
-            active-tab <=> root.active-tab;
             bottom-nav-visible: root.bottom-nav-visible;
-            call-is-muted: root.call-is-muted;
-            call-is-video-enabled: root.call-is-video-enabled;
-            call-remote-video-frames: root.call-remote-video-frames;
             compact-layout: root.compact-layout;
-            contacts-badge: root.friends-received-requests.length;
+            contacts-badge: ModalHostState.friends-received-requests.length;
             fab-y: root.fab-y;
             fab-visible: root.fab-visible;
-            friends-modal-tab <=> root.friends-modal-tab;
-            missed-call-count: root.missed-call-count;
-            mobile-show-chat <=> root.mobile-show-chat;
             return-to-call-height: root.return-to-call-height;
             safe-area-bottom: root.safe-area-bottom;
-            sidebar-collapsed <=> root.sidebar-collapsed;
             sidebar-user-collapsed <=> root.sidebar-user-collapsed;
-            total-unread-count: root.total-unread-count;
-            user-avatar-source: root.user-avatar-source;
-            call-end => { root.call-end(); }
-            calls-tab-clicked => { root.calls-tab-clicked(); }
-            call-toggle-mute => { root.call-toggle-mute(); }
-            call-toggle-video => { root.call-toggle-video(); }
-            create-clicked => { root.nav-push("create-menu"); }
+            create-clicked => { ModalHostState.nav-push("create-menu"); }
         }
 
         // ========== Toast notification overlay (top-right) ==========

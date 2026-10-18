@@ -2,6 +2,7 @@
 //!
 //! Updates download/upload progress in the UI.
 
+use slint::ComponentHandle;
 use slint::Model;
 
 use crate::{MainWindow, MessageAttachmentData};
@@ -15,7 +16,7 @@ pub fn update_attachment_transfer_status(
     is_uploading: bool,
     progress: f32,
 ) {
-    let messages = window.get_messages();
+    let messages = window.global::<crate::ChatPane>().get_messages();
     for msg_idx in 0..messages.row_count() {
         if let Some(msg) = messages.row_data(msg_idx) {
             let attachments = msg.attachments.clone();

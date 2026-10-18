@@ -217,7 +217,7 @@ pub(super) fn handle_message_received(
         }
 
         if is_active {
-            let was_at_bottom = w.get_is_at_bottom();
+            let was_at_bottom = w.global::<crate::ChatPane>().get_is_at_bottom();
 
             // Build Slint message item
             let mut new_msg = display_data.to_slint_with_user(&current_user_id);
@@ -230,7 +230,7 @@ pub(super) fn handle_message_received(
             // Dedup + ordered-insert POLICY lives in core (Signal-style: by
             // timestamp_ns, tiebreak sender_id). Here we only extract the keys
             // and apply the decision to the Slint model.
-            let current_model = w.get_messages();
+            let current_model = w.global::<crate::ChatPane>().get_messages();
             let new_ts = new_msg.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
             let new_sender = new_msg.sender_id.to_string();
 
@@ -293,7 +293,8 @@ pub(super) fn handle_message_received(
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
                             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
                         }
-                        w.set_messages(ModelRc::new(model));
+                        w.global::<crate::ChatPane>()
+                            .set_messages(ModelRc::new(model));
                         tracing::warn!(insert_pos, "[UI_RECV] downcast failed; replaced model");
                     }
 
@@ -305,7 +306,7 @@ pub(super) fn handle_message_received(
             }
 
             if was_at_bottom {
-                w.set_is_at_bottom(true);
+                w.global::<crate::ChatPane>().set_is_at_bottom(true);
             }
         }
 
@@ -347,15 +348,20 @@ pub(super) fn handle_dm_bootstrap_completed(
 /// open, so any other placeholder (reply, attachments, read-only) is left.
 fn end_bootstrap_placeholder(w: &MainWindow) {
     use crate::bin_ui::features::chat::send_message::BOOTSTRAP_PLACEHOLDER;
-    if w.get_composer_placeholder().as_str() == BOOTSTRAP_PLACEHOLDER {
-        w.set_composer_placeholder("Type a message...".into());
+    if w.global::<crate::ChatPane>()
+        .get_composer_placeholder()
+        .as_str()
+        == BOOTSTRAP_PLACEHOLDER
+    {
+        w.global::<crate::ChatPane>()
+            .set_composer_placeholder("Type a message...".into());
     }
 }
 
 /// Set the status of our own bubbles sent at `timestamps` (`timestamp_ns`) in
 /// the open message list. Core has already stored the same status.
 pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     let Some(model) = messages
         .as_any()
         .downcast_ref::<VecModel<MessageItemData>>()
@@ -394,7 +400,7 @@ pub(super) fn handle_delivery_status_update(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
-        let messages = w.get_messages();
+        let messages = w.global::<crate::ChatPane>().get_messages();
         let timestamp_strs: Vec<String> =
             message_timestamps.iter().map(|ts| ts.to_string()).collect();
 
@@ -639,7 +645,7 @@ pub(super) fn update_active_channel_member_count(
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_member_count(member_count);
+            w.global::<crate::ChatPane>().set_member_count(member_count);
         }
     });
 }
@@ -683,7 +689,7 @@ pub(super) fn handle_persisted_delivery_status(
                 info.set_details(details.into());
             }
         }
-        let messages = w.get_messages();
+        let messages = w.global::<crate::ChatPane>().get_messages();
         let Some(model) = messages
             .as_any()
             .downcast_ref::<VecModel<MessageItemData>>()

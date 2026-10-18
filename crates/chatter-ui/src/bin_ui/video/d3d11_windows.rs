@@ -114,7 +114,7 @@ pub fn init_d3d11_video(window: &MainWindow) -> bool {
                             if video_state.is_playing {
                                 if let Some(image) = fetch_next_frame_d3d11(video_state) {
                                     if let Some(w) = weak.upgrade() {
-                                        w.set_video_player_frame(image);
+                                        w.global::<crate::ChatPane>().set_video_player_frame(image);
                                     }
                                 }
                             }

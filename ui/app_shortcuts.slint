@@ -1,23 +1,15 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SearchPane } from "app_search_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { CallView } from "app_call_view.slint";
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
 // Keyboard commands for the main view. The surrounding Back scope retains
 // focus ownership so closing a picker or dialog still receives Back/Escape.
 export component AppShortcuts inherits FocusScope {
     in property <string> current-view;
-    in property <string> search-shortcut-pref;
-    in-out property <int> unified-search-selected-index;
-    in-out property <bool> unified-search-open;
     in property <string> active-modal;
-    in-out property <string> active-tab;
-    in property <bool> calls-more-menu-visible;
-    in property <bool> call-history-selecting;
-    in property <int> delete-confirm-count;
-    callback channel-selected(string);
-    callback unified-search-opened();
-    callback nav-push(string);
-    callback nav-close(string);
-    callback nav-pop();
-    callback settings-clicked();
     callback back-pressed();
 
     width: 0;
@@ -27,45 +19,45 @@ export component AppShortcuts inherits FocusScope {
     key-pressed(event) => {
         // Ctrl+J: open the local AI channel
         if (JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
-            root.channel-selected("00000000-0000-0000-0000-000000000000");
+            SidebarPane.channel-selected("00000000-0000-0000-0000-000000000000");
             return accept;
         }
         // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
         if (event.modifiers.control
-            && ((event.text == "k" && root.search-shortcut-pref != "f")
-             || (event.text == "f" && root.search-shortcut-pref != "k"))) {
-            root.unified-search-selected-index = 0;
-            root.unified-search-open = true;
-            root.unified-search-opened();
+            && ((event.text == "k" && SearchPane.search-shortcut-pref != "f")
+             || (event.text == "f" && SearchPane.search-shortcut-pref != "k"))) {
+            SearchPane.unified-search-selected-index = 0;
+            SearchPane.unified-search-open = true;
+            SearchPane.unified-search-opened();
             return accept;
         }
         // Ctrl+,: Open settings
         if (event.modifiers.control && event.text == ",") {
-            root.nav-push("settings");
-            root.settings-clicked();
+            ModalHostState.nav-push("settings");
+            SidebarPane.settings-clicked();
             return accept;
         }
         // Ctrl+/: Toggle keyboard shortcuts help
         if (event.modifiers.control && event.text == "/") {
             if (root.active-modal == "keyboard-shortcuts") {
-                root.nav-close("keyboard-shortcuts");
+                ModalHostState.nav-close("keyboard-shortcuts");
             } else {
-                root.nav-push("keyboard-shortcuts");
+                ModalHostState.nav-push("keyboard-shortcuts");
             }
             return accept;
         }
         // Escape: close the top modal, else leave a non-Chats tab
         if (event.text == Key.Escape) {
-            if (root.calls-more-menu-visible || root.call-history-selecting || root.delete-confirm-count > 0) {
+            if (CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0) {
                 root.back-pressed();
                 return accept;
             }
             if (root.active-modal != "none") {
-                root.nav-pop();
+                ModalHostState.nav-pop();
                 return accept;
             }
-            if (root.active-tab != "chats") {
-                root.active-tab = "chats";
+            if (SidebarPane.active-tab != "chats") {
+                SidebarPane.active-tab = "chats";
                 return accept;
             }
         }

@@ -1,6 +1,7 @@
 //! Channel settings moderation.
 
 use super::*;
+use slint::ComponentHandle;
 
 /// The conversation the settings modal is showing: a private group when it
 /// was opened for one (`type == "private-group"`), otherwise a channel.
@@ -8,12 +9,21 @@ pub(super) fn settings_conversation(
     w: &MainWindow,
     ui_ctx: &ChatterClient,
 ) -> Option<ActiveConversation> {
-    let kind = if w.get_channel_settings_type() == "private-group" {
+    let kind = if w
+        .global::<crate::ModalHostState>()
+        .get_channel_settings_type()
+        == "private-group"
+    {
         ConversationType::AnonGroup
     } else {
         ConversationType::Channel
     };
-    ui_ctx.resolve_row_conversation(w.get_channel_settings_id().as_str(), &kind)
+    ui_ctx.resolve_row_conversation(
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_id()
+            .as_str(),
+        &kind,
+    )
 }
 
 /// A members-pane moderation action; core does the work and the server
@@ -38,7 +48,11 @@ pub(super) fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
             let channel_id = weak
                 .upgrade()
-                .map(|w| w.get_channel_settings_id().to_string())
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .to_string()
+                })
                 .unwrap_or_default();
             let (Ok(channel_id), Ok(user_id)) = (
                 channel_id.parse::<ChannelId>(),
@@ -71,7 +85,8 @@ pub(super) fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 let weak_err = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_err.upgrade() {
-                        w.set_channel_settings_error(error.into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_error(error.into());
                     }
                 });
                 refresh_member_lists(weak, ui_ctx, channel_id);
@@ -80,23 +95,29 @@ pub(super) fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     };
 
     let r = run.clone();
-    window.on_channel_settings_ban_member(move |user_id| r(user_id, ModAction::Ban));
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_ban_member(move |user_id| r(user_id, ModAction::Ban));
     let r = run.clone();
-    window.on_channel_settings_unban_member(move |user_id| r(user_id, ModAction::Unban));
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_unban_member(move |user_id| r(user_id, ModAction::Unban));
     // minutes <= 0 = until unmuted.
-    window.on_channel_settings_set_member_muted(move |user_id, muted, minutes| {
-        let action = if !muted {
-            ModAction::Unmute
-        } else {
-            ModAction::Mute(
-                u64::try_from(minutes)
-                    .ok()
-                    .filter(|&m| m > 0)
-                    .map(|m| std::time::Duration::from_secs(m * 60)),
-            )
-        };
-        run(user_id, action)
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_set_member_muted(move |user_id, muted, minutes| {
+            let action = if !muted {
+                ModAction::Unmute
+            } else {
+                ModAction::Mute(
+                    u64::try_from(minutes)
+                        .ok()
+                        .filter(|&m| m > 0)
+                        .map(|m| std::time::Duration::from_secs(m * 60)),
+                )
+            };
+            run(user_id, action)
+        });
 }
 
 /// Members › ⋮ › "Make owner…" (confirmed in the pane), for a channel or a
@@ -105,46 +126,59 @@ pub(super) fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 pub(super) fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_channel_settings_transfer_ownership(move |user_id| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let Some(w) = weak.upgrade() else { return };
-        let channel_id = w.get_channel_settings_id().to_string();
-        let (Some(conv), Ok(channel_uuid), Ok(new_owner)) = (
-            settings_conversation(&w, &ui_ctx),
-            channel_id.parse::<ChannelId>(),
-            user_id.as_str().parse::<UserId>(),
-        ) else {
-            return;
-        };
-        tokio::spawn(async move {
-            let result = ui_ctx
-                .transfer_conversation_ownership(conv, &new_owner)
-                .await;
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak.upgrade() else { return };
-                match result {
-                    Ok(()) => {
-                        w.set_channel_settings_error("".into());
-                        let still_open = w.get_channel_settings_id() == channel_id.as_str()
-                            && w.get_modal_stack().iter().any(|s| s == "channel-settings");
-                        if still_open && matches!(conv, ActiveConversation::AnonGroup(_)) {
-                            refresh_members_if_open(weak.clone(), ui_ctx, channel_uuid);
-                        } else if still_open {
-                            open_channel_settings(weak.clone(), ui_ctx, channel_uuid);
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_transfer_ownership(move |user_id| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+            let Some(w) = weak.upgrade() else { return };
+            let channel_id = w
+                .global::<crate::ModalHostState>()
+                .get_channel_settings_id()
+                .to_string();
+            let (Some(conv), Ok(channel_uuid), Ok(new_owner)) = (
+                settings_conversation(&w, &ui_ctx),
+                channel_id.parse::<ChannelId>(),
+                user_id.as_str().parse::<UserId>(),
+            ) else {
+                return;
+            };
+            tokio::spawn(async move {
+                let result = ui_ctx
+                    .transfer_conversation_ownership(conv, &new_owner)
+                    .await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    match result {
+                        Ok(()) => {
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error("".into());
+                            let still_open = w
+                                .global::<crate::ModalHostState>()
+                                .get_channel_settings_id()
+                                == channel_id.as_str()
+                                && w.global::<crate::ModalHostState>()
+                                    .get_modal_stack()
+                                    .iter()
+                                    .any(|s| s == "channel-settings");
+                            if still_open && matches!(conv, ActiveConversation::AnonGroup(_)) {
+                                refresh_members_if_open(weak.clone(), ui_ctx, channel_uuid);
+                            } else if still_open {
+                                open_channel_settings(weak.clone(), ui_ctx, channel_uuid);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(%channel_uuid, error = %e, "Ownership transfer failed");
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error(
+                                    format!("Couldn't transfer ownership: {e}").into(),
+                                );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(%channel_uuid, error = %e, "Ownership transfer failed");
-                        w.set_channel_settings_error(
-                            format!("Couldn't transfer ownership: {e}").into(),
-                        );
-                    }
-                }
+                });
             });
         });
-    });
 }
 
 /// Private group › Danger Zone › Block group, and Members › ⋮ › Block in
@@ -152,20 +186,24 @@ pub(super) fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterC
 /// receive; this only forwards the choice and re-reads the roster.
 pub(super) fn wire_group_blocking(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
-    window.on_channel_settings_block_group(move |block| {
-        change_group_block(&weak, &ctx, move |ctx, conv| {
-            ctx.set_conversation_blocked(conv, block)
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_block_group(move |block| {
+            change_group_block(&weak, &ctx, move |ctx, conv| {
+                ctx.set_conversation_blocked(conv, block)
+            });
         });
-    });
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
-    window.on_channel_settings_block_member(move |user_id, block| {
-        let Ok(user) = user_id.as_str().parse::<UserId>() else {
-            return;
-        };
-        change_group_block(&weak, &ctx, move |ctx, conv| {
-            ctx.set_conversation_member_blocked(conv, &user, block)
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_block_member(move |user_id, block| {
+            let Ok(user) = user_id.as_str().parse::<UserId>() else {
+                return;
+            };
+            change_group_block(&weak, &ctx, move |ctx, conv| {
+                ctx.set_conversation_member_blocked(conv, &user, block)
+            });
         });
-    });
 }
 
 /// Apply a block change to the private group the settings modal shows (off
@@ -194,7 +232,10 @@ fn change_group_block(
             tracing::warn!(error = %e, "Group block change failed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.set_channel_settings_error(format!("Couldn't change the block: {e}").into());
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_error(
+                            format!("Couldn't change the block: {e}").into(),
+                        );
                 }
             });
         }

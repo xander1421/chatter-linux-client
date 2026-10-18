@@ -54,7 +54,9 @@ pub fn set_typing_with_timer(
 ) {
     tracing::info!(key = %key, "TYPING_SET: Setting typing indicator");
     if client.active_conversation().is_for_channel(channel_id) {
-        window.set_typing_indicator(text.into());
+        window
+            .global::<crate::ChatPane>()
+            .set_typing_indicator(text.into());
     }
     update_sidebar_typing(window, key, true);
 
@@ -75,7 +77,8 @@ pub fn set_typing_with_timer(
             tracing::debug!(key = %key_owned, "TYPING_TIMER: 15s timeout FIRED - clearing indicator");
             client.clear_typing(&channel_id);
             if client.active_conversation().is_for_channel(channel_id) {
-                w.set_typing_indicator("".into());
+                w.global::<crate::ChatPane>()
+                    .set_typing_indicator("".into());
             }
             update_sidebar_typing(&w, &key_owned, false);
         }
@@ -135,7 +138,9 @@ pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str, is_active: bool
     );
     clear_typing_timer(peer_id);
     if is_active {
-        window.set_typing_indicator("".into());
+        window
+            .global::<crate::ChatPane>()
+            .set_typing_indicator("".into());
     }
     // Also clear sidebar typing state
     update_sidebar_typing(window, peer_id, false);

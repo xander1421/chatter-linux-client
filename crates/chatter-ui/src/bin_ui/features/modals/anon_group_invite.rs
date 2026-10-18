@@ -30,7 +30,8 @@ pub fn refresh_group_invites(weak: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_pending_group_invites(count);
+            w.global::<crate::ModalHostState>()
+                .set_pending_group_invites(count);
             let items: Vec<FriendRequestData> = items
                 .into_iter()
                 .map(|(id, name, inviter_name)| FriendRequestData {
@@ -43,7 +44,8 @@ pub fn refresh_group_invites(weak: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient
                     note: SharedString::default(),
                 })
                 .collect();
-            w.set_friends_group_invites(ModelRc::new(VecModel::from(items)));
+            w.global::<crate::ModalHostState>()
+                .set_friends_group_invites(ModelRc::new(VecModel::from(items)));
         }
     });
 }
@@ -75,83 +77,114 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
     {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
-        window.on_friends_accept_group_invite(move |group_id_str: SharedString| {
-            let Ok(group_id) = group_id_str.parse() else {
-                return;
-            };
-            if let Some(w) = weak.upgrade() {
-                if !w.get_group_invite_decision().is_empty() {
+        window
+            .global::<crate::ModalHostState>()
+            .on_friends_accept_group_invite(move |group_id_str: SharedString| {
+                let Ok(group_id) = group_id_str.parse() else {
                     return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    if !w
+                        .global::<crate::ModalHostState>()
+                        .get_group_invite_decision()
+                        .is_empty()
+                    {
+                        return;
+                    }
+                    w.global::<crate::ModalHostState>()
+                        .set_group_invite_decision(format!("join:{group_id_str}").into());
+                    w.global::<crate::ModalHostState>()
+                        .set_group_invite_error_id("".into());
+                    w.global::<crate::ModalHostState>()
+                        .set_group_invite_error("".into());
                 }
-                w.set_group_invite_decision(format!("join:{group_id_str}").into());
-                w.set_group_invite_error_id("".into());
-                w.set_group_invite_error("".into());
-            }
-            let weak = weak.clone();
-            let ui_ctx = ui_ctx.clone();
-            tokio::spawn(async move {
-                match ui_ctx.accept_pending_anon_group_invite(group_id).await {
-                    Ok(_) => {
-                        refresh_group_invites(&weak, &ui_ctx);
-                        crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_group_invite_decision("".into());
-                                if w.get_active_tab() == "contacts" {
-                                    w.set_active_tab("chats".into());
-                                    w.set_mobile_show_chat(true);
-                                    w.invoke_private_group_selected(group_id.to_string().into());
+                let weak = weak.clone();
+                let ui_ctx = ui_ctx.clone();
+                tokio::spawn(async move {
+                    match ui_ctx.accept_pending_anon_group_invite(group_id).await {
+                        Ok(_) => {
+                            refresh_group_invites(&weak, &ui_ctx);
+                            crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.global::<crate::ModalHostState>()
+                                        .set_group_invite_decision("".into());
+                                    if w.global::<crate::SidebarPane>().get_active_tab()
+                                        == "contacts"
+                                    {
+                                        w.global::<crate::SidebarPane>()
+                                            .set_active_tab("chats".into());
+                                        w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
+                                        w.global::<crate::SidebarPane>()
+                                            .invoke_private_group_selected(
+                                                group_id.to_string().into(),
+                                            );
+                                    }
                                 }
-                            }
-                        });
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "Failed to accept group invitation");
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_group_invite_decision("".into());
-                                w.set_group_invite_error_id(group_id_str);
-                                w.set_group_invite_error(error.to_string().into());
-                            }
-                        });
-                    }
-                }
-            });
-        });
-    }
-    {
-        let weak = window.as_weak();
-        let ui_ctx = ui_ctx.clone();
-        window.on_friends_decline_group_invite(move |group_id_str: SharedString| {
-            let Ok(group_id) = group_id_str.parse() else {
-                return;
-            };
-            if let Some(w) = weak.upgrade() {
-                if !w.get_group_invite_decision().is_empty() {
-                    return;
-                }
-                w.set_group_invite_decision(format!("decline:{group_id_str}").into());
-                w.set_group_invite_error_id("".into());
-                w.set_group_invite_error("".into());
-            }
-            let weak = weak.clone();
-            let ui_ctx = ui_ctx.clone();
-            tokio::spawn(async move {
-                let result = ui_ctx.decline_pending_anon_group_invite(&group_id);
-                if result.is_ok() {
-                    refresh_group_invites(&weak, &ui_ctx);
-                }
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_group_invite_decision("".into());
-                        if let Err(error) = result {
-                            tracing::error!(%error, "Failed to decline group invitation");
-                            w.set_group_invite_error_id(group_id_str);
-                            w.set_group_invite_error(error.to_string().into());
+                            });
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "Failed to accept group invitation");
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.global::<crate::ModalHostState>()
+                                        .set_group_invite_decision("".into());
+                                    w.global::<crate::ModalHostState>()
+                                        .set_group_invite_error_id(group_id_str);
+                                    w.global::<crate::ModalHostState>()
+                                        .set_group_invite_error(error.to_string().into());
+                                }
+                            });
                         }
                     }
                 });
             });
-        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        window
+            .global::<crate::ModalHostState>()
+            .on_friends_decline_group_invite(move |group_id_str: SharedString| {
+                let Ok(group_id) = group_id_str.parse() else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    if !w
+                        .global::<crate::ModalHostState>()
+                        .get_group_invite_decision()
+                        .is_empty()
+                    {
+                        return;
+                    }
+                    w.global::<crate::ModalHostState>()
+                        .set_group_invite_decision(format!("decline:{group_id_str}").into());
+                    w.global::<crate::ModalHostState>()
+                        .set_group_invite_error_id("".into());
+                    w.global::<crate::ModalHostState>()
+                        .set_group_invite_error("".into());
+                }
+                let weak = weak.clone();
+                let ui_ctx = ui_ctx.clone();
+                tokio::spawn(async move {
+                    let result = ui_ctx.decline_pending_anon_group_invite(&group_id);
+                    if result.is_ok() {
+                        refresh_group_invites(&weak, &ui_ctx);
+                    }
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<crate::ModalHostState>()
+                                .set_group_invite_decision("".into());
+                            if let Err(error) = result {
+                                tracing::error!(%error, "Failed to decline group invitation");
+                                w.global::<crate::ModalHostState>()
+                                    .set_group_invite_error_id(group_id_str);
+                                w.global::<crate::ModalHostState>()
+                                    .set_group_invite_error(error.to_string().into());
+                            }
+                        }
+                    });
+                });
+            });
     }
 }

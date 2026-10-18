@@ -1,83 +1,20 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
 import { LoginPage } from "pages/login.slint";
 import { RegisterPage } from "pages/register.slint";
 import { AccountRecoveryPage } from "pages/account_recovery.slint";
 import { LinkDevicePage } from "pages/link_device.slint";
 import { LoadingPage } from "pages/loading.slint";
 import { WelcomePage } from "pages/welcome.slint";
-import { AvatarOption } from "components/avatar_picker.slint";
+import { AuthFlow } from "app_auth_flow.slint";
 
-// The account entry flow. MainWindow owns the state so Rust's API stays stable.
+// The account entry flow uses AuthFlow for authentication state and actions.
 export component AuthPages inherits Rectangle {
     in property <bool> account-free-surfaces;
-    in property <[AvatarOption]> avatar-options;
-    in property <string> configured-server-url;
     in property <string> current-view;
     in property <string> exiting-view;
     in property <bool> is-mobile-platform;
-    in property <bool> link-device-active;
-    in property <string> link-device-error;
-    in property <bool> link-device-has-local-identity;
-    in property <image> link-device-qr;
-    in property <string> link-device-status;
-    in property <string> link-device-url;
-    in property <string> loading-message;
-    in property <string> loading-secondary-message;
-    in property <string> login-error;
-    in property <bool> login-identity-reset-available;
-    in property <bool> login-loading;
-    in-out property <string> login-password;
-    in-out property <string> login-pin;
-    in-out property <string> login-server-url;
-    in-out property <string> login-username;
-    in property <bool> login-verifying;
-    in-out property <string> recovery-code;
-    in-out property <string> recovery-confirm-password;
-    in property <string> recovery-error;
-    in property <bool> recovery-loading;
-    in-out property <string> recovery-new-password;
-    in-out property <string> recovery-new-pin;
-    in property <string> recovery-success;
-    in-out property <string> recovery-username;
-    in-out property <color> register-avatar-color;
-    in property <image> register-avatar-source;
-    in-out property <string> register-confirm-password;
-    in-out property <string> register-display-name;
-    in property <string> register-error;
-    in property <bool> register-has-avatar;
-    in property <bool> register-loading;
-    in-out property <string> register-password;
-    in property <int> register-password-strength;
-    in-out property <string> register-pin;
-    in property <int> register-pin-strength;
-    in-out property <int> register-selected-default-idx;
-    in-out property <string> register-server-url;
-    in-out property <string> register-username;
     in property <bool> server-unreachable;
-    in property <string> user-display-name;
     in property <float> view-progress;
-    callback accept-new-identity();
-    callback continue-without-account();
-    callback go-to-link-device();
-    callback go-to-login();
-    callback go-to-recovery();
-    callback go-to-register();
-    callback link-device-cancel();
-    callback link-device-copy();
-    callback link-device-start();
-    callback login(string, string, string, string);
-    callback recover-account(string, string, string, string);
-    callback register(string, string, string, string, string);
-    callback register-clear-error();
-    callback register-password-changed(string);
-    callback register-pin-changed(string);
-    pure callback register-pin-validation(string) -> string;
-    callback register-remove-avatar();
-    callback register-select-avatar();
-    callback register-select-default-avatar(int);
-    pure callback register-username-validation(string) -> string;
-    callback welcome-add-friends();
-    callback welcome-browse-channels();
-    callback welcome-get-started();
     function view-shift(name: string) -> length {
         return root.current-view == name ? (1 - root.view-progress) * 24px
             : -root.view-progress * 12px;
@@ -91,8 +28,8 @@ export component AuthPages inherits Rectangle {
         z: 2;
         x: root.view-shift("loading");
         opacity: root.view-opacity("loading");
-        message: root.loading-message;
-        secondary-message: root.loading-secondary-message;
+        message: AuthFlow.loading-message;
+        secondary-message: AuthFlow.loading-secondary-message;
     }
 
     // Login page
@@ -101,32 +38,32 @@ export component AuthPages inherits Rectangle {
         x: root.view-shift("login");
         opacity: root.view-opacity("login");
         touch: root.is-mobile-platform;
-        server-url <=> root.login-server-url;
-        configured-server-url: root.configured-server-url;
-        username <=> root.login-username;
-        password <=> root.login-password;
-        pin <=> root.login-pin;
-        loading: root.login-loading;
-        error: root.login-error;
-        verifying: root.login-verifying;
-        identity-reset-available: root.login-identity-reset-available;
-        accept-new-identity => { root.accept-new-identity(); }
+        server-url <=> AuthFlow.login-server-url;
+        configured-server-url: AuthFlow.configured-server-url;
+        username <=> AuthFlow.login-username;
+        password <=> AuthFlow.login-password;
+        pin <=> AuthFlow.login-pin;
+        loading: AuthFlow.login-loading;
+        error: AuthFlow.login-error;
+        verifying: AuthFlow.login-verifying;
+        identity-reset-available: AuthFlow.login-identity-reset-available;
+        accept-new-identity => { AuthFlow.accept-new-identity(); }
 
         server-unreachable: root.server-unreachable;
         account-free-surfaces: root.account-free-surfaces;
-        continue-without-account => { root.continue-without-account(); }
+        continue-without-account => { AuthFlow.continue-without-account(); }
 
         login(u, p, s, pin) => {
-            root.login(u, p, s, pin);
+            AuthFlow.login(u, p, s, pin);
         }
         register => {
-            root.go-to-register();
+            AuthFlow.go-to-register();
         }
         go-to-recovery => {
-            root.go-to-recovery();
+            AuthFlow.go-to-recovery();
         }
         go-to-link-device => {
-            root.go-to-link-device();
+            AuthFlow.go-to-link-device();
         }
     }
 
@@ -136,47 +73,47 @@ export component AuthPages inherits Rectangle {
         x: root.view-shift("register");
         opacity: root.view-opacity("register");
         touch: root.is-mobile-platform;
-        display-name <=> root.register-display-name;
-        username <=> root.register-username;
-        password <=> root.register-password;
-        confirm-password <=> root.register-confirm-password;
-        pin <=> root.register-pin;
-        server-url <=> root.register-server-url;
-        loading: root.register-loading;
-        error: root.register-error;
-        avatar-source: root.register-avatar-source;
-        avatar-options: root.avatar-options;
-        has-avatar: root.register-has-avatar;
-        selected-default-idx <=> root.register-selected-default-idx;
-        avatar-color <=> root.register-avatar-color;
-        password-strength: root.register-password-strength;
-        pin-strength: root.register-pin-strength;
+        display-name <=> AuthFlow.register-display-name;
+        username <=> AuthFlow.register-username;
+        password <=> AuthFlow.register-password;
+        confirm-password <=> AuthFlow.register-confirm-password;
+        pin <=> AuthFlow.register-pin;
+        server-url <=> AuthFlow.register-server-url;
+        loading: AuthFlow.register-loading;
+        error: AuthFlow.register-error;
+        avatar-source: AuthFlow.register-avatar-source;
+        avatar-options: AuthFlow.avatar-options;
+        has-avatar: AuthFlow.register-has-avatar;
+        selected-default-idx <=> AuthFlow.register-selected-default-idx;
+        avatar-color <=> AuthFlow.register-avatar-color;
+        password-strength: AuthFlow.register-password-strength;
+        pin-strength: AuthFlow.register-pin-strength;
         server-unreachable: root.server-unreachable;
         account-free-surfaces: root.account-free-surfaces;
 
-        continue-without-account => { root.continue-without-account(); }
+        continue-without-account => { AuthFlow.continue-without-account(); }
 
         register(u, p, d, pin, s) => {
-            root.register(u, p, d, pin, s);
+            AuthFlow.register(u, p, d, pin, s);
         }
-        username-validation(u) => { root.register-username-validation(u) }
-        pin-validation(pin) => { root.register-pin-validation(pin) }
-        clear-error => { root.register-clear-error(); }
+        username-validation(u) => { AuthFlow.register-username-validation(u) }
+        pin-validation(pin) => { AuthFlow.register-pin-validation(pin) }
+        clear-error => { AuthFlow.register-clear-error(); }
         password-changed(p) => {
-            root.register-password-changed(p);
+            AuthFlow.register-password-changed(p);
         }
         pin-changed(p) => {
-            root.register-pin-changed(p);
+            AuthFlow.register-pin-changed(p);
         }
         select-avatar => {
-            root.register-select-avatar();
+            AuthFlow.register-select-avatar();
         }
         select-default-avatar(idx) => {
-            root.register-select-default-avatar(idx);
+            AuthFlow.register-select-default-avatar(idx);
         }
-        remove-avatar => { root.register-remove-avatar(); }
+        remove-avatar => { AuthFlow.register-remove-avatar(); }
         go-to-login => {
-            root.go-to-login();
+            AuthFlow.go-to-login();
         }
     }
 
@@ -186,17 +123,17 @@ export component AuthPages inherits Rectangle {
         x: root.view-shift("link-device");
         opacity: root.view-opacity("link-device");
         touch: root.is-mobile-platform;
-        qr-image: root.link-device-qr;
-        link-url: root.link-device-url;
-        status-text: root.link-device-status;
-        error: root.link-device-error;
-        linking: root.link-device-active;
-        has-local-identity: root.link-device-has-local-identity;
+        qr-image: AuthFlow.link-device-qr;
+        link-url: AuthFlow.link-device-url;
+        status-text: AuthFlow.link-device-status;
+        error: AuthFlow.link-device-error;
+        linking: AuthFlow.link-device-active;
+        has-local-identity: AuthFlow.link-device-has-local-identity;
 
-        start => { root.link-device-start(); }
-        cancel => { root.link-device-cancel(); }
-        copy-link => { root.link-device-copy(); }
-        go-to-login => { root.go-to-login(); }
+        start => { AuthFlow.link-device-start(); }
+        cancel => { AuthFlow.link-device-cancel(); }
+        copy-link => { AuthFlow.link-device-copy(); }
+        go-to-login => { AuthFlow.go-to-login(); }
     }
 
     // Account recovery page
@@ -204,20 +141,20 @@ export component AuthPages inherits Rectangle {
         z: 2;
         x: root.view-shift("recovery");
         opacity: root.view-opacity("recovery");
-        username <=> root.recovery-username;
-        recovery-code <=> root.recovery-code;
-        new-password <=> root.recovery-new-password;
-        confirm-password <=> root.recovery-confirm-password;
-        new-pin <=> root.recovery-new-pin;
-        loading: root.recovery-loading;
-        error: root.recovery-error;
-        success: root.recovery-success;
+        username <=> AuthFlow.recovery-username;
+        recovery-code <=> AuthFlow.recovery-code;
+        new-password <=> AuthFlow.recovery-new-password;
+        confirm-password <=> AuthFlow.recovery-confirm-password;
+        new-pin <=> AuthFlow.recovery-new-pin;
+        loading: AuthFlow.recovery-loading;
+        error: AuthFlow.recovery-error;
+        success: AuthFlow.recovery-success;
 
         recover(u, code, pw, pin) => {
-            root.recover-account(u, code, pw, pin);
+            AuthFlow.recover-account(u, code, pw, pin);
         }
         go-to-login => {
-            root.go-to-login();
+            AuthFlow.go-to-login();
         }
     }
 
@@ -226,9 +163,9 @@ export component AuthPages inherits Rectangle {
         z: 2;
         x: root.view-shift("welcome");
         opacity: root.view-opacity("welcome");
-        display-name: root.user-display-name;
-        add-friends => { root.welcome-add-friends(); }
-        browse-channels => { root.welcome-browse-channels(); }
-        get-started => { root.welcome-get-started(); }
+        display-name: SidebarPane.user-display-name;
+        add-friends => { AuthFlow.welcome-add-friends(); }
+        browse-channels => { AuthFlow.welcome-browse-channels(); }
+        get-started => { AuthFlow.welcome-get-started(); }
     }
 }

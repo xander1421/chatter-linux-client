@@ -3,6 +3,7 @@
 //! Core shapes each row (`chatter_core::client::JarvisRow`); this turns it
 //! into the Slint view type and splices it into the message list.
 
+use slint::ComponentHandle;
 use slint::{Model, ModelRc, VecModel};
 
 use chatter_core::client::JarvisRow;
@@ -44,14 +45,16 @@ pub fn row_to_item(row: JarvisRow) -> MessageItemData {
 
 /// Append rows to the message list, dropping the row with `remove_id` first.
 pub fn push_rows(window: &MainWindow, remove_id: Option<&str>, rows: Vec<JarvisRow>) {
-    let model = window.get_messages();
+    let model = window.global::<crate::ChatPane>().get_messages();
     let mut messages: Vec<_> = model
         .iter()
         .filter(|m| remove_id != Some(m.message_id.as_str()))
         .collect();
     messages.extend(rows.into_iter().map(row_to_item));
-    window.set_is_at_bottom(true);
-    window.set_messages(ModelRc::new(VecModel::from(messages)));
+    window.global::<crate::ChatPane>().set_is_at_bottom(true);
+    window
+        .global::<crate::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(messages)));
 }
 
 /// Add a "Jarvis is thinking..." placeholder message.
@@ -66,13 +69,18 @@ pub fn add_jarvis_thinking_placeholder(window: &MainWindow) -> String {
 
 /// Clear only the placeholder belonging to this request.
 pub fn remove_jarvis_thinking_placeholder(window: &MainWindow, thinking_id: &str) {
-    let model = window.get_messages();
-    if model.iter().any(|row| row.message_id.as_str() == thinking_id) {
+    let model = window.global::<crate::ChatPane>().get_messages();
+    if model
+        .iter()
+        .any(|row| row.message_id.as_str() == thinking_id)
+    {
         let rows: Vec<_> = model
             .iter()
             .filter(|row| row.message_id.as_str() != thinking_id)
             .collect();
-        window.set_messages(ModelRc::new(VecModel::from(rows)));
+        window
+            .global::<crate::ChatPane>()
+            .set_messages(ModelRc::new(VecModel::from(rows)));
     }
 }
 

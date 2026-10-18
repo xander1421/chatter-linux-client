@@ -100,7 +100,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Whether the sign-in screens have anywhere to offer as an alternative to
     // themselves. Core's call, not ours.
     window.set_account_free_surfaces(ui_ctx.has_account_free_surfaces());
-    window.set_is_signed_in(ui_ctx.is_logged_in());
+    window
+        .global::<crate::AuthFlow>()
+        .set_is_signed_in(ui_ctx.is_logged_in());
     if ui_ctx.is_logged_in() {
         match ui_ctx.unacknowledged_recovery_codes() {
             Ok(Some(pending)) if !pending.codes.is_empty() => {
@@ -109,8 +111,12 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .iter()
                     .map(|code| code.as_str().into())
                     .collect();
-                window.set_recovery_codes(slint::ModelRc::new(slint::VecModel::from(model)));
-                window.set_recovery_codes_regenerated(pending.regenerated);
+                window
+                    .global::<crate::AuthFlow>()
+                    .set_recovery_codes(slint::ModelRc::new(slint::VecModel::from(model)));
+                window
+                    .global::<crate::AuthFlow>()
+                    .set_recovery_codes_regenerated(pending.regenerated);
                 crate::bin_ui::features::back::push(window, "recovery-codes");
             }
             Ok(_) => {}
@@ -144,7 +150,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_server_unreachable(unreachable);
                     w.set_connection_reconnect_attempt(attempt);
                     w.set_account_free_surfaces(account_free);
-                    w.set_is_signed_in(signed_in);
+                    w.global::<crate::AuthFlow>().set_is_signed_in(signed_in);
                 }
             });
         }

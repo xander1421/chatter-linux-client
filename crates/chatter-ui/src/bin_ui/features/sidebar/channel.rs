@@ -18,59 +18,98 @@ use crate::bin_ui::features::history_owner::HistoryOwner;
 pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let refresh_client = ui_ctx.clone();
     let refresh_window = window.as_weak();
-    window.on_refresh_channel_call(move || {
-        if let Some(w) = refresh_window.upgrade() {
-            if let chatter_core::state::ActiveConversation::Channel(id) =
-                refresh_client.active_conversation()
-            {
-                refresh_channel_call(w.as_weak(), refresh_client.clone(), id.to_string());
+    window
+        .global::<crate::SidebarPane>()
+        .on_refresh_channel_call(move || {
+            if let Some(w) = refresh_window.upgrade() {
+                if let chatter_core::state::ActiveConversation::Channel(id) =
+                    refresh_client.active_conversation()
+                {
+                    refresh_channel_call(w.as_weak(), refresh_client.clone(), id.to_string());
+                }
             }
-        }
-    });
+        });
     let ui_ctx_clone = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_channel_selected(move |channel_id: SharedString| {
-        let open_started = std::time::Instant::now();
-        crate::trace_chat_open_started(open_started, "channel");
-        tracing::info!(
-            kind = "channel",
-            stage = "tap",
-            elapsed_ms = 0,
-            "conversation_open"
-        );
-        if let Ok(id) = channel_id.parse::<ChannelId>() {
-            super::super::header::cancel_pending_jump_for(
-                chatter_core::state::ActiveConversation::Channel(id),
+    window
+        .global::<crate::SidebarPane>()
+        .on_channel_selected(move |channel_id: SharedString| {
+            let open_started = std::time::Instant::now();
+            crate::trace_chat_open_started(open_started, "channel");
+            tracing::info!(
+                kind = "channel",
+                stage = "tap",
+                elapsed_ms = 0,
+                "conversation_open"
             );
-        }
-        let channel_id_str = channel_id.to_string();
-        let weak = weak_window.clone();
-        super::show_chat_pane(&weak);
-        tracing::info!(
-            kind = "channel",
-            stage = "slide_requested",
-            elapsed_ms = open_started.elapsed().as_millis(),
-            "conversation_open"
-        );
-        let ui_ctx = ui_ctx_clone.clone();
+            if let Ok(id) = channel_id.parse::<ChannelId>() {
+                super::super::header::cancel_pending_jump_for(
+                    chatter_core::state::ActiveConversation::Channel(id),
+                );
+            }
+            let channel_id_str = channel_id.to_string();
+            let weak = weak_window.clone();
+            super::show_chat_pane(&weak);
+            tracing::info!(
+                kind = "channel",
+                stage = "slide_requested",
+                elapsed_ms = open_started.elapsed().as_millis(),
+                "conversation_open"
+            );
+            let ui_ctx = ui_ctx_clone.clone();
 
-        // Stop any playing audio when switching channels
-        stop_audio_playback();
+            // Stop any playing audio when switching channels
+            stop_audio_playback();
 
-        // Clear inline GIF animations to free memory
-        crate::bin_ui::gif_state::clear_inline_gifs();
+            // Clear inline GIF animations to free memory
+            crate::bin_ui::gif_state::clear_inline_gifs();
 
-        // Local AI channel: no network, no pins, no read-marks — load Jarvis
-        // history and stop.
-        #[cfg(feature = "jarvis")]
-        if crate::bin_ui::features::jarvis::is_jarvis_channel_str(&channel_id_str) {
+            // Local AI channel: no network, no pins, no read-marks — load Jarvis
+            // history and stop.
+            #[cfg(feature = "jarvis")]
+            if crate::bin_ui::features::jarvis::is_jarvis_channel_str(&channel_id_str) {
+                if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
+                    ui_ctx.select_channel(parsed);
+                }
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_refresh_screen_protection();
+                }
+                if let Some(w) = weak.upgrade() {
+                    crate::bin_ui::features::composer::sync_composer_draft(
+                        &w,
+                        &ui_ctx,
+                        ui_ctx.chat_snapshot().attachment_revision,
+                    );
+                }
+                let ui_ctx_for_sel = ui_ctx.clone();
+                run_ui!(weak, |w| {
+                    w.global::<crate::ChatPane>().set_loading_messages(true);
+                    super::refresh_selection(&w, &ui_ctx_for_sel);
+                });
+                let weak = weak.clone();
+                let ui_ctx = ui_ctx.clone();
+                tokio::spawn(async move {
+                    crate::bin_ui::features::jarvis::load_jarvis_channel_into_ui(weak, ui_ctx)
+                        .await;
+                });
+                return;
+            }
+
+            // Commit active-conversation state SYNCHRONOUSLY on the UI thread
+            // (same race fix as dm.rs — see comment there).
             if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
                 ui_ctx.select_channel(parsed);
             }
             if let Some(w) = weak.upgrade() {
+                w.global::<crate::CallView>()
+                    .set_active_channel_call_id("".into());
+                refresh_channel_call(weak.clone(), ui_ctx.clone(), channel_id_str.clone());
+            }
+            if let Some(w) = weak.upgrade() {
                 w.invoke_refresh_screen_protection();
             }
+
             if let Some(w) = weak.upgrade() {
                 crate::bin_ui::features::composer::sync_composer_draft(
                     &w,
@@ -78,112 +117,80 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ui_ctx.chat_snapshot().attachment_revision,
                 );
             }
-            let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| {
-                w.set_loading_messages(true);
-                super::refresh_selection(&w, &ui_ctx_for_sel);
+
+            let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.active_conversation());
+            let channel_id_str_for_ui = channel_id_str.clone();
+            let ui_ctx_for_ui = ui_ctx.clone();
+            crate::run_history_ui!(weak, owner, |w| {
+                w.global::<crate::ChatPane>().set_loading_messages(true);
+
+                // Clear unread count in sidebar
+                crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
+                    &w,
+                    &ui_ctx_for_ui,
+                    &channel_id_str_for_ui,
+                    0,
+                );
+
+                // Clear pinned bar immediately while loading new channel's pins
+                w.global::<crate::ChatPane>().set_has_pinned_messages(false);
+                w.global::<crate::ChatPane>()
+                    .set_pinned_message_preview("".into());
+                w.global::<crate::ChatPane>().set_pinned_total_count(0);
             });
-            let weak = weak.clone();
-            let ui_ctx = ui_ctx.clone();
+
             tokio::spawn(async move {
-                crate::bin_ui::features::jarvis::load_jarvis_channel_into_ui(weak, ui_ctx).await;
-            });
-            return;
-        }
-
-        // Commit active-conversation state SYNCHRONOUSLY on the UI thread
-        // (same race fix as dm.rs — see comment there).
-        if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
-            ui_ctx.select_channel(parsed);
-        }
-        if let Some(w) = weak.upgrade() {
-            w.set_active_channel_call_id("".into());
-            refresh_channel_call(weak.clone(), ui_ctx.clone(), channel_id_str.clone());
-        }
-        if let Some(w) = weak.upgrade() {
-            w.invoke_refresh_screen_protection();
-        }
-
-        if let Some(w) = weak.upgrade() {
-            crate::bin_ui::features::composer::sync_composer_draft(
-                &w,
-                &ui_ctx,
-                ui_ctx.chat_snapshot().attachment_revision,
-            );
-        }
-
-        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.active_conversation());
-        let channel_id_str_for_ui = channel_id_str.clone();
-        let ui_ctx_for_ui = ui_ctx.clone();
-        crate::run_history_ui!(weak, owner, |w| {
-            w.set_loading_messages(true);
-
-            // Clear unread count in sidebar
-            crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
-                &w,
-                &ui_ctx_for_ui,
-                &channel_id_str_for_ui,
-                0,
-            );
-
-            // Clear pinned bar immediately while loading new channel's pins
-            w.set_has_pinned_messages(false);
-            w.set_pinned_message_preview("".into());
-            w.set_pinned_total_count(0);
-        });
-
-        tokio::spawn(async move {
-            if !owner.is_current() {
-                return;
-            }
-            // Parse channel ID
-            let channel_id: ChannelId = match channel_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid channel ID: {}", e);
+                if !owner.is_current() {
                     return;
                 }
-            };
+                // Parse channel ID
+                let channel_id: ChannelId = match channel_id_str.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid channel ID: {}", e);
+                        return;
+                    }
+                };
 
-            // Active conversation already committed pre-spawn.
-            let ui_ctx_for_sel = ui_ctx.clone();
-            crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
-                &w,
-                &ui_ctx_for_sel
-            ));
+                // Active conversation already committed pre-spawn.
+                let ui_ctx_for_sel = ui_ctx.clone();
+                crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
+                    &w,
+                    &ui_ctx_for_sel
+                ));
 
-            // Mark as read
-            let handle =
-                ui_ctx.conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
-            // Where the user left off. This is the only moment it exists: the
-            // call that returns it is the call that clears `is_read`. The
-            // receipts go out for the page `load_channel_into_ui` loads.
-            let anchor = handle.mark_read_local().unwrap_or_default();
-            tracing::info!(
-                kind = "channel",
-                stage = "read_marked",
-                elapsed_ms = open_started.elapsed().as_millis(),
-                "conversation_open"
-            );
-            // Reading a foldered channel has to clear its folder badge too.
-            let ui_ctx_badges = ui_ctx.clone();
-            crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
-                &w,
-                &ui_ctx_badges
-            ));
+                // Mark as read
+                let handle = ui_ctx
+                    .conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+                // Where the user left off. This is the only moment it exists: the
+                // call that returns it is the call that clears `is_read`. The
+                // receipts go out for the page `load_channel_into_ui` loads.
+                let anchor = handle.mark_read_local().unwrap_or_default();
+                tracing::info!(
+                    kind = "channel",
+                    stage = "read_marked",
+                    elapsed_ms = open_started.elapsed().as_millis(),
+                    "conversation_open"
+                );
+                // Reading a foldered channel has to clear its folder badge too.
+                let ui_ctx_badges = ui_ctx.clone();
+                crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
+                    &w,
+                    &ui_ctx_badges
+                ));
 
-            load_channel_into_ui_owned(
-                weak,
-                channel_id,
-                ui_ctx.clone(),
-                anchor,
-                Some(handle),
-                owner,
-                Some(open_started),
-            )
-            .await;
+                load_channel_into_ui_owned(
+                    weak,
+                    channel_id,
+                    ui_ctx.clone(),
+                    anchor,
+                    Some(handle),
+                    owner,
+                    Some(open_started),
+                )
+                .await;
+            });
         });
-    });
 }
 
 fn refresh_channel_call(
@@ -209,11 +216,16 @@ fn refresh_channel_call(
             }
             match lookup {
                 Ok(Ok(Some((id, video, participants)))) => {
-                    w.set_active_channel_call_id(id.into());
-                    w.set_active_channel_call_video(video);
-                    w.set_active_channel_call_participants(participants);
+                    w.global::<crate::CallView>()
+                        .set_active_channel_call_id(id.into());
+                    w.global::<crate::CallView>()
+                        .set_active_channel_call_video(video);
+                    w.global::<crate::CallView>()
+                        .set_active_channel_call_participants(participants);
                 }
-                Ok(Ok(None)) => w.set_active_channel_call_id("".into()),
+                Ok(Ok(None)) => w
+                    .global::<crate::CallView>()
+                    .set_active_channel_call_id("".into()),
                 Ok(Err(error)) => tracing::debug!(%error, "active channel call lookup failed"),
                 Err(_) => tracing::debug!("active channel call lookup timed out"),
             }
@@ -257,16 +269,18 @@ impl ChannelMetadata {
     }
 
     pub(crate) fn apply(self, w: &MainWindow) {
-        w.set_channel_name(self.name.into());
-        w.set_topic(self.topic.into());
+        w.global::<crate::ChatPane>()
+            .set_channel_name(self.name.into());
+        w.global::<crate::ChatPane>().set_topic(self.topic.into());
         if let Some((rgba, width, height)) = self.icon {
-            w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                &rgba, width, height,
-            ));
-            w.set_channel_has_avatar(true);
+            w.global::<crate::ChatPane>().set_channel_avatar_source(
+                crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, width, height),
+            );
+            w.global::<crate::ChatPane>().set_channel_has_avatar(true);
         } else {
-            w.set_channel_avatar_source(slint::Image::default());
-            w.set_channel_has_avatar(false);
+            w.global::<crate::ChatPane>()
+                .set_channel_avatar_source(slint::Image::default());
+            w.global::<crate::ChatPane>().set_channel_has_avatar(false);
         }
     }
 }
@@ -319,7 +333,9 @@ pub(crate) async fn load_channel_into_ui_owned(
         Some(c) => c,
         None => {
             tracing::error!("Channel {} not found locally", channel_id);
-            crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
+            crate::run_history_ui!(weak, owner, |w| w
+                .global::<crate::ChatPane>()
+                .set_loading_messages(false));
             return Vec::new();
         }
     };
@@ -356,7 +372,9 @@ pub(crate) async fn load_channel_into_ui_owned(
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
-            crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
+            crate::run_history_ui!(weak, owner, |w| w
+                .global::<crate::ChatPane>()
+                .set_loading_messages(false));
             return Vec::new();
         }
     };
@@ -427,10 +445,11 @@ pub(crate) async fn load_channel_into_ui_owned(
             &conversation_type,
             private_channel,
         );
-        w.set_is_dm(false);
-        w.set_member_count(member_count);
+        w.global::<crate::ChatPane>().set_is_dm(false);
+        w.global::<crate::ChatPane>().set_member_count(member_count);
 
-        w.set_header_presence_status("offline".into());
+        w.global::<crate::ChatPane>()
+            .set_header_presence_status("offline".into());
         let slint_messages: Vec<_> = display_messages
             .iter()
             .map(|m| m.to_slint_preview_with_user(&current_user_id))
@@ -439,7 +458,8 @@ pub(crate) async fn load_channel_into_ui_owned(
         if conversation_type == chatter_core::domain::message::ConversationType::Channel {
             crate::bin_ui::features::chat::recompute_channel_continuations(&model);
         }
-        w.set_messages(ModelRc::new(model));
+        w.global::<crate::ChatPane>()
+            .set_messages(ModelRc::new(model));
         if let Some(started) = open_started {
             tracing::info!(
                 kind = "channel",
@@ -459,7 +479,7 @@ pub(crate) async fn load_channel_into_ui_owned(
             // Non-sidebar reloads have no open-frame trace to defer against.
             super::fill_open_media(w.as_weak(), owner, display_messages, current_user_id);
         }
-        w.set_loading_messages(false);
+        w.global::<crate::ChatPane>().set_loading_messages(false);
         super::super::header::finish_pending_jump(&w, &ui_ctx);
         super::super::header::refresh_pinned_ui(&w, &ui_ctx);
 

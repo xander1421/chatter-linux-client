@@ -37,9 +37,10 @@ pub(crate) fn current_request() -> u64 {
 
 fn gallery(w: &MainWindow) -> Vec<String> {
     ordered_media(
-        w.get_messages()
+        w.global::<crate::ChatPane>()
+            .get_messages()
             .iter()
-            .chain(w.get_thread_replies().iter())
+            .chain(w.global::<crate::ChatPane>().get_thread_replies().iter())
             .map(|message| GalleryMessage {
                 sent_at_ns: message.timestamp_ns.parse().unwrap_or(0),
                 attachments: message
@@ -56,9 +57,10 @@ fn gallery(w: &MainWindow) -> Vec<String> {
 }
 
 fn thumbnail(w: &MainWindow, id: &str) -> slint::Image {
-    w.get_messages()
+    w.global::<crate::ChatPane>()
+        .get_messages()
         .iter()
-        .chain(w.get_thread_replies().iter())
+        .chain(w.global::<crate::ChatPane>().get_thread_replies().iter())
         .find_map(|message| {
             message
                 .attachments
@@ -96,10 +98,12 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         .and_then(|i| i.checked_sub(1))
         .and_then(|i| items.get(i));
     let next = index.and_then(|i| items.get(i + 1));
-    w.set_media_viewer_previous_thumbnail(
-        previous.map(|item| thumbnail(w, item)).unwrap_or_default(),
-    );
-    w.set_media_viewer_next_thumbnail(next.map(|item| thumbnail(w, item)).unwrap_or_default());
+    w.global::<crate::ChatPane>()
+        .set_media_viewer_previous_thumbnail(
+            previous.map(|item| thumbnail(w, item)).unwrap_or_default(),
+        );
+    w.global::<crate::ChatPane>()
+        .set_media_viewer_next_thumbnail(next.map(|item| thumbnail(w, item)).unwrap_or_default());
     #[cfg(target_os = "android")]
     {
         HAS_PREVIOUS.store(index.is_some_and(|i| i > 0), Ordering::Relaxed);
@@ -108,10 +112,13 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
             Ordering::Relaxed,
         );
     }
-    w.set_media_viewer_attachment_id(id.into());
-    w.set_media_viewer_has_previous(index.is_some_and(|i| i > 0));
-    w.set_media_viewer_has_next(index.is_some_and(|i| i + 1 < items.len()));
-    w.set_media_viewer_position(
+    w.global::<crate::ChatPane>()
+        .set_media_viewer_attachment_id(id.into());
+    w.global::<crate::ChatPane>()
+        .set_media_viewer_has_previous(index.is_some_and(|i| i > 0));
+    w.global::<crate::ChatPane>()
+        .set_media_viewer_has_next(index.is_some_and(|i| i + 1 < items.len()));
+    w.global::<crate::ChatPane>().set_media_viewer_position(
         index
             .map(|i| format!("{} / {}", i + 1, items.len()))
             .unwrap_or_default()
@@ -153,7 +160,10 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
             let next = preview(all.get(index + 1));
             let _ = weak.upgrade_in_event_loop(move |w| {
                 if !is_current(request)
-                    || w.get_media_viewer_attachment_id().as_str() != selected
+                    || w.global::<crate::ChatPane>()
+                        .get_media_viewer_attachment_id()
+                        .as_str()
+                        != selected
                     || client.active_conversation() != conversation
                     || client.auth_snapshot().session_revision != session_revision
                 {
@@ -161,24 +171,31 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                 }
                 let mut stored = GALLERY.lock().unwrap_or_else(|poison| poison.into_inner());
                 *stored = (conversation, all.clone(), true, session_revision);
-                w.set_media_viewer_has_previous(index > 0);
-                w.set_media_viewer_has_next(index + 1 < all.len());
-                w.set_media_viewer_position(format!("{} / {}", index + 1, all.len()).into());
-                w.set_media_viewer_previous_thumbnail(
-                    previous
-                        .map(|(rgba, width, height)| {
+                w.global::<crate::ChatPane>()
+                    .set_media_viewer_has_previous(index > 0);
+                w.global::<crate::ChatPane>()
+                    .set_media_viewer_has_next(index + 1 < all.len());
+                w.global::<crate::ChatPane>()
+                    .set_media_viewer_position(format!("{} / {}", index + 1, all.len()).into());
+                w.global::<crate::ChatPane>()
+                    .set_media_viewer_previous_thumbnail(
+                        previous
+                            .map(|(rgba, width, height)| {
+                                crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                                    &rgba, width, height,
+                                )
+                            })
+                            .unwrap_or_default(),
+                    );
+                w.global::<crate::ChatPane>()
+                    .set_media_viewer_next_thumbnail(
+                        next.map(|(rgba, width, height)| {
                             crate::bin_ui::slint_conversions::rgba_to_slint_image(
                                 &rgba, width, height,
                             )
                         })
                         .unwrap_or_default(),
-                );
-                w.set_media_viewer_next_thumbnail(
-                    next.map(|(rgba, width, height)| {
-                        crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, width, height)
-                    })
-                    .unwrap_or_default(),
-                );
+                    );
                 #[cfg(target_os = "android")]
                 {
                     HAS_PREVIOUS.store(index > 0, Ordering::Relaxed);
@@ -191,7 +208,9 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
 }
 
 fn navigate(w: &MainWindow, delta: i32) {
-    let current = w.get_media_viewer_attachment_id();
+    let current = w
+        .global::<crate::ChatPane>()
+        .get_media_viewer_attachment_id();
     let items = GALLERY
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -208,8 +227,10 @@ fn navigate(w: &MainWindow, delta: i32) {
     crate::bin_ui::video_state::stop_video();
     // Keep the lightbox alive across image pages so its image and chrome can
     // travel together. Video selections replace it in the attachment handler.
-    w.set_video_player_visible(false);
-    w.invoke_view_attachment(items[next as usize].clone().into());
+    w.global::<crate::ChatPane>()
+        .set_video_player_visible(false);
+    w.global::<crate::ChatPane>()
+        .invoke_view_attachment(items[next as usize].clone().into());
 }
 
 /// Native video controls use the same gallery selection as image controls.
@@ -222,8 +243,12 @@ pub(crate) fn native_action(action: i32, request: u64) {
             }
             match action {
                 -1 | 1 => navigate(&w, action),
-                2 => w.invoke_media_viewer_export(false),
-                3 => w.invoke_media_viewer_open_downloads(),
+                2 => w
+                    .global::<crate::ChatPane>()
+                    .invoke_media_viewer_export(false),
+                3 => w
+                    .global::<crate::ChatPane>()
+                    .invoke_media_viewer_open_downloads(),
                 _ => (),
             }
         });
@@ -245,57 +270,65 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let _ = WINDOW.set(window.as_weak());
     let _ = CLIENT.set(client.clone());
     let weak = window.as_weak();
-    window.on_media_viewer_navigate(move |delta| {
-        if let Some(w) = weak.upgrade() {
-            navigate(&w, delta);
-        }
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_media_viewer_navigate(move |delta| {
+            if let Some(w) = weak.upgrade() {
+                navigate(&w, delta);
+            }
+        });
     let weak = window.as_weak();
     let client = client.clone();
-    window.on_media_viewer_export(move |copy| {
-        let Some(w) = weak.upgrade() else { return };
-        let selected = w.get_media_viewer_attachment_id();
-        if selected.is_empty() {
-            return;
-        }
-        let id = selected
-            .parse::<AttachmentId>()
-            .unwrap_or_else(|_| AttachmentId::from_cdn_key(selected.as_str()));
-        let revision = client.auth_snapshot().session_revision;
-        let request = current_request();
-        let client = client.clone();
-        let weak = weak.clone();
-        // Decryption, image decoding and file operations stay off the UI thread.
-        std::thread::spawn(move || {
-            let result = export(&client, &id, copy);
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                if client.auth_snapshot().session_revision != revision || !is_current(request) {
-                    return;
-                }
-                match result {
-                    Ok(message) => {
-                        w.set_toast_message(message.into());
-                        w.set_toast_variant("success".into());
+    window
+        .global::<crate::ChatPane>()
+        .on_media_viewer_export(move |copy| {
+            let Some(w) = weak.upgrade() else { return };
+            let selected = w
+                .global::<crate::ChatPane>()
+                .get_media_viewer_attachment_id();
+            if selected.is_empty() {
+                return;
+            }
+            let id = selected
+                .parse::<AttachmentId>()
+                .unwrap_or_else(|_| AttachmentId::from_cdn_key(selected.as_str()));
+            let revision = client.auth_snapshot().session_revision;
+            let request = current_request();
+            let client = client.clone();
+            let weak = weak.clone();
+            // Decryption, image decoding and file operations stay off the UI thread.
+            std::thread::spawn(move || {
+                let result = export(&client, &id, copy);
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    if client.auth_snapshot().session_revision != revision || !is_current(request) {
+                        return;
                     }
-                    Err(_) => {
-                        w.set_toast_message("Unable to export this media".into());
-                        w.set_toast_variant("error".into());
+                    match result {
+                        Ok(message) => {
+                            w.set_toast_message(message.into());
+                            w.set_toast_variant("success".into());
+                        }
+                        Err(_) => {
+                            w.set_toast_message("Unable to export this media".into());
+                            w.set_toast_variant("error".into());
+                        }
                     }
-                }
-                w.set_toast_visible(true);
+                    w.set_toast_visible(true);
+                });
             });
         });
-    });
-    window.on_media_viewer_open_downloads(|| {
-        #[cfg(target_os = "android")]
-        let _ = crate::platform::android::media_export::open_downloads();
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if let Some(path) = dirs::download_dir() {
-            let folder = path.join("Chatter");
-            let _ = std::fs::create_dir_all(&folder);
-            let _ = chatter_core::system::ExternalOpener.open_folder(&folder);
-        }
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_media_viewer_open_downloads(|| {
+            #[cfg(target_os = "android")]
+            let _ = crate::platform::android::media_export::open_downloads();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(path) = dirs::download_dir() {
+                let folder = path.join("Chatter");
+                let _ = std::fs::create_dir_all(&folder);
+                let _ = chatter_core::system::ExternalOpener.open_folder(&folder);
+            }
+        });
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

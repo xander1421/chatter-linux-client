@@ -16,55 +16,57 @@ pub fn wire_reply_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_reply_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
-        let sender_id_str = sender_id.to_string();
-        let timestamp_ns_str = timestamp_ns.to_string();
+    window.global::<crate::ChatPane>().on_reply_message(
+        move |sender_id: SharedString, timestamp_ns: SharedString| {
+            let sender_id_str = sender_id.to_string();
+            let timestamp_ns_str = timestamp_ns.to_string();
 
-        // Synchronous, like `reply_clicked`: the rows and composer read here
-        // are the ones the menu was opened over. A queued callback could run
-        // after a navigation or sign-out and target another conversation.
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        // Get reply info directly from UI message model (works for all message types)
-        let messages = w.get_messages();
-        let mut display_name = String::new();
-        let mut preview_text = String::new();
-        for i in 0..messages.row_count() {
-            if let Some(m) = messages.row_data(i) {
-                if m.sender_id.as_str() == sender_id_str
-                    && m.timestamp_ns.as_str() == timestamp_ns_str
-                {
-                    display_name = m.sender_name.to_string();
-                    let content = m.content.to_string();
-                    preview_text = if content.chars().count() > 50 {
-                        format!("{}...", content.chars().take(47).collect::<String>())
-                    } else {
-                        content
-                    };
-                    break;
+            // Synchronous, like `reply_clicked`: the rows and composer read here
+            // are the ones the menu was opened over. A queued callback could run
+            // after a navigation or sign-out and target another conversation.
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            // Get reply info directly from UI message model (works for all message types)
+            let messages = w.global::<crate::ChatPane>().get_messages();
+            let mut display_name = String::new();
+            let mut preview_text = String::new();
+            for i in 0..messages.row_count() {
+                if let Some(m) = messages.row_data(i) {
+                    if m.sender_id.as_str() == sender_id_str
+                        && m.timestamp_ns.as_str() == timestamp_ns_str
+                    {
+                        display_name = m.sender_name.to_string();
+                        let content = m.content.to_string();
+                        preview_text = if content.chars().count() > 50 {
+                            format!("{}...", content.chars().take(47).collect::<String>())
+                        } else {
+                            content
+                        };
+                        break;
+                    }
                 }
             }
-        }
-        if display_name.is_empty() {
-            display_name = sender_id_str.clone();
-        }
-        if let Ok(author) = sender_id_str.parse::<UserId>() {
-            display_name = ui_ctx.quote_author_name(&author, || display_name);
-        }
+            if display_name.is_empty() {
+                display_name = sender_id_str.clone();
+            }
+            if let Ok(author) = sender_id_str.parse::<UserId>() {
+                display_name = ui_ctx.quote_author_name(&author, || display_name);
+            }
 
-        super::send_message::show_reply(
-            &w,
-            chatter_core::client::ComposerReply {
-                sender_id: sender_id_str,
-                timestamp: timestamp_ns_str,
-                sender_name: display_name,
-                preview: preview_text,
-                thumbnail: None,
-            },
-        );
-        tracing::debug!("Reply mode activated (context menu)");
-    });
+            super::send_message::show_reply(
+                &w,
+                chatter_core::client::ComposerReply {
+                    sender_id: sender_id_str,
+                    timestamp: timestamp_ns_str,
+                    sender_name: display_name,
+                    preview: preview_text,
+                    thumbnail: None,
+                },
+            );
+            tracing::debug!("Reply mode activated (context menu)");
+        },
+    );
 }
 
 /// Wire forward-message-action callback from context menu.
@@ -74,7 +76,7 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
     let weak_window = window.as_weak();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
-    window.on_forward_message_action(move |sender_id: SharedString, timestamp_ns: SharedString| {
+    window.global::<crate::ChatPane>().on_forward_message_action(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
@@ -145,11 +147,15 @@ pub(super) fn open_forward_modal(
     // current mode may show, Saved Messages, and the secret-chat rules for
     // these sources. The UI renders it.
     let sources: Vec<SharedString> = sources.into_iter().map(Into::into).collect();
-    w.set_forward_message_preview(preview.into());
-    w.set_forward_sources(ModelRc::from(std::rc::Rc::new(VecModel::from(sources))));
-    w.set_forward_search_text("".into());
+    w.global::<crate::ModalHostState>()
+        .set_forward_message_preview(preview.into());
+    w.global::<crate::ModalHostState>()
+        .set_forward_sources(ModelRc::from(std::rc::Rc::new(VecModel::from(sources))));
+    w.global::<crate::ModalHostState>()
+        .set_forward_search_text("".into());
     let targets = forward_targets(w, ui_ctx, "");
-    w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
+    w.global::<crate::ModalHostState>()
+        .set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
     crate::bin_ui::features::back::push(&w, "forward-message");
 }
 
@@ -159,22 +165,26 @@ pub fn wire_forward_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_forward_search_changed(move |query: SharedString| {
-        // Synchronous, core-ranked — same shape as the unified search palette's
-        // conversation list. A local read per keystroke over the sidebar's
-        // conversations, not a network call.
-        if let Some(w) = weak_window.upgrade() {
-            let targets = forward_targets(&w, &ui_ctx, query.as_str());
-            w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_forward_search_changed(move |query: SharedString| {
+            // Synchronous, core-ranked — same shape as the unified search palette's
+            // conversation list. A local read per keystroke over the sidebar's
+            // conversations, not a network call.
+            if let Some(w) = weak_window.upgrade() {
+                let targets = forward_targets(&w, &ui_ctx, query.as_str());
+                w.global::<crate::ModalHostState>()
+                    .set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
+            }
+        });
 }
 
 /// The stashed forward sources ("sender_id:timestamp_ns" keys), parsed.
 /// `None` when any key is unparsable. rsplit: the timestamp is the part that
 /// is certainly colon-free.
 pub(crate) fn forward_sources(w: &MainWindow) -> Option<Vec<(UserId, u64)>> {
-    w.get_forward_sources()
+    w.global::<crate::ModalHostState>()
+        .get_forward_sources()
         .iter()
         .map(|key| {
             let (sender, ts) = key.rsplit_once(':')?;
@@ -214,7 +224,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
-    window.on_copy_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
+    window.global::<crate::ChatPane>().on_copy_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
@@ -283,7 +293,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_download_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
+    window.global::<crate::ChatPane>().on_download_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();

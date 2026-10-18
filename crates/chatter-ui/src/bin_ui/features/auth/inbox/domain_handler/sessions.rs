@@ -4,6 +4,7 @@
 //! account. UI side: log it and refresh the sessions/devices modal so
 //! the new entry appears without manual re-fetch.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::Weak;
@@ -37,8 +38,11 @@ pub(super) fn handle_device_linked(
             return;
         }
         if let Some(w) = weak.upgrade() {
-            if w.get_active_modal() == "sessions" && !w.get_sessions_revoking() {
-                w.invoke_settings_view_sessions();
+            if w.get_active_modal() == "sessions"
+                && !w.global::<crate::ModalHostState>().get_sessions_revoking()
+            {
+                w.global::<crate::SettingsPane>()
+                    .invoke_settings_view_sessions();
             }
         }
     });

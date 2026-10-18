@@ -63,18 +63,35 @@ pub(super) fn retire() {
 fn open(w: &MainWindow, owner: Owner) {
     retire();
     let default_index = crate::bin_ui::converters::random_preset_avatar_index();
-    w.set_edit_profile_display_name(w.get_profile_display_name());
-    w.set_edit_profile_bio(w.get_profile_bio());
-    w.set_edit_profile_avatar(w.get_user_avatar_source());
-    w.set_edit_profile_has_photo(w.get_user_avatar_source().size().width > 0);
-    w.set_edit_profile_selected_default_idx(default_index as i32);
-    w.set_edit_profile_avatar_color(slint::Color::from_rgb_u8(15, 118, 110));
-    w.set_edit_profile_error("".into());
-    w.set_edit_profile_loading(false);
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_display_name(
+            w.global::<crate::ModalHostState>()
+                .get_profile_display_name(),
+        );
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_bio(w.global::<crate::ModalHostState>().get_profile_bio());
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_avatar(w.global::<crate::SidebarPane>().get_user_avatar_source());
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_has_photo(
+            w.global::<crate::SidebarPane>()
+                .get_user_avatar_source()
+                .size()
+                .width
+                > 0,
+        );
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_selected_default_idx(default_index as i32);
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_avatar_color(slint::Color::from_rgb_u8(15, 118, 110));
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_error("".into());
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_loading(false);
     crate::bin_ui::features::back::push(w, "edit-profile");
     EDIT.with(|s| {
         let mut s = s.borrow_mut();
-        s.stack = Some(w.get_modal_stack());
+        s.stack = Some(w.global::<crate::ModalHostState>().get_modal_stack());
         s.owner = Some(owner);
         s.default_index = Some(default_index);
     });
@@ -88,7 +105,7 @@ fn current(w: &MainWindow, owner: Owner, r: &Request) -> bool {
             let s = s.borrow();
             s.epoch == r.edit
                 && s.operation == r.operation
-                && s.stack.as_ref() == Some(&w.get_modal_stack())
+                && s.stack.as_ref() == Some(&w.global::<crate::ModalHostState>().get_modal_stack())
         })
 }
 fn begin(w: &MainWindow, owner: Owner, save: bool) -> Option<(Request, Option<Vec<u8>>)> {
@@ -97,7 +114,10 @@ fn begin(w: &MainWindow, owner: Owner, save: bool) -> Option<(Request, Option<Ve
     }
     EDIT.with(|s| {
         let mut s = s.borrow_mut();
-        if s.owner != Some(owner) || s.stack.as_ref() != Some(&w.get_modal_stack()) || s.saving {
+        if s.owner != Some(owner)
+            || s.stack.as_ref() != Some(&w.global::<crate::ModalHostState>().get_modal_stack())
+            || s.saving
+        {
             return None;
         }
         if save {
@@ -107,7 +127,8 @@ fn begin(w: &MainWindow, owner: Owner, save: bool) -> Option<(Request, Option<Ve
                 s.staged.as_ref().and_then(|v| v.as_ref().err()).cloned()
             };
             if let Some(error) = error {
-                w.set_edit_profile_error(error.into());
+                w.global::<crate::ModalHostState>()
+                    .set_edit_profile_error(error.into());
                 return None;
             }
         }
@@ -125,8 +146,10 @@ fn begin(w: &MainWindow, owner: Owner, save: bool) -> Option<(Request, Option<Ve
         };
         s.saving = save;
         s.picking = !save;
-        w.set_edit_profile_loading(save);
-        w.set_edit_profile_error("".into());
+        w.global::<crate::ModalHostState>()
+            .set_edit_profile_loading(save);
+        w.global::<crate::ModalHostState>()
+            .set_edit_profile_error("".into());
         Some((r, s.staged.as_ref().and_then(|v| v.as_ref().ok()).cloned()))
     })
 }
@@ -178,9 +201,12 @@ fn finish_picker(
         Ok(None) => (), // Native cancellation preserves the previous staged choice.
         Ok(Some(bytes)) => match crate::bin_ui::slint_conversions::memory_to_slint_image(&bytes) {
             Ok(image) => {
-                w.set_edit_profile_avatar(image);
-                w.set_edit_profile_has_photo(true);
-                w.set_edit_profile_error("".into());
+                w.global::<crate::ModalHostState>()
+                    .set_edit_profile_avatar(image);
+                w.global::<crate::ModalHostState>()
+                    .set_edit_profile_has_photo(true);
+                w.global::<crate::ModalHostState>()
+                    .set_edit_profile_error("".into());
                 EDIT.with(|s| s.borrow_mut().staged = Some(Ok(bytes)));
             }
             Err(_) => reject_picker(
@@ -192,7 +218,8 @@ fn finish_picker(
     }
 }
 fn reject_picker(w: &MainWindow, error: String) {
-    w.set_edit_profile_error(error.clone().into());
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_error(error.clone().into());
     EDIT.with(|s| s.borrow_mut().staged = Some(Err(error)));
 }
 
@@ -200,15 +227,18 @@ fn select_default(w: &MainWindow, owner: Owner, index: usize) {
     if owner.user.is_none() || w.get_active_modal() != "edit-profile" {
         return;
     }
-    let Some(bytes) =
-        crate::bin_ui::converters::default_avatar_bytes(index, w.get_edit_profile_display_name().as_str())
-    else {
+    let Some(bytes) = crate::bin_ui::converters::default_avatar_bytes(
+        index,
+        w.global::<crate::ModalHostState>()
+            .get_edit_profile_display_name()
+            .as_str(),
+    ) else {
         return;
     };
     EDIT.with(|state| {
         let mut state = state.borrow_mut();
         if state.owner != Some(owner)
-            || state.stack.as_ref() != Some(&w.get_modal_stack())
+            || state.stack.as_ref() != Some(&w.global::<crate::ModalHostState>().get_modal_stack())
             || state.saving
         {
             return;
@@ -221,7 +251,8 @@ fn select_default(w: &MainWindow, owner: Owner, index: usize) {
         state.default_index = Some(index);
         state.staged = Some(Ok(bytes));
         crate::bin_ui::features::avatar_defaults::show_edit_default(w, index);
-        w.set_edit_profile_error("".into());
+        w.global::<crate::ModalHostState>()
+            .set_edit_profile_error("".into());
     });
 }
 fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile, String>) {
@@ -229,12 +260,15 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
         return;
     }
     EDIT.with(|s| s.borrow_mut().saving = false);
-    w.set_edit_profile_loading(false);
+    w.global::<crate::ModalHostState>()
+        .set_edit_profile_loading(false);
     match result {
-        Err(error) => w.set_edit_profile_error(error.into()),
+        Err(error) => w
+            .global::<crate::ModalHostState>()
+            .set_edit_profile_error(error.into()),
         Ok(profile) => {
             if Some(profile.user_id) != r.owner.user {
-                w.set_edit_profile_error(
+                w.global::<crate::ModalHostState>().set_edit_profile_error(
                     "Profile response belongs to another account. Retry.".into(),
                 );
                 return;
@@ -243,31 +277,37 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
             if let Some(bytes) = profile.avatar_bytes.as_deref() {
                 match crate::bin_ui::slint_conversions::memory_to_slint_image(bytes) {
                     Ok(image) => {
-                        w.set_user_avatar_source(image.clone());
-                        w.set_profile_avatar_source(image.clone());
-                        w.set_edit_profile_avatar(image);
+                        w.global::<crate::SidebarPane>()
+                            .set_user_avatar_source(image.clone());
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_avatar_source(image.clone());
+                        w.global::<crate::ModalHostState>()
+                            .set_edit_profile_avatar(image);
                     }
                     Err(_) => {
-                        w.set_edit_profile_error(
+                        w.global::<crate::ModalHostState>().set_edit_profile_error(
                             "Unable to display saved avatar. Try another image.".into(),
                         );
                         return;
                     }
                 }
             }
-            w.set_profile_display_name(profile.display_name.clone().into());
-            w.set_profile_bio(
+            w.global::<crate::ModalHostState>()
+                .set_profile_display_name(profile.display_name.clone().into());
+            w.global::<crate::ModalHostState>().set_profile_bio(
                 profile
                     .status_message
                     .map(|m| m.text)
                     .unwrap_or_default()
                     .into(),
             );
-            w.set_user_initials(
+            w.global::<crate::SidebarPane>().set_user_initials(
                 crate::bin_ui::converters::initials_from_name(&profile.display_name).into(),
             );
-            w.set_profile_initials(w.get_user_initials());
-            w.set_user_display_name(profile.display_name.into());
+            w.global::<crate::ModalHostState>()
+                .set_profile_initials(w.global::<crate::SidebarPane>().get_user_initials());
+            w.global::<crate::SidebarPane>()
+                .set_user_display_name(profile.display_name.into());
             crate::bin_ui::features::back::close(w, "edit-profile");
         }
     }
@@ -276,97 +316,111 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
 pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client = ctx.clone();
-    window.on_edit_profile_select_default_avatar(move |index| {
-        if let Some(w) = weak.upgrade() {
-            select_default(&w, Owner::read(&client), index.max(0) as usize);
-        }
-    });
-    let weak = window.as_weak();
-    let client = ctx.clone();
-    window.on_edit_profile_remove_avatar(move || {
-        if let Some(w) = weak.upgrade() {
-            let index = EDIT
-                .with(|s| s.borrow().default_index)
-                .unwrap_or_else(crate::bin_ui::converters::random_preset_avatar_index);
-            select_default(&w, Owner::read(&client), index);
-        }
-    });
-    let weak = window.as_weak();
-    let client = ctx.clone();
-    window.on_profile_edit_profile(move || {
-        if let Some(w) = weak.upgrade() {
-            if Owner::read(&client).user.is_some() {
-                open(&w, Owner::read(&client));
+    window
+        .global::<crate::ModalHostState>()
+        .on_edit_profile_select_default_avatar(move |index| {
+            if let Some(w) = weak.upgrade() {
+                select_default(&w, Owner::read(&client), index.max(0) as usize);
             }
-        }
-    });
+        });
     let weak = window.as_weak();
     let client = ctx.clone();
-    window.on_edit_profile_change_avatar(move || {
-        let Some(w) = weak.upgrade() else { return };
-        let Some((request, _)) = begin(&w, Owner::read(&client), false) else {
-            return;
-        };
-        let (weak, client) = (weak.clone(), client.clone());
-        tokio::spawn(async move {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            let picked = chatter_core::media::FilePicker::pick_file(
-                chatter_core::media::FilePickerConfig::new()
-                    .with_title("Select Profile Picture")
-                    .with_filter(chatter_core::media::FileFilter::images()),
-            )
-            .await;
-            #[cfg(target_os = "android")]
-            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
-                .await
-                .into_iter()
-                .next();
-            #[cfg(target_os = "ios")]
-            let picked: Option<std::path::PathBuf> = None;
-            let result = match picked {
-                Some(path) => tokio::task::spawn_blocking(move || read_avatar(&path))
-                    .await
-                    .map_err(|_| "Unable to process selected avatar.".to_owned())
-                    .and_then(|r| r.map(Some)),
-                None => Ok(None),
+    window
+        .global::<crate::ModalHostState>()
+        .on_edit_profile_remove_avatar(move || {
+            if let Some(w) = weak.upgrade() {
+                let index = EDIT
+                    .with(|s| s.borrow().default_index)
+                    .unwrap_or_else(crate::bin_ui::converters::random_preset_avatar_index);
+                select_default(&w, Owner::read(&client), index);
+            }
+        });
+    let weak = window.as_weak();
+    let client = ctx.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_edit_profile(move || {
+            if let Some(w) = weak.upgrade() {
+                if Owner::read(&client).user.is_some() {
+                    open(&w, Owner::read(&client));
+                }
+            }
+        });
+    let weak = window.as_weak();
+    let client = ctx.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_edit_profile_change_avatar(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let Some((request, _)) = begin(&w, Owner::read(&client), false) else {
+                return;
             };
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                finish_picker(&w, Owner::read(&client), request, result)
+            let (weak, client) = (weak.clone(), client.clone());
+            tokio::spawn(async move {
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                let picked = chatter_core::media::FilePicker::pick_file(
+                    chatter_core::media::FilePickerConfig::new()
+                        .with_title("Select Profile Picture")
+                        .with_filter(chatter_core::media::FileFilter::images()),
+                )
+                .await;
+                #[cfg(target_os = "android")]
+                let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                    .await
+                    .into_iter()
+                    .next();
+                #[cfg(target_os = "ios")]
+                let picked: Option<std::path::PathBuf> = None;
+                let result = match picked {
+                    Some(path) => tokio::task::spawn_blocking(move || read_avatar(&path))
+                        .await
+                        .map_err(|_| "Unable to process selected avatar.".to_owned())
+                        .and_then(|r| r.map(Some)),
+                    None => Ok(None),
+                };
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    finish_picker(&w, Owner::read(&client), request, result)
+                });
             });
         });
-    });
     let weak = window.as_weak();
     let client = ctx.clone();
-    window.on_edit_profile_save(move |name, bio| {
-        let Some(w) = weak.upgrade() else { return };
-        let Some((request, mut bytes)) = begin(&w, Owner::read(&client), true) else {
-            return;
-        };
-        if !w.get_edit_profile_has_photo() {
-            if let Some(index) = EDIT.with(|s| s.borrow().default_index) {
-                bytes = crate::bin_ui::converters::default_avatar_bytes(index, name.as_str());
+    window
+        .global::<crate::ModalHostState>()
+        .on_edit_profile_save(move |name, bio| {
+            let Some(w) = weak.upgrade() else { return };
+            let Some((request, mut bytes)) = begin(&w, Owner::read(&client), true) else {
+                return;
+            };
+            if !w
+                .global::<crate::ModalHostState>()
+                .get_edit_profile_has_photo()
+            {
+                if let Some(index) = EDIT.with(|s| s.borrow().default_index) {
+                    bytes = crate::bin_ui::converters::default_avatar_bytes(index, name.as_str());
+                }
             }
-        }
-        let (weak, client) = (weak.clone(), client.clone());
-        let name = name.to_string();
-        let bio = bio.to_string();
-        tokio::spawn(async move {
-            let result = client
-                .save_own_profile_in_session(
-                    request.owner.user.expect("admitted own-profile edit"),
-                    request.owner.session,
-                    request.alive.clone(),
-                    bytes,
-                    name,
-                    (!bio.is_empty()).then(|| chatter_core::domain::user::StatusMessage::new(bio)),
-                )
-                .await
-                .map_err(|e| e.to_string());
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                finish_save(&w, Owner::read(&client), request, result)
+            let (weak, client) = (weak.clone(), client.clone());
+            let name = name.to_string();
+            let bio = bio.to_string();
+            tokio::spawn(async move {
+                let result = client
+                    .save_own_profile_in_session(
+                        request.owner.user.expect("admitted own-profile edit"),
+                        request.owner.session,
+                        request.alive.clone(),
+                        bytes,
+                        name,
+                        (!bio.is_empty())
+                            .then(|| chatter_core::domain::user::StatusMessage::new(bio)),
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    finish_save(&w, Owner::read(&client), request, result)
+                });
             });
         });
-    });
 }
 
 #[cfg(test)]
@@ -381,7 +435,8 @@ mod tests {
         encoded.into_inner()
     }
     fn bytes(w: &MainWindow) -> Vec<u8> {
-        w.get_edit_profile_avatar()
+        w.global::<crate::ModalHostState>()
+            .get_edit_profile_avatar()
             .to_rgba8()
             .unwrap()
             .as_bytes()
@@ -446,7 +501,8 @@ mod tests {
         };
         let picked = normalize(&png([10, 20, 30, 255])).unwrap();
         let persisted = normalize(&png([200, 100, 50, 255])).unwrap();
-        w.set_profile_display_name("Original fixture".into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_display_name("Original fixture".into());
         open(&w, owner);
         let old = begin(&w, owner, false).unwrap().0;
         crate::bin_ui::features::back::pop(&w);
@@ -467,7 +523,12 @@ mod tests {
         let invalid = begin(&w, owner, false).unwrap().0;
         finish_picker(&w, owner, invalid, Err("invalid fixture image".into()));
         assert_eq!(bytes(&w), before);
-        assert_eq!(w.get_edit_profile_error().as_str(), "invalid fixture image");
+        assert_eq!(
+            w.global::<crate::ModalHostState>()
+                .get_edit_profile_error()
+                .as_str(),
+            "invalid fixture image"
+        );
         assert!(
             begin(&w, owner, true).is_none(),
             "invalid selected image cannot silently save previous avatar"
@@ -479,7 +540,10 @@ mod tests {
         assert!(begin(&w, owner, true).is_none(), "duplicate Save refused");
         finish_save(&w, owner, save, Err("persist fixture refusal".into()));
         assert_eq!(w.get_active_modal().as_str(), "edit-profile");
-        assert!(!w.get_edit_profile_loading());
+        assert!(
+            !w.global::<crate::ModalHostState>()
+                .get_edit_profile_loading()
+        );
         assert_eq!(
             EDIT.with(|s| s
                 .borrow()
@@ -498,7 +562,12 @@ mod tests {
         profile.avatar_bytes = Some(persisted.clone());
         finish_save(&w, owner, save, Ok(profile.clone()));
         assert_eq!(w.get_active_modal().as_str(), "edit-profile");
-        assert_eq!(w.get_user_display_name().as_str(), "User");
+        assert_eq!(
+            w.global::<crate::SidebarPane>()
+                .get_user_display_name()
+                .as_str(),
+            "User"
+        );
         let changed_session = Owner {
             session: 2,
             ..owner
@@ -528,7 +597,10 @@ mod tests {
         finish_picker(&w, owner, picker, Ok(Some(picked)));
         let save = begin(&w, owner, true).unwrap().0;
         finish_save(&w, changed_session, save.clone(), Ok(profile.clone()));
-        assert!(w.get_edit_profile_loading());
+        assert!(
+            w.global::<crate::ModalHostState>()
+                .get_edit_profile_loading()
+        );
         finish_save(&w, owner, save, Ok(profile));
         assert_ne!(w.get_active_modal().as_str(), "edit-profile");
         let expected = image::load_from_memory(&persisted)
@@ -536,15 +608,28 @@ mod tests {
             .to_rgba8()
             .into_raw();
         assert_eq!(
-            w.get_user_avatar_source().to_rgba8().unwrap().as_bytes(),
+            w.global::<crate::SidebarPane>()
+                .get_user_avatar_source()
+                .to_rgba8()
+                .unwrap()
+                .as_bytes(),
             expected
         );
         assert_eq!(
-            w.get_profile_avatar_source().to_rgba8().unwrap().as_bytes(),
+            w.global::<crate::ModalHostState>()
+                .get_profile_avatar_source()
+                .to_rgba8()
+                .unwrap()
+                .as_bytes(),
             expected
         );
         assert_eq!(bytes(&w), expected);
-        assert_eq!(w.get_user_display_name().as_str(), "Saved fixture");
+        assert_eq!(
+            w.global::<crate::SidebarPane>()
+                .get_user_display_name()
+                .as_str(),
+            "Saved fixture"
+        );
         open(&w, owner);
         assert_eq!(
             bytes(&w),

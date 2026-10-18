@@ -31,7 +31,7 @@ use crate::MainWindow;
 /// notifies the view, and rewriting all of them on every tap would repaint the
 /// whole list.
 fn sync_model(w: &MainWindow, selected_ids: &HashSet<String>) {
-    let model = w.get_messages();
+    let model = w.global::<crate::ChatPane>().get_messages();
     for i in 0..model.row_count() {
         let Some(mut row) = model.row_data(i) else {
             continue;
@@ -42,7 +42,8 @@ fn sync_model(w: &MainWindow, selected_ids: &HashSet<String>) {
             model.set_row_data(i, row);
         }
     }
-    w.set_selected_message_count(selected_ids.len() as i32);
+    w.global::<crate::ChatPane>()
+        .set_selected_message_count(selected_ids.len() as i32);
 }
 
 fn refresh_delete_everyone(
@@ -62,16 +63,19 @@ fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>, generation:
     generation.set(generation.get().wrapping_add(1));
     selected_ids.borrow_mut().clear();
     sync_model(w, &selected_ids.borrow());
-    w.set_selection_mode(false);
+    w.global::<crate::ChatPane>().set_selection_mode(false);
     w.global::<crate::SelectionChrome>()
         .set_can_delete_everyone(false);
 }
 
 /// Snapshot the complete selection before any asynchronous deletion begins.
 fn selected_ids_in_order(w: &MainWindow, ids: &HashSet<String>) -> Vec<String> {
-    w.get_messages().iter()
+    w.global::<crate::ChatPane>()
+        .get_messages()
+        .iter()
         .filter(|row| ids.contains(row.message_id.as_str()))
-        .map(|row| row.message_id.to_string()).collect()
+        .map(|row| row.message_id.to_string())
+        .collect()
 }
 
 fn delete_selection(
@@ -248,29 +252,31 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let selected_ids = selected_ids.clone();
         let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
-        window.on_message_selection_toggled(move |message_id: SharedString| {
-            let Some(w) = weak.upgrade() else { return };
-            let id = message_id.to_string();
-            if id.is_empty() {
-                return;
-            }
-            generation.set(generation.get().wrapping_add(1));
-            {
-                let mut set = selected_ids.borrow_mut();
-                if !set.remove(&id) {
-                    set.insert(id);
+        window
+            .global::<crate::ChatPane>()
+            .on_message_selection_toggled(move |message_id: SharedString| {
+                let Some(w) = weak.upgrade() else { return };
+                let id = message_id.to_string();
+                if id.is_empty() {
+                    return;
                 }
-            }
-            if selected_ids.borrow().is_empty() {
-                exit(&w, &selected_ids, &generation);
-                w.global::<crate::SelectionChrome>()
-                    .set_can_delete_everyone(false);
-            } else {
-                w.set_selection_mode(true);
-                sync_model(&w, &selected_ids.borrow());
-                refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
-            }
-        });
+                generation.set(generation.get().wrapping_add(1));
+                {
+                    let mut set = selected_ids.borrow_mut();
+                    if !set.remove(&id) {
+                        set.insert(id);
+                    }
+                }
+                if selected_ids.borrow().is_empty() {
+                    exit(&w, &selected_ids, &generation);
+                    w.global::<crate::SelectionChrome>()
+                        .set_can_delete_everyone(false);
+                } else {
+                    w.global::<crate::ChatPane>().set_selection_mode(true);
+                    sync_model(&w, &selected_ids.borrow());
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                }
+            });
     }
 
     // Explicit exit (the bar's close button). Android Back routes here too.
@@ -278,10 +284,12 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
         let generation = generation.clone();
-        window.on_selection_cleared(move || {
-            let Some(w) = weak.upgrade() else { return };
-            exit(&w, &selected_ids, &generation);
-        });
+        window
+            .global::<crate::ChatPane>()
+            .on_selection_cleared(move || {
+                let Some(w) = weak.upgrade() else { return };
+                exit(&w, &selected_ids, &generation);
+            });
     }
 
     // Bulk copy: the selected messages' text, in list (time) order, one
@@ -291,23 +299,28 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let selected_ids = selected_ids.clone();
         let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
-        window.on_selection_copy_clicked(move || {
-            let Some(w) = weak.upgrade() else { return };
-            let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
-            let targets = ui_ctx.selected_message_targets(
-                ui_ctx.active_conversation(), &ordered_ids).unwrap_or_default();
-            let handle = ui_ctx.conversation(ui_ctx.active_conversation());
-            std::thread::spawn(move || {
-                let texts: Vec<String> = targets
-                    .iter()
-                    .filter_map(|(sender, ts)| handle.get_message_text(sender, *ts).ok().flatten())
-                    .collect();
-                if !texts.is_empty() {
-                    crate::bin_ui::features::chat::actions::copy_text(&texts.join("\n\n"));
-                }
+        window
+            .global::<crate::ChatPane>()
+            .on_selection_copy_clicked(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
+                let targets = ui_ctx
+                    .selected_message_targets(ui_ctx.active_conversation(), &ordered_ids)
+                    .unwrap_or_default();
+                let handle = ui_ctx.conversation(ui_ctx.active_conversation());
+                std::thread::spawn(move || {
+                    let texts: Vec<String> = targets
+                        .iter()
+                        .filter_map(|(sender, ts)| {
+                            handle.get_message_text(sender, *ts).ok().flatten()
+                        })
+                        .collect();
+                    if !texts.is_empty() {
+                        crate::bin_ui::features::chat::actions::copy_text(&texts.join("\n\n"));
+                    }
+                });
+                exit(&w, &selected_ids, &generation);
             });
-            exit(&w, &selected_ids, &generation);
-        });
     }
 
     // Bulk forward: the selected messages, in list (time) order, through the
@@ -317,24 +330,29 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let selected_ids = selected_ids.clone();
         let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
-        window.on_selection_forward_clicked(move || {
-            let Some(w) = weak.upgrade() else { return };
-            let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
-            let targets = ui_ctx.selected_message_targets(
-                ui_ctx.active_conversation(), &ordered_ids).unwrap_or_default();
-            let sources: Vec<String> = targets.iter()
-                .map(|(sender, ts)| format!("{sender}:{ts}")).collect();
-            if sources.is_empty() {
-                return;
-            }
-            let preview = if sources.len() == 1 {
-                "1 message".to_string()
-            } else {
-                format!("{} messages", sources.len())
-            };
-            exit(&w, &selected_ids, &generation);
-            super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
-        });
+        window
+            .global::<crate::ChatPane>()
+            .on_selection_forward_clicked(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
+                let targets = ui_ctx
+                    .selected_message_targets(ui_ctx.active_conversation(), &ordered_ids)
+                    .unwrap_or_default();
+                let sources: Vec<String> = targets
+                    .iter()
+                    .map(|(sender, ts)| format!("{sender}:{ts}"))
+                    .collect();
+                if sources.is_empty() {
+                    return;
+                }
+                let preview = if sources.len() == 1 {
+                    "1 message".to_string()
+                } else {
+                    format!("{} messages", sources.len())
+                };
+                exit(&w, &selected_ids, &generation);
+                super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
+            });
     }
 
     // Delete-for-me drops each confirmed row while retaining failures for retry.
@@ -344,10 +362,12 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
         let pending = delete_pending.clone();
-        window.on_selection_delete_clicked(move || {
-            let Some(w) = weak.upgrade() else { return };
-            delete_selection(&w, &ui_ctx, &selected_ids, &pending, &generation, false);
-        });
+        window
+            .global::<crate::ChatPane>()
+            .on_selection_delete_clicked(move || {
+                let Some(w) = weak.upgrade() else { return };
+                delete_selection(&w, &ui_ctx, &selected_ids, &pending, &generation, false);
+            });
     }
 
     {
@@ -363,7 +383,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 {
                     let mut set = selected_ids.borrow_mut();
                     set.clear();
-                    let model = w.get_messages();
+                    let model = w.global::<crate::ChatPane>().get_messages();
                     for row in model.iter() {
                         let id = row.message_id.to_string();
                         if !id.is_empty() && !row.is_deleted {
@@ -376,7 +396,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.global::<crate::SelectionChrome>()
                         .set_can_delete_everyone(false);
                 } else {
-                    w.set_selection_mode(true);
+                    w.global::<crate::ChatPane>().set_selection_mode(true);
                     sync_model(&w, &selected_ids.borrow());
                     refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
                 }

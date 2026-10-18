@@ -5,6 +5,7 @@
 //! capability before cancellation. Body/full-screen open use separate one-shot
 //! capabilities before changing the UI. Core call/session checks still apply.
 
+use slint::ComponentHandle;
 use std::sync::{Arc, OnceLock};
 
 use chatter_core::client::ChatterClient;
@@ -70,7 +71,8 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeAcceptIncoming
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.invoke_accept_incoming_call(call_id.into());
+                    w.global::<crate::CallView>()
+                        .invoke_accept_incoming_call(call_id.into());
                 }
             });
         })())
@@ -117,10 +119,14 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCa
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    if w.get_incoming_call_visible()
-                        && w.get_incoming_call_data().call_id == call_id.as_str()
+                    if w.global::<crate::CallView>().get_incoming_call_visible()
+                        && w.global::<crate::CallView>()
+                            .get_incoming_call_data()
+                            .call_id
+                            == call_id.as_str()
                     {
-                        w.set_incoming_call_minimized(false);
+                        w.global::<crate::CallView>()
+                            .set_incoming_call_minimized(false);
                     }
                 }
             });

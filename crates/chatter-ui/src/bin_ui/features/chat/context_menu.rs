@@ -18,7 +18,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = Arc::clone(ui_ctx);
     let weak_window = window.as_weak();
 
-    window.on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
+    window.global::<crate::ChatPane>().on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = Arc::clone(&ui_ctx);
@@ -77,7 +77,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// model. The menu is keyed Signal-style, but "Reply in Thread" and "Select"
 /// are keyed by message id, so the menu has to carry both.
 fn find_message_id(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> String {
-    let model = w.get_messages();
+    let model = w.global::<crate::ChatPane>().get_messages();
     for i in 0..model.row_count() {
         if let Some(m) = model.row_data(i) {
             if m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns {
@@ -117,12 +117,15 @@ fn set_context_menu(
     flags.set_info(actions.info);
     flags.set_select(actions.select);
 
-    w.set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
-    w.set_context_menu_sender_id(sender_id.into());
-    w.set_context_menu_timestamp_ns(timestamp_ns.into());
-    w.set_context_menu_x(menu_x);
-    w.set_context_menu_y(menu_y);
-    w.set_context_menu_visible(true);
+    w.global::<crate::ChatPane>()
+        .set_context_menu_message_id(find_message_id(w, &sender_id, &timestamp_ns).into());
+    w.global::<crate::ChatPane>()
+        .set_context_menu_sender_id(sender_id.into());
+    w.global::<crate::ChatPane>()
+        .set_context_menu_timestamp_ns(timestamp_ns.into());
+    w.global::<crate::ChatPane>().set_context_menu_x(menu_x);
+    w.global::<crate::ChatPane>().set_context_menu_y(menu_y);
+    w.global::<crate::ChatPane>().set_context_menu_visible(true);
 }
 
 fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

@@ -3,6 +3,7 @@
 //! Downloads encrypted content and handles GIF/image processing.
 //! Used by DMs, anon DMs, channels, and anon groups.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, VecModel};
@@ -350,7 +351,7 @@ pub fn update_attachment_thumbnail(
         return;
     }
 
-    let messages = window.get_messages();
+    let messages = window.global::<crate::ChatPane>().get_messages();
 
     for msg_idx in 0..messages.row_count() {
         if let Some(msg) = messages.row_data(msg_idx) {
@@ -398,7 +399,7 @@ pub fn update_attachment_thumbnail_with_dims(
         return;
     }
 
-    let messages = window.get_messages();
+    let messages = window.global::<crate::ChatPane>().get_messages();
     let att_id = AttachmentId::from_cdn_key(cdn_key);
     let att_id_str = att_id.to_string();
 

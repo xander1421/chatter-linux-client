@@ -79,27 +79,27 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_create_section(move |name: SharedString, emoji: SharedString| {
+    window.global::<crate::ModalHostState>().on_create_section(move |name: SharedString, emoji: SharedString| {
         let name_str = name.to_string();
         let emoji_str = emoji.to_string();
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
 
-        run_ui!(weak, |w| w.set_create_section_loading(true));
+        run_ui!(weak, |w| w.global::<crate::ModalHostState>().set_create_section_loading(true));
 
         tokio::spawn(async move {
             match ui_ctx.create_section(&name_str, &emoji_str) {
                 Ok(section) => {
                     tracing::info!(section_id = %section.id, name = %name_str, "Created custom section");
                     run_ui!(weak_clone, |w| {
-                        w.set_create_section_loading(false);
+                        w.global::<crate::ModalHostState>().set_create_section_loading(false);
                         crate::bin_ui::features::back::close(&w, "create-section");
                     });
                     refresh_sections_ui(&weak_clone, &ui_ctx);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create section");
-                    run_ui!(weak_clone, |w| w.set_create_section_loading(false));
+                    run_ui!(weak_clone, |w| w.global::<crate::ModalHostState>().set_create_section_loading(false));
                 }
             }
         });
@@ -110,7 +110,7 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_delete_section_clicked(move |section_id: SharedString| {
+    window.global::<crate::SidebarPane>().on_delete_section_clicked(move |section_id: SharedString| {
         let section_id_str = section_id.to_string();
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
@@ -141,26 +141,31 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
 
-        window.on_rename_section_clicked(move |section_id: SharedString| {
-            let section_id_str = section_id.to_string();
-            if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
-                if let Some(section) = sections.iter().find(|s| s.id.to_string() == section_id_str)
-                {
-                    let name: SharedString = section.name.clone().into();
-                    let emoji: SharedString = section.icon_emoji.clone().into();
-                    run_ui!(weak, |w| {
-                        w.set_create_section_name(name);
-                        w.set_create_section_emoji(emoji);
-                    });
+        window
+            .global::<crate::SidebarPane>()
+            .on_rename_section_clicked(move |section_id: SharedString| {
+                let section_id_str = section_id.to_string();
+                if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
+                    if let Some(section) =
+                        sections.iter().find(|s| s.id.to_string() == section_id_str)
+                    {
+                        let name: SharedString = section.name.clone().into();
+                        let emoji: SharedString = section.icon_emoji.clone().into();
+                        run_ui!(weak, |w| {
+                            w.global::<crate::ModalHostState>()
+                                .set_create_section_name(name);
+                            w.global::<crate::ModalHostState>()
+                                .set_create_section_emoji(emoji);
+                        });
+                    }
                 }
-            }
-        });
+            });
     }
 
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_rename_section(
+    window.global::<crate::ModalHostState>().on_rename_section(
         move |section_id: SharedString, name: SharedString, emoji: SharedString| {
             let section_id_str = section_id.to_string();
             let name_str = name.to_string();
@@ -197,24 +202,26 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_section_toggle_expanded(move |section_id: SharedString| {
-        let section_id_str = section_id.to_string();
-        let ui_ctx = ui_ctx.clone();
-        let weak_clone = weak.clone();
+    window
+        .global::<crate::SidebarPane>()
+        .on_section_toggle_expanded(move |section_id: SharedString| {
+            let section_id_str = section_id.to_string();
+            let ui_ctx = ui_ctx.clone();
+            let weak_clone = weak.clone();
 
-        tokio::spawn(async move {
-            let Ok(id) = section_id_str.parse::<SectionId>() else {
-                return;
-            };
+            tokio::spawn(async move {
+                let Ok(id) = section_id_str.parse::<SectionId>() else {
+                    return;
+                };
 
-            if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
-                if let Some(section) = sections.iter().find(|s| s.id == id) {
-                    let _ = ui_ctx.toggle_section_expanded(&id, !section.is_expanded);
-                    refresh_sections_ui(&weak_clone, &ui_ctx);
+                if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
+                    if let Some(section) = sections.iter().find(|s| s.id == id) {
+                        let _ = ui_ctx.toggle_section_expanded(&id, !section.is_expanded);
+                        refresh_sections_ui(&weak_clone, &ui_ctx);
+                    }
                 }
-            }
+            });
         });
-    });
 }
 
 /// Move a folder one place up or down.
@@ -228,7 +235,7 @@ fn wire_move_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_move_section(move |section_id: SharedString, delta: i32| {
+    window.global::<crate::SidebarPane>().on_move_section(move |section_id: SharedString, delta: i32| {
         let section_id_str = section_id.to_string();
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
@@ -251,7 +258,7 @@ fn wire_set_sort_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_set_section_sort_mode(move |section_id: SharedString, mode: SharedString| {
+    window.global::<crate::SidebarPane>().on_set_section_sort_mode(move |section_id: SharedString, mode: SharedString| {
         let section_id_str = section_id.to_string();
         let mode = SectionSortMode::from_str_value(mode.as_str());
         let ui_ctx = ui_ctx.clone();
@@ -272,7 +279,7 @@ fn wire_set_conversation_pinned(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_set_conversation_pinned(move |conv_id: SharedString, pinned: bool| {
+    window.global::<crate::SidebarPane>().on_set_conversation_pinned(move |conv_id: SharedString, pinned: bool| {
         let conv_id_str = conv_id.to_string();
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
@@ -293,7 +300,7 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_move_to_section(move |conv_id: SharedString, kind: crate::ConversationKind, section_id: SharedString| {
+    window.global::<crate::SidebarPane>().on_move_to_section(move |conv_id: SharedString, kind: crate::ConversationKind, section_id: SharedString| {
         let conv_id_str = conv_id.to_string();
         let conv_type = crate::bin_ui::converters::conversation_type(kind);
         let section_id_str = section_id.to_string();
@@ -323,44 +330,54 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_remove_from_section(move |conv_id: SharedString| {
-        let conv_id_str = conv_id.to_string();
-        let ui_ctx = ui_ctx.clone();
-        let weak_clone = weak.clone();
+    window
+        .global::<crate::SidebarPane>()
+        .on_remove_from_section(move |conv_id: SharedString| {
+            let conv_id_str = conv_id.to_string();
+            let ui_ctx = ui_ctx.clone();
+            let weak_clone = weak.clone();
 
-        tokio::spawn(async move {
-            match ui_ctx.remove_conversation_from_section(&conv_id_str) {
-                Ok(()) => {
-                    refresh_sections_ui(&weak_clone, &ui_ctx);
-                    super::rebuild_chat_list(&weak_clone, &ui_ctx);
+            tokio::spawn(async move {
+                match ui_ctx.remove_conversation_from_section(&conv_id_str) {
+                    Ok(()) => {
+                        refresh_sections_ui(&weak_clone, &ui_ctx);
+                        super::rebuild_chat_list(&weak_clone, &ui_ctx);
+                    }
+                    Err(e) => tracing::error!(
+                        error = %e, conversation_id = %conv_id_str,
+                        "Failed to remove conversation from folder"
+                    ),
                 }
-                Err(e) => tracing::error!(
-                    error = %e, conversation_id = %conv_id_str,
-                    "Failed to remove conversation from folder"
-                ),
-            }
+            });
         });
-    });
 }
 
 fn wire_section_conversation_selected(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
 
-    window.on_section_conversation_selected(
-        move |conv_id: SharedString, kind: crate::ConversationKind| {
-            use crate::ConversationKind as K;
-            let conv_id_str = conv_id.to_string();
-            run_ui!(weak, |w| {
-                match kind {
-                    K::Channel | K::SavedMessages => w.invoke_channel_selected(conv_id_str.into()),
-                    K::ServerDm | K::AnonDm => w.invoke_dm_selected(conv_id_str.into()),
-                    K::AnonGroup => w.invoke_private_group_selected(conv_id_str.into()),
-                    // Mesh conversations are never filed into folders.
-                    K::Mesh | K::MeshDm => {}
-                }
-            });
-        },
-    );
+    window
+        .global::<crate::SidebarPane>()
+        .on_section_conversation_selected(
+            move |conv_id: SharedString, kind: crate::ConversationKind| {
+                use crate::ConversationKind as K;
+                let conv_id_str = conv_id.to_string();
+                run_ui!(weak, |w| {
+                    match kind {
+                        K::Channel | K::SavedMessages => w
+                            .global::<crate::SidebarPane>()
+                            .invoke_channel_selected(conv_id_str.into()),
+                        K::ServerDm | K::AnonDm => w
+                            .global::<crate::SidebarPane>()
+                            .invoke_dm_selected(conv_id_str.into()),
+                        K::AnonGroup => w
+                            .global::<crate::SidebarPane>()
+                            .invoke_private_group_selected(conv_id_str.into()),
+                        // Mesh conversations are never filed into folders.
+                        K::Mesh | K::MeshDm => {}
+                    }
+                });
+            },
+        );
 }
 
 /// Rebuild the folder models. Queries run on the caller's (runtime) thread;
@@ -381,9 +398,11 @@ pub(crate) fn refresh_sections_ui(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
 /// Retain each section and its conversation model across badge/selection
 /// refreshes. Only a real section insertion or removal creates delegates.
 fn apply_sections(window: &MainWindow, sections: Vec<CustomSectionData>) {
-    let model = window.get_custom_sections();
+    let model = window.global::<crate::SidebarPane>().get_custom_sections();
     let Some(vec) = model.as_any().downcast_ref::<VecModel<CustomSectionData>>() else {
-        window.set_custom_sections(ModelRc::new(VecModel::from(sections)));
+        window
+            .global::<crate::SidebarPane>()
+            .set_custom_sections(ModelRc::new(VecModel::from(sections)));
         return;
     };
     let target_len = sections.len();

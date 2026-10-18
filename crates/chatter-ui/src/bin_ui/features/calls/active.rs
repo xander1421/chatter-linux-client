@@ -26,7 +26,7 @@ fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str
     // The screen frames are teed under `screen_share_frame_id`, so the tile
     // keyed the same way picks them up via the by-user_id texture lookup.
     let screen_id = chatter_core::calls::screen_share_frame_id(local_user_id, true);
-    let mut data = window.get_active_call_data();
+    let mut data = window.global::<crate::CallView>().get_active_call_data();
     let mut participants: Vec<CallParticipantData> = data.participants.iter().collect();
     // Always drop any existing local screen tile first (idempotent).
     participants.retain(|p| p.user_id.as_str() != screen_id);
@@ -50,7 +50,9 @@ fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str
     }
     data.participant_count = participants.len() as i32;
     data.participants = ModelRc::new(VecModel::from(participants));
-    window.set_active_call_data(data);
+    window
+        .global::<crate::CallView>()
+        .set_active_call_data(data);
 }
 
 /// Mutate the participant entry matching `target_user_id` via `f`, leaving
@@ -64,7 +66,7 @@ fn update_participant<F>(
 where
     F: FnMut(&mut CallParticipantData),
 {
-    let mut data = window.get_active_call_data();
+    let mut data = window.global::<crate::CallView>().get_active_call_data();
     let mut found: Option<CallParticipantData> = None;
     let updated: Vec<CallParticipantData> = (0..data.participants.row_count())
         .map(|i| {
@@ -77,14 +79,16 @@ where
         })
         .collect();
     data.participants = ModelRc::new(VecModel::from(updated));
-    window.set_active_call_data(data);
+    window
+        .global::<crate::CallView>()
+        .set_active_call_data(data);
     found
 }
 
 /// Wire active call control callbacks.
 pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Toggle mute
-    window.on_call_toggle_mute({
+    window.global::<crate::CallView>().on_call_toggle_mute({
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
         move || {
@@ -95,7 +99,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 ui_ctx.call_set_microphone_muted(new_state);
                 tracing::info!("Microphone muted: {}", new_state);
                 if let Some(w) = weak.upgrade() {
-                    w.set_call_is_muted(new_state);
+                    w.global::<crate::CallView>().set_call_is_muted(new_state);
                 }
             })
             .unwrap();
@@ -106,7 +110,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // voice — so the user can escalate to video mid-call. Turning the camera on
     // the first time publishes the camera track (needs the connected room, like
     // screen share); after that, toggling just pauses/resumes capture.
-    window.on_call_toggle_video({
+    window.global::<crate::CallView>().on_call_toggle_video({
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
         move || {
@@ -139,7 +143,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Err(e) = ui_ctx.call_publish_camera(None).await {
                         tracing::error!("Failed to enable camera: {}", e);
                         if let Some(w) = weak.upgrade() {
-                            w.set_call_is_video_enabled(false);
+                            w.global::<crate::CallView>()
+                                .set_call_is_video_enabled(false);
                         }
                         camera_error(&weak, "Camera unavailable");
                         return;
@@ -153,7 +158,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 let local_id = ui_ctx.session_current_user_id().map(|u| u.to_string());
                 if let Some(w) = weak.upgrade() {
-                    w.set_call_is_video_enabled(new_state);
+                    w.global::<crate::CallView>()
+                        .set_call_is_video_enabled(new_state);
                     if let Some(id) = local_id {
                         update_participant(&w, &id, |p| p.is_video_enabled = new_state);
                     }
@@ -164,144 +170,159 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     // Toggle screen share.
-    window.on_call_toggle_screen_share({
-        let ui_ctx = ui_ctx.clone();
-        let weak = window.as_weak();
-        move || {
-            let _ui_ctx = ui_ctx.clone();
-            let _weak = weak.clone();
-            #[cfg(not(target_os = "android"))]
-            slint::spawn_local(async move {
-                let new_state = !_ui_ctx.call_is_screen_sharing().await;
-                if new_state {
-                    // No room during the outgoing "Calling…" state — starting a
-                    // share now fails NotInCall. Gate on the connected room.
-                    if !_ui_ctx.call_is_connected().await {
-                        tracing::info!("Screen share unavailable — call not connected yet");
-                        return;
-                    }
-                    match ScreenCapture::primary_source() {
-                        Ok(source) => {
-                            if let Err(e) = _ui_ctx.call_publish_screen_share(source).await {
-                                tracing::error!("Failed to start screen share: {}", e);
-                            } else {
-                                tracing::info!("Screen share started");
-                                let local_id =
-                                    _ui_ctx.session_current_user_id().map(|u| u.to_string());
-                                if let Some(w) = _weak.upgrade() {
-                                    w.set_call_is_screen_sharing(true);
-                                    if let Some(id) = local_id {
-                                        set_local_participant_screen_sharing(&w, &id, true);
+    window
+        .global::<crate::CallView>()
+        .on_call_toggle_screen_share({
+            let ui_ctx = ui_ctx.clone();
+            let weak = window.as_weak();
+            move || {
+                let _ui_ctx = ui_ctx.clone();
+                let _weak = weak.clone();
+                #[cfg(not(target_os = "android"))]
+                slint::spawn_local(async move {
+                    let new_state = !_ui_ctx.call_is_screen_sharing().await;
+                    if new_state {
+                        // No room during the outgoing "Calling…" state — starting a
+                        // share now fails NotInCall. Gate on the connected room.
+                        if !_ui_ctx.call_is_connected().await {
+                            tracing::info!("Screen share unavailable — call not connected yet");
+                            return;
+                        }
+                        match ScreenCapture::primary_source() {
+                            Ok(source) => {
+                                if let Err(e) = _ui_ctx.call_publish_screen_share(source).await {
+                                    tracing::error!("Failed to start screen share: {}", e);
+                                } else {
+                                    tracing::info!("Screen share started");
+                                    let local_id =
+                                        _ui_ctx.session_current_user_id().map(|u| u.to_string());
+                                    if let Some(w) = _weak.upgrade() {
+                                        w.global::<crate::CallView>()
+                                            .set_call_is_screen_sharing(true);
+                                        if let Some(id) = local_id {
+                                            set_local_participant_screen_sharing(&w, &id, true);
+                                        }
                                     }
                                 }
                             }
+                            Err(e) => {
+                                tracing::error!("No screen source available: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            tracing::error!("No screen source available: {}", e);
-                        }
-                    }
-                } else {
-                    _ui_ctx.call_stop_screen_share();
-                    tracing::info!("Screen share stopped");
-                    let local_id = _ui_ctx.session_current_user_id().map(|u| u.to_string());
-                    if let Some(w) = _weak.upgrade() {
-                        w.set_call_is_screen_sharing(false);
-                        if let Some(id) = local_id {
-                            set_local_participant_screen_sharing(&w, &id, false);
-                        }
-                    }
-                }
-            })
-            .unwrap();
-            #[cfg(target_os = "android")]
-            slint::spawn_local(async move {
-                let new_state = !_ui_ctx.call_is_screen_sharing().await;
-                if new_state {
-                    if !_ui_ctx.call_is_connected().await {
-                        camera_error(&_weak, "Screen share unavailable until the call connects.");
-                        return;
-                    }
-                    if let Err(error) = _ui_ctx.call_publish_screen_share().await {
-                        tracing::warn!("Android screen share unavailable: {error}");
-                        camera_error(&_weak, "Screen share unavailable");
-                        return;
-                    }
-                    let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());
-                    if let Some(window) = _weak.upgrade() {
-                        window.set_call_is_screen_sharing(true);
-                        if let Some(id) = local_id {
-                            set_local_participant_screen_sharing(&window, &id, true);
+                    } else {
+                        _ui_ctx.call_stop_screen_share();
+                        tracing::info!("Screen share stopped");
+                        let local_id = _ui_ctx.session_current_user_id().map(|u| u.to_string());
+                        if let Some(w) = _weak.upgrade() {
+                            w.global::<crate::CallView>()
+                                .set_call_is_screen_sharing(false);
+                            if let Some(id) = local_id {
+                                set_local_participant_screen_sharing(&w, &id, false);
+                            }
                         }
                     }
-                    watch_android_screen(_weak, _ui_ctx);
-                } else {
-                    _ui_ctx.call_stop_screen_share();
-                    let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());
-                    if let Some(window) = _weak.upgrade() {
-                        window.set_call_is_screen_sharing(false);
-                        if let Some(id) = local_id {
-                            set_local_participant_screen_sharing(&window, &id, false);
+                })
+                .unwrap();
+                #[cfg(target_os = "android")]
+                slint::spawn_local(async move {
+                    let new_state = !_ui_ctx.call_is_screen_sharing().await;
+                    if new_state {
+                        if !_ui_ctx.call_is_connected().await {
+                            camera_error(
+                                &_weak,
+                                "Screen share unavailable until the call connects.",
+                            );
+                            return;
+                        }
+                        if let Err(error) = _ui_ctx.call_publish_screen_share().await {
+                            tracing::warn!("Android screen share unavailable: {error}");
+                            camera_error(&_weak, "Screen share unavailable");
+                            return;
+                        }
+                        let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());
+                        if let Some(window) = _weak.upgrade() {
+                            window
+                                .global::<crate::CallView>()
+                                .set_call_is_screen_sharing(true);
+                            if let Some(id) = local_id {
+                                set_local_participant_screen_sharing(&window, &id, true);
+                            }
+                        }
+                        watch_android_screen(_weak, _ui_ctx);
+                    } else {
+                        _ui_ctx.call_stop_screen_share();
+                        let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());
+                        if let Some(window) = _weak.upgrade() {
+                            window
+                                .global::<crate::CallView>()
+                                .set_call_is_screen_sharing(false);
+                            if let Some(id) = local_id {
+                                set_local_participant_screen_sharing(&window, &id, false);
+                            }
                         }
                     }
-                }
-            })
-            .unwrap();
-        }
-    });
+                })
+                .unwrap();
+            }
+        });
 
     // Per-peer local audio mute toggle.
-    window.on_call_peer_audio_mute_toggle({
-        let ui_ctx = ui_ctx.clone();
-        let weak = window.as_weak();
-        move |user_id: SharedString| {
-            let Some(w) = weak.upgrade() else { return };
-            let uid = user_id.to_string();
-            let updated = update_participant(&w, &uid, |p| {
-                p.is_audio_muted_locally = !p.is_audio_muted_locally;
-            });
-            let Some(p) = updated else { return };
-            ui_ctx.call_set_peer_audio_muted(uid.clone(), p.is_audio_muted_locally);
-            tracing::info!(
-                peer = %uid,
-                muted = p.is_audio_muted_locally,
-                "Per-peer audio mute toggled (local)"
-            );
-        }
-    });
+    window
+        .global::<crate::CallView>()
+        .on_call_peer_audio_mute_toggle({
+            let ui_ctx = ui_ctx.clone();
+            let weak = window.as_weak();
+            move |user_id: SharedString| {
+                let Some(w) = weak.upgrade() else { return };
+                let uid = user_id.to_string();
+                let updated = update_participant(&w, &uid, |p| {
+                    p.is_audio_muted_locally = !p.is_audio_muted_locally;
+                });
+                let Some(p) = updated else { return };
+                ui_ctx.call_set_peer_audio_muted(uid.clone(), p.is_audio_muted_locally);
+                tracing::info!(
+                    peer = %uid,
+                    muted = p.is_audio_muted_locally,
+                    "Per-peer audio mute toggled (local)"
+                );
+            }
+        });
 
     // Per-peer local video pause toggle. Flipping `is_video_enabled` makes
     // the tile fall back to the avatar while paused, since the core layer
     // also drops the cached frame from `shared_frames`.
-    window.on_call_peer_video_pause_toggle({
-        let ui_ctx = ui_ctx.clone();
-        let weak = window.as_weak();
-        move |user_id: SharedString| {
-            let Some(w) = weak.upgrade() else { return };
-            let uid = user_id.to_string();
-            let updated = update_participant(&w, &uid, |p| {
-                p.is_video_paused_locally = !p.is_video_paused_locally;
-                if p.is_video_paused_locally {
-                    p.is_video_enabled = false;
-                } else {
-                    // Resuming — let the next decoded frame flip the tile
-                    // back to video by re-marking video as enabled. If no
-                    // frames arrive, the TrackUnsubscribed handler will
-                    // clear it again.
-                    p.is_video_enabled = true;
-                }
-            });
-            let Some(p) = updated else { return };
-            ui_ctx.call_set_peer_video_paused(uid.clone(), p.is_video_paused_locally);
-            tracing::info!(
-                peer = %uid,
-                paused = p.is_video_paused_locally,
-                "Per-peer video pause toggled (local)"
-            );
-        }
-    });
+    window
+        .global::<crate::CallView>()
+        .on_call_peer_video_pause_toggle({
+            let ui_ctx = ui_ctx.clone();
+            let weak = window.as_weak();
+            move |user_id: SharedString| {
+                let Some(w) = weak.upgrade() else { return };
+                let uid = user_id.to_string();
+                let updated = update_participant(&w, &uid, |p| {
+                    p.is_video_paused_locally = !p.is_video_paused_locally;
+                    if p.is_video_paused_locally {
+                        p.is_video_enabled = false;
+                    } else {
+                        // Resuming — let the next decoded frame flip the tile
+                        // back to video by re-marking video as enabled. If no
+                        // frames arrive, the TrackUnsubscribed handler will
+                        // clear it again.
+                        p.is_video_enabled = true;
+                    }
+                });
+                let Some(p) = updated else { return };
+                ui_ctx.call_set_peer_video_paused(uid.clone(), p.is_video_paused_locally);
+                tracing::info!(
+                    peer = %uid,
+                    paused = p.is_video_paused_locally,
+                    "Per-peer video pause toggled (local)"
+                );
+            }
+        });
 
     // End call
-    window.on_call_end({
+    window.global::<crate::CallView>().on_call_end({
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
 
@@ -310,7 +331,9 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak.clone();
             tracing::info!("End call");
             let pending = super::outgoing::cancel_pending_start();
-            let named = weak.upgrade().map(|w| w.get_active_call_data());
+            let named = weak
+                .upgrade()
+                .map(|w| w.global::<crate::CallView>().get_active_call_data());
             let cancelled_outgoing = named.as_ref().is_some_and(|data| {
                 !data.is_connected && ui_ctx.cancel_call_start(data.call_id.as_str())
             });
@@ -321,7 +344,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 stop_call_timer();
                 stop_video_frame_timer();
                 if let Some(w) = weak.upgrade() {
-                    w.set_active_call_visible(false);
+                    w.global::<crate::CallView>().set_active_call_visible(false);
                 }
 
                 if pending {
@@ -358,7 +381,10 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn watch_android_screen(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
     slint::Timer::single_shot(std::time::Duration::from_millis(500), move || {
         let Some(window) = weak.upgrade() else { return };
-        if !window.get_call_is_screen_sharing() {
+        if !window
+            .global::<crate::CallView>()
+            .get_call_is_screen_sharing()
+        {
             return;
         }
         let weak_next = weak.clone();
@@ -367,7 +393,9 @@ fn watch_android_screen(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient
                 ui_ctx.call_stop_screen_share();
                 let local_id = ui_ctx.session_current_user_id().map(|id| id.to_string());
                 if let Some(window) = weak_next.upgrade() {
-                    window.set_call_is_screen_sharing(false);
+                    window
+                        .global::<crate::CallView>()
+                        .set_call_is_screen_sharing(false);
                     if let Some(id) = local_id {
                         set_local_participant_screen_sharing(&window, &id, false);
                     }
@@ -428,17 +456,22 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             // another call (or "answered elsewhere" for one still ringing,
             // which the orchestrator withdraws) must not touch the call shown.
             if let Some(w) = weak.upgrade() {
-                if w.get_active_call_visible()
-                    && w.get_active_call_data().call_id == call_id.as_str()
+                if w.global::<crate::CallView>().get_active_call_visible()
+                    && w.global::<crate::CallView>().get_active_call_data().call_id
+                        == call_id.as_str()
                 {
                     stop_call_timer();
                     stop_video_frame_timer();
-                    w.set_active_call_visible(false);
+                    w.global::<crate::CallView>().set_active_call_visible(false);
                 }
-                if w.get_incoming_call_visible()
-                    && w.get_incoming_call_data().call_id == call_id.as_str()
+                if w.global::<crate::CallView>().get_incoming_call_visible()
+                    && w.global::<crate::CallView>()
+                        .get_incoming_call_data()
+                        .call_id
+                        == call_id.as_str()
                 {
-                    w.set_incoming_call_visible(false);
+                    w.global::<crate::CallView>()
+                        .set_incoming_call_visible(false);
                 }
             }
         }

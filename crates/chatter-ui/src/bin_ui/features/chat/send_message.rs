@@ -167,11 +167,11 @@ fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageIt
     if let Some(item) = item {
         // `append_message_to_ui` clears the composer; the next draft the
         // user has started typing meanwhile is theirs to keep.
-        let draft = w.get_composer_text();
+        let draft = w.global::<crate::ChatPane>().get_composer_text();
         super::helpers::append_message_to_ui(w, item);
-        w.set_composer_text(draft);
+        w.global::<crate::ChatPane>().set_composer_text(draft);
     }
-    w.set_is_at_bottom(true);
+    w.global::<crate::ChatPane>().set_is_at_bottom(true);
 }
 
 /// Take the pending row for `send` out of the open list: the send did not go.
@@ -184,7 +184,7 @@ pub(crate) fn remove_pending_bubble(w: &MainWindow, send: &ComposerSend) {
 fn mark_pending_unconfirmed(w: &MainWindow, send: &ComposerSend) {
     use slint::Model;
     let pending_id = pending_message_id(send);
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     for i in 0..messages.row_count() {
         if let Some(mut m) = messages.row_data(i)
             && m.message_id.as_str() == pending_id
@@ -201,7 +201,7 @@ fn mark_pending_unconfirmed(w: &MainWindow, send: &ComposerSend) {
 fn mark_pending_waiting_for_tor(w: &MainWindow, send: &ComposerSend) {
     use slint::Model;
     let pending_id = pending_message_id(send);
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     for i in 0..messages.row_count() {
         if let Some(mut m) = messages.row_data(i)
             && m.message_id.as_str() == pending_id
@@ -368,10 +368,13 @@ fn set_send_notice(
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_composer_notice(notice.into());
-            w.set_secret_request_actions(answer);
-            w.set_conversation_read_only(read_only);
-            w.set_header_can_call(can_call);
+            w.global::<crate::ChatPane>()
+                .set_composer_notice(notice.into());
+            w.global::<crate::ChatPane>()
+                .set_secret_request_actions(answer);
+            w.global::<crate::ChatPane>()
+                .set_conversation_read_only(read_only);
+            w.global::<crate::ChatPane>().set_header_can_call(can_call);
             super::membership::apply_header(&w, &membership);
         }
     });
@@ -400,9 +403,11 @@ fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak_clear = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_clear.upgrade() {
-                    w.set_composer_notice("".into());
-                    w.set_secret_request_actions(false);
-                    w.set_conversation_read_only(false);
+                    w.global::<crate::ChatPane>().set_composer_notice("".into());
+                    w.global::<crate::ChatPane>()
+                        .set_secret_request_actions(false);
+                    w.global::<crate::ChatPane>()
+                        .set_conversation_read_only(false);
                     super::membership::apply_header(&w, &Default::default());
                 }
             });
@@ -420,137 +425,151 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     let weak_window = window.as_weak();
 
-    window.on_send(move |text: slint::SharedString| {
-        let send_started = std::time::Instant::now();
-        let text = text.to_string();
-        let pending_attachments = chat_state.pending_attachments();
-        let has_attachments = !pending_attachments.is_empty();
+    window
+        .global::<crate::ChatPane>()
+        .on_send(move |text: slint::SharedString| {
+            let send_started = std::time::Instant::now();
+            let text = text.to_string();
+            let pending_attachments = chat_state.pending_attachments();
+            let has_attachments = !pending_attachments.is_empty();
 
-        if text.trim().is_empty() && !has_attachments {
-            return false;
-        }
+            if text.trim().is_empty() && !has_attachments {
+                return false;
+            }
 
-        // Mesh conversation open: serverless, so it must not reach the gateway
-        // pipeline — or the Jarvis interceptions below, which would answer a
-        // slash command instead of broadcasting it. Core picks the transport
-        // (public room / geohash cell / peer).
-        #[cfg(feature = "mesh")]
-        if crate::bin_ui::features::mesh::intercept_send(&ui_ctx_jarvis, &text, weak_window.clone())
-        {
-            return true;
-        }
+            // Mesh conversation open: serverless, so it must not reach the gateway
+            // pipeline — or the Jarvis interceptions below, which would answer a
+            // slash command instead of broadcasting it. Core picks the transport
+            // (public room / geohash cell / peer).
+            #[cfg(feature = "mesh")]
+            if crate::bin_ui::features::mesh::intercept_send(
+                &ui_ctx_jarvis,
+                &text,
+                weak_window.clone(),
+            ) {
+                return true;
+            }
 
-        // Local AI channel: every send routes to Jarvis, nothing networks.
-        #[cfg(feature = "jarvis")]
-        if let Some(id) = chat_state.chat_snapshot().active_channel_id {
-            if chatter_core::client::is_jarvis_channel(&id) {
-                if text.trim().is_empty() {
-                    return false;
+            // Local AI channel: every send routes to Jarvis, nothing networks.
+            #[cfg(feature = "jarvis")]
+            if let Some(id) = chat_state.chat_snapshot().active_channel_id {
+                if chatter_core::client::is_jarvis_channel(&id) {
+                    if text.trim().is_empty() {
+                        return false;
+                    }
+                    let ui_ctx = ui_ctx_jarvis.clone();
+                    let weak = weak_window.clone();
+                    tokio::spawn(async move {
+                        crate::bin_ui::features::jarvis::handle_jarvis_channel_send(
+                            ui_ctx, text, weak,
+                        )
+                        .await;
+                    });
+                    return true;
                 }
+            }
+
+            // Check for Jarvis slash commands first (/ask, /summarize, /knowledge, /remember)
+            #[cfg(feature = "jarvis")]
+            if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {
                 let ui_ctx = ui_ctx_jarvis.clone();
+                let conversation = chat_state.active_conversation();
+                let auth = ui_ctx.auth_snapshot();
+                let owner =
+                    auth.current_user_id
+                        .map(|user_id| chatter_core::client::JarvisSessionOwner {
+                            user_id,
+                            revision: auth.session_revision,
+                        });
+                let view_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+                    &ui_ctx,
+                    conversation,
+                );
                 let weak = weak_window.clone();
                 tokio::spawn(async move {
-                    crate::bin_ui::features::jarvis::handle_jarvis_channel_send(ui_ctx, text, weak)
-                        .await;
+                    handle_jarvis_slash_command(
+                        &ui_ctx,
+                        cmd,
+                        conversation,
+                        owner,
+                        view_owner,
+                        weak,
+                    )
+                    .await;
                 });
                 return true;
             }
-        }
 
-        // Check for Jarvis slash commands first (/ask, /summarize, /knowledge, /remember)
-        #[cfg(feature = "jarvis")]
-        if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {
-            let ui_ctx = ui_ctx_jarvis.clone();
-            let conversation = chat_state.active_conversation();
-            let auth = ui_ctx.auth_snapshot();
-            let owner =
-                auth.current_user_id
-                    .map(|user_id| chatter_core::client::JarvisSessionOwner {
-                        user_id,
-                        revision: auth.session_revision,
-                    });
-            let view_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
-                &ui_ctx,
-                conversation,
-            );
-            let weak = weak_window.clone();
-            tokio::spawn(async move {
-                handle_jarvis_slash_command(&ui_ctx, cmd, conversation, owner, view_owner, weak)
+            // @Jarvis request? Core decides: a whole-word mention in a
+            // conversation where AI is on. Anything else is sent as written.
+            #[cfg(feature = "jarvis")]
+            if let Some((context, query)) =
+                ui_ctx_jarvis.jarvis_mention(&chat_state.active_conversation(), &text)
+            {
+                let ui_ctx = ui_ctx_jarvis.clone();
+                let weak = weak_window.clone();
+                tokio::spawn(async move {
+                    crate::bin_ui::features::jarvis::handle_jarvis_mention(
+                        &ui_ctx, &query, context, weak,
+                    )
                     .await;
-            });
-            return true;
-        }
-
-        // @Jarvis request? Core decides: a whole-word mention in a
-        // conversation where AI is on. Anything else is sent as written.
-        #[cfg(feature = "jarvis")]
-        if let Some((context, query)) =
-            ui_ctx_jarvis.jarvis_mention(&chat_state.active_conversation(), &text)
-        {
-            let ui_ctx = ui_ctx_jarvis.clone();
-            let weak = weak_window.clone();
-            tokio::spawn(async move {
-                crate::bin_ui::features::jarvis::handle_jarvis_mention(
-                    &ui_ctx, &query, context, weak,
-                )
-                .await;
-            });
-            return true;
-        }
-
-        let Some(w) = weak_window.upgrade() else {
-            return false;
-        };
-        let send = match ui_ctx_jarvis.begin_composer_send(text, composer_reply(&w)) {
-            Ok(send) => send,
-            Err(message) => {
-                w.set_toast_message(message.into());
-                w.set_toast_variant("error".into());
-                w.set_toast_visible(true);
-                return false;
+                });
+                return true;
             }
-        };
-        // The composer clears itself once this returns true; clear it here
-        // first so the persisted draft goes with the accepted send now, not
-        // after the autosave delay (see `take_composer_send`).
-        w.set_composer_text("".into());
-        // Android: the IME's own copy of the composer is consumed as of now,
-        // in order with the keyboard's operations (the producer gate), so
-        // nothing it still holds of the sent text can come back.
-        #[cfg(target_os = "android")]
-        crate::platform::android::text_input::consume();
-        if send.reply.is_some() {
-            clear_reply(&w);
-        }
-        crate::bin_ui::features::composer::render_attachments(&w, &[]);
-        crate::bin_ui::features::composer::autosave_composer_draft(&w, &ui_ctx_jarvis);
 
-        // Clear outgoing typing state (Signal: clearTypingTimers on message send)
-        clear_outgoing_typing(&ui_ctx_jarvis);
+            let Some(w) = weak_window.upgrade() else {
+                return false;
+            };
+            let send = match ui_ctx_jarvis.begin_composer_send(text, composer_reply(&w)) {
+                Ok(send) => send,
+                Err(message) => {
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                    return false;
+                }
+            };
+            // The composer clears itself once this returns true; clear it here
+            // first so the persisted draft goes with the accepted send now, not
+            // after the autosave delay (see `take_composer_send`).
+            w.global::<crate::ChatPane>().set_composer_text("".into());
+            // Android: the IME's own copy of the composer is consumed as of now,
+            // in order with the keyboard's operations (the producer gate), so
+            // nothing it still holds of the sent text can come back.
+            #[cfg(target_os = "android")]
+            crate::platform::android::text_input::consume();
+            if send.reply.is_some() {
+                clear_reply(&w);
+            }
+            crate::bin_ui::features::composer::render_attachments(&w, &[]);
+            crate::bin_ui::features::composer::autosave_composer_draft(&w, &ui_ctx_jarvis);
 
-        // Track user activity for presence updates
-        {
-            let ui_ctx = ui_ctx_jarvis.clone();
-            tokio::spawn(async move {
-                ui_ctx.record_presence_activity().await;
-            });
-        }
+            // Clear outgoing typing state (Signal: clearTypingTimers on message send)
+            clear_outgoing_typing(&ui_ctx_jarvis);
 
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_jarvis.clone();
-
-        tokio::spawn(async move {
-            let frozen = send.clone();
-            if !deliver(weak.clone(), ui_ctx.clone(), send, send_started).await {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        recover_failed_send(&w, &ui_ctx, frozen);
-                    }
+            // Track user activity for presence updates
+            {
+                let ui_ctx = ui_ctx_jarvis.clone();
+                tokio::spawn(async move {
+                    ui_ctx.record_presence_activity().await;
                 });
             }
+
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_jarvis.clone();
+
+            tokio::spawn(async move {
+                let frozen = send.clone();
+                if !deliver(weak.clone(), ui_ctx.clone(), send, send_started).await {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            recover_failed_send(&w, &ui_ctx, frozen);
+                        }
+                    });
+                }
+            });
+            true
         });
-        true
-    });
 }
 
 /// Recover a definite failure into its own empty composer, or park it there
@@ -573,17 +592,34 @@ pub fn recover_failed_send(w: &MainWindow, ui_ctx: &ChatterClient, send: Compose
 
 /// The reply bar's target, if the composer is replying.
 pub fn composer_reply(w: &MainWindow) -> Option<ComposerReply> {
-    if !w.get_composer_is_replying() {
+    if !w.global::<crate::ChatPane>().get_composer_is_replying() {
         return None;
     }
     let reply = ComposerReply {
-        sender_id: w.get_composer_reply_to_sender().to_string(),
-        timestamp: w.get_composer_reply_to_timestamp().to_string(),
-        sender_name: w.get_composer_reply_to_sender_name().to_string(),
-        preview: w.get_composer_reply_preview().to_string(),
+        sender_id: w
+            .global::<crate::ChatPane>()
+            .get_composer_reply_to_sender()
+            .to_string(),
+        timestamp: w
+            .global::<crate::ChatPane>()
+            .get_composer_reply_to_timestamp()
+            .to_string(),
+        sender_name: w
+            .global::<crate::ChatPane>()
+            .get_composer_reply_to_sender_name()
+            .to_string(),
+        preview: w
+            .global::<crate::ChatPane>()
+            .get_composer_reply_preview()
+            .to_string(),
         thumbnail: w
+            .global::<crate::ChatPane>()
             .get_composer_reply_has_thumbnail()
-            .then(|| w.get_composer_reply_thumbnail().to_rgba8())
+            .then(|| {
+                w.global::<crate::ChatPane>()
+                    .get_composer_reply_thumbnail()
+                    .to_rgba8()
+            })
             .flatten()
             .map(|pixels| (pixels.as_bytes().to_vec(), pixels.width(), pixels.height())),
     };
@@ -591,25 +627,34 @@ pub fn composer_reply(w: &MainWindow) -> Option<ComposerReply> {
 }
 
 pub(crate) fn clear_reply(w: &MainWindow) {
-    w.set_composer_is_replying(false);
-    w.set_composer_reply_to_sender("".into());
-    w.set_composer_reply_to_sender_name("".into());
-    w.set_composer_reply_to_timestamp("".into());
-    w.set_composer_reply_preview("".into());
-    w.set_composer_reply_has_thumbnail(false);
-    w.set_composer_reply_thumbnail(slint::Image::default());
-    w.set_composer_placeholder("Type a message...".into());
-    w.invoke_composer_draft_changed();
+    w.global::<crate::ChatPane>()
+        .set_composer_is_replying(false);
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_to_sender("".into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_to_sender_name("".into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_to_timestamp("".into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_preview("".into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_has_thumbnail(false);
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_thumbnail(slint::Image::default());
+    w.global::<crate::ChatPane>()
+        .set_composer_placeholder("Type a message...".into());
+    w.global::<crate::ChatPane>()
+        .invoke_composer_draft_changed();
 }
 
 /// Whether the composer holds nothing a restored send could overwrite.
 /// A voice note being recorded counts: its send would take restored files.
 pub fn composer_is_empty(w: &MainWindow) -> bool {
     let voice = w.global::<crate::VoiceRecording>();
-    w.get_composer_text().is_empty()
+    w.global::<crate::ChatPane>().get_composer_text().is_empty()
         && !w.invoke_composer_has_preedit()
-        && !w.get_composer_is_replying()
-        && !w.get_composer_is_editing()
+        && !w.global::<crate::ChatPane>().get_composer_is_replying()
+        && !w.global::<crate::ChatPane>().get_composer_is_editing()
         && !voice.get_active()
         && !voice.get_busy()
 }
@@ -617,12 +662,17 @@ pub fn composer_is_empty(w: &MainWindow) -> bool {
 /// Freeze the composer into a send (core decides whether it may go) and
 /// clear what it took. `Err` is what to tell the user; nothing was consumed.
 pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<ComposerSend, String> {
-    if w.get_composer_is_editing() {
+    if w.global::<crate::ChatPane>().get_composer_is_editing() {
         return Err("Finish editing first.".into());
     }
     w.invoke_settle_composer();
-    let send = ui_ctx.begin_composer_send(w.get_composer_text().to_string(), composer_reply(w))?;
-    w.set_composer_text("".into());
+    let send = ui_ctx.begin_composer_send(
+        w.global::<crate::ChatPane>()
+            .get_composer_text()
+            .to_string(),
+        composer_reply(w),
+    )?;
+    w.global::<crate::ChatPane>().set_composer_text("".into());
     #[cfg(target_os = "android")]
     crate::platform::android::text_input::consume();
     if send.reply.is_some() {
@@ -654,15 +704,23 @@ pub(crate) fn show_reply_image(
     reply: ComposerReply,
     thumbnail: Option<slint::Image>,
 ) {
-    w.set_composer_reply_to_sender(reply.sender_id.into());
-    w.set_composer_reply_to_timestamp(reply.timestamp.into());
-    w.set_composer_reply_to_sender_name(reply.sender_name.into());
-    w.set_composer_reply_preview(reply.preview.into());
-    w.set_composer_reply_has_thumbnail(thumbnail.is_some());
-    w.set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
-    w.set_composer_placeholder("Type your reply...".into());
-    w.set_composer_is_replying(true);
-    w.invoke_composer_draft_changed();
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_to_sender(reply.sender_id.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_to_timestamp(reply.timestamp.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_to_sender_name(reply.sender_name.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_preview(reply.preview.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_has_thumbnail(thumbnail.is_some());
+    w.global::<crate::ChatPane>()
+        .set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
+    w.global::<crate::ChatPane>()
+        .set_composer_placeholder("Type your reply...".into());
+    w.global::<crate::ChatPane>().set_composer_is_replying(true);
+    w.global::<crate::ChatPane>()
+        .invoke_composer_draft_changed();
 }
 
 /// Put a failed send back into the (empty) composer it came from.
@@ -673,7 +731,8 @@ pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
     {
         return;
     }
-    w.set_composer_text(send.text.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_text(send.text.into());
     // Android: the accepted send consumed the IME's copy; the text going
     // back in is a newer state than the emptied one it may still report.
     #[cfg(target_os = "android")]
@@ -1020,7 +1079,7 @@ async fn deliver_inner(
                 use slint::Model;
                 tracing::info!(
                     msg_id = %msg_id,
-                    existing = w.get_messages().row_count(),
+                    existing = w.global::<crate::ChatPane>().get_messages().row_count(),
                     "[UI_SEND] calling append_message_to_ui"
                 );
             }
@@ -1034,7 +1093,7 @@ async fn deliver_inner(
             {
                 use slint::Model;
                 tracing::info!(
-                    after = w.get_messages().row_count(),
+                    after = w.global::<crate::ChatPane>().get_messages().row_count(),
                     "[UI_SEND] append_message_to_ui done"
                 );
             }
@@ -1042,7 +1101,8 @@ async fn deliver_inner(
             // Group fan-out can be pending too, but it does not establish a
             // DM channel and must leave the group composer available.
             if bootstrap_initiated && !matches!(conversation, ActiveConversation::AnonGroup(_)) {
-                w.set_composer_placeholder(BOOTSTRAP_PLACEHOLDER.into());
+                w.global::<crate::ChatPane>()
+                    .set_composer_placeholder(BOOTSTRAP_PLACEHOLDER.into());
             }
 
             crate::bin_ui::gif_state::auto_register_gifs_from_messages(
@@ -1099,7 +1159,7 @@ async fn handle_jarvis_slash_command(
             if owner.is_current() {
                 if let Some(w) = weak.upgrade() {
                     jarvis_state.set_thinking(true);
-                    w.set_jarvis_thinking(true);
+                    w.global::<crate::JarvisPane>().set_jarvis_thinking(true);
                     let id = crate::bin_ui::features::jarvis::add_jarvis_thinking_placeholder(&w);
                     let _ = tx.send(id);
                 }
@@ -1134,10 +1194,12 @@ async fn handle_jarvis_slash_command(
                     crate::bin_ui::features::jarvis::remove_jarvis_thinking_placeholder(&w, &tid);
                 }
                 let still_thinking = w
+                    .global::<crate::ChatPane>()
                     .get_messages()
                     .iter()
                     .any(|row| row.delivery_status.as_str() == "thinking");
-                w.set_jarvis_thinking(still_thinking);
+                w.global::<crate::JarvisPane>()
+                    .set_jarvis_thinking(still_thinking);
                 jarvis_state.set_thinking(still_thinking);
             }
         } else {

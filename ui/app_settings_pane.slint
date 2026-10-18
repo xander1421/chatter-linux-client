@@ -1,0 +1,112 @@
+import { LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
+
+// Settings and AI presentation state and actions.
+export global SettingsPane {
+    // Settings properties
+    in property <string> settings-display-name: "";
+    in property <string> settings-username: "";
+    in property <int> settings-session-count: 0;
+    in-out property <string> settings-current-password: "";
+    in-out property <string> settings-new-password: "";
+    in-out property <string> settings-confirm-password: "";
+    in property <bool> settings-password-changing: false;
+    in property <string> settings-password-error: "";
+    // Delete-account confirmation
+    in-out property <string> settings-delete-password: "";
+    in property <bool> settings-delete-loading: false;
+    in property <string> settings-delete-error: "";
+    // Settings › Account › Recovery Codes › Regenerate
+    in-out property <string> settings-recovery-regen-password: "";
+    in property <bool> settings-recovery-regen-loading: false;
+    in property <string> settings-recovery-regen-error: "";
+    in-out property <bool> settings-read-receipts: true;
+    in-out property <bool> settings-typing-indicators: true;
+    // "none" | "name_only" | "name_and_message" (NotificationDetailLevel::as_str)
+    in-out property <string> settings-notification-detail: "none";
+    // "everyone" | "contacts" | "nobody" (core ProfileVisibility::as_str)
+    in property <string> settings-profile-visibility: "everyone";
+    in property <string> settings-profile-visibility-pending: "";
+    in property <bool> settings-profile-visibility-busy: false;
+    in property <string> settings-profile-visibility-error: "";
+    in-out property <string> settings-profile-visibility-pin: "";
+    in property <string> settings-identity-fingerprint: "";
+    in-out property <bool> settings-sealed-sender-unrestricted: false;
+    in-out property <bool> settings-username-discoverable: true;
+
+    // Settings security (Change PIN / Key Backup)
+    in-out property <string> settings-change-pin-current: "";
+    in-out property <string> settings-change-pin-new: "";
+    in-out property <string> settings-change-pin-confirm: "";
+    in property <bool> settings-change-pin-loading: false;
+    in property <string> settings-change-pin-error: "";
+    in property <string> settings-change-pin-success: "";
+    in property <string> settings-backup-status: "unknown";
+    in-out property <string> settings-backup-retry-pin: "";
+    in property <bool> settings-backup-retry-loading: false;
+    in property <string> settings-backup-retry-error: "";
+
+    // AI settings properties
+    in-out property <bool> settings-local-ai-enabled: false;
+    // Cloud AI (off-device)
+    in-out property <bool> settings-ai-prefer-cloud: false;
+    in-out property <string> settings-cloud-ai-mode: "direct-anthropic";
+    in-out property <string> settings-cloud-ai-api-key: "";
+    in property <bool> settings-cloud-ai-configured: false;
+    in property <string> settings-cloud-ai-status: "";
+    in property <string> settings-cloud-ai-balance: "";
+    in-out property <string> settings-local-ai-model-id: "";
+    in property <bool> settings-local-ai-loading: false;
+    in property <string> settings-local-ai-status: "";
+    in property <string> settings-local-ai-error: "";
+    in property <string> settings-local-ai-hardware-summary: "";
+    in property <bool> settings-local-ai-detecting: false;
+    in property <[LocalAIProviderData]> settings-local-ai-providers: [];
+    in property <string> settings-local-ai-active-provider: "";
+    in property <[string]> settings-local-ai-models: [];
+    in property <string> settings-local-ai-active-model: "";
+    in property <[CatalogModelData]> settings-local-ai-catalog: [];
+
+    // Settings
+    callback settings-edit-profile();
+    callback settings-change-password(string, string);
+    callback settings-view-sessions();
+    callback settings-logout();
+    callback settings-delete-account();
+    callback settings-delete-account-confirmed(string);  // password
+    callback settings-regenerate-recovery-codes(string);  // password
+    callback settings-read-receipts-changed(bool);
+    callback settings-typing-indicators-changed(bool);
+    callback settings-notification-detail-changed(string);
+    callback settings-profile-visibility-selected(string);
+    callback settings-profile-visibility-confirmed(string, string);  // key, PIN
+    callback settings-profile-visibility-cancelled();
+    callback settings-search-shortcut-changed(string);
+    callback settings-copy-fingerprint();
+    callback settings-sealed-sender-changed(bool);
+    callback settings-username-discoverable-changed(bool);
+    callback settings-change-pin(string, string);  // current_pin, new_pin
+    callback settings-retry-backup(string);  // pin
+
+    // Message-history backup
+    callback settings-export-message-backup(string);   // passphrase
+    callback settings-import-message-backup(string);   // passphrase
+    callback settings-server-message-backup(string);   // pin
+    callback settings-restore-message-backup(string);  // pin
+    in-out property <string> settings-message-backup-status: "";
+
+    // AI settings callbacks
+    callback settings-local-ai-enabled-changed(bool);
+    callback settings-local-ai-load-model(string);
+    callback settings-local-ai-unload-model();
+    callback settings-local-ai-refresh();
+    callback settings-local-ai-select-provider(string);
+    callback settings-local-ai-select-model(string);
+    callback settings-local-ai-download(string);
+
+    // Cloud AI settings callbacks
+    callback settings-ai-prefer-cloud-changed(bool);
+    callback settings-cloud-ai-mode-changed(string);
+    callback settings-cloud-ai-api-key-changed(string);
+    callback settings-cloud-ai-refresh-quota();
+
+}

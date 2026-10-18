@@ -1,26 +1,33 @@
 //! Channel settings invites.
 
 use super::*;
+use slint::ComponentHandle;
 
 pub(super) fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_channel_settings_invite_members(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_invite_members(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
 
-        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let group_id_str = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_id().to_string())
-            .unwrap_or_default();
+            // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+            let group_id_str = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .to_string()
+                })
+                .unwrap_or_default();
 
-        let Ok(group_id) = group_id_str.parse() else {
-            return;
-        };
-        open_private_group_invite_modal(weak, ui_ctx, group_id);
-    });
+            let Ok(group_id) = group_id_str.parse() else {
+                return;
+            };
+            open_private_group_invite_modal(weak, ui_ctx, group_id);
+        });
 }
 
 /// Shared header/settings entry: validate ownership and populate the picker.
@@ -29,10 +36,9 @@ pub fn open_private_group_invite_modal(
     ui_ctx: Arc<ChatterClient>,
     group_id: AnonGroupId,
 ) {
-    let Some(fence) = weak
-        .upgrade()
-        .and_then(|w| crate::bin_ui::features::modals::create_channel::RequestFence::capture(&w, &ui_ctx))
-    else {
+    let Some(fence) = weak.upgrade().and_then(|w| {
+        crate::bin_ui::features::modals::create_channel::RequestFence::capture(&w, &ui_ctx)
+    }) else {
         return;
     };
     tokio::spawn(async move {
@@ -68,9 +74,12 @@ pub fn open_private_group_invite_modal(
                 .into_iter()
                 .map(|(c, avatar)| crate::bin_ui::converters::invite_candidate_to_slint(c, avatar))
                 .collect();
-            w.set_invite_private_group_id(group_id.to_string().into());
-            w.set_invite_private_group_friends(ModelRc::new(VecModel::from(rows)));
-            w.set_invite_private_group_selected_count(0);
+            w.global::<crate::ModalHostState>()
+                .set_invite_private_group_id(group_id.to_string().into());
+            w.global::<crate::ModalHostState>()
+                .set_invite_private_group_friends(ModelRc::new(VecModel::from(rows)));
+            w.global::<crate::ModalHostState>()
+                .set_invite_private_group_selected_count(0);
             crate::bin_ui::features::back::push(&w, "invite-private-group");
         });
     });
@@ -107,10 +116,14 @@ pub fn open_invite_member_modal(
                     .into_iter()
                     .map(candidate_to_invite_user)
                     .collect();
-                w.set_invite_member_channel_id(channel_id_str.into());
-                w.set_invite_member_channel_name(channel_name.into());
-                w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
-                w.set_invite_member_selected_count(0);
+                w.global::<crate::ModalHostState>()
+                    .set_invite_member_channel_id(channel_id_str.into());
+                w.global::<crate::ModalHostState>()
+                    .set_invite_member_channel_name(channel_name.into());
+                w.global::<crate::ModalHostState>()
+                    .set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
+                w.global::<crate::ModalHostState>()
+                    .set_invite_member_selected_count(0);
                 crate::bin_ui::features::back::push(&w, "invite-member");
             }
         });
@@ -136,57 +149,68 @@ pub(super) fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<Chat
     let weak_window = window.as_weak();
     let ui_ctx_open = ui_ctx.clone();
 
-    window.on_channel_settings_invite_channel_members(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_open.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_invite_channel_members(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_open.clone();
 
-        let channel_id_str = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_id().to_string())
-            .unwrap_or_default();
+            let channel_id_str = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .to_string()
+                })
+                .unwrap_or_default();
 
-        if channel_id_str.is_empty() {
-            return;
-        }
-
-        let channel_id: ChannelId = match channel_id_str.parse() {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!("Invalid channel ID: {}", e);
+            if channel_id_str.is_empty() {
                 return;
             }
-        };
 
-        open_invite_member_modal(weak, ui_ctx, channel_id);
-    });
+            let channel_id: ChannelId = match channel_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid channel ID: {}", e);
+                    return;
+                }
+            };
+
+            open_invite_member_modal(weak, ui_ctx, channel_id);
+        });
 
     // Toggle user selection
     let weak_window = window.as_weak();
-    window.on_invite_member_toggle_user(move |idx| {
-        let weak = weak_window.clone();
-        let index = idx as usize;
+    window
+        .global::<crate::ModalHostState>()
+        .on_invite_member_toggle_user(move |idx| {
+            let weak = weak_window.clone();
+            let index = idx as usize;
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let users = w.get_invite_member_users();
-                if let Some(mut user) = users.row_data(index) {
-                    // Toggle selected state
-                    user.selected = !user.selected;
-                    users.set_row_data(index, user);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let users = w
+                        .global::<crate::ModalHostState>()
+                        .get_invite_member_users();
+                    if let Some(mut user) = users.row_data(index) {
+                        // Toggle selected state
+                        user.selected = !user.selected;
+                        users.set_row_data(index, user);
 
-                    // Recalculate selected count
-                    let count = users.iter().filter(|u| u.selected).count() as i32;
-                    w.set_invite_member_selected_count(count);
+                        // Recalculate selected count
+                        let count = users.iter().filter(|u| u.selected).count() as i32;
+                        w.global::<crate::ModalHostState>()
+                            .set_invite_member_selected_count(count);
+                    }
                 }
-            }
+            });
         });
-    });
 
     // Confirm invite
     let weak_window = window.as_weak();
     let ui_ctx_invite = ui_ctx.clone();
 
-    window.on_invite_member_confirm(move || {
+    window.global::<crate::ModalHostState>().on_invite_member_confirm(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_invite.clone();
 
@@ -196,8 +220,8 @@ pub(super) fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<Chat
         // "Invite" did nothing at all.
         let (channel_id_str, selected_user_ids) = {
             let Some(w) = weak.upgrade() else { return };
-            let channel_id = w.get_invite_member_channel_id().to_string();
-            let users = w.get_invite_member_users();
+            let channel_id = w.global::<crate::ModalHostState>().get_invite_member_channel_id().to_string();
+            let users = w.global::<crate::ModalHostState>().get_invite_member_users();
             let selected_vec = ui_ctx.eligible_channel_invite_targets(users.iter()
                 .map(|u| (u.id.to_string(), u.selected, u.already_member, u.banned))
                 .collect::<Vec<_>>());
@@ -229,7 +253,7 @@ pub(super) fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<Chat
                 let weak = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.set_invite_member_loading(true);
+                        w.global::<crate::ModalHostState>().set_invite_member_loading(true);
                     }
                 });
             }
@@ -272,7 +296,7 @@ pub(super) fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<Chat
             let attempted = selected_user_ids.len();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                w.set_invite_member_loading(false);
+                w.global::<crate::ModalHostState>().set_invite_member_loading(false);
 
                 if success_count == 0 {
                     // Stay open: the selection is still there and retrying is
@@ -322,44 +346,52 @@ pub(super) fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<Chatte
     // (core asks after its pre-lookup pause).
     static SEARCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    window.on_invite_member_search_changed(move |query: slint::SharedString| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_search.clone();
-        let query = query.to_string();
-        let seq = SEARCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    window
+        .global::<crate::ModalHostState>()
+        .on_invite_member_search_changed(move |query: slint::SharedString| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_search.clone();
+            let query = query.to_string();
+            let seq = SEARCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
-        let channel_id_str = weak
-            .upgrade()
-            .map(|w| w.get_invite_member_channel_id().to_string())
-            .unwrap_or_default();
+            let channel_id_str = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_invite_member_channel_id()
+                        .to_string()
+                })
+                .unwrap_or_default();
 
-        tokio::spawn(async move {
-            if channel_id_str.is_empty() {
-                return;
-            }
-            let channel_id: ChannelId = match channel_id_str.parse() {
-                Ok(id) => id,
-                Err(_) => return,
-            };
-
-            // Core filters and looks up; the rows (non-Send images) are
-            // built inside the event loop below.
-            let superseded = || SEARCH_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq;
-            let Some(cands) = ui_ctx
-                .search_channel_invite_candidates(&channel_id, &query, superseded)
-                .await
-            else {
-                return;
-            };
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let friends: Vec<InviteUser> =
-                        cands.into_iter().map(candidate_to_invite_user).collect();
-                    w.set_invite_member_users(ModelRc::new(VecModel::from(friends)));
-                    w.set_invite_member_selected_count(0);
+            tokio::spawn(async move {
+                if channel_id_str.is_empty() {
+                    return;
                 }
+                let channel_id: ChannelId = match channel_id_str.parse() {
+                    Ok(id) => id,
+                    Err(_) => return,
+                };
+
+                // Core filters and looks up; the rows (non-Send images) are
+                // built inside the event loop below.
+                let superseded = || SEARCH_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq;
+                let Some(cands) = ui_ctx
+                    .search_channel_invite_candidates(&channel_id, &query, superseded)
+                    .await
+                else {
+                    return;
+                };
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        let friends: Vec<InviteUser> =
+                            cands.into_iter().map(candidate_to_invite_user).collect();
+                        w.global::<crate::ModalHostState>()
+                            .set_invite_member_users(ModelRc::new(VecModel::from(friends)));
+                        w.global::<crate::ModalHostState>()
+                            .set_invite_member_selected_count(0);
+                    }
+                });
             });
         });
-    });
 }

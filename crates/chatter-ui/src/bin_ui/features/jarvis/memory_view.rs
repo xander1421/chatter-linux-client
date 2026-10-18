@@ -33,20 +33,26 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
-        window.on_jarvis_memory_refresh(move || {
-            let ui_ctx = ui_ctx.clone();
-            let weak = weak.clone();
-            tokio::spawn(async move { refresh(ui_ctx, weak, None).await });
-        });
+        window
+            .global::<crate::JarvisPane>()
+            .on_jarvis_memory_refresh(move || {
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak.clone();
+                tokio::spawn(async move { refresh(ui_ctx, weak, None).await });
+            });
     }
     {
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
-        window.on_jarvis_memory_select_entity(move |entity_id: SharedString| {
-            let ui_ctx = ui_ctx.clone();
-            let weak = weak.clone();
-            tokio::spawn(async move { refresh(ui_ctx, weak, Some(entity_id.to_string())).await });
-        });
+        window
+            .global::<crate::JarvisPane>()
+            .on_jarvis_memory_select_entity(move |entity_id: SharedString| {
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak.clone();
+                tokio::spawn(
+                    async move { refresh(ui_ctx, weak, Some(entity_id.to_string())).await },
+                );
+            });
     }
     {
         let ui_ctx = ui_ctx.clone();
@@ -150,11 +156,16 @@ async fn refresh(
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_jarvis_memory_facts(ModelRc::new(VecModel::from(fact_rows)));
-            w.set_jarvis_memory_entities(ModelRc::new(VecModel::from(entity_rows)));
-            w.set_jarvis_memory_graph_nodes(ModelRc::new(VecModel::from(nodes)));
-            w.set_jarvis_memory_graph_edges(ModelRc::new(VecModel::from(edges)));
-            w.set_jarvis_memory_stats(stats.into());
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_facts(ModelRc::new(VecModel::from(fact_rows)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_entities(ModelRc::new(VecModel::from(entity_rows)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_graph_nodes(ModelRc::new(VecModel::from(nodes)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_graph_edges(ModelRc::new(VecModel::from(edges)));
+            w.global::<crate::JarvisPane>()
+                .set_jarvis_memory_stats(stats.into());
         }
     });
 }

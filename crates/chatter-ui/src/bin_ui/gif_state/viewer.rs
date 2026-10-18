@@ -2,6 +2,7 @@
 //!
 //! Manages animated GIF playback in the full-screen image viewer.
 
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::time::Duration;
 
@@ -331,7 +332,7 @@ fn advance_viewer_frame(window: Weak<MainWindow>) {
     // Update the image viewer
     if let Some(image) = next_image {
         if let Some(w) = window.upgrade() {
-            w.set_image_viewer_source(image);
+            w.global::<crate::ChatPane>().set_image_viewer_source(image);
             tracing::trace!(
                 "GIF frame {}/{} displayed, next delay {}ms",
                 frame_idx,

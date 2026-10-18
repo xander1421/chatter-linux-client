@@ -48,9 +48,12 @@ fn model(emojis: Vec<PickerEmoji>) -> ModelRc<EmojiData> {
 pub fn show_reaction_picker_start(w: &MainWindow, ui_ctx: &ChatterClient) {
     let (category, emojis) =
         with_recent_emoji(ui_ctx, |recent| emoji_data::initial_listing(recent, 0));
-    w.set_reaction_picker_selected_category(category);
-    w.set_reaction_picker_search_query("".into());
-    w.set_reaction_picker_emojis(model(emojis));
+    w.global::<crate::ChatPane>()
+        .set_reaction_picker_selected_category(category);
+    w.global::<crate::ChatPane>()
+        .set_reaction_picker_search_query("".into());
+    w.global::<crate::ChatPane>()
+        .set_reaction_picker_emojis(model(emojis));
 }
 
 /// A fresh composer drawer (closed → open): Recent when the account has
@@ -58,12 +61,15 @@ pub fn show_reaction_picker_start(w: &MainWindow, ui_ctx: &ChatterClient) {
 /// tabs inside the open drawer does NOT come through here; each mode keeps
 /// its query and category until the drawer closes.
 pub fn show_composer_picker_start(w: &MainWindow, ui_ctx: &ChatterClient) {
-    let tone = w.get_composer_emoji_skin_tone();
+    let tone = w.global::<crate::ChatPane>().get_composer_emoji_skin_tone();
     let (category, emojis) =
         with_recent_emoji(ui_ctx, |recent| emoji_data::initial_listing(recent, tone));
-    w.set_composer_emoji_category(category);
-    w.set_composer_emoji_search("".into());
-    w.set_composer_emoji_list(model(emojis));
+    w.global::<crate::ChatPane>()
+        .set_composer_emoji_category(category);
+    w.global::<crate::ChatPane>()
+        .set_composer_emoji_search("".into());
+    w.global::<crate::ChatPane>()
+        .set_composer_emoji_list(model(emojis));
 }
 
 /// Wire emoji loader callbacks.
@@ -72,119 +78,154 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Initial load — show smileys (category 0) by default
     if let Some(w) = weak.upgrade() {
-        w.set_composer_emoji_list(model(emoji_data::category_emojis(0)));
-        w.set_reaction_picker_emojis(model(emoji_data::category_emojis(0)));
+        w.global::<crate::ChatPane>()
+            .set_composer_emoji_list(model(emoji_data::category_emojis(0)));
+        w.global::<crate::ChatPane>()
+            .set_reaction_picker_emojis(model(emoji_data::category_emojis(0)));
     }
 
-    window.on_composer_emoji_category_changed({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move |category| {
-            if let Some(w) = weak.upgrade() {
-                let tone = w.get_composer_emoji_skin_tone();
-                w.set_composer_emoji_list(model(with_recent_emoji(&ui_ctx, |recent| {
-                    emoji_data::listing(category, tone, recent)
-                })));
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_emoji_category_changed({
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            move |category| {
+                if let Some(w) = weak.upgrade() {
+                    let tone = w.global::<crate::ChatPane>().get_composer_emoji_skin_tone();
+                    w.global::<crate::ChatPane>().set_composer_emoji_list(model(
+                        with_recent_emoji(&ui_ctx, |recent| {
+                            emoji_data::listing(category, tone, recent)
+                        }),
+                    ));
+                }
             }
-        }
-    });
+        });
 
     // Clearing the search returns to the selected tab WITH the selected tone:
     // reloading at tone 0 left the swatch row marking a tone the grid no
     // longer showed.
-    window.on_composer_emoji_search_changed({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move |query| {
-            if let Some(w) = weak.upgrade() {
-                let emojis = if query.is_empty() {
-                    with_recent_emoji(&ui_ctx, |recent| {
-                        emoji_data::listing(
-                            w.get_composer_emoji_category(),
-                            w.get_composer_emoji_skin_tone(),
-                            recent,
-                        )
-                    })
-                } else {
-                    emoji_data::search(&query)
-                };
-                w.set_composer_emoji_list(model(emojis));
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_emoji_search_changed({
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            move |query| {
+                if let Some(w) = weak.upgrade() {
+                    let emojis = if query.is_empty() {
+                        with_recent_emoji(&ui_ctx, |recent| {
+                            emoji_data::listing(
+                                w.global::<crate::ChatPane>().get_composer_emoji_category(),
+                                w.global::<crate::ChatPane>().get_composer_emoji_skin_tone(),
+                                recent,
+                            )
+                        })
+                    } else {
+                        emoji_data::search(&query)
+                    };
+                    w.global::<crate::ChatPane>()
+                        .set_composer_emoji_list(model(emojis));
+                }
             }
-        }
-    });
+        });
 
     // Reaction picker emoji callbacks
-    window.on_reaction_picker_category_changed({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move |category| {
-            if let Some(w) = weak.upgrade() {
-                w.set_reaction_picker_emojis(model(with_recent_emoji(&ui_ctx, |recent| {
-                    emoji_data::listing(category, 0, recent)
-                })));
+    window
+        .global::<crate::ChatPane>()
+        .on_reaction_picker_category_changed({
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            move |category| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::ChatPane>()
+                        .set_reaction_picker_emojis(model(with_recent_emoji(&ui_ctx, |recent| {
+                            emoji_data::listing(category, 0, recent)
+                        })));
+                }
             }
-        }
-    });
+        });
 
-    window.on_reaction_picker_search_changed({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move |query| {
-            if let Some(w) = weak.upgrade() {
-                let emojis = if query.is_empty() {
-                    with_recent_emoji(&ui_ctx, |recent| {
-                        emoji_data::listing(w.get_reaction_picker_selected_category(), 0, recent)
-                    })
-                } else {
-                    emoji_data::search(&query)
-                };
-                w.set_reaction_picker_emojis(model(emojis));
+    window
+        .global::<crate::ChatPane>()
+        .on_reaction_picker_search_changed({
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            move |query| {
+                if let Some(w) = weak.upgrade() {
+                    let emojis = if query.is_empty() {
+                        with_recent_emoji(&ui_ctx, |recent| {
+                            emoji_data::listing(
+                                w.global::<crate::ChatPane>()
+                                    .get_reaction_picker_selected_category(),
+                                0,
+                                recent,
+                            )
+                        })
+                    } else {
+                        emoji_data::search(&query)
+                    };
+                    w.global::<crate::ChatPane>()
+                        .set_reaction_picker_emojis(model(emojis));
+                }
             }
-        }
-    });
+        });
 
     // Record the pick for the signed-in account and insert at the saved
     // composer caret/selection.
-    window.on_composer_emoji_selected({
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        move |emoji| {
-            if let Some(w) = weak.upgrade() {
-                // Inserted first; then the pick is remembered for whoever is
-                // signed in at this moment.
-                w.invoke_insert_composer_emoji(emoji.clone());
-                if let Some(scope) = ui_ctx.picker_history_scope() {
-                    ui_ctx.record_recent_emoji(scope, &emoji);
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_emoji_selected({
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            move |emoji| {
+                if let Some(w) = weak.upgrade() {
+                    // Inserted first; then the pick is remembered for whoever is
+                    // signed in at this moment.
+                    w.invoke_insert_composer_emoji(emoji.clone());
+                    if let Some(scope) = ui_ctx.picker_history_scope() {
+                        ui_ctx.record_recent_emoji(scope, &emoji);
+                    }
+                    // The Recent tab reorders in place, so a repeat pick needs no
+                    // tab round trip to show up first.
+                    if w.global::<crate::ChatPane>().get_composer_emoji_category()
+                        == RECENT_CATEGORY
+                        && w.global::<crate::ChatPane>()
+                            .get_composer_emoji_search()
+                            .is_empty()
+                    {
+                        w.global::<crate::ChatPane>().set_composer_emoji_list(model(
+                            with_recent_emoji(&ui_ctx, |recent| {
+                                emoji_data::listing(RECENT_CATEGORY, 0, recent)
+                            }),
+                        ));
+                    }
+                    // Deliberately left OPEN. Picking an emoji for the composer is
+                    // usually not the last thing you do — closing after each one
+                    // made "😀😀😀" four taps (§112u). Back, or the emoji button,
+                    // closes it. The REACTION picker still closes on pick.
                 }
-                // The Recent tab reorders in place, so a repeat pick needs no
-                // tab round trip to show up first.
-                if w.get_composer_emoji_category() == RECENT_CATEGORY
-                    && w.get_composer_emoji_search().is_empty()
-                {
-                    w.set_composer_emoji_list(model(with_recent_emoji(&ui_ctx, |recent| {
-                        emoji_data::listing(RECENT_CATEGORY, 0, recent)
-                    })));
-                }
-                // Deliberately left OPEN. Picking an emoji for the composer is
-                // usually not the last thing you do — closing after each one
-                // made "😀😀😀" four taps (§112u). Back, or the emoji button,
-                // closes it. The REACTION picker still closes on pick.
             }
-        }
-    });
+        });
 
     // Skin tone changed — reload People category with selected tone
-    window.on_composer_emoji_skin_tone_changed({
-        let ui_ctx = ui_ctx.clone();
-        move |tone| {
-            if let Some(w) = weak.upgrade() {
-                let category = w.get_composer_emoji_category();
-                if category == PEOPLE_CATEGORY && w.get_composer_emoji_search().is_empty() {
-                    w.set_composer_emoji_list(model(with_recent_emoji(&ui_ctx, |recent| {
-                        emoji_data::listing(category, tone, recent)
-                    })));
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_emoji_skin_tone_changed({
+            let ui_ctx = ui_ctx.clone();
+            move |tone| {
+                if let Some(w) = weak.upgrade() {
+                    let category = w.global::<crate::ChatPane>().get_composer_emoji_category();
+                    if category == PEOPLE_CATEGORY
+                        && w.global::<crate::ChatPane>()
+                            .get_composer_emoji_search()
+                            .is_empty()
+                    {
+                        w.global::<crate::ChatPane>().set_composer_emoji_list(model(
+                            with_recent_emoji(&ui_ctx, |recent| {
+                                emoji_data::listing(category, tone, recent)
+                            }),
+                        ));
+                    }
                 }
             }
-        }
-    });
+        });
 }

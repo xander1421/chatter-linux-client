@@ -38,18 +38,21 @@ pub fn start_audio_progress_timer(window: &MainWindow) {
                 let position = audio_state::get_position();
                 let elapsed = audio_state::format_duration(position);
 
-                w.set_audio_progress(progress);
-                w.set_audio_elapsed(elapsed.into());
+                w.global::<crate::ChatPane>().set_audio_progress(progress);
+                w.global::<crate::ChatPane>()
+                    .set_audio_elapsed(elapsed.into());
 
                 // Completion comes from the player, including unknown durations.
                 if audio_state::playback_finished() {
                     // Stop timer and clear state
                     stop_audio_progress_timer();
                     audio_state::clear_state();
-                    w.set_current_playing_attachment_id("".into());
-                    w.set_is_media_playing(false);
-                    w.set_audio_progress(0.0);
-                    w.set_audio_elapsed("0:00".into());
+                    w.global::<crate::ChatPane>()
+                        .set_current_playing_attachment_id("".into());
+                    w.global::<crate::ChatPane>().set_is_media_playing(false);
+                    w.global::<crate::ChatPane>().set_audio_progress(0.0);
+                    w.global::<crate::ChatPane>()
+                        .set_audio_elapsed("0:00".into());
                 }
             }
         });
@@ -95,7 +98,7 @@ pub fn start_video_progress_timer(window: &MainWindow) {
                             frame.height,
                             &frame.rgb_data,
                         );
-                        w.set_video_player_frame(image);
+                        w.global::<crate::ChatPane>().set_video_player_frame(image);
                     }
 
                     // Get current state from video player
@@ -111,21 +114,26 @@ pub fn start_video_progress_timer(window: &MainWindow) {
                         };
                         let elapsed = chatter_core::media::format_duration(clamped_position);
 
-                        w.set_video_player_progress(progress as f32);
-                        w.set_video_player_elapsed(elapsed.into());
-                        w.set_video_player_is_playing(is_playing);
+                        w.global::<crate::ChatPane>()
+                            .set_video_player_progress(progress as f32);
+                        w.global::<crate::ChatPane>()
+                            .set_video_player_elapsed(elapsed.into());
+                        w.global::<crate::ChatPane>()
+                            .set_video_player_is_playing(is_playing);
 
                         // Check if playback finished (only when not playing and at end)
                         // Don't stop on progress alone - wait for actual EOS from decoder
                         if !is_playing && progress >= 0.99 {
                             // Video ended - stop timer but keep player visible
                             stop_video_progress_timer();
-                            w.set_video_player_is_playing(false);
+                            w.global::<crate::ChatPane>()
+                                .set_video_player_is_playing(false);
                         }
                     } else {
                         // Player was stopped/closed
                         stop_video_progress_timer();
-                        w.set_video_player_visible(false);
+                        w.global::<crate::ChatPane>()
+                            .set_video_player_visible(false);
                     }
                 }
             },

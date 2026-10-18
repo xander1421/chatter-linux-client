@@ -41,9 +41,11 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     // button here. Anything staged in another conversation is dropped rather
     // than left armed to vanish on the next send.
     ui_ctx.clear_pending_attachments();
-    window.set_pending_attachments(ModelRc::new(
-        VecModel::<crate::PendingAttachmentData>::from(Vec::new()),
-    ));
+    window
+        .global::<crate::ChatPane>()
+        .set_pending_attachments(ModelRc::new(
+            VecModel::<crate::PendingAttachmentData>::from(Vec::new()),
+        ));
 
     // Reveal the message pane the way every other conversation does; on a
     // phone this is the only thing that leaves the chat list.
@@ -84,7 +86,9 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             Ok(messages) => messages,
             Err(error) => {
                 tracing::error!(%error, "mesh: could not load the conversation");
-                crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
+                crate::run_history_ui!(weak, owner, |w| w
+                    .global::<crate::ChatPane>()
+                    .set_loading_messages(false));
                 return;
             }
         };
@@ -113,9 +117,10 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
                 .iter()
                 .map(|m| m.to_slint_with_user(&local_user))
                 .collect();
-            w.set_messages(ModelRc::new(VecModel::from(items)));
-            w.set_loading_messages(false);
-            w.set_is_at_bottom(true);
+            w.global::<crate::ChatPane>()
+                .set_messages(ModelRc::new(VecModel::from(items)));
+            w.global::<crate::ChatPane>().set_loading_messages(false);
+            w.global::<crate::ChatPane>().set_is_at_bottom(true);
         });
 
         // Everything on screen has been read. Local only — telling the peer
@@ -134,33 +139,49 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
 
 /// Header, composer and the mesh strip, for the conversation being opened.
 fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
-    window.set_loading_messages(true);
-    window.set_channel_id(row.id.clone().into());
-    window.set_channel_name(row.title.clone().into());
+    window
+        .global::<crate::ChatPane>()
+        .set_loading_messages(true);
+    window
+        .global::<crate::ChatPane>()
+        .set_channel_id(row.id.clone().into());
+    window
+        .global::<crate::ChatPane>()
+        .set_channel_name(row.title.clone().into());
     let conversation_type = if row.kind == "dm" {
         chatter_core::domain::message::ConversationType::MeshDm
     } else {
         chatter_core::domain::message::ConversationType::Mesh
     };
     crate::bin_ui::converters::set_conversation_kind(window, ui_ctx, &conversation_type, false);
-    window.set_is_dm(row.kind == "dm");
+    window
+        .global::<crate::ChatPane>()
+        .set_is_dm(row.kind == "dm");
     // Public scopes have no membership. A private channel gets its signed
     // roster count from core, where admission and rotation are enforced.
-    window.set_member_count(if row.kind == "private-channel" {
-        ui_ctx
-            .mesh_private_channel_member_count(&row.scope)
-            .unwrap_or(0) as i32
-    } else {
-        0
-    });
-    window.set_topic("".into());
-    window.set_header_presence_status("offline".into());
-    window.set_channel_avatar_source(slint::Image::default());
-    window.set_channel_has_avatar(false);
+    window
+        .global::<crate::ChatPane>()
+        .set_member_count(if row.kind == "private-channel" {
+            ui_ctx
+                .mesh_private_channel_member_count(&row.scope)
+                .unwrap_or(0) as i32
+        } else {
+            0
+        });
+    window.global::<crate::ChatPane>().set_topic("".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_header_presence_status("offline".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_channel_avatar_source(slint::Image::default());
+    window
+        .global::<crate::ChatPane>()
+        .set_channel_has_avatar(false);
 
     // The composer names the exact scope, because that scope is published
     // alongside whatever gets typed into it.
-    window.set_composer_placeholder(
+    window.global::<crate::ChatPane>().set_composer_placeholder(
         match row.kind {
             "geohash" => format!("Message #{} — public to this area", row.scope),
             "room" => "Message everyone in radio range".to_string(),
@@ -173,9 +194,13 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     // Composer ownership was transferred synchronously above; history and
     // headers must never clear the newly restored draft. Mesh has no pins.
 
-    window.set_has_pinned_messages(false);
-    window.set_pinned_message_preview("".into());
-    window.set_pinned_total_count(0);
+    window
+        .global::<crate::ChatPane>()
+        .set_has_pinned_messages(false);
+    window
+        .global::<crate::ChatPane>()
+        .set_pinned_message_preview("".into());
+    window.global::<crate::ChatPane>().set_pinned_total_count(0);
 
     let global = window.global::<MeshGlobal>();
     global.set_private_leave_pending(false);
@@ -233,7 +258,7 @@ pub(super) fn append_incoming(
 ) {
     let id = message.message.id.to_string();
 
-    let model = window.get_messages();
+    let model = window.global::<crate::ChatPane>().get_messages();
     let mut items: Vec<MessageItemData> = model.iter().collect();
     // A courier resend maps onto the id it already had, so the same message
     // can legitimately arrive twice. Show it once.
@@ -270,8 +295,10 @@ pub(super) fn append_incoming(
     for item in display.iter() {
         items.push(item.to_slint_with_user(&local_user));
     }
-    window.set_messages(ModelRc::new(VecModel::from(items)));
-    window.set_is_at_bottom(true);
+    window
+        .global::<crate::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(items)));
+    window.global::<crate::ChatPane>().set_is_at_bottom(true);
 }
 
 /// Move a message this device sent to its new delivery state.
@@ -280,7 +307,7 @@ pub(super) fn append_incoming(
 /// "sent"/"delivered"/"read", or the mesh-only "waiting"/"carried"/
 /// "undelivered" that render as words instead of ticks.
 pub(super) fn apply_delivery(window: &MainWindow, message_id: &str, label: &str) {
-    let model = window.get_messages();
+    let model = window.global::<crate::ChatPane>().get_messages();
     let mut changed = false;
     let items: Vec<MessageItemData> = model
         .iter()
@@ -293,6 +320,8 @@ pub(super) fn apply_delivery(window: &MainWindow, message_id: &str, label: &str)
         })
         .collect();
     if changed {
-        window.set_messages(ModelRc::new(VecModel::from(items)));
+        window
+            .global::<crate::ChatPane>()
+            .set_messages(ModelRc::new(VecModel::from(items)));
     }
 }

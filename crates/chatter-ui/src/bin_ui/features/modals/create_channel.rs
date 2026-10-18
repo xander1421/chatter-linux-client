@@ -31,8 +31,12 @@ impl RequestFence {
             owner: auth.current_user_id?,
             session_revision: auth.session_revision,
             conversation: client.active_conversation(),
-            stack: w.get_modal_stack().iter().collect(),
-            modal_generation: w.get_modal_generation(),
+            stack: w
+                .global::<crate::ModalHostState>()
+                .get_modal_stack()
+                .iter()
+                .collect(),
+            modal_generation: w.global::<crate::ModalHostState>().get_modal_generation(),
         })
     }
 
@@ -45,8 +49,11 @@ impl RequestFence {
     pub(super) fn owns_ui(&self, w: &MainWindow, client: &ChatterClient) -> bool {
         self.session_current(client)
             && client.active_conversation() == self.conversation
-            && w.get_modal_stack().iter().eq(self.stack.iter().cloned())
-            && w.get_modal_generation() == self.modal_generation
+            && w.global::<crate::ModalHostState>()
+                .get_modal_stack()
+                .iter()
+                .eq(self.stack.iter().cloned())
+            && w.global::<crate::ModalHostState>().get_modal_generation() == self.modal_generation
     }
 }
 
@@ -95,69 +102,77 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // File picker for channel icon — stores the chosen path so on_create can
     // upload it through AttachmentService. Preview decoding is local UI state only.
     let weak_pick = weak_window.clone();
-    window.on_create_channel_pick_icon(move || {
-        tracing::info!("[CHANNEL_ICON] pick-channel-icon callback fired");
-        let weak = weak_pick.clone();
-        tokio::spawn(async move {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            let picked = {
-                let config = chatter_core::media::FilePickerConfig::new()
-                    .with_title("Select Channel Icon")
-                    .with_filter(chatter_core::media::FileFilter::images());
-                chatter_core::media::FilePicker::pick_file(config).await
-            };
-            // Android has no `rfd` backend; go through the SAF bridge (§112p).
-            #[cfg(target_os = "android")]
-            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
-                .await
-                .into_iter()
-                .next();
-            #[cfg(target_os = "ios")]
-            let picked: Option<std::path::PathBuf> = {
-                tracing::warn!("File picker not supported on iOS");
-                None
-            };
+    window
+        .global::<crate::ModalHostState>()
+        .on_create_channel_pick_icon(move || {
+            tracing::info!("[CHANNEL_ICON] pick-channel-icon callback fired");
+            let weak = weak_pick.clone();
+            tokio::spawn(async move {
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                let picked = {
+                    let config = chatter_core::media::FilePickerConfig::new()
+                        .with_title("Select Channel Icon")
+                        .with_filter(chatter_core::media::FileFilter::images());
+                    chatter_core::media::FilePicker::pick_file(config).await
+                };
+                // Android has no `rfd` backend; go through the SAF bridge (§112p).
+                #[cfg(target_os = "android")]
+                let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                    .await
+                    .into_iter()
+                    .next();
+                #[cfg(target_os = "ios")]
+                let picked: Option<std::path::PathBuf> = {
+                    tracing::warn!("File picker not supported on iOS");
+                    None
+                };
 
-            match picked {
-                Some(path) => {
-                    tracing::info!(path = %path.display(), "[CHANNEL_ICON] file picked");
-                    match std::fs::read(&path) {
-                        Ok(data) => {
-                            let path_string = path.to_string_lossy().to_string();
-                            let _ = slint::invoke_from_event_loop(move || {
-                                // Stash picked path on the modal's icon-url property so
-                                // on_create can read it (thread_local! is tokio-worker-local,
-                                // which race-lost the value between pick and create).
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_create_channel_icon_url(path_string.into());
-                                }
-                                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data)
-                                {
-                                    Ok(slint_img) => {
-                                        if let Some(w) = weak.upgrade() {
-                                            w.set_create_channel_icon_preview(slint_img);
-                                            w.set_create_channel_has_icon_preview(true);
-                                            tracing::info!("[CHANNEL_ICON] preview set on modal");
-                                        }
+                match picked {
+                    Some(path) => {
+                        tracing::info!(path = %path.display(), "[CHANNEL_ICON] file picked");
+                        match std::fs::read(&path) {
+                            Ok(data) => {
+                                let path_string = path.to_string_lossy().to_string();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    // Stash picked path on the modal's icon-url property so
+                                    // on_create can read it (thread_local! is tokio-worker-local,
+                                    // which race-lost the value between pick and create).
+                                    if let Some(w) = weak.upgrade() {
+                                        w.global::<crate::ModalHostState>()
+                                            .set_create_channel_icon_url(path_string.into());
                                     }
-                                    Err(e) => tracing::error!(
-                                        "[CHANNEL_ICON] Failed to decode preview: {}",
-                                        e
-                                    ),
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e)
+                                    match crate::bin_ui::slint_conversions::memory_to_slint_image(
+                                        &data,
+                                    ) {
+                                        Ok(slint_img) => {
+                                            if let Some(w) = weak.upgrade() {
+                                                w.global::<crate::ModalHostState>()
+                                                    .set_create_channel_icon_preview(slint_img);
+                                                w.global::<crate::ModalHostState>()
+                                                    .set_create_channel_has_icon_preview(true);
+                                                tracing::info!(
+                                                    "[CHANNEL_ICON] preview set on modal"
+                                                );
+                                            }
+                                        }
+                                        Err(e) => tracing::error!(
+                                            "[CHANNEL_ICON] Failed to decode preview: {}",
+                                            e
+                                        ),
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e)
+                            }
                         }
                     }
+                    None => tracing::info!("[CHANNEL_ICON] file pick cancelled"),
                 }
-                None => tracing::info!("[CHANNEL_ICON] file pick cancelled"),
-            }
+            });
         });
-    });
 
-    window.on_create_channel(
+    window.global::<crate::ModalHostState>().on_create_channel(
         move |name: SharedString,
               description: SharedString,
               template: SharedString,
@@ -198,8 +213,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let weak_loading = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_loading.upgrade() {
-                        w.set_create_channel_loading(true);
-                        w.set_create_channel_error("".into());
+                        w.global::<crate::ModalHostState>().set_create_channel_loading(true);
+                        w.global::<crate::ModalHostState>().set_create_channel_error("".into());
                     }
                 });
 
@@ -285,7 +300,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if !fence.session_current(&ui_ctx) {
                                     return;
                                 }
-                                w.set_create_channel_loading(false);
+                                w.global::<crate::ModalHostState>().set_create_channel_loading(false);
                                 if !fence.owns_ui(&w, &ui_ctx) {
                                     notify_background_success(
                                         &w,
@@ -294,12 +309,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     return;
                                 }
                                 chat_state.prepare_channel_selection(channel_id);
-                                w.set_create_channel_name("".into());
-                                w.set_create_channel_description("".into());
-                                w.set_create_channel_icon_url("".into());
-                                w.set_create_channel_has_icon_preview(false);
+                                w.global::<crate::ModalHostState>().set_create_channel_name("".into());
+                                w.global::<crate::ModalHostState>().set_create_channel_description("".into());
+                                w.global::<crate::ModalHostState>().set_create_channel_icon_url("".into());
+                                w.global::<crate::ModalHostState>().set_create_channel_has_icon_preview(false);
                                 crate::bin_ui::features::back::close(&w, "create-channel");
-                                w.invoke_channel_selected(channel_id_for_ui);
+                                w.global::<crate::SidebarPane>().invoke_channel_selected(channel_id_for_ui);
                             }
                         });
 
@@ -312,8 +327,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if !fence.session_current(&ui_ctx) {
                                     return;
                                 }
-                                w.set_create_channel_loading(false);
-                                w.set_create_channel_error(error_msg.into());
+                                w.global::<crate::ModalHostState>().set_create_channel_loading(false);
+                                w.global::<crate::ModalHostState>().set_create_channel_error(error_msg.into());
                             }
                         });
                     }
@@ -324,7 +339,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     let weak_window = window.as_weak();
     let ui_ctx_ai = ui_ctx.clone();
-    window.on_create_channel_provider_selected(move |provider: SharedString| {
+    window.global::<crate::ModalHostState>().on_create_channel_provider_selected(move |provider: SharedString| {
         let weak = weak_window.clone();
         let ui_ctx_ai = ui_ctx_ai.clone();
         let provider_str = provider.to_string();
@@ -337,9 +352,9 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak_loading = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_loading.upgrade() {
-                    w.set_create_channel_ai_models_loading(true);
-                    w.set_create_channel_ai_models_error("".into());
-                    w.set_create_channel_ai_models(ModelRc::new(VecModel::default()));
+                    w.global::<crate::ModalHostState>().set_create_channel_ai_models_loading(true);
+                    w.global::<crate::ModalHostState>().set_create_channel_ai_models_error("".into());
+                    w.global::<crate::ModalHostState>().set_create_channel_ai_models(ModelRc::new(VecModel::default()));
                 }
             });
 
@@ -348,8 +363,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let models: Vec<AIModelOption> = available_models.into_iter().map(|(id, name)| AIModelOption { id: id.into(), name: name.into(), provider: provider_str.clone().into() }).collect();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models)));
-                            w.set_create_channel_ai_models_loading(false);
+                            w.global::<crate::ModalHostState>().set_create_channel_ai_models(ModelRc::new(VecModel::from(models)));
+                            w.global::<crate::ModalHostState>().set_create_channel_ai_models_loading(false);
                         }
                     });
                 }
@@ -358,8 +373,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let error_msg = format!("Failed to load models: {e}");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_create_channel_ai_models_loading(false);
-                            w.set_create_channel_ai_models_error(error_msg.into());
+                            w.global::<crate::ModalHostState>().set_create_channel_ai_models_loading(false);
+                            w.global::<crate::ModalHostState>().set_create_channel_ai_models_error(error_msg.into());
                         }
                     });
                 }
@@ -368,178 +383,208 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     let weak_window = window.as_weak();
-    window.on_toggle_friend_selection(move |idx: i32| {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let friends = w.get_create_channel_available_friends();
-                let selected_count = edit_private_friend(&friends, idx, toggle_selected);
-                w.set_create_channel_selected_friend_count(selected_count);
-            }
+    window
+        .global::<crate::ModalHostState>()
+        .on_toggle_friend_selection(move |idx: i32| {
+            let weak = weak_window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let friends = w
+                        .global::<crate::ModalHostState>()
+                        .get_create_channel_available_friends();
+                    let selected_count = edit_private_friend(&friends, idx, toggle_selected);
+                    w.global::<crate::ModalHostState>()
+                        .set_create_channel_selected_friend_count(selected_count);
+                }
+            });
         });
-    });
 
     // Toggle friend role between member and admin
     let weak_window = window.as_weak();
-    window.on_toggle_friend_role(move |idx: i32| {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let friends = w.get_create_channel_available_friends();
-                edit_private_friend(&friends, idx, toggle_role);
-            }
+    window
+        .global::<crate::ModalHostState>()
+        .on_toggle_friend_role(move |idx: i32| {
+            let weak = weak_window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let friends = w
+                        .global::<crate::ModalHostState>()
+                        .get_create_channel_available_friends();
+                    edit_private_friend(&friends, idx, toggle_role);
+                }
+            });
         });
-    });
 
     let weak_window = window.as_weak();
     let ui_ctx_group = ui_ctx.clone();
-    window.on_create_private_group(
-        move |name: SharedString, friends: ModelRc<PrivateGroupFriend>| {
-            let weak = weak_window.clone();
-            let ui_ctx = ui_ctx_group.clone();
-            let name = name.to_string();
+    window
+        .global::<crate::ModalHostState>()
+        .on_create_private_group(
+            move |name: SharedString, friends: ModelRc<PrivateGroupFriend>| {
+                let weak = weak_window.clone();
+                let ui_ctx = ui_ctx_group.clone();
+                let name = name.to_string();
 
-            // Extract selected friends with their roles
-            let selected_friends =
-                chatter_core::domain::anon_group::PrivateGroupInviteSelection::parse(
-                    friends
-                        .iter()
-                        .map(|f| (f.selected, f.user_id.to_string(), f.role.to_string())),
-                );
+                // Extract selected friends with their roles
+                let selected_friends =
+                    chatter_core::domain::anon_group::PrivateGroupInviteSelection::parse(
+                        friends
+                            .iter()
+                            .map(|f| (f.selected, f.user_id.to_string(), f.role.to_string())),
+                    );
 
-            if selected_friends.is_empty() {
-                return;
-            }
-            let Some(fence) = weak
-                .upgrade()
-                .and_then(|w| RequestFence::capture(&w, &ui_ctx))
-            else {
-                return;
-            };
-
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_create_channel_loading(true);
-                    w.set_create_channel_error("".into());
+                if selected_friends.is_empty() {
+                    return;
                 }
-            });
+                let Some(fence) = weak
+                    .upgrade()
+                    .and_then(|w| RequestFence::capture(&w, &ui_ctx))
+                else {
+                    return;
+                };
 
-            tokio::spawn(async move {
-                match ui_ctx
-                    .create_anon_group(name.clone(), selected_friends)
-                    .await
-                {
-                    Ok(group) => {
-                        crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
-                        let weak_success = weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak_success.upgrade() {
-                                if !fence.session_current(&ui_ctx) {
-                                    return;
-                                }
-                                w.set_create_channel_loading(false);
-                                if !fence.owns_ui(&w, &ui_ctx) {
-                                    notify_background_success(
-                                        &w,
-                                        format!("Private group \"{name}\" created."),
-                                    );
-                                    return;
-                                }
-                                crate::bin_ui::features::back::close(&w, "create-channel");
-                                w.invoke_private_group_selected(group.id.to_string().into());
-                            }
-                        });
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.global::<crate::ModalHostState>()
+                            .set_create_channel_loading(true);
+                        w.global::<crate::ModalHostState>()
+                            .set_create_channel_error("".into());
                     }
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                if !fence.session_current(&ui_ctx) {
-                                    return;
+                });
+
+                tokio::spawn(async move {
+                    match ui_ctx
+                        .create_anon_group(name.clone(), selected_friends)
+                        .await
+                    {
+                        Ok(group) => {
+                            crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                            let weak_success = weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_success.upgrade() {
+                                    if !fence.session_current(&ui_ctx) {
+                                        return;
+                                    }
+                                    w.global::<crate::ModalHostState>()
+                                        .set_create_channel_loading(false);
+                                    if !fence.owns_ui(&w, &ui_ctx) {
+                                        notify_background_success(
+                                            &w,
+                                            format!("Private group \"{name}\" created."),
+                                        );
+                                        return;
+                                    }
+                                    crate::bin_ui::features::back::close(&w, "create-channel");
+                                    w.global::<crate::SidebarPane>()
+                                        .invoke_private_group_selected(group.id.to_string().into());
                                 }
-                                w.set_create_channel_loading(false);
-                                w.set_create_channel_error(error_msg.into());
-                            }
-                        });
+                            });
+                        }
+                        Err(e) => {
+                            let error_msg = e.to_string();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    if !fence.session_current(&ui_ctx) {
+                                        return;
+                                    }
+                                    w.global::<crate::ModalHostState>()
+                                        .set_create_channel_loading(false);
+                                    w.global::<crate::ModalHostState>()
+                                        .set_create_channel_error(error_msg.into());
+                                }
+                            });
+                        }
                     }
-                }
-            });
-        },
-    );
+                });
+            },
+        );
 
     let weak_window = window.as_weak();
     let ui_ctx_tpl = ui_ctx.clone();
-    window.on_create_channel_template_selected(move |template: SharedString| {
-        if template.as_str() != "private-group" {
-            return;
-        }
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_tpl.clone();
-        tokio::spawn(async move {
-            let candidates: Vec<_> = ui_ctx
-                .list_anon_group_invite_candidates(None)
-                .into_iter()
-                .map(|c| {
-                    let avatar = crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
-                    (c, avatar)
-                })
-                .collect();
+    window
+        .global::<crate::ModalHostState>()
+        .on_create_channel_template_selected(move |template: SharedString| {
+            if template.as_str() != "private-group" {
+                return;
+            }
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_tpl.clone();
+            tokio::spawn(async move {
+                let candidates: Vec<_> = ui_ctx
+                    .list_anon_group_invite_candidates(None)
+                    .into_iter()
+                    .map(|c| {
+                        let avatar =
+                            crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
+                        (c, avatar)
+                    })
+                    .collect();
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let friend_data: Vec<PrivateGroupFriend> = candidates
-                        .into_iter()
-                        .map(|(c, avatar)| {
-                            crate::bin_ui::converters::invite_candidate_to_slint(c, avatar)
-                        })
-                        .collect();
-                    w.set_create_channel_available_friends(ModelRc::new(VecModel::from(
-                        friend_data,
-                    )));
-                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        let friend_data: Vec<PrivateGroupFriend> = candidates
+                            .into_iter()
+                            .map(|(c, avatar)| {
+                                crate::bin_ui::converters::invite_candidate_to_slint(c, avatar)
+                            })
+                            .collect();
+                        w.global::<crate::ModalHostState>()
+                            .set_create_channel_available_friends(ModelRc::new(VecModel::from(
+                                friend_data,
+                            )));
+                    }
+                });
             });
         });
-    });
 }
 
 /// Wire the invite to private group modal callbacks.
 pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Toggle selection for invite modal
     let weak_window = window.as_weak();
-    window.on_toggle_invite_friend_selection(move |idx: i32| {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let friends = w.get_invite_private_group_friends();
-                let selected_count = edit_private_friend(&friends, idx, toggle_selected);
-                w.set_invite_private_group_selected_count(selected_count);
-            }
+    window
+        .global::<crate::ModalHostState>()
+        .on_toggle_invite_friend_selection(move |idx: i32| {
+            let weak = weak_window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let friends = w
+                        .global::<crate::ModalHostState>()
+                        .get_invite_private_group_friends();
+                    let selected_count = edit_private_friend(&friends, idx, toggle_selected);
+                    w.global::<crate::ModalHostState>()
+                        .set_invite_private_group_selected_count(selected_count);
+                }
+            });
         });
-    });
 
     // Toggle role for invite modal (member/admin)
     let weak_window = window.as_weak();
-    window.on_toggle_invite_friend_role(move |idx: i32| {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let friends = w.get_invite_private_group_friends();
-                edit_private_friend(&friends, idx, toggle_role);
-            }
+    window
+        .global::<crate::ModalHostState>()
+        .on_toggle_invite_friend_role(move |idx: i32| {
+            let weak = weak_window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let friends = w
+                        .global::<crate::ModalHostState>()
+                        .get_invite_private_group_friends();
+                    edit_private_friend(&friends, idx, toggle_role);
+                }
+            });
         });
-    });
 
     // Submit invite
     let weak_window = window.as_weak();
     let ui_ctx_invite = ui_ctx.clone();
-    window.on_invite_to_private_group(move |friends: ModelRc<PrivateGroupFriend>| {
+    window.global::<crate::ModalHostState>().on_invite_to_private_group(move |friends: ModelRc<PrivateGroupFriend>| {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_invite.clone();
 
         let group_id_str = weak
             .upgrade()
-            .map(|w| w.get_invite_private_group_id().to_string())
+            .map(|w| w.global::<crate::ModalHostState>().get_invite_private_group_id().to_string())
             .unwrap_or_default();
 
         // Extract selected friends with their roles
@@ -558,7 +603,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let weak_loading = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_loading.upgrade() {
-                w.set_invite_private_group_loading(true);
+                w.global::<crate::ModalHostState>().set_invite_private_group_loading(true);
             }
         });
 
@@ -570,7 +615,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                     tracing::error!("Invalid group ID for invite: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_invite_private_group_loading(false);
+                            w.global::<crate::ModalHostState>().set_invite_private_group_loading(false);
                         }
                     });
                     return;
@@ -587,7 +632,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         if let Some(w) = weak.upgrade() {
                             if !fence.session_current(&ui_ctx) { return; }
                             if fence.owns_ui(&w, &ui_ctx) {
-                                w.set_invite_private_group_loading(false);
+                                w.global::<crate::ModalHostState>().set_invite_private_group_loading(false);
                                 crate::bin_ui::features::back::close(&w, "invite-private-group");
                             } else {
                                 notify_background_success(&w, "Invitations sent".into());
@@ -601,7 +646,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         if let Some(w) = weak.upgrade() {
                             if !fence.session_current(&ui_ctx) { return; }
                             if fence.owns_ui(&w, &ui_ctx) {
-                                w.set_invite_private_group_loading(false);
+                                w.global::<crate::ModalHostState>().set_invite_private_group_loading(false);
                             }
                             w.set_toast_message("Unable to send all invitations. Check the member list before retrying.".into());
                             w.set_toast_variant("error".into());

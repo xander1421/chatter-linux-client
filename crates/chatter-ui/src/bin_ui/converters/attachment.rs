@@ -49,7 +49,10 @@ impl AttachmentDisplayData {
         #[cfg(target_os = "android")]
         if self.is_video && self.thumbnail_bytes.is_empty() {
             if let Ok(id) = self.id.parse() {
-                if client.get_attachment_metadata(&id).is_some_and(|att| att.needs_download()) {
+                if client
+                    .get_attachment_metadata(&id)
+                    .is_some_and(|att| att.needs_download())
+                {
                     return;
                 }
                 match client.decrypt_and_extract_video_thumbnail(&id) {

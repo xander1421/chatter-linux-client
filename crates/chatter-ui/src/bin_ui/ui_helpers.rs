@@ -3,6 +3,7 @@
 //! Eliminates the repeated `tokio::spawn` + `invoke_from_event_loop` +
 //! loading state boilerplate found in every modal callback.
 
+use slint::ComponentHandle;
 /// Default timeout for UI-spawned service calls (10 seconds).
 ///
 /// Long enough for slow networks, short enough that users won't force-quit.
@@ -41,7 +42,7 @@ macro_rules! run_ui {
 /// ```ignore
 /// spawn_async_action!(weak, set_profile_loading,
 ///     async { user_service.remove_friend(&friend_id).await },
-///     |w, _| { w.set_profile_is_friend(false); }
+///     |w, _| { w.global::<crate::ModalHostState>().set_profile_is_friend(false); }
 /// );
 /// ```
 #[macro_export]

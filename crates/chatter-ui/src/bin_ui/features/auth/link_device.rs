@@ -25,14 +25,14 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_link_device_start(move || {
+    window.global::<crate::AuthFlow>().on_link_device_start(move || {
         let ui_ctx = ui_ctx.clone();
         let weak = weak.clone();
 
         if let Some(w) = weak.upgrade() {
-            w.set_link_device_active(true);
-            w.set_link_device_error("".into());
-            w.set_link_device_status("Generating QR code…".into());
+            w.global::<crate::AuthFlow>().set_link_device_active(true);
+            w.global::<crate::AuthFlow>().set_link_device_error("".into());
+            w.global::<crate::AuthFlow>().set_link_device_status("Generating QR code…".into());
         }
 
         crate::rt_handle().spawn(async move {
@@ -55,13 +55,13 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_ui.upgrade() {
                                 if let Some((px, ww, hh)) = pixels {
-                                    w.set_link_device_qr(
+                                    w.global::<crate::AuthFlow>().set_link_device_qr(
                                         crate::bin_ui::slint_conversions::rgba_to_slint_image(
                                             &px, ww, hh,
                                         ),
                                     );
                                 }
-                                w.set_link_device_url(url_for_ui.into());
+                                w.global::<crate::AuthFlow>().set_link_device_url(url_for_ui.into());
                             }
                         });
                     }
@@ -86,8 +86,8 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let weak_for_view = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_view.upgrade() {
-                                w.set_link_device_active(false);
-                                w.set_link_device_url("".into());
+                                w.global::<crate::AuthFlow>().set_link_device_active(false);
+                                w.global::<crate::AuthFlow>().set_link_device_url("".into());
                             }
                         });
                         return;
@@ -102,74 +102,85 @@ fn wire_cancel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_link_device_cancel(move || {
-        let ui_ctx = ui_ctx.clone();
-        crate::rt_handle().spawn(async move {
-            let _ = ui_ctx.link_device_cancel().await;
-        });
+    window
+        .global::<crate::AuthFlow>()
+        .on_link_device_cancel(move || {
+            let ui_ctx = ui_ctx.clone();
+            crate::rt_handle().spawn(async move {
+                let _ = ui_ctx.link_device_cancel().await;
+            });
 
-        if let Some(w) = weak.upgrade() {
-            w.set_current_view("login".into());
-        }
-    });
+            if let Some(w) = weak.upgrade() {
+                w.set_current_view("login".into());
+            }
+        });
 }
 
 fn wire_copy(window: &MainWindow) {
     let weak = window.as_weak();
 
-    window.on_link_device_copy(move || {
-        let Some(w) = weak.upgrade() else { return };
-        let url = w.get_link_device_url().to_string();
-        if url.is_empty() {
-            return;
-        }
+    window
+        .global::<crate::AuthFlow>()
+        .on_link_device_copy(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let url = w
+                .global::<crate::AuthFlow>()
+                .get_link_device_url()
+                .to_string();
+            if url.is_empty() {
+                return;
+            }
 
-        #[cfg(target_os = "android")]
-        {
-            let message = match crate::platform::android::clipboard::set_text("Device link", &url) {
-                Ok(()) => "Link copied to clipboard.",
-                Err(_) => "Unable to copy link. Please try again.",
-            };
-            w.set_link_device_status(message.into());
-        }
-        #[cfg(target_os = "ios")]
-        w.set_link_device_status("Clipboard copy is unavailable on this device.".into());
+            #[cfg(target_os = "android")]
+            {
+                let message =
+                    match crate::platform::android::clipboard::set_text("Device link", &url) {
+                        Ok(()) => "Link copied to clipboard.",
+                        Err(_) => "Unable to copy link. Please try again.",
+                    };
+                w.global::<crate::AuthFlow>()
+                    .set_link_device_status(message.into());
+            }
+            #[cfg(target_os = "ios")]
+            w.global::<crate::AuthFlow>()
+                .set_link_device_status("Clipboard copy is unavailable on this device.".into());
 
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let weak = weak.clone();
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        std::thread::spawn(move || {
-            let wayland = std::process::Command::new("wl-copy").arg(&url).status();
-            let result = match wayland {
-                Ok(status) if status.success() => Ok(status),
-                _ => std::process::Command::new("xclip")
-                    .args(["-selection", "clipboard"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-                    .and_then(|mut child| {
-                        use std::io::Write;
-                        if let Some(stdin) = child.stdin.as_mut() {
-                            stdin.write_all(url.as_bytes())?;
-                        }
-                        child.wait()
-                    }),
-            };
-            let copied = result.is_ok_and(|status| status.success());
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                // A completed old copy must not change a replacement link page.
-                if w.get_current_view().as_str() != "link-device"
-                    || w.get_link_device_url().as_str() != url
-                {
-                    return;
-                }
-                w.set_link_device_status(if copied {
-                    "Link copied to clipboard.".into()
-                } else {
-                    "Unable to copy link. Please try again.".into()
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let weak = weak.clone();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            std::thread::spawn(move || {
+                let wayland = std::process::Command::new("wl-copy").arg(&url).status();
+                let result = match wayland {
+                    Ok(status) if status.success() => Ok(status),
+                    _ => std::process::Command::new("xclip")
+                        .args(["-selection", "clipboard"])
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                        .and_then(|mut child| {
+                            use std::io::Write;
+                            if let Some(stdin) = child.stdin.as_mut() {
+                                stdin.write_all(url.as_bytes())?;
+                            }
+                            child.wait()
+                        }),
+                };
+                let copied = result.is_ok_and(|status| status.success());
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    // A completed old copy must not change a replacement link page.
+                    if w.get_current_view().as_str() != "link-device"
+                        || w.global::<crate::AuthFlow>().get_link_device_url().as_str() != url
+                    {
+                        return;
+                    }
+                    w.global::<crate::AuthFlow>()
+                        .set_link_device_status(if copied {
+                            "Link copied to clipboard.".into()
+                        } else {
+                            "Unable to copy link. Please try again.".into()
+                        });
                 });
             });
         });
-    });
 }
 
 // ============================================================================
@@ -181,7 +192,8 @@ fn set_status(weak: &slint::Weak<MainWindow>, msg: &str) {
     let msg = msg.to_string();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_link_device_status(msg.into());
+            w.global::<crate::AuthFlow>()
+                .set_link_device_status(msg.into());
         }
     });
 }
@@ -190,8 +202,9 @@ fn set_error(weak: &slint::Weak<MainWindow>, msg: String) {
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_link_device_active(false);
-            w.set_link_device_error(msg.into());
+            w.global::<crate::AuthFlow>().set_link_device_active(false);
+            w.global::<crate::AuthFlow>()
+                .set_link_device_error(msg.into());
         }
     });
 }
@@ -241,8 +254,8 @@ async fn finish_linked(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClien
     let weak_for_view = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_for_view.upgrade() {
-            w.set_link_device_active(false);
-            w.set_is_signed_in(true);
+            w.global::<crate::AuthFlow>().set_link_device_active(false);
+            w.global::<crate::AuthFlow>().set_is_signed_in(true);
             w.set_current_view("main".into());
         }
     });

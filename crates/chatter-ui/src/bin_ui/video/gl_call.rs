@@ -32,6 +32,7 @@
 //! and nothing is uploaded. We never panic in the notifier (that would take
 //! down rendering).
 
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_void};
@@ -466,7 +467,10 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
         // off while still screen-sharing) or a tile is a video-off avatar.
         // The local participant is pinned last and draws local-video-frame, so
         // it is excluded here.
-        let participants = window.get_active_call_data().participants;
+        let participants = window
+            .global::<crate::CallView>()
+            .get_active_call_data()
+            .participants;
         let remote_count = participants.row_count().saturating_sub(1);
         let images: Vec<slint::Image> = (0..remote_count)
             .map(|i| {
@@ -502,7 +506,9 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
             Some(m) => m.clone(),
             None => {
                 let m = Rc::new(VecModel::<slint::Image>::default());
-                window.set_call_remote_video_frames(ModelRc::from(m.clone()));
+                window
+                    .global::<crate::CallView>()
+                    .set_call_remote_video_frames(ModelRc::from(m.clone()));
                 *model = Some(m.clone());
                 m
             }
@@ -546,7 +552,9 @@ pub fn on_before_rendering(window: &crate::MainWindow) {
                     })
             })
             .unwrap_or_default();
-        window.set_call_local_video_frame(local_img);
+        window
+            .global::<crate::CallView>()
+            .set_call_local_video_frame(local_img);
     });
 }
 

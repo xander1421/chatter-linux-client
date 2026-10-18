@@ -8,6 +8,7 @@
 //! Polling → InboxEventProcessor (core) → DomainEvent → domain_handler (this module)
 //! ```
 
+use slint::ComponentHandle;
 mod anon;
 #[cfg(feature = "call-ui")]
 #[cfg(feature = "call-ui")]
@@ -393,12 +394,11 @@ pub async fn handle_domain_event(
             channel_id,
             ..
         } => {
-            let downloadable =
-                if attachment.needs_download() {
-                    vec![attachment]
-                } else {
-                    vec![]
-                };
+            let downloadable = if attachment.needs_download() {
+                vec![attachment]
+            } else {
+                vec![]
+            };
             if !downloadable.is_empty() {
                 let ui_ctx_dl = ui_ctx.clone();
                 let weak = window.clone();
@@ -482,7 +482,11 @@ pub async fn handle_domain_event(
             ..
         } => {
             anon::handle_dm_request_accepted(window, ui_ctx, conversation_id, peer_id);
-            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
+            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+                window,
+                ui_ctx,
+                conversation_id,
+            );
             // Accepted → anon peer becomes a Friends-tab contact.
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),
@@ -502,7 +506,11 @@ pub async fn handle_domain_event(
         // The peer declined our request; core marked it Declined.
         // The list row too, or it keeps "(pending) Waiting for response".
         DomainEvent::AnonDmDeclined { conversation_id } => {
-            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
+            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+                window,
+                ui_ctx,
+                conversation_id,
+            );
             anon::refresh_chat_list(window, ui_ctx);
         }
 
@@ -616,7 +624,11 @@ pub async fn handle_domain_event(
             bio,
             timestamp,
         } => {
-            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
+            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+                window,
+                ui_ctx,
+                conversation_id,
+            );
             social::handle_anon_dm_profile_updated(
                 window,
                 ui_ctx,
@@ -691,7 +703,9 @@ pub async fn handle_domain_event(
         // at the next restart or Calls open.
         DomainEvent::MissedCallsChanged => {
             let missed = ui_ctx.missed_call_count().await as i32;
-            crate::run_ui!(window, |w| w.set_missed_call_count(missed));
+            crate::run_ui!(window, |w| w
+                .global::<crate::CallView>()
+                .set_missed_call_count(missed));
         }
         DomainEvent::DmSessionHealed { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
@@ -765,8 +779,10 @@ pub async fn handle_domain_event(
                 let removed = matches!(action.as_str(), "KICK" | "BAN");
                 let text = ChatterClient::channel_event_notice(
                     chatter_core::client::channels::ChannelEventNotice::Moderation {
-                        action: action.as_str(), reason: reason.as_deref(),
-                    });
+                        action: action.as_str(),
+                        reason: reason.as_deref(),
+                    },
+                );
                 let variant = if matches!(action.as_str(), "UNMUTE" | "UNBAN") {
                     "success"
                 } else {
@@ -827,8 +843,10 @@ pub async fn handle_domain_event(
         DomainEvent::ChannelOperationFailed { code, message, .. } => {
             let text = ChatterClient::channel_event_notice(
                 chatter_core::client::channels::ChannelEventNotice::OperationFailed {
-                    code: &code, message: &message,
-                });
+                    code: &code,
+                    message: &message,
+                },
+            );
             let weak = window.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

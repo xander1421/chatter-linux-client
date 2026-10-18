@@ -38,22 +38,31 @@ thread_local! {
 
 fn icon_draft_current(w: &MainWindow, ctx: &ChatterClient, request: &IconRequest) -> bool {
     w.get_active_modal() == "channel-settings"
-        && w.get_channel_settings_can_edit()
-        && w.get_channel_settings_id().as_str() == request.settings_id
+        && w.global::<crate::ModalHostState>()
+            .get_channel_settings_can_edit()
+        && w.global::<crate::ModalHostState>()
+            .get_channel_settings_id()
+            .as_str()
+            == request.settings_id
         && ctx.active_conversation() == request.conversation
         && ctx.composer_session_is_current(request.session_revision)
 }
 
 fn icon_request_current(w: &MainWindow, ctx: &ChatterClient, request: &IconRequest) -> bool {
-    icon_draft_current(w, ctx, request) && w.get_modal_stack() == request.modal_stack
+    icon_draft_current(w, ctx, request)
+        && w.global::<crate::ModalHostState>().get_modal_stack() == request.modal_stack
 }
 
 fn begin_icon_request(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
-    if w.get_active_modal() != "channel-settings" || !w.get_channel_settings_can_edit() {
+    if w.get_active_modal() != "channel-settings"
+        || !w
+            .global::<crate::ModalHostState>()
+            .get_channel_settings_can_edit()
+    {
         return None;
     }
     if !matches!(ctx.active_conversation(), ActiveConversation::Channel(id)
-        if id.to_string() == w.get_channel_settings_id().as_str())
+        if id.to_string() == w.global::<crate::ModalHostState>().get_channel_settings_id().as_str())
     {
         return None;
     }
@@ -63,10 +72,13 @@ fn begin_icon_request(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
         let generation = state.generation;
         state.pending = Some(IconRequest {
             generation,
-            modal_stack: w.get_modal_stack(),
+            modal_stack: w.global::<crate::ModalHostState>().get_modal_stack(),
             conversation: ctx.active_conversation(),
             session_revision: ctx.auth_snapshot().session_revision,
-            settings_id: w.get_channel_settings_id().to_string(),
+            settings_id: w
+                .global::<crate::ModalHostState>()
+                .get_channel_settings_id()
+                .to_string(),
         });
         generation
     }))
@@ -91,15 +103,21 @@ fn finish_icon_request(
             Ok(Some((path, data))) => {
                 match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
                     Ok(image) => {
-                        w.set_channel_settings_icon_path(path.to_string_lossy().as_ref().into());
-                        w.set_channel_settings_icon_preview(image);
-                        w.set_channel_settings_has_icon_preview(true);
-                        w.set_channel_settings_error("".into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_icon_path(path.to_string_lossy().as_ref().into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_icon_preview(image);
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_has_icon_preview(true);
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_error("".into());
                         state.staged = Some((request, data));
                     }
-                    Err(error) => w.set_channel_settings_error(
-                        format!("Couldn't open channel icon: {error}").into(),
-                    ),
+                    Err(error) => w
+                        .global::<crate::ModalHostState>()
+                        .set_channel_settings_error(
+                            format!("Couldn't open channel icon: {error}").into(),
+                        ),
                 }
             }
             Ok(None) => {
@@ -109,9 +127,9 @@ fn finish_icon_request(
                 w.set_toast_variant("info".into());
                 w.set_toast_visible(true);
             }
-            Err(error) => {
-                w.set_channel_settings_error(format!("Couldn't open channel icon: {error}").into())
-            }
+            Err(error) => w
+                .global::<crate::ModalHostState>()
+                .set_channel_settings_error(format!("Couldn't open channel icon: {error}").into()),
         }
     });
 }
@@ -157,7 +175,8 @@ pub(crate) fn settings_refresh_allowed(
 }
 
 fn settings_on_stack(w: &MainWindow) -> bool {
-    w.get_modal_stack()
+    w.global::<crate::ModalHostState>()
+        .get_modal_stack()
         .iter()
         .any(|s| s.as_str() == "channel-settings")
 }
@@ -171,32 +190,58 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
         state.pending = None;
         state.staged = None;
     });
-    w.set_channel_settings_id(id.into());
-    w.set_channel_settings_type(kind.into());
-    w.set_channel_settings_name("".into());
-    w.set_channel_settings_description("".into());
-    w.set_channel_settings_name_draft("".into());
-    w.set_channel_settings_description_draft("".into());
-    w.set_channel_settings_saving(false);
-    w.set_channel_settings_created_at("".into());
-    w.set_channel_settings_archived(false);
-    w.set_channel_settings_ai_enabled(false);
-    w.set_channel_settings_muted(false);
-    w.set_channel_settings_icon_path("".into());
-    w.set_channel_settings_has_icon_preview(false);
-    w.set_channel_settings_can_edit(false);
-    w.set_channel_settings_can_manage_members(false);
-    w.set_channel_settings_can_archive(false);
-    w.set_channel_settings_can_delete(false);
-    w.set_channel_settings_can_leave(false);
-    w.set_channel_settings_is_owner(false);
-    w.set_channel_settings_member_count(0);
-    w.set_channel_settings_invited_count(0);
-    w.set_channel_settings_members(ModelRc::default());
-    w.set_channel_settings_can_view_bans(false);
-    w.set_channel_settings_banned_members(ModelRc::default());
-    w.set_channel_settings_loading(true);
-    w.set_channel_settings_error("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_id(id.into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_type(kind.into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_name("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_description("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_name_draft("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_description_draft("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_saving(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_created_at("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_archived(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_ai_enabled(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_muted(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_icon_path("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_has_icon_preview(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_manage_members(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_archive(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_delete(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_leave(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_is_owner(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_member_count(0);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_invited_count(0);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_members(ModelRc::default());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_view_bans(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_banned_members(ModelRc::default());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_loading(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_error("".into());
     crate::bin_ui::features::chat::membership::reset_access(w);
     crate::bin_ui::features::back::push(w, "channel-settings");
 }
@@ -204,11 +249,18 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
 /// Put `message` on the settings screen. The error banner lives on that
 /// screen, so a failure that only sets the property is invisible.
 pub(crate) fn present_settings_error(w: &MainWindow, id: &str, kind: &str, message: &str) {
-    if w.get_channel_settings_id().as_str() != id || !settings_on_stack(w) {
+    if w.global::<crate::ModalHostState>()
+        .get_channel_settings_id()
+        .as_str()
+        != id
+        || !settings_on_stack(w)
+    {
         show_channel_settings_shell(w, id, kind);
     }
-    w.set_channel_settings_loading(false);
-    w.set_channel_settings_error(message.into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_loading(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_error(message.into());
 }
 
 struct LocalChannelSettings {
@@ -230,37 +282,63 @@ struct LocalChannelSettings {
 }
 
 fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSettings) {
-    w.set_channel_settings_id(settings.id.as_str().into());
-    w.set_channel_settings_name(settings.name.as_str().into());
-    w.set_channel_settings_description(settings.description.as_str().into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_id(settings.id.as_str().into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_name(settings.name.as_str().into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_description(settings.description.as_str().into());
     // Reset the editable drafts to the stored values so reopening a
     // different channel doesn't carry the previous edits.
-    w.set_channel_settings_name_draft(settings.name.as_str().into());
-    w.set_channel_settings_description_draft(settings.description.as_str().into());
-    w.set_channel_settings_saving(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_name_draft(settings.name.as_str().into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_description_draft(settings.description.as_str().into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_saving(false);
     // Clear any icon picked in a previous open.
-    w.set_channel_settings_icon_path("".into());
-    w.set_channel_settings_has_icon_preview(false);
-    w.set_channel_settings_ai_enabled(settings.ai_enabled);
-    w.set_channel_settings_muted(settings.muted);
-    w.set_channel_settings_type(settings.channel_type.into());
-    w.set_channel_settings_archived(settings.archived);
-    w.set_channel_settings_created_at(settings.created_at.as_str().into());
-    w.set_channel_settings_can_edit(settings.can_edit);
-    w.set_channel_settings_can_manage_members(settings.can_manage_members);
-    w.set_channel_settings_can_archive(settings.can_archive);
-    w.set_channel_settings_can_delete(settings.can_delete);
-    w.set_channel_settings_is_owner(settings.is_owner);
-    w.set_channel_settings_can_leave(settings.can_leave);
-    w.set_channel_settings_member_count(settings.member_count);
-    w.set_channel_settings_invited_count(0);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_icon_path("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_has_icon_preview(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_ai_enabled(settings.ai_enabled);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_muted(settings.muted);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_type(settings.channel_type.into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_archived(settings.archived);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_created_at(settings.created_at.as_str().into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(settings.can_edit);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_manage_members(settings.can_manage_members);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_archive(settings.can_archive);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_delete(settings.can_delete);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_is_owner(settings.is_owner);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_leave(settings.can_leave);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_member_count(settings.member_count);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_invited_count(0);
     // Drop the previous channel's rows. The roster RPC fills this pane
     // after the screen is already up.
-    w.set_channel_settings_members(ModelRc::default());
-    w.set_channel_settings_can_view_bans(false);
-    w.set_channel_settings_banned_members(ModelRc::default());
-    w.set_channel_settings_loading(true);
-    w.set_channel_settings_error("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_members(ModelRc::default());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_view_bans(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_banned_members(ModelRc::default());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_loading(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_error("".into());
 }
 
 fn paint_if_current(
@@ -272,7 +350,9 @@ fn paint_if_current(
 ) {
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-        let current_id = w.get_channel_settings_id();
+        let current_id = w
+            .global::<crate::ModalHostState>()
+            .get_channel_settings_id();
         if !settings_refresh_allowed(
             ui_ctx.active_conversation(),
             opened,
@@ -300,8 +380,12 @@ pub fn open_channel_settings(
     let channel_id_str = channel_id.to_string();
     if settings_open_allowed(ui_ctx.active_conversation(), opened) {
         if let Some(w) = weak_window.upgrade() {
-            let already =
-                w.get_channel_settings_id().as_str() == channel_id_str && settings_on_stack(&w);
+            let already = w
+                .global::<crate::ModalHostState>()
+                .get_channel_settings_id()
+                .as_str()
+                == channel_id_str
+                && settings_on_stack(&w);
             if !already {
                 // Type is filled from the local row. Empty hides the access
                 // pane until that row says public or private.
@@ -319,13 +403,20 @@ pub fn open_channel_settings(
             Some(c) => c,
             None => {
                 paint_if_current(weak_window, ui_ctx, opened, channel_id_str, |w| {
-                    w.set_channel_settings_loading(false);
-                    w.set_channel_settings_error("Channel not found".into());
-                    w.set_channel_settings_can_edit(false);
-                    w.set_channel_settings_can_manage_members(false);
-                    w.set_channel_settings_can_archive(false);
-                    w.set_channel_settings_can_delete(false);
-                    w.set_channel_settings_can_leave(false);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_loading(false);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_error("Channel not found".into());
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_can_edit(false);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_can_manage_members(false);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_can_archive(false);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_can_delete(false);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_can_leave(false);
                 });
                 return;
             }
@@ -424,13 +515,17 @@ pub fn open_channel_settings(
                 if !members.is_empty() {
                     apply_member_lists(w, &members, bans.as_deref(), complete);
                 }
-                w.set_channel_settings_loading(false);
-                w.set_channel_settings_error(message.into());
+                w.global::<crate::ModalHostState>()
+                    .set_channel_settings_loading(false);
+                w.global::<crate::ModalHostState>()
+                    .set_channel_settings_error(message.into());
                 return;
             }
             apply_member_lists(w, &members, bans.as_deref(), complete);
-            w.set_channel_settings_loading(false);
-            w.set_channel_settings_error("".into());
+            w.global::<crate::ModalHostState>()
+                .set_channel_settings_loading(false);
+            w.global::<crate::ModalHostState>()
+                .set_channel_settings_error("".into());
         });
     });
 }
@@ -449,16 +544,20 @@ fn apply_member_lists(
         .map(crate::bin_ui::converters::member_to_slint)
         .collect();
     if complete {
-        w.set_channel_settings_member_count(rows.len() as i32);
+        w.global::<crate::ModalHostState>()
+            .set_channel_settings_member_count(rows.len() as i32);
     }
-    w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
-    w.set_channel_settings_can_view_bans(bans.is_some());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_view_bans(bans.is_some());
     let banned: Vec<BannedMemberData> = bans
         .unwrap_or_default()
         .iter()
         .map(crate::bin_ui::converters::banned_member_to_slint)
         .collect();
-    w.set_channel_settings_banned_members(ModelRc::new(VecModel::from(banned)));
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_banned_members(ModelRc::new(VecModel::from(banned)));
 }
 
 /// Re-fetch the members pane after a moderation action, leaving the rest of
@@ -495,7 +594,8 @@ fn refresh_member_lists(
             channel_id.to_string(),
             move |w| {
                 if let Some(error) = error {
-                    w.set_channel_settings_error(error.into());
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_error(error.into());
                 } else {
                     apply_member_lists(w, &members, bans.as_deref(), complete);
                 }
@@ -521,12 +621,21 @@ pub fn refresh_members_if_open(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         let id = channel_id.to_string();
-        let open = w.get_channel_settings_id() == id.as_str()
-            && w.get_modal_stack().iter().any(|s| s == "channel-settings");
+        let open = w
+            .global::<crate::ModalHostState>()
+            .get_channel_settings_id()
+            == id.as_str()
+            && w.global::<crate::ModalHostState>()
+                .get_modal_stack()
+                .iter()
+                .any(|s| s == "channel-settings");
         if !open {
             return;
         }
-        if w.get_channel_settings_type() != "private-group" {
+        if w.global::<crate::ModalHostState>()
+            .get_channel_settings_type()
+            != "private-group"
+        {
             refresh_member_lists(weak.clone(), ui_ctx, channel_id);
             return;
         }
@@ -540,7 +649,9 @@ pub fn refresh_members_if_open(
             };
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                let current_id = w.get_channel_settings_id();
+                let current_id = w
+                    .global::<crate::ModalHostState>()
+                    .get_channel_settings_id();
                 if settings_refresh_allowed(
                     ui_ctx.active_conversation(),
                     ActiveConversation::AnonGroup(group_id),
@@ -565,15 +676,24 @@ pub fn apply_private_group_roster(
     // (not the owner while others remain). Set every time: these properties
     // are shared with channel settings and would otherwise keep a channel's
     // values, offering server RPCs keyed by the group id.
-    w.set_channel_settings_can_edit(false);
-    w.set_channel_settings_can_archive(false);
-    w.set_channel_settings_can_delete(false);
-    w.set_channel_settings_can_leave(roster.can_leave);
-    w.set_channel_settings_group_blocked(roster.blocked);
-    w.set_channel_settings_member_count(roster.member_count);
-    w.set_channel_settings_invited_count(roster.invited_count);
-    w.set_channel_settings_is_owner(roster.is_owner);
-    w.set_channel_settings_can_manage_members(roster.can_manage_members);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_archive(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_delete(false);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_leave(roster.can_leave);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_group_blocked(roster.blocked);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_member_count(roster.member_count);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_invited_count(roster.invited_count);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_is_owner(roster.is_owner);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_manage_members(roster.can_manage_members);
     let rows: Vec<ChannelMemberData> = roster
         .members
         .into_iter()
@@ -601,15 +721,18 @@ pub fn apply_private_group_roster(
             unverified: false,
         })
         .collect();
-    w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
 }
 
 fn begin_settings_save(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
     let opened = ctx.active_conversation();
     if !matches!(opened, ActiveConversation::Channel(id)
-        if id.to_string() == w.get_channel_settings_id().as_str())
+        if id.to_string() == w.global::<crate::ModalHostState>().get_channel_settings_id().as_str())
         || w.get_active_modal() != "channel-settings"
-        || !w.get_channel_settings_can_edit()
+        || !w
+            .global::<crate::ModalHostState>()
+            .get_channel_settings_can_edit()
     {
         return None;
     }
@@ -621,14 +744,19 @@ fn begin_settings_save(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
     SAVE_REQUEST.with(|request| {
         *request.borrow_mut() = Some(IconRequest {
             generation: epoch,
-            modal_stack: w.get_modal_stack(),
+            modal_stack: w.global::<crate::ModalHostState>().get_modal_stack(),
             conversation: opened,
             session_revision: ctx.auth_snapshot().session_revision,
-            settings_id: w.get_channel_settings_id().to_string(),
+            settings_id: w
+                .global::<crate::ModalHostState>()
+                .get_channel_settings_id()
+                .to_string(),
         });
     });
-    w.set_channel_settings_saving(true);
-    w.set_channel_settings_error("".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_saving(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_error("".into());
     Some(epoch)
 }
 
@@ -668,151 +796,167 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_channel_settings_save(move |name, description| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        let name_str = name.to_string();
-        let desc_str = description.to_string();
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_save(move |name, description| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            let name_str = name.to_string();
+            let desc_str = description.to_string();
 
-        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_id().to_string())
-            .unwrap_or_default();
-        // The picked icon file (if any) so Save uploads it alongside the
-        // name/description. Empty path = icon unchanged.
-        let icon_path = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_icon_path().to_string())
-            .unwrap_or_default();
-        let Some(w) = weak.upgrade() else { return };
-        let opened = ui_ctx.active_conversation();
-        let Some(epoch) = begin_settings_save(&w, &ui_ctx) else {
-            return;
-        };
-        let session_revision = ui_ctx.auth_snapshot().session_revision;
-        let staged_icon = weak.upgrade().and_then(|w| {
-            ICON_STATE.with(|state| {
-                state.borrow().staged.as_ref().and_then(|(request, bytes)| {
-                    icon_draft_current(&w, &ui_ctx, request).then(|| bytes.clone())
+            // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+            let channel_id = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .to_string()
                 })
-            })
-        });
-        tokio::spawn(async move {
-            if channel_id.is_empty() {
+                .unwrap_or_default();
+            // The picked icon file (if any) so Save uploads it alongside the
+            // name/description. Empty path = icon unchanged.
+            let icon_path = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_icon_path()
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let Some(w) = weak.upgrade() else { return };
+            let opened = ui_ctx.active_conversation();
+            let Some(epoch) = begin_settings_save(&w, &ui_ctx) else {
                 return;
-            }
-            let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
-                Ok(id) => ChannelId::from(id),
-                Err(_) => return,
             };
-
-            let icon_bytes: Option<Vec<u8>> = if staged_icon.is_some() {
-                staged_icon
-            } else if icon_path.is_empty() {
-                None
-            } else {
-                match std::fs::read(&icon_path) {
-                    Ok(b) => Some(b),
-                    Err(e) => {
-                        let ctx_for_error = ui_ctx.clone();
-                        paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
-                            if save_request_current(w, &ctx_for_error, epoch) {
-                                w.set_channel_settings_saving(false);
-                                w.set_channel_settings_error(
-                                    format!("Couldn't read channel icon: {e}").into(),
-                                );
-                            }
-                        });
-                        return;
-                    }
-                }
-            };
-
-            let desc_opt = if desc_str.is_empty() {
-                None
-            } else {
-                Some(desc_str.as_str())
-            };
-            let result = ui_ctx
-                .update_channel(
-                    &channel_uuid,
-                    Some(&name_str),
-                    desc_opt,
-                    icon_bytes.as_deref(),
-                )
-                .await;
-            if !ui_ctx.composer_session_is_current(session_revision) {
-                return;
-            }
-            let result = result.map(|channel| {
-                let metadata =
-                    crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(
-                        &channel,
-                    );
-                let rows = ui_ctx.sidebar_rows();
-                (metadata, rows)
+            let session_revision = ui_ctx.auth_snapshot().session_revision;
+            let staged_icon = weak.upgrade().and_then(|w| {
+                ICON_STATE.with(|state| {
+                    state.borrow().staged.as_ref().and_then(|(request, bytes)| {
+                        icon_draft_current(&w, &ui_ctx, request).then(|| bytes.clone())
+                    })
+                })
             });
-            let ctx_for_paint = ui_ctx.clone();
-            paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
-                if !save_request_current(w, &ctx_for_paint, epoch) {
+            tokio::spawn(async move {
+                if channel_id.is_empty() {
                     return;
                 }
-                match result {
-                    Ok((metadata, rows)) => {
-                        apply_saved_channel(w, &ctx_for_paint, epoch, metadata, rows)
+                let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
+                    Ok(id) => ChannelId::from(id),
+                    Err(_) => return,
+                };
+
+                let icon_bytes: Option<Vec<u8>> = if staged_icon.is_some() {
+                    staged_icon
+                } else if icon_path.is_empty() {
+                    None
+                } else {
+                    match std::fs::read(&icon_path) {
+                        Ok(b) => Some(b),
+                        Err(e) => {
+                            let ctx_for_error = ui_ctx.clone();
+                            paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
+                                if save_request_current(w, &ctx_for_error, epoch) {
+                                    w.global::<crate::ModalHostState>()
+                                        .set_channel_settings_saving(false);
+                                    w.global::<crate::ModalHostState>()
+                                        .set_channel_settings_error(
+                                            format!("Couldn't read channel icon: {e}").into(),
+                                        );
+                                }
+                            });
+                            return;
+                        }
                     }
-                    Err(e) => {
-                        w.set_channel_settings_saving(false);
-                        w.set_channel_settings_error(e.to_string().into());
-                    }
+                };
+
+                let desc_opt = if desc_str.is_empty() {
+                    None
+                } else {
+                    Some(desc_str.as_str())
+                };
+                let result = ui_ctx
+                    .update_channel(
+                        &channel_uuid,
+                        Some(&name_str),
+                        desc_opt,
+                        icon_bytes.as_deref(),
+                    )
+                    .await;
+                if !ui_ctx.composer_session_is_current(session_revision) {
+                    return;
                 }
+                let result = result.map(|channel| {
+                    let metadata =
+                        crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(
+                            &channel,
+                        );
+                    let rows = ui_ctx.sidebar_rows();
+                    (metadata, rows)
+                });
+                let ctx_for_paint = ui_ctx.clone();
+                paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
+                    if !save_request_current(w, &ctx_for_paint, epoch) {
+                        return;
+                    }
+                    match result {
+                        Ok((metadata, rows)) => {
+                            apply_saved_channel(w, &ctx_for_paint, epoch, metadata, rows)
+                        }
+                        Err(e) => {
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_saving(false);
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error(e.to_string().into());
+                        }
+                    }
+                });
             });
         });
-    });
 }
 
 // Reuse the native avatar/photo picker adapter, with modal-owned staging.
 fn wire_pick_icon(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ctx = ui_ctx.clone();
-    window.on_channel_settings_pick_icon(move || {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        let Some(generation) = begin_icon_request(&w, &ctx) else {
-            return;
-        };
-        let weak = w.as_weak();
-        let ctx = ctx.clone();
-        tokio::spawn(async move {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            let picked = {
-                let config = chatter_core::media::FilePickerConfig::new()
-                    .with_title("Select Channel Icon")
-                    .with_filter(chatter_core::media::FileFilter::images());
-                chatter_core::media::FilePicker::pick_file(config).await
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_pick_icon(move || {
+            let Some(w) = weak_window.upgrade() else {
+                return;
             };
-            #[cfg(target_os = "android")]
-            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
-                .await
-                .into_iter()
-                .next();
-            #[cfg(target_os = "ios")]
-            let picked: Option<std::path::PathBuf> = None;
-            let result = match picked {
-                Some(path) => std::fs::read(&path)
-                    .map(|data| Some((path, data)))
-                    .map_err(|e| e.to_string()),
-                None => Ok(None),
+            let Some(generation) = begin_icon_request(&w, &ctx) else {
+                return;
             };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    finish_icon_request(&w, &ctx, generation, result);
-                }
+            let weak = w.as_weak();
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                let picked = {
+                    let config = chatter_core::media::FilePickerConfig::new()
+                        .with_title("Select Channel Icon")
+                        .with_filter(chatter_core::media::FileFilter::images());
+                    chatter_core::media::FilePicker::pick_file(config).await
+                };
+                #[cfg(target_os = "android")]
+                let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                    .await
+                    .into_iter()
+                    .next();
+                #[cfg(target_os = "ios")]
+                let picked: Option<std::path::PathBuf> = None;
+                let result = match picked {
+                    Some(path) => std::fs::read(&path)
+                        .map(|data| Some((path, data)))
+                        .map_err(|e| e.to_string()),
+                    None => Ok(None),
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        finish_icon_request(&w, &ctx, generation, result);
+                    }
+                });
             });
         });
-    });
 }
 
 fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -822,37 +966,48 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     // carries no such field, so there is nothing to persist it to. Wiring it
     // needs a server-side change (owner-scoped, tracked in VALIDATED-UI F-UI-1).
     let weak_window = window.as_weak();
-    window.on_channel_settings_change_notification(move |preference| {
-        let weak = weak_window.clone();
-        let pref_str = preference.to_string();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_channel_settings_notification_pref(pref_str.into());
-            }
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_change_notification(move |preference| {
+            let weak = weak_window.clone();
+            let pref_str = preference.to_string();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_notification_pref(pref_str.into());
+                }
+            });
         });
-    });
 
     // Per-channel AI switch. Off by default; read at ask time by
     // ChatterClient::jarvis_ask, so flipping it here actually changes whether
     // the AI will answer in this channel.
     let weak_ai = window.as_weak();
     let ui_ctx_ai = ui_ctx.clone();
-    window.on_channel_settings_toggle_ai(move |enabled| {
-        let Some(w) = weak_ai.upgrade() else { return };
-        let channel_id = w.get_channel_settings_id().to_string();
-        if channel_id.is_empty() {
-            return;
-        }
-        match ui_ctx_ai.set_ai_enabled_for(&channel_id, enabled) {
-            Ok(()) => w.set_channel_settings_ai_enabled(enabled),
-            Err(e) => {
-                tracing::error!("Failed to save per-channel AI setting: {}", e);
-                // Snap the toggle back so it never shows a state we did not
-                // manage to persist.
-                w.set_channel_settings_ai_enabled(ui_ctx_ai.ai_enabled_for(&channel_id));
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_toggle_ai(move |enabled| {
+            let Some(w) = weak_ai.upgrade() else { return };
+            let channel_id = w
+                .global::<crate::ModalHostState>()
+                .get_channel_settings_id()
+                .to_string();
+            if channel_id.is_empty() {
+                return;
             }
-        }
-    });
+            match ui_ctx_ai.set_ai_enabled_for(&channel_id, enabled) {
+                Ok(()) => w
+                    .global::<crate::ModalHostState>()
+                    .set_channel_settings_ai_enabled(enabled),
+                Err(e) => {
+                    tracing::error!("Failed to save per-channel AI setting: {}", e);
+                    // Snap the toggle back so it never shows a state we did not
+                    // manage to persist.
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_ai_enabled(ui_ctx_ai.ai_enabled_for(&channel_id));
+                }
+            }
+        });
 
     // Mute DOES persist: `mute_conversation` writes a per-channel settings key
     // (not the moderator-mute column) — the exact bug F-UI-1 documented (a
@@ -860,44 +1015,52 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     // the open channel-settings id, mirroring `change_member_role`.
     let weak_window = window.as_weak();
     let ui_ctx_mute = ui_ctx.clone();
-    window.on_channel_settings_toggle_mute(move |muted| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_mute.clone();
-        // Reflect the toggle immediately, then persist off the UI thread.
-        let weak_ui = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak_ui.upgrade() {
-                w.set_channel_settings_muted(muted);
-            }
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_toggle_mute(move |muted| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_mute.clone();
+            // Reflect the toggle immediately, then persist off the UI thread.
+            let weak_ui = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_ui.upgrade() {
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_muted(muted);
+                }
+            });
+            // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+            let channel_id = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .to_string()
+                })
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                if channel_id.is_empty() {
+                    return;
+                }
+                let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
+                    Ok(id) => ChannelId::from(id),
+                    Err(_) => return,
+                };
+                if let Err(e) = ui_ctx.mute_conversation(
+                    chatter_core::state::ActiveConversation::Channel(channel_uuid),
+                    muted,
+                ) {
+                    tracing::error!(error = %e, "Failed to persist channel mute");
+                    // Snap the switch back so it never shows a state we did not
+                    // manage to persist (same as the AI toggle above).
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_muted(!muted);
+                        }
+                    });
+                }
+            });
         });
-        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_id().to_string())
-            .unwrap_or_default();
-        tokio::spawn(async move {
-            if channel_id.is_empty() {
-                return;
-            }
-            let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
-                Ok(id) => ChannelId::from(id),
-                Err(_) => return,
-            };
-            if let Err(e) = ui_ctx.mute_conversation(
-                chatter_core::state::ActiveConversation::Channel(channel_uuid),
-                muted,
-            ) {
-                tracing::error!(error = %e, "Failed to persist channel mute");
-                // Snap the switch back so it never shows a state we did not
-                // manage to persist (same as the AI toggle above).
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_channel_settings_muted(!muted);
-                    }
-                });
-            }
-        });
-    });
 }
 
 fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -905,61 +1068,74 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let ui_ctx_role = ui_ctx.clone();
 
-    window.on_channel_settings_change_member_role(move |user_id, role| {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_role.clone();
-        let user_id_str = user_id.to_string();
-        let role_str = role.to_string();
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_change_member_role(move |user_id, role| {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_role.clone();
+            let user_id_str = user_id.to_string();
+            let role_str = role.to_string();
 
-        // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_id().to_string())
-            .unwrap_or_default();
-        tokio::spawn(async move {
-            if channel_id.is_empty() {
-                return;
-            }
-            let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
-                Ok(id) => ChannelId::from(id),
-                Err(_) => return,
-            };
-            let user_uuid = match user_id_str.parse::<uuid::Uuid>() {
-                Ok(id) => chatter_core::domain::ids::UserId::from(id),
-                Err(_) => return,
-            };
-            let Some(new_role) = chatter_core::domain::channel::MemberRole::parse(&role_str) else {
-                return;
-            };
-            let result = ui_ctx
-                .update_channel_member_role(&channel_uuid, &user_uuid, new_role)
-                .await;
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak.upgrade() else { return };
-                match result {
-                    Ok(m) => {
-                        w.set_channel_settings_error("".into());
-                        let members = w.get_channel_settings_members();
-                        for i in 0..members.row_count() {
-                            if let Some(mut row) = members.row_data(i) {
-                                if row.user_id == user_id_str.as_str() {
-                                    row.role = m.role.as_str().into();
-                                    members.set_row_data(i, row);
+            // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
+            let channel_id = weak
+                .upgrade()
+                .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .to_string()
+                })
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                if channel_id.is_empty() {
+                    return;
+                }
+                let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
+                    Ok(id) => ChannelId::from(id),
+                    Err(_) => return,
+                };
+                let user_uuid = match user_id_str.parse::<uuid::Uuid>() {
+                    Ok(id) => chatter_core::domain::ids::UserId::from(id),
+                    Err(_) => return,
+                };
+                let Some(new_role) = chatter_core::domain::channel::MemberRole::parse(&role_str)
+                else {
+                    return;
+                };
+                let result = ui_ctx
+                    .update_channel_member_role(&channel_uuid, &user_uuid, new_role)
+                    .await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    match result {
+                        Ok(m) => {
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error("".into());
+                            let members = w
+                                .global::<crate::ModalHostState>()
+                                .get_channel_settings_members();
+                            for i in 0..members.row_count() {
+                                if let Some(mut row) = members.row_data(i) {
+                                    if row.user_id == user_id_str.as_str() {
+                                        row.role = m.role.as_str().into();
+                                        members.set_row_data(i, row);
+                                    }
                                 }
                             }
                         }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to change member role");
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error(
+                                    format!("Couldn't change role: {e}").into(),
+                                );
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to change member role");
-                        w.set_channel_settings_error(format!("Couldn't change role: {e}").into());
-                    }
-                }
+                });
             });
         });
-    });
 
     let weak_window = window.as_weak();
-    window.on_channel_settings_remove_member(move |user_id| {
+    window.global::<crate::ModalHostState>().on_channel_settings_remove_member(move |user_id| {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
@@ -997,7 +1173,7 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::warn!(error = %e, "Failed to remove member");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_channel_settings_error(
+                            w.global::<crate::ModalHostState>().set_channel_settings_error(
                                 format!("Couldn't remove member: {e}").into(),
                             );
                         }

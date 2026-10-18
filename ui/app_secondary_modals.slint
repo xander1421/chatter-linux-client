@@ -1,3 +1,8 @@
+import { SearchPane } from "app_search_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { JarvisPane } from "app_jarvis_pane.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { AuthFlow } from "app_auth_flow.slint";
 import { Materials } from "theme/materials.slint";
 import { ServerRecordsGlobal } from "server_records/screen.slint";
 import { Spacing } from "theme/spacing.slint";
@@ -22,154 +27,16 @@ export component AppSecondaryModals inherits Rectangle {
     in-out property <string> anon-mode-pin;
     in property <string> anon-mode-pin-error;
     in property <bool> anon-mode-verifying;
-    in property <image> channel-avatar-source;
-    in property <bool> channel-has-avatar;
-    in property <string> channel-id;
-    in-out property <bool> channel-settings-ai-enabled;
-    in property <bool> channel-settings-archived;
-    in property <[BannedMemberData]> channel-settings-banned-members;
-    in property <bool> channel-settings-can-archive;
-    in property <bool> channel-settings-can-delete;
-    in property <bool> channel-settings-can-edit;
-    in property <bool> channel-settings-can-leave;
-    in property <bool> channel-settings-can-manage-members;
-    in property <bool> channel-settings-can-view-bans;
-    in property <string> channel-settings-created-at;
-    in property <string> channel-settings-description;
-    in-out property <string> channel-settings-description-draft;
-    in property <string> channel-settings-error;
-    in property <bool> channel-settings-group-blocked;
-    in-out property <bool> channel-settings-has-icon-preview;
-    in-out property <image> channel-settings-icon-preview;
-    in property <string> channel-settings-id;
-    in property <int> channel-settings-invited-count;
-    in property <bool> channel-settings-is-owner;
-    in property <bool> channel-settings-loading;
-    in property <int> channel-settings-member-count;
-    in property <[ChannelMemberData]> channel-settings-members;
-    in-out property <bool> channel-settings-muted;
-    in property <string> channel-settings-name;
-    in-out property <string> channel-settings-name-draft;
-    in-out property <string> channel-settings-notification-pref;
-    in property <bool> channel-settings-saving;
-    in property <string> channel-settings-type;
-    in property <bool> chat-menu-secret-chat;
-    in property <bool> chat-menu-settings;
-    in property <bool> chat-menu-video;
     in property <bool> compact-layout;
-    in property <ConversationKind> conversation-kind;
-    in-out property <string> create-section-emoji;
-    in property <string> create-section-id;
-    in property <bool> create-section-loading;
-    in-out property <string> create-section-name;
-    in property <bool> create-section-rename-mode;
     in property <string> exiting-modal;
     in property <length> fab-y;
-    in property <bool> forward-loading;
-    in property <string> forward-message-preview;
-    in-out property <string> forward-search-text;
-    in property <[ForwardTarget]> forward-targets;
-    in property <[FriendData]> friends-list;
     in property <bool> is-mobile-platform;
-    in property <[MemoryEntityData]> jarvis-memory-entities;
-    in property <[MemoryFactData]> jarvis-memory-facts;
-    in property <[MemoryGraphEdgeData]> jarvis-memory-graph-edges;
-    in property <[MemoryGraphNodeData]> jarvis-memory-graph-nodes;
-    in property <string> jarvis-memory-stats;
     in property <length> macos-titlebar-height;
-    in property <[PinnedItem]> pinned-items;
-    in property <int> pinned-total-count;
     in property <string> presented-modal;
     in property <length> safe-area-top;
-    in property <[SessionInfo]> sessions;
-    in property <string> sessions-error;
-    in property <bool> sessions-loaded;
-    in property <bool> sessions-loading;
-    in property <[PendingLinkInfo]> sessions-pending-links;
-    in property <bool> sessions-revoking;
     in property <bool> sidebar-is-rail;
-    in property <[CalendarDay]> unified-search-calendar-days;
-    in property <string> unified-search-calendar-month;
-    in-out property <string> unified-search-category;
-    in property <[QuickSwitcherItem]> unified-search-conversations;
-    in property <[int]> unified-search-counts;
-    in-out property <string> unified-search-date;
-    in-out property <string> unified-search-from;
-    in-out property <string> unified-search-from-label;
-    in property <[bool]> unified-search-has-thumbnails;
-    in-out property <string> unified-search-in;
-    in-out property <string> unified-search-in-label;
-    in property <[string]> unified-search-message-kinds;
-    in property <[SearchResult]> unified-search-messages;
-    in-out property <bool> unified-search-open;
-    in property <[int]> unified-search-page-limits;
-    in property <string> unified-search-person-error;
-    in property <string> unified-search-person-handle;
-    in property <string> unified-search-person-id;
-    in property <string> unified-search-person-name;
-    in property <string> unified-search-person-status;
-    in property <[QuickSwitcherItem]> unified-search-picker-options;
-    in-out property <string> unified-search-query;
-    in property <bool> unified-search-query-is-handle;
-    in property <[string]> unified-search-recents;
-    in property <bool> unified-search-searching;
-    in-out property <int> unified-search-selected-index;
-    in-out property <string> unified-search-sort;
-    in property <[image]> unified-search-thumbnails;
     in property <length> window-height;
-    callback cancel-pending-link(string);
-    callback channel-settings-archive();
-    callback channel-settings-ban-member(string);
-    callback channel-settings-block-group(bool);
-    callback channel-settings-block-member(string, bool);
-    callback channel-settings-change-member-role(string, string);
-    callback channel-settings-change-notification(string);
-    callback channel-settings-delete();
-    callback channel-settings-invite-channel-members();
-    callback channel-settings-invite-members();
-    callback channel-settings-leave();
-    callback channel-settings-pick-icon();
-    callback channel-settings-remove-member(string);
-    callback channel-settings-save(string, string);
-    callback channel-settings-set-member-muted(string, bool, int);
-    callback channel-settings-toggle-ai(bool);
-    callback channel-settings-toggle-mute(bool);
-    callback channel-settings-transfer-ownership(string);
-    callback channel-settings-unban-member(string);
-    callback chat-menu-start-secret-chat();
-    callback chat-settings-clicked();
-    callback create-section(/* name */ string, /* emoji */ string);
-    callback forward-message(string);
-    callback forward-search-changed(string);
-    callback friends-start-dm(string);
-    callback jarvis-memory-refresh();
-    callback jarvis-memory-select-entity(string);
-    callback link-approve-open();
-    callback nav-close(string);
-    callback nav-push(string);
-    callback pinned-item-selected(string);
-    callback pinned-show-clicked();
-    callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string);
-    callback revoke-all-sessions();
-    callback revoke-session(int);
-    callback secret-timer-set(int);
-    callback start-create-channel();
-    callback start-create-section();
-    callback start-video-call();
     callback submit-anon-mode-pin(string);
-    callback unified-search-calendar-shift(int);
-    callback unified-search-changed(string);
-    callback unified-search-closed();
-    callback unified-search-conversation-selected(string, string);
-    callback unified-search-filters-changed(string, string, string, string, string);
-    callback unified-search-message-selected(string);
-    callback unified-search-person-selected(string);
-    callback unified-search-picker-request(string, string);
-    callback unified-search-recent-clear();
-    callback unified-search-recent-remove(string);
-    callback unified-search-recent-selected(string);
-    callback unified-search-resolve(string);
-    callback unified-search-show-more(string);
     function is-presented(name: string) -> bool {
         return root.presented-modal == name || root.exiting-modal == name;
     }
@@ -179,46 +46,46 @@ export component AppSecondaryModals inherits Rectangle {
     // Forward Message Modal
     if root.is-presented("forward-message"): ForwardMessageModal {
         show-modal: root.active-modal == "forward-message";
-        message-preview: root.forward-message-preview;
-        search-text <=> root.forward-search-text;
-        targets: root.forward-targets;
-        loading: root.forward-loading;
+        message-preview: ModalHostState.forward-message-preview;
+        search-text <=> ModalHostState.forward-search-text;
+        targets: ModalHostState.forward-targets;
+        loading: ModalHostState.forward-loading;
 
         close => {
-            root.nav-close("forward-message");
+            ModalHostState.nav-close("forward-message");
         }
         forward(target-id) => {
-            root.forward-message(target-id);
+            ModalHostState.forward-message(target-id);
         }
         search-changed(query) => {
-            root.forward-search-changed(query);
+            ModalHostState.forward-search-changed(query);
         }
     }
 
     // Sessions Modal
     if root.is-presented("sessions"): SessionsModal {
         show-modal: root.active-modal == "sessions";
-        sessions: root.sessions;
-        error: root.sessions-error;
-        loaded: root.sessions-loaded;
-        loading: root.sessions-loading;
-        revoking: root.sessions-revoking;
-        pending-links: root.sessions-pending-links;
+        sessions: ModalHostState.sessions;
+        error: ModalHostState.sessions-error;
+        loaded: ModalHostState.sessions-loaded;
+        loading: ModalHostState.sessions-loading;
+        revoking: ModalHostState.sessions-revoking;
+        pending-links: ModalHostState.sessions-pending-links;
 
         close => {
-            root.nav-close("sessions");
+            ModalHostState.nav-close("sessions");
         }
         cancel-pending-link(uuid) => {
-            root.cancel-pending-link(uuid);
+            ModalHostState.cancel-pending-link(uuid);
         }
         revoke-session(device-id) => {
-            root.revoke-session(device-id);
+            ModalHostState.revoke-session(device-id);
         }
         revoke-all-others => {
-            root.revoke-all-sessions();
+            ModalHostState.revoke-all-sessions();
         }
         link-new-device => {
-            root.link-approve-open();
+            AuthFlow.link-approve-open();
         }
     }
 
@@ -227,165 +94,165 @@ export component AppSecondaryModals inherits Rectangle {
     UnifiedSearch {
         width: parent.width;
         height: parent.height;
-        show: root.unified-search-open;
+        show: SearchPane.unified-search-open;
         source-x: root.compact-layout ? Spacing.sm : 0px;
         source-y: root.macos-titlebar-height;
         source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
-        conversations: root.unified-search-conversations;
-        messages: root.unified-search-messages;
-        searching: root.unified-search-searching;
-        query <=> root.unified-search-query;
-        selected-index <=> root.unified-search-selected-index;
-        category <=> root.unified-search-category;
-        sort-order <=> root.unified-search-sort;
-        date-filter <=> root.unified-search-date;
-        from-filter <=> root.unified-search-from;
-        in-filter <=> root.unified-search-in;
-        from-label <=> root.unified-search-from-label;
-        in-label <=> root.unified-search-in-label;
-        picker-options: root.unified-search-picker-options;
-        recent-searches: root.unified-search-recents;
-        calendar-month: root.unified-search-calendar-month;
-        calendar-days: root.unified-search-calendar-days;
-        category-counts: root.unified-search-counts;
-        page-limits: root.unified-search-page-limits;
-        thumbnails: root.unified-search-thumbnails;
-        has-thumbnails: root.unified-search-has-thumbnails;
-        message-kinds: root.unified-search-message-kinds;
-        query-is-handle: root.unified-search-query-is-handle;
-        person-status: root.unified-search-person-status;
-        person-error: root.unified-search-person-error;
-        person-id: root.unified-search-person-id;
-        person-name: root.unified-search-person-name;
-        person-handle: root.unified-search-person-handle;
-        query-changed(q) => { root.unified-search-changed(q); }
-        filters-changed(c, s, d, f, i) => { root.unified-search-filters-changed(c, s, d, f, i); }
-        recent-selected(q) => { root.unified-search-recent-selected(q); }
-        recent-clear => { root.unified-search-recent-clear(); }
-        recent-remove(q) => { root.unified-search-recent-remove(q); }
-        calendar-shift(delta) => { root.unified-search-calendar-shift(delta); }
-        picker-request(kind, query) => { root.unified-search-picker-request(kind, query); }
-        show-more(section) => { root.unified-search-show-more(section); }
-        resolve(q) => { root.unified-search-resolve(q); }
+        conversations: SearchPane.unified-search-conversations;
+        messages: SearchPane.unified-search-messages;
+        searching: SearchPane.unified-search-searching;
+        query <=> SearchPane.unified-search-query;
+        selected-index <=> SearchPane.unified-search-selected-index;
+        category <=> SearchPane.unified-search-category;
+        sort-order <=> SearchPane.unified-search-sort;
+        date-filter <=> SearchPane.unified-search-date;
+        from-filter <=> SearchPane.unified-search-from;
+        in-filter <=> SearchPane.unified-search-in;
+        from-label <=> SearchPane.unified-search-from-label;
+        in-label <=> SearchPane.unified-search-in-label;
+        picker-options: SearchPane.unified-search-picker-options;
+        recent-searches: SearchPane.unified-search-recents;
+        calendar-month: SearchPane.unified-search-calendar-month;
+        calendar-days: SearchPane.unified-search-calendar-days;
+        category-counts: SearchPane.unified-search-counts;
+        page-limits: SearchPane.unified-search-page-limits;
+        thumbnails: SearchPane.unified-search-thumbnails;
+        has-thumbnails: SearchPane.unified-search-has-thumbnails;
+        message-kinds: SearchPane.unified-search-message-kinds;
+        query-is-handle: SearchPane.unified-search-query-is-handle;
+        person-status: SearchPane.unified-search-person-status;
+        person-error: SearchPane.unified-search-person-error;
+        person-id: SearchPane.unified-search-person-id;
+        person-name: SearchPane.unified-search-person-name;
+        person-handle: SearchPane.unified-search-person-handle;
+        query-changed(q) => { SearchPane.unified-search-changed(q); }
+        filters-changed(c, s, d, f, i) => { SearchPane.unified-search-filters-changed(c, s, d, f, i); }
+        recent-selected(q) => { SearchPane.unified-search-recent-selected(q); }
+        recent-clear => { SearchPane.unified-search-recent-clear(); }
+        recent-remove(q) => { SearchPane.unified-search-recent-remove(q); }
+        calendar-shift(delta) => { SearchPane.unified-search-calendar-shift(delta); }
+        picker-request(kind, query) => { SearchPane.unified-search-picker-request(kind, query); }
+        show-more(section) => { SearchPane.unified-search-show-more(section); }
+        resolve(q) => { SearchPane.unified-search-resolve(q); }
         person-selected(uid) => {
-            root.unified-search-person-selected(uid);
-            root.unified-search-open = false;
-            root.unified-search-closed();
+            SearchPane.unified-search-person-selected(uid);
+            SearchPane.unified-search-open = false;
+            SearchPane.unified-search-closed();
         }
         conversation-selected(id, t) => {
-            root.unified-search-conversation-selected(id, t);
-            root.unified-search-open = false;
-            root.unified-search-closed();
+            SearchPane.unified-search-conversation-selected(id, t);
+            SearchPane.unified-search-open = false;
+            SearchPane.unified-search-closed();
         }
         message-selected(id) => {
-            root.unified-search-message-selected(id);
-            root.unified-search-open = false;
-            root.unified-search-closed();
+            SearchPane.unified-search-message-selected(id);
+            SearchPane.unified-search-open = false;
+            SearchPane.unified-search-closed();
         }
         close => {
-            root.unified-search-open = false;
-            root.unified-search-closed();
+            SearchPane.unified-search-open = false;
+            SearchPane.unified-search-closed();
         }
         cancel => {
-            root.unified-search-query = "";
-            root.unified-search-open = false;
-            root.unified-search-closed();
+            SearchPane.unified-search-query = "";
+            SearchPane.unified-search-open = false;
+            SearchPane.unified-search-closed();
         }
     }
 
     if root.is-presented("channel-settings"): ChannelSettingsModal {
         show-modal: root.active-modal == "channel-settings";
-        channel-id: root.channel-settings-id;
+        channel-id: ModalHostState.channel-settings-id;
         integrations => {
-            root.nav-push("server-records");
-            ServerRecordsGlobal.open("integrations", root.channel-settings-id);
+            ModalHostState.nav-push("server-records");
+            ServerRecordsGlobal.open("integrations", ModalHostState.channel-settings-id);
         }
         server-calls => {
-            root.nav-push("server-records");
-            ServerRecordsGlobal.open("calls", root.channel-settings-id);
+            ModalHostState.nav-push("server-records");
+            ServerRecordsGlobal.open("calls", ModalHostState.channel-settings-id);
         }
-        channel-name: root.channel-settings-name;
-        channel-description: root.channel-settings-description;
-        channel-name-draft <=> root.channel-settings-name-draft;
-        channel-description-draft <=> root.channel-settings-description-draft;
-        channel-icon-preview <=> root.channel-settings-icon-preview;
-        channel-has-icon-preview <=> root.channel-settings-has-icon-preview;
-        channel-avatar-source: root.channel-avatar-source;
-        channel-has-avatar: root.channel-settings-id == root.channel-id && root.channel-has-avatar;
-        pick-channel-icon => { root.channel-settings-pick-icon(); }
-        channel-type: root.channel-settings-type;
-        is-archived: root.channel-settings-archived;
-        created-at: root.channel-settings-created-at;
-        member-count: root.channel-settings-member-count;
-        invited-count: root.channel-settings-invited-count;
-        can-edit: root.channel-settings-can-edit;
-        can-manage-members: root.channel-settings-can-manage-members;
-        can-archive: root.channel-settings-can-archive;
-        can-delete: root.channel-settings-can-delete;
-        is-owner: root.channel-settings-is-owner;
-        can-leave: root.channel-settings-can-leave;
-        group-blocked: root.channel-settings-group-blocked;
-        notification-preference <=> root.channel-settings-notification-pref;
-        is-muted <=> root.channel-settings-muted;
-        ai-enabled <=> root.channel-settings-ai-enabled;
-        toggle-ai(value) => { root.channel-settings-toggle-ai(value); }
-        members: root.channel-settings-members;
-        banned-members: root.channel-settings-banned-members;
-        can-view-bans: root.channel-settings-can-view-bans;
-        loading: root.channel-settings-loading;
-        saving: root.channel-settings-saving;
-        error-message: root.channel-settings-error;
+        channel-name: ModalHostState.channel-settings-name;
+        channel-description: ModalHostState.channel-settings-description;
+        channel-name-draft <=> ModalHostState.channel-settings-name-draft;
+        channel-description-draft <=> ModalHostState.channel-settings-description-draft;
+        channel-icon-preview <=> ModalHostState.channel-settings-icon-preview;
+        channel-has-icon-preview <=> ModalHostState.channel-settings-has-icon-preview;
+        channel-avatar-source: ChatPane.channel-avatar-source;
+        channel-has-avatar: ModalHostState.channel-settings-id == ChatPane.channel-id && ChatPane.channel-has-avatar;
+        pick-channel-icon => { ModalHostState.channel-settings-pick-icon(); }
+        channel-type: ModalHostState.channel-settings-type;
+        is-archived: ModalHostState.channel-settings-archived;
+        created-at: ModalHostState.channel-settings-created-at;
+        member-count: ModalHostState.channel-settings-member-count;
+        invited-count: ModalHostState.channel-settings-invited-count;
+        can-edit: ModalHostState.channel-settings-can-edit;
+        can-manage-members: ModalHostState.channel-settings-can-manage-members;
+        can-archive: ModalHostState.channel-settings-can-archive;
+        can-delete: ModalHostState.channel-settings-can-delete;
+        is-owner: ModalHostState.channel-settings-is-owner;
+        can-leave: ModalHostState.channel-settings-can-leave;
+        group-blocked: ModalHostState.channel-settings-group-blocked;
+        notification-preference <=> ModalHostState.channel-settings-notification-pref;
+        is-muted <=> ModalHostState.channel-settings-muted;
+        ai-enabled <=> ModalHostState.channel-settings-ai-enabled;
+        toggle-ai(value) => { ModalHostState.channel-settings-toggle-ai(value); }
+        members: ModalHostState.channel-settings-members;
+        banned-members: ModalHostState.channel-settings-banned-members;
+        can-view-bans: ModalHostState.channel-settings-can-view-bans;
+        loading: ModalHostState.channel-settings-loading;
+        saving: ModalHostState.channel-settings-saving;
+        error-message: ModalHostState.channel-settings-error;
 
         close => {
-            root.nav-close("channel-settings");
+            ModalHostState.nav-close("channel-settings");
         }
         save-settings(name, description) => {
-            root.channel-settings-save(name, description);
+            ModalHostState.channel-settings-save(name, description);
         }
         change-notification(level) => {
-            root.channel-settings-change-notification(level);
+            ModalHostState.channel-settings-change-notification(level);
         }
         toggle-mute(muted) => {
-            root.channel-settings-toggle-mute(muted);
+            ModalHostState.channel-settings-toggle-mute(muted);
         }
         change-member-role(user-id, role) => {
-            root.channel-settings-change-member-role(user-id, role);
+            ModalHostState.channel-settings-change-member-role(user-id, role);
         }
         ban-member(user-id) => {
-            root.channel-settings-ban-member(user-id);
+            ModalHostState.channel-settings-ban-member(user-id);
         }
         set-member-muted(user-id, muted, minutes) => {
-            root.channel-settings-set-member-muted(user-id, muted, minutes);
+            ModalHostState.channel-settings-set-member-muted(user-id, muted, minutes);
         }
         unban-member(user-id) => {
-            root.channel-settings-unban-member(user-id);
+            ModalHostState.channel-settings-unban-member(user-id);
         }
         transfer-ownership(user-id) => {
-            root.channel-settings-transfer-ownership(user-id);
+            ModalHostState.channel-settings-transfer-ownership(user-id);
         }
         block-member(user-id, block) => {
-            root.channel-settings-block-member(user-id, block);
+            ModalHostState.channel-settings-block-member(user-id, block);
         }
         block-group(block) => {
-            root.channel-settings-block-group(block);
+            ModalHostState.channel-settings-block-group(block);
         }
         remove-member(user-id) => {
-            root.channel-settings-remove-member(user-id);
+            ModalHostState.channel-settings-remove-member(user-id);
         }
         invite-members => {
-            root.channel-settings-invite-members();
+            ModalHostState.channel-settings-invite-members();
         }
         invite-channel-members => {
-            root.channel-settings-invite-channel-members();
+            ModalHostState.channel-settings-invite-channel-members();
         }
         archive-channel => {
-            root.channel-settings-archive();
+            ModalHostState.channel-settings-archive();
         }
         leave-channel => {
-            root.channel-settings-leave();
+            ModalHostState.channel-settings-leave();
         }
         delete-channel => {
-            root.channel-settings-delete();
+            ModalHostState.channel-settings-delete();
         }
     }
 
@@ -397,7 +264,7 @@ export component AppSecondaryModals inherits Rectangle {
         verifying: root.anon-mode-verifying;
 
         close => {
-            root.nav-close("anon-mode-pin");
+            ModalHostState.nav-close("anon-mode-pin");
         }
         submit(pin) => {
             root.submit-anon-mode-pin(pin);
@@ -426,18 +293,18 @@ export component AppSecondaryModals inherits Rectangle {
             ? root.fab-y - self.card-height - Spacing.sm
             : root.safe-area-top + Spacing.xs
                 + (root.is-mobile-platform ? Spacing.header-height-touch : Spacing.header-height);
-        close => { root.nav-close("create-menu"); }
+        close => { ModalHostState.nav-close("create-menu"); }
         new-chat => {
-            root.nav-close("create-menu");
-            root.nav-push("new-chat");
+            ModalHostState.nav-close("create-menu");
+            ModalHostState.nav-push("new-chat");
         }
         new-channel => {
-            root.nav-close("create-menu");
-            root.start-create-channel();
+            ModalHostState.nav-close("create-menu");
+            ModalHostState.start-create-channel();
         }
         new-section => {
-            root.nav-close("create-menu");
-            root.start-create-section();
+            ModalHostState.nav-close("create-menu");
+            ModalHostState.start-create-section();
         }
     }
 
@@ -445,70 +312,70 @@ export component AppSecondaryModals inherits Rectangle {
     // pane (the header's trailing edge on a phone and on two-pane).
     if root.is-presented("pinned-messages"): PinnedMessagesModal {
         show-modal: root.active-modal == "pinned-messages";
-        items: root.pinned-items;
-        close => { root.nav-close("pinned-messages"); }
-        selected(message-id) => { root.pinned-item-selected(message-id); }
+        items: ChatPane.pinned-items;
+        close => { ModalHostState.nav-close("pinned-messages"); }
+        selected(message-id) => { ChatPane.pinned-item-selected(message-id); }
     }
 
     if root.is-presented("chat-menu"): ChatHeaderMenu {
         show: root.active-modal == "chat-menu";
-        show-video-call: root.chat-menu-video;
-        show-settings: root.chat-menu-settings;
-        show-secret-chat: root.chat-menu-secret-chat;
-        show-disappearing: root.conversation-kind == ConversationKind.anon-dm;
-        show-pinned: root.pinned-total-count > 0
-            || root.conversation-kind == ConversationKind.saved-messages;
-        pinned => { root.nav-close("chat-menu"); root.pinned-show-clicked(); }
+        show-video-call: ChatPane.chat-menu-video;
+        show-settings: ChatPane.chat-menu-settings;
+        show-secret-chat: ChatPane.chat-menu-secret-chat;
+        show-disappearing: ChatPane.conversation-kind == ConversationKind.anon-dm;
+        show-pinned: ChatPane.pinned-total-count > 0
+            || ChatPane.conversation-kind == ConversationKind.saved-messages;
+        pinned => { ModalHostState.nav-close("chat-menu"); ChatPane.pinned-show-clicked(); }
         card-x: root.width - self.card-width - Spacing.sm;
         card-y: (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs;
-        close => { root.nav-close("chat-menu"); }
+        close => { ModalHostState.nav-close("chat-menu"); }
         video-call => {
-            root.nav-close("chat-menu");
-            root.start-video-call();
+            ModalHostState.nav-close("chat-menu");
+            ChatPane.start-video-call();
         }
         settings => {
-            root.nav-close("chat-menu");
-            root.chat-settings-clicked();
+            ModalHostState.nav-close("chat-menu");
+            ChatPane.chat-settings-clicked();
         }
         secret-chat => {
-            root.nav-close("chat-menu");
-            root.chat-menu-start-secret-chat();
+            ModalHostState.nav-close("chat-menu");
+            ModalHostState.chat-menu-start-secret-chat();
         }
-        disappearing => { root.nav-close("chat-menu"); root.nav-push("secret-timer"); }
+        disappearing => { ModalHostState.nav-close("chat-menu"); ModalHostState.nav-push("secret-timer"); }
     }
 
     if root.is-presented("secret-timer"): SecretTimerModal {
         show-modal: root.active-modal == "secret-timer";
-        close => { root.nav-close("secret-timer"); }
-        choose(seconds) => { root.secret-timer-set(seconds); root.nav-close("secret-timer"); }
+        close => { ModalHostState.nav-close("secret-timer"); }
+        choose(seconds) => { ModalHostState.secret-timer-set(seconds); ModalHostState.nav-close("secret-timer"); }
     }
 
     if root.is-presented("new-chat"): NewChatPicker {
         show: root.active-modal == "new-chat";
         mobile-mode: root.compact-layout;
-        friends: root.friends-list;
-        close => { root.nav-close("new-chat"); }
+        friends: ModalHostState.friends-list;
+        close => { ModalHostState.nav-close("new-chat"); }
         // Same path as Contacts' Message button: core opens the DM and
         // returns to Chats with the conversation showing.
-        pick(user-id) => { root.friends-start-dm(user-id); }
+        pick(user-id) => { ModalHostState.friends-start-dm(user-id); }
     }
 
     if root.is-presented("create-section"): CreateSectionModal {
         show-modal: root.active-modal == "create-section";
-        rename-mode: root.create-section-rename-mode;
-        section-name <=> root.create-section-name;
-        selected-emoji <=> root.create-section-emoji;
-        section-id: root.create-section-id;
-        loading: root.create-section-loading;
+        rename-mode: ModalHostState.create-section-rename-mode;
+        section-name <=> ModalHostState.create-section-name;
+        selected-emoji <=> ModalHostState.create-section-emoji;
+        section-id: ModalHostState.create-section-id;
+        loading: ModalHostState.create-section-loading;
 
         close => {
-            root.nav-close("create-section");
+            ModalHostState.nav-close("create-section");
         }
         create-section(name, emoji) => {
-            root.create-section(name, emoji);
+            ModalHostState.create-section(name, emoji);
         }
         rename-section(id, name, emoji) => {
-            root.rename-section(id, name, emoji);
+            ModalHostState.rename-section(id, name, emoji);
         }
     }
 
@@ -517,7 +384,7 @@ export component AppSecondaryModals inherits Rectangle {
         shown: root.active-modal == "keyboard-shortcuts";
         width: root.width;
         height: root.window-height;
-        close => { root.nav-close("keyboard-shortcuts"); }
+        close => { ModalHostState.nav-close("keyboard-shortcuts"); }
     }
 
     // Jarvis memory browser (centered modal over the backdrop)
@@ -529,7 +396,7 @@ export component AppSecondaryModals inherits Rectangle {
         opacity: self.shown ? 1 : 0;
         animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
         visible: self.shown || self.opacity > 0;
-        TouchArea { enabled: parent.shown; clicked => { root.nav-close("jarvis-memory"); } }
+        TouchArea { enabled: parent.shown; clicked => { ModalHostState.nav-close("jarvis-memory"); } }
     }
     if root.is-presented("jarvis-memory"): JarvisMemoryModal {
         show: root.active-modal == "jarvis-memory";
@@ -537,13 +404,13 @@ export component AppSecondaryModals inherits Rectangle {
         height: min(560px, parent.height - 48px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        facts: root.jarvis-memory-facts;
-        entities: root.jarvis-memory-entities;
-        graph-nodes: root.jarvis-memory-graph-nodes;
-        graph-edges: root.jarvis-memory-graph-edges;
-        stats-label: root.jarvis-memory-stats;
-        close => { root.nav-close("jarvis-memory"); }
-        select-entity(id) => { root.jarvis-memory-select-entity(id); }
-        refresh => { root.jarvis-memory-refresh(); }
+        facts: JarvisPane.jarvis-memory-facts;
+        entities: JarvisPane.jarvis-memory-entities;
+        graph-nodes: JarvisPane.jarvis-memory-graph-nodes;
+        graph-edges: JarvisPane.jarvis-memory-graph-edges;
+        stats-label: JarvisPane.jarvis-memory-stats;
+        close => { ModalHostState.nav-close("jarvis-memory"); }
+        select-entity(id) => { JarvisPane.jarvis-memory-select-entity(id); }
+        refresh => { JarvisPane.jarvis-memory-refresh(); }
     }
 }

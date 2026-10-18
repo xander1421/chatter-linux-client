@@ -13,72 +13,85 @@ pub(crate) fn wire_view_profile(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let weak_window = window.as_weak();
     let ui_ctx_profile = ui_ctx.clone();
 
-    window.on_friends_view_profile(move |user_id: SharedString| {
-        let weak = weak_window.clone();
-        let user_id_str = user_id.to_string();
-        let ui_ctx = ui_ctx_profile.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_friends_view_profile(move |user_id: SharedString| {
+            let weak = weak_window.clone();
+            let user_id_str = user_id.to_string();
+            let ui_ctx = ui_ctx_profile.clone();
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                match user_id_str.parse::<chatter_core::domain::ids::UserId>() {
-                    Ok(uid) => {
-                        crate::bin_ui::features::modals::open_user_profile(&w, &uid, Some(&ui_ctx));
-                        crate::bin_ui::features::back::push(&w, "user-profile");
-                    }
-                    Err(e) => {
-                        tracing::error!("Invalid user ID in view profile: {}", e);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    match user_id_str.parse::<chatter_core::domain::ids::UserId>() {
+                        Ok(uid) => {
+                            crate::bin_ui::features::modals::open_user_profile(
+                                &w,
+                                &uid,
+                                Some(&ui_ctx),
+                            );
+                            crate::bin_ui::features::back::push(&w, "user-profile");
+                        }
+                        Err(e) => {
+                            tracing::error!("Invalid user ID in view profile: {}", e);
+                        }
                     }
                 }
-            }
+            });
         });
-    });
 }
 
 pub(crate) fn wire_start_dm(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_friends_start_dm(move |user_id: SharedString| {
-        let _ = &ui_ctx;
-        let weak = weak_window.clone();
-        let user_id_str = user_id.to_string();
-        // DMs are channel-free — the conversation key is the peer's user_id.
-        let dm_id = user_id_str.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_friends_start_dm(move |user_id: SharedString| {
+            let _ = &ui_ctx;
+            let weak = weak_window.clone();
+            let user_id_str = user_id.to_string();
+            // DMs are channel-free — the conversation key is the peer's user_id.
+            let dm_id = user_id_str.clone();
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                crate::bin_ui::features::back::reset_to_chats(&w);
-                w.invoke_dm_selected(dm_id.clone().into());
-                tracing::debug!("Starting DM with user {}", user_id_str);
-            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    crate::bin_ui::features::back::reset_to_chats(&w);
+                    w.global::<crate::SidebarPane>()
+                        .invoke_dm_selected(dm_id.clone().into());
+                    tracing::debug!("Starting DM with user {}", user_id_str);
+                }
+            });
         });
-    });
 }
 
 pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_friends_unblock_user(move |user_id: SharedString| {
-        run_blocked_action(
-            weak_window.clone(),
-            ui_ctx.clone(),
-            user_id.to_string(),
-            false,
-        );
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_friends_unblock_user(move |user_id: SharedString| {
+            run_blocked_action(
+                weak_window.clone(),
+                ui_ctx.clone(),
+                user_id.to_string(),
+                false,
+            );
+        });
 }
 
 pub(crate) fn wire_remove_blocked_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_friends_remove_blocked_user(move |user_id: SharedString| {
-        run_blocked_action(
-            weak_window.clone(),
-            ui_ctx.clone(),
-            user_id.to_string(),
-            true,
-        );
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_friends_remove_blocked_user(move |user_id: SharedString| {
+            run_blocked_action(
+                weak_window.clone(),
+                ui_ctx.clone(),
+                user_id.to_string(),
+                true,
+            );
+        });
 }
 
 /// Unblock (or, with `remove`, unfriend and unblock) from Friends › Blocked,
@@ -91,7 +104,8 @@ fn run_blocked_action(
     remove: bool,
 ) {
     if let Some(w) = weak.upgrade() {
-        w.set_friends_loading(true);
+        w.global::<crate::ModalHostState>()
+            .set_friends_loading(true);
     }
     tokio::spawn(async move {
         match user_id_str.parse() {
@@ -130,7 +144,8 @@ fn run_blocked_action(
         }
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_friends_loading(false);
+                w.global::<crate::ModalHostState>()
+                    .set_friends_loading(false);
                 crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             }
         });

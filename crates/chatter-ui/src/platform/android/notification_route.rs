@@ -1,5 +1,6 @@
 //! Route an opaque Android notification tap after the UI and account are ready.
 
+use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 
 use chatter_core::client::ChatterClient;
@@ -61,7 +62,7 @@ pub fn open_pending(window: &crate::MainWindow) {
         return;
     };
     if !client.is_logged_in()
-        || !window.get_is_signed_in()
+        || !window.global::<crate::AuthFlow>().get_is_signed_in()
         || window.get_current_view().as_str() != "main"
     {
         return;
@@ -93,21 +94,33 @@ pub fn open_pending(window: &crate::MainWindow) {
     crate::bin_ui::features::back::reset_to_chats(window);
     match target {
         chatter_core::client::NotificationTarget::Conversation(conversation) => {
-            window.set_active_tab("chats".into());
-            window.set_mobile_show_chat(true);
+            window
+                .global::<crate::SidebarPane>()
+                .set_active_tab("chats".into());
+            window
+                .global::<crate::SidebarPane>()
+                .set_mobile_show_chat(true);
             // A message notification is a request for the newest message.
             // The ordinary sidebar open instead starts at the first unread
             // row, which can be much older than the notification itself.
             crate::bin_ui::features::sidebar::dm::open_from_notification(window, conversation);
         }
         chatter_core::client::NotificationTarget::SecretRequest => {
-            window.set_mobile_show_chat(false);
+            window
+                .global::<crate::SidebarPane>()
+                .set_mobile_show_chat(false);
             crate::bin_ui::features::sidebar::navigation::load_pending_message_requests_count(
                 window, &client,
             );
-            window.set_friends_modal_tab("requests".into());
-            window.set_friends_requests_sub_tab("private".into());
-            window.set_active_tab("contacts".into());
+            window
+                .global::<crate::ModalHostState>()
+                .set_friends_modal_tab("requests".into());
+            window
+                .global::<crate::ModalHostState>()
+                .set_friends_requests_sub_tab("private".into());
+            window
+                .global::<crate::SidebarPane>()
+                .set_active_tab("contacts".into());
         }
     }
 }

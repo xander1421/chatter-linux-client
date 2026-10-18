@@ -18,19 +18,24 @@ pub(crate) fn wire_emoji_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient
     // Only the composer's smiley button comes through here: it opens the
     // drawer from closed (fresh picker state, both queries cleared) or closes
     // it. The drawer's own Emoji/GIF tabs switch mode without touching this.
-    window.on_emoji_clicked(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        tracing::debug!("Emoji picker clicked");
+    window
+        .global::<crate::ChatPane>()
+        .on_emoji_clicked(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            tracing::debug!("Emoji picker clicked");
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Visibility is handled by Slint ChatLayout.
-                if w.get_composer_emoji_picker_visible() {
-                    emoji_loader::show_composer_picker_start(&w, &ui_ctx);
-                    w.set_composer_gif_picker_search("".into());
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Visibility is handled by Slint ChatLayout.
+                    if w.global::<crate::ChatPane>()
+                        .get_composer_emoji_picker_visible()
+                    {
+                        emoji_loader::show_composer_picker_start(&w, &ui_ctx);
+                        w.global::<crate::ChatPane>()
+                            .set_composer_gif_picker_search("".into());
+                    }
                 }
-            }
+            });
         });
-    });
 }

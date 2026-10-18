@@ -113,9 +113,11 @@ pub fn build_own_message_item(
 /// in place (the list only ever holds the rows on screen, and a fresh model
 /// would make it re-measure and re-seek), clear composer, and auto-scroll.
 pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::MessageItemData) {
-    window.set_is_at_bottom(true);
+    window.global::<crate::ChatPane>().set_is_at_bottom(true);
     edit_messages(window, |model| model.push(msg_item));
-    window.set_composer_text("".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_text("".into());
 }
 
 /// Edit the open message list in place. Every path that changes one row
@@ -127,14 +129,16 @@ pub(crate) fn edit_messages(
     window: &crate::MainWindow,
     f: impl FnOnce(&slint::VecModel<crate::MessageItemData>),
 ) {
-    let model = window.get_messages();
+    let model = window.global::<crate::ChatPane>().get_messages();
     match model
         .as_any()
         .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
     {
         Some(vec) => {
             f(vec);
-            if window.get_conversation_kind() == crate::ConversationKind::Channel {
+            if window.global::<crate::ChatPane>().get_conversation_kind()
+                == crate::ConversationKind::Channel
+            {
                 recompute_channel_continuations(vec);
             }
         }

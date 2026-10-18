@@ -34,9 +34,9 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
             Ok(()) => {
                 w.invoke_refresh_screen_protection();
                 w.global::<AnonMode>().set_enabled(enable);
-                w.set_login_error("".into());
-                w.set_register_error("".into());
-                w.set_link_device_error("".into());
+                w.global::<crate::AuthFlow>().set_login_error("".into());
+                w.global::<crate::AuthFlow>().set_register_error("".into());
+                w.global::<crate::AuthFlow>().set_link_device_error("".into());
                 if enable {
                     #[cfg(target_os = "android")]
                     crate::platform::android::activity::request_shield_background_network();
@@ -50,9 +50,9 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
             }
             Err(e) => {
                 let message = e.user_message();
-                w.set_login_error(message.clone().into());
-                w.set_register_error(message.clone().into());
-                w.set_link_device_error(message.into());
+                w.global::<crate::AuthFlow>().set_login_error(message.clone().into());
+                w.global::<crate::AuthFlow>().set_register_error(message.clone().into());
+                w.global::<crate::AuthFlow>().set_link_device_error(message.into());
             }
         }
     });

@@ -29,7 +29,9 @@ pub(crate) fn jump_to_conversation_message(
     conversation: ActiveConversation,
     message_id: &str,
 ) {
-    if ui_ctx.active_conversation() == conversation && !w.get_loading_messages() {
+    if ui_ctx.active_conversation() == conversation
+        && !w.global::<crate::ChatPane>().get_loading_messages()
+    {
         jump_to_message(w, ui_ctx, message_id);
         return;
     }
@@ -40,7 +42,7 @@ pub(crate) fn jump_to_conversation_message(
 
 /// Call after installing a conversation's messages and clearing loading.
 pub(crate) fn finish_pending_jump(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    if w.get_loading_messages() {
+    if w.global::<crate::ChatPane>().get_loading_messages() {
         return;
     }
     let target = PENDING_JUMP.with(|pending| {
@@ -84,11 +86,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_visible_media_rows(move |first, last| {
-        if let Some(w) = weak.upgrade() {
-            refresh_visible_media(&w, &client, first, last);
-        }
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_visible_media_rows(move |first, last| {
+            if let Some(w) = weak.upgrade() {
+                refresh_visible_media(&w, &client, first, last);
+            }
+        });
 }
 
 /// Resolve previews only for placeholder images in the viewport. Older pages
@@ -101,7 +105,7 @@ pub(crate) fn refresh_visible_media(
     first: i32,
     last: i32,
 ) {
-    if window.get_loading_messages() || last < first || last < 0 {
+    if window.global::<crate::ChatPane>().get_loading_messages() || last < first || last < 0 {
         return;
     }
     let conversation = ui_ctx.active_conversation();
@@ -109,7 +113,7 @@ pub(crate) fn refresh_visible_media(
         return;
     }
     let owner = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
-    let model = window.get_messages();
+    let model = window.global::<crate::ChatPane>().get_messages();
     let mut ids = Vec::new();
     for index in first.max(0) as usize..=(last as usize).min(model.row_count().saturating_sub(1)) {
         let Some(row) = model.row_data(index) else {
@@ -186,7 +190,7 @@ pub(crate) fn refresh_visible_media(
                     return;
                 }
                 let Some(pixels) = pixels else { return };
-                let model = w.get_messages();
+                let model = w.global::<crate::ChatPane>().get_messages();
                 for row_index in 0..model.row_count() {
                     let Some(row) = model.row_data(row_index) else {
                         continue;
@@ -219,119 +223,132 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_prev = ui_ctx.clone();
 
-    window.on_pinned_prev_clicked(move || {
-        ui_ctx_prev.pinned_navigate_prev();
-        update_pinned_ui_from_loaded_messages(
-            weak_window.clone(),
-            ui_ctx_prev.clone(),
-            ui_ctx_prev.active_conversation(),
-        );
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_prev_clicked(move || {
+            ui_ctx_prev.pinned_navigate_prev();
+            update_pinned_ui_from_loaded_messages(
+                weak_window.clone(),
+                ui_ctx_prev.clone(),
+                ui_ctx_prev.active_conversation(),
+            );
+        });
 
     // Next pinned message
     let weak_window = window.as_weak();
     let ui_ctx_next = ui_ctx.clone();
 
-    window.on_pinned_next_clicked(move || {
-        ui_ctx_next.pinned_navigate_next();
-        update_pinned_ui_from_loaded_messages(
-            weak_window.clone(),
-            ui_ctx_next.clone(),
-            ui_ctx_next.active_conversation(),
-        );
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_next_clicked(move || {
+            ui_ctx_next.pinned_navigate_next();
+            update_pinned_ui_from_loaded_messages(
+                weak_window.clone(),
+                ui_ctx_next.clone(),
+                ui_ctx_next.active_conversation(),
+            );
+        });
 
     // Dismiss pinned bar
     let ui_ctx_dismiss = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_pinned_dismiss_clicked(move || {
-        ui_ctx_dismiss.pinned_dismiss();
-        if let Some(w) = weak_window.upgrade() {
-            w.set_has_pinned_messages(false);
-        }
-        tracing::debug!("Pinned bar dismissed");
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_dismiss_clicked(move || {
+            ui_ctx_dismiss.pinned_dismiss();
+            if let Some(w) = weak_window.upgrade() {
+                w.global::<crate::ChatPane>().set_has_pinned_messages(false);
+            }
+            tracing::debug!("Pinned bar dismissed");
+        });
 
     // Header menu opens the complete core-ordered pin list, not just loaded rows.
     let weak_window = window.as_weak();
     let ui_ctx_show = ui_ctx.clone();
-    window.on_pinned_show_clicked(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_show.clone();
-        let conversation = ui_ctx.active_conversation();
-        let revision = ui_ctx.auth_snapshot().session_revision;
-        tokio::spawn(async move {
-            let mut items = ui_ctx.pinned_display_items(conversation).await;
-            for item in &mut items {
-                item.preview = pinned_plaintext_preview(
-                    &ui_ctx,
-                    conversation,
-                    &item.message_id,
-                    &item.preview,
-                );
-            }
-            #[cfg(target_os = "android")]
-            let items = {
-                let client = ui_ctx.clone();
-                tokio::task::spawn_blocking(move || {
-                    for item in items.iter_mut().filter(|i| i.thumbnail.is_empty()).take(4) {
-                        item.thumbnail =
-                            pinned_video_thumbnail(&client, conversation, &item.message_id);
-                    }
-                    items
-                })
-                .await
-                .unwrap_or_default()
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak.upgrade() else {
-                    return;
-                };
-                if ui_ctx.auth_snapshot().session_revision != revision {
-                    return;
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_show_clicked(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_show.clone();
+            let conversation = ui_ctx.active_conversation();
+            let revision = ui_ctx.auth_snapshot().session_revision;
+            tokio::spawn(async move {
+                let mut items = ui_ctx.pinned_display_items(conversation).await;
+                for item in &mut items {
+                    item.preview = pinned_plaintext_preview(
+                        &ui_ctx,
+                        conversation,
+                        &item.message_id,
+                        &item.preview,
+                    );
                 }
-                if ui_ctx.active_conversation() != conversation {
-                    return;
-                }
-                let rows: Vec<crate::PinnedItem> = items
-                    .into_iter()
-                    .map(|item| crate::PinnedItem {
-                        message_id: item.message_id.to_string().into(),
-                        preview: item.preview.into(),
-                        thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(
-                            &item.thumbnail,
-                        )
-                        .unwrap_or_default(),
+                #[cfg(target_os = "android")]
+                let items = {
+                    let client = ui_ctx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        for item in items.iter_mut().filter(|i| i.thumbnail.is_empty()).take(4) {
+                            item.thumbnail =
+                                pinned_video_thumbnail(&client, conversation, &item.message_id);
+                        }
+                        items
                     })
-                    .collect();
-                w.set_pinned_items(ModelRc::new(slint::VecModel::from(rows)));
-                super::back::push(&w, "pinned-messages");
+                    .await
+                    .unwrap_or_default()
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else {
+                        return;
+                    };
+                    if ui_ctx.auth_snapshot().session_revision != revision {
+                        return;
+                    }
+                    if ui_ctx.active_conversation() != conversation {
+                        return;
+                    }
+                    let rows: Vec<crate::PinnedItem> = items
+                        .into_iter()
+                        .map(|item| crate::PinnedItem {
+                            message_id: item.message_id.to_string().into(),
+                            preview: item.preview.into(),
+                            thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(
+                                &item.thumbnail,
+                            )
+                            .unwrap_or_default(),
+                        })
+                        .collect();
+                    w.global::<crate::ChatPane>()
+                        .set_pinned_items(ModelRc::new(slint::VecModel::from(rows)));
+                    super::back::push(&w, "pinned-messages");
+                });
             });
         });
-    });
     let weak_window = window.as_weak();
     let ui_ctx_selected = ui_ctx.clone();
-    window.on_pinned_item_selected(move |message_id| {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        super::back::close(&w, "pinned-messages");
-        jump_to_message(&w, &ui_ctx_selected, &message_id);
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_item_selected(move |message_id| {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            super::back::close(&w, "pinned-messages");
+            jump_to_message(&w, &ui_ctx_selected, &message_id);
+        });
 
     // Go to pinned message (scroll to it in chat)
     let weak_window = window.as_weak();
     let ui_ctx_goto = ui_ctx.clone();
 
-    window.on_pinned_go_to_message(move || {
-        if let (Some(message_id), Some(w)) = (
-            ui_ctx_goto.pinned_current_message_id(),
-            weak_window.upgrade(),
-        ) {
-            jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
-        }
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_pinned_go_to_message(move || {
+            if let (Some(message_id), Some(w)) = (
+                ui_ctx_goto.pinned_current_message_id(),
+                weak_window.upgrade(),
+            ) {
+                jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
+            }
+        });
 }
 
 /// Resolve the full text before stripping/truncating; core previews can already
@@ -413,7 +430,7 @@ fn update_pinned_ui_from_loaded_messages(
     // First try to get preview from currently loaded UI messages (works for all types)
     let msg_id_str = current_msg_id.map(|id| id.to_string()).unwrap_or_default();
     let ui_preview = weak_window.upgrade().and_then(|w| {
-        let messages = w.get_messages();
+        let messages = w.global::<crate::ChatPane>().get_messages();
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
                 if msg.message_id.as_str() == msg_id_str {
@@ -436,11 +453,16 @@ fn update_pinned_ui_from_loaded_messages(
             cfg!(target_os = "android") && missing_video && thumbnail.size().width == 0;
         // Already have preview from UI, update directly (already on UI thread from callback)
         if let Some(w) = weak_window.upgrade() {
-            w.set_pinned_current_index(current_index + 1);
-            w.set_pinned_total_count(total_count);
-            w.set_pinned_message_preview(preview.into());
-            w.set_pinned_thumbnail(thumbnail);
-            w.set_has_pinned_messages(total_count > 0);
+            w.global::<crate::ChatPane>()
+                .set_pinned_current_index(current_index + 1);
+            w.global::<crate::ChatPane>()
+                .set_pinned_total_count(total_count);
+            w.global::<crate::ChatPane>()
+                .set_pinned_message_preview(preview.into());
+            w.global::<crate::ChatPane>()
+                .set_pinned_thumbnail(thumbnail);
+            w.global::<crate::ChatPane>()
+                .set_has_pinned_messages(total_count > 0);
         }
         if !derive_video {
             return;
@@ -480,14 +502,18 @@ fn update_pinned_ui_from_loaded_messages(
                 {
                     return;
                 }
-                w.set_pinned_thumbnail(
+                w.global::<crate::ChatPane>().set_pinned_thumbnail(
                     crate::bin_ui::converters::avatar_bytes_to_image(&thumbnail)
                         .unwrap_or_default(),
                 );
-                w.set_pinned_current_index(current_index + 1);
-                w.set_pinned_total_count(total_count);
-                w.set_pinned_message_preview(preview.into());
-                w.set_has_pinned_messages(total_count > 0);
+                w.global::<crate::ChatPane>()
+                    .set_pinned_current_index(current_index + 1);
+                w.global::<crate::ChatPane>()
+                    .set_pinned_total_count(total_count);
+                w.global::<crate::ChatPane>()
+                    .set_pinned_message_preview(preview.into());
+                w.global::<crate::ChatPane>()
+                    .set_has_pinned_messages(total_count > 0);
             }
         });
     });
@@ -497,39 +523,81 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_chat_settings_clicked(move || {
-        let conversation = ui_ctx.active_conversation();
+    window
+        .global::<crate::ChatPane>()
+        .on_chat_settings_clicked(move || {
+            let conversation = ui_ctx.active_conversation();
 
-        if let ActiveConversation::AnonGroup(group_id) = conversation {
-            // Private group settings - move DB queries to background thread
-            let ui_ctx = ui_ctx.clone();
-            let weak = weak_window.clone();
-            let opened = ActiveConversation::AnonGroup(group_id);
-            if !super::modals::settings_open_allowed(ui_ctx.active_conversation(), opened) {
-                return;
-            }
-            let group_id_str = group_id.to_string();
-            if let Some(w) = weak.upgrade() {
-                let already = w.get_channel_settings_id().as_str() == group_id_str
-                    && w.get_modal_stack()
-                        .iter()
-                        .any(|s| s.as_str() == "channel-settings");
-                if !already {
-                    super::modals::show_channel_settings_shell(&w, &group_id_str, "private-group");
+            if let ActiveConversation::AnonGroup(group_id) = conversation {
+                // Private group settings - move DB queries to background thread
+                let ui_ctx = ui_ctx.clone();
+                let weak = weak_window.clone();
+                let opened = ActiveConversation::AnonGroup(group_id);
+                if !super::modals::settings_open_allowed(ui_ctx.active_conversation(), opened) {
+                    return;
                 }
-            }
+                let group_id_str = group_id.to_string();
+                if let Some(w) = weak.upgrade() {
+                    let already = w
+                        .global::<crate::ModalHostState>()
+                        .get_channel_settings_id()
+                        .as_str()
+                        == group_id_str
+                        && w.global::<crate::ModalHostState>()
+                            .get_modal_stack()
+                            .iter()
+                            .any(|s| s.as_str() == "channel-settings");
+                    if !already {
+                        super::modals::show_channel_settings_shell(
+                            &w,
+                            &group_id_str,
+                            "private-group",
+                        );
+                    }
+                }
 
-            std::thread::spawn(move || {
-                // Shared with the live refresh on membership events
-                // (`refresh_members_if_open`), so both read the same roster.
-                let Some(roster) = ui_ctx.private_group_settings_roster(group_id) else {
-                    let ui_ctx = ui_ctx.clone();
-                    let weak = weak.clone();
-                    let id = group_id_str.clone();
+                std::thread::spawn(move || {
+                    // Shared with the live refresh on membership events
+                    // (`refresh_members_if_open`), so both read the same roster.
+                    let Some(roster) = ui_ctx.private_group_settings_roster(group_id) else {
+                        let ui_ctx = ui_ctx.clone();
+                        let weak = weak.clone();
+                        let id = group_id_str.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let Some(w) = weak.upgrade() else { return };
+                            let current_id = w
+                                .global::<crate::ModalHostState>()
+                                .get_channel_settings_id();
+                            let on_stack = w
+                                .global::<crate::ModalHostState>()
+                                .get_modal_stack()
+                                .iter()
+                                .any(|s| s.as_str() == "channel-settings");
+                            if !super::modals::settings_refresh_allowed(
+                                ui_ctx.active_conversation(),
+                                opened,
+                                current_id.as_str(),
+                                &id,
+                                on_stack,
+                            ) {
+                                return;
+                            }
+                            super::modals::present_settings_error(
+                                &w,
+                                &id,
+                                "private-group",
+                                "Private group not found",
+                            );
+                        });
+                        return;
+                    };
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
-                        let current_id = w.get_channel_settings_id();
+                        let current_id = w
+                            .global::<crate::ModalHostState>()
+                            .get_channel_settings_id();
                         let on_stack = w
+                            .global::<crate::ModalHostState>()
                             .get_modal_stack()
                             .iter()
                             .any(|s| s.as_str() == "channel-settings");
@@ -537,116 +605,106 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                             ui_ctx.active_conversation(),
                             opened,
                             current_id.as_str(),
-                            &id,
+                            &group_id_str,
                             on_stack,
                         ) {
                             return;
                         }
-                        super::modals::present_settings_error(
-                            &w,
-                            &id,
-                            "private-group",
-                            "Private group not found",
-                        );
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_id(group_id_str.as_str().into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_name(roster.name.as_str().into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_name_draft(roster.name.as_str().into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_description("".into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_description_draft("".into());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_ai_enabled(ui_ctx.ai_enabled_for(&group_id_str));
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_type("private-group".into());
+                        super::modals::apply_private_group_roster(&w, roster);
+                        // Clear a previous channel's ban list.
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_can_view_bans(false);
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_banned_members(ModelRc::default());
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_loading(false);
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_error("".into());
+                        tracing::debug!("Opened settings for private group {}", group_id);
                     });
-                    return;
-                };
-                let _ = slint::invoke_from_event_loop(move || {
-                    let Some(w) = weak.upgrade() else { return };
-                    let current_id = w.get_channel_settings_id();
-                    let on_stack = w
-                        .get_modal_stack()
-                        .iter()
-                        .any(|s| s.as_str() == "channel-settings");
-                    if !super::modals::settings_refresh_allowed(
-                        ui_ctx.active_conversation(),
-                        opened,
-                        current_id.as_str(),
-                        &group_id_str,
-                        on_stack,
-                    ) {
-                        return;
-                    }
-                    w.set_channel_settings_id(group_id_str.as_str().into());
-                    w.set_channel_settings_name(roster.name.as_str().into());
-                    w.set_channel_settings_name_draft(roster.name.as_str().into());
-                    w.set_channel_settings_description("".into());
-                    w.set_channel_settings_description_draft("".into());
-                    w.set_channel_settings_ai_enabled(ui_ctx.ai_enabled_for(&group_id_str));
-                    w.set_channel_settings_type("private-group".into());
-                    super::modals::apply_private_group_roster(&w, roster);
-                    // Clear a previous channel's ban list.
-                    w.set_channel_settings_can_view_bans(false);
-                    w.set_channel_settings_banned_members(ModelRc::default());
-                    w.set_channel_settings_loading(false);
-                    w.set_channel_settings_error("".into());
-                    tracing::debug!("Opened settings for private group {}", group_id);
                 });
-            });
-            return;
-        }
-
-        // A DM's settings screen is the peer's profile — block, verify, safety
-        // number, remove friend all live there, the same way Telegram hangs a
-        // DM's settings off the contact page. The kebab used to route to
-        // channel settings instead, which for a channel-free (Signal-style)
-        // server DM missed in `get_channel_local` and silently did nothing:
-        // the button was on screen in every DM and had never worked.
-        if let ActiveConversation::ServerDm { peer_id } = conversation {
-            let weak = weak_window.clone();
-            let ui_ctx = ui_ctx.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    super::modals::open_user_profile(&w, &peer_id, Some(&ui_ctx));
-                    crate::bin_ui::features::back::push(&w, "user-profile");
-                }
-            });
-            return;
-        }
-
-        // Regular channel settings
-        let channel_id = match conversation {
-            ActiveConversation::Channel(id) => id,
-            _ => {
-                tracing::warn!("Cannot open channel settings: no active channel");
                 return;
             }
-        };
 
-        super::modals::open_channel_settings(weak_window.clone(), ui_ctx.clone(), channel_id);
-    });
+            // A DM's settings screen is the peer's profile — block, verify, safety
+            // number, remove friend all live there, the same way Telegram hangs a
+            // DM's settings off the contact page. The kebab used to route to
+            // channel settings instead, which for a channel-free (Signal-style)
+            // server DM missed in `get_channel_local` and silently did nothing:
+            // the button was on screen in every DM and had never worked.
+            if let ActiveConversation::ServerDm { peer_id } = conversation {
+                let weak = weak_window.clone();
+                let ui_ctx = ui_ctx.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        super::modals::open_user_profile(&w, &peer_id, Some(&ui_ctx));
+                        crate::bin_ui::features::back::push(&w, "user-profile");
+                    }
+                });
+                return;
+            }
+
+            // Regular channel settings
+            let channel_id = match conversation {
+                ActiveConversation::Channel(id) => id,
+                _ => {
+                    tracing::warn!("Cannot open channel settings: no active channel");
+                    return;
+                }
+            };
+
+            super::modals::open_channel_settings(weak_window.clone(), ui_ctx.clone(), channel_id);
+        });
 }
 
 fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_invite_member(move || {
-        let conversation = ui_ctx.active_conversation();
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
+    window
+        .global::<crate::ChatPane>()
+        .on_invite_member(move || {
+            let conversation = ui_ctx.active_conversation();
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
 
-        match conversation {
-            ActiveConversation::AnonGroup(group_id) => {
-                crate::bin_ui::features::modals::open_private_group_invite_modal(
-                    weak, ui_ctx, group_id,
-                );
+            match conversation {
+                ActiveConversation::AnonGroup(group_id) => {
+                    crate::bin_ui::features::modals::open_private_group_invite_modal(
+                        weak, ui_ctx, group_id,
+                    );
+                }
+                ActiveConversation::Channel(channel_id) => {
+                    crate::bin_ui::features::modals::open_invite_member_modal(
+                        weak, ui_ctx, channel_id,
+                    );
+                }
+                _ => {
+                    tracing::debug!("Invite not available for this conversation type");
+                }
             }
-            ActiveConversation::Channel(channel_id) => {
-                crate::bin_ui::features::modals::open_invite_member_modal(weak, ui_ctx, channel_id);
-            }
-            _ => {
-                tracing::debug!("Invite not available for this conversation type");
-            }
-        }
-    });
+        });
 }
 
 fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_load_more(move || {
+    window.global::<crate::ChatPane>().on_load_more(move || {
         if let Some(w) = weak_window.upgrade() {
             load_older(&w, &ui_ctx, None);
         }
@@ -655,7 +713,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// Row of the open list holding `message_id`.
 fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     (0..messages.row_count()).find(|&i| {
         messages
             .row_data(i)
@@ -677,8 +735,10 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
         }
         return;
     };
-    w.set_scroll_to_message_index(row as i32);
-    w.set_highlighted_message_id(message_id.into());
+    w.global::<crate::ChatPane>()
+        .set_scroll_to_message_index(row as i32);
+    w.global::<crate::ChatPane>()
+        .set_highlighted_message_id(message_id.into());
 
     // A brief pulse, not a permanent highlight. The index goes back with it:
     // the list acts on it changing, so left in place a second jump to the
@@ -686,8 +746,10 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
     let weak = w.as_weak();
     slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
         if let Some(w) = weak.upgrade() {
-            w.set_highlighted_message_id(slint::SharedString::new());
-            w.set_scroll_to_message_index(-1);
+            w.global::<crate::ChatPane>()
+                .set_highlighted_message_id(slint::SharedString::new());
+            w.global::<crate::ChatPane>()
+                .set_scroll_to_message_index(-1);
         }
     });
 }
@@ -722,6 +784,7 @@ fn report_jump_unavailable_later(
 /// not a copy of where it was last time. UI thread.
 fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<MessageId>) {
     let before = w
+        .global::<crate::ChatPane>()
         .get_messages()
         .row_data(0)
         .and_then(|m| m.message_id.parse::<MessageId>().ok());
@@ -746,7 +809,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
         return;
     };
     // A fresh page is on its way: the previous failure's Retry chip goes.
-    w.set_history_load_failed(false);
+    w.global::<crate::ChatPane>().set_history_load_failed(false);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -781,7 +844,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             if owner.is_current() {
-                                w.set_history_load_failed(true);
+                                w.global::<crate::ChatPane>().set_history_load_failed(true);
                             }
                         }
                     });
@@ -835,7 +898,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 .map(|d| d.to_slint_with_user(&current_user_id))
                 .collect();
 
-            let current_model = w.get_messages();
+            let current_model = w.global::<crate::ChatPane>().get_messages();
             let current_ids = current_model.iter().map(|msg| msg.message_id.to_string());
 
             // Prepend older messages (older go at top), skipping

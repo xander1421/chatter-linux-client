@@ -70,8 +70,10 @@ pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>)
                         note: d.note.into(),
                     })
                     .collect();
-                w.set_friends_channel_invites(ModelRc::new(VecModel::from(items)));
-                w.set_pending_channel_invites(count);
+                w.global::<crate::ModalHostState>()
+                    .set_friends_channel_invites(ModelRc::new(VecModel::from(items)));
+                w.global::<crate::ModalHostState>()
+                    .set_pending_channel_invites(count);
             }
         });
     });
@@ -87,9 +89,11 @@ pub fn wire_channel_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterCl
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
 
-        window.on_friends_accept_channel_invite(move |channel_id_str: SharedString| {
-            respond(&weak, &ui_ctx, channel_id_str, true);
-        });
+        window
+            .global::<crate::ModalHostState>()
+            .on_friends_accept_channel_invite(move |channel_id_str: SharedString| {
+                respond(&weak, &ui_ctx, channel_id_str, true);
+            });
     }
 
     // Decline channel invite
@@ -97,9 +101,11 @@ pub fn wire_channel_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterCl
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
 
-        window.on_friends_decline_channel_invite(move |channel_id_str: SharedString| {
-            respond(&weak, &ui_ctx, channel_id_str, false);
-        });
+        window
+            .global::<crate::ModalHostState>()
+            .on_friends_decline_channel_invite(move |channel_id_str: SharedString| {
+                respond(&weak, &ui_ctx, channel_id_str, false);
+            });
     }
 }
 
@@ -111,9 +117,11 @@ pub fn wire_channel_invites_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_channel_invites_clicked(move || {
-        load_channel_invites(weak.clone(), &ui_ctx);
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_invites_clicked(move || {
+            load_channel_invites(weak.clone(), &ui_ctx);
+        });
 }
 
 /// Parse the channel id, respond to the invite, then refresh the list/count.

@@ -1,3 +1,6 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { CallView } from "app_call_view.slint";
 import { Spacing } from "theme/spacing.slint";
 import { ReturnToCallBar, ActiveCallData } from "calls/mod.slint";
 import { ComposeFab } from "components/compose_fab.slint";
@@ -5,32 +8,15 @@ import { AppBottomNavigation } from "components/app_bottom_navigation.slint";
 
 // Inset content chrome shared by the call state and compact navigation.
 export component AppBottomChrome inherits Rectangle {
-    in property <ActiveCallData> active-call-data;
-    in-out property <bool> active-call-fullscreen;
-    in property <bool> active-call-visible;
     in property <string> active-modal;
-    in-out property <string> active-tab;
     in property <bool> bottom-nav-visible;
-    in property <bool> call-is-muted;
-    in property <bool> call-is-video-enabled;
-    in property <[image]> call-remote-video-frames;
     in property <bool> compact-layout;
     in property <int> contacts-badge;
     in property <length> fab-y;
     in property <bool> fab-visible;
-    in-out property <string> friends-modal-tab;
-    in property <int> missed-call-count;
-    in-out property <bool> mobile-show-chat;
     in property <length> return-to-call-height;
     in property <length> safe-area-bottom;
-    in-out property <bool> sidebar-collapsed;
     in-out property <bool> sidebar-user-collapsed;
-    in property <int> total-unread-count;
-    in property <image> user-avatar-source;
-    callback call-end();
-    callback calls-tab-clicked();
-    callback call-toggle-mute();
-    callback call-toggle-video();
     callback create-clicked();
     background: transparent;
 
@@ -45,13 +31,13 @@ export component AppBottomChrome inherits Rectangle {
     // Layered with the tab bar (z -1), under every pushed modal: a dialog's
     // backdrop dims it and takes its taps, so it is live only when no dialog
     // is open — the same rule Signal's in-call bar follows.
-    if root.active-call-visible && (root.active-tab != "chats" || root.active-modal != "none"
-        || (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {
+    if CallView.active-call-visible && (SidebarPane.active-tab != "chats" || root.active-modal != "none"
+        || (root.compact-layout && !SidebarPane.mobile-show-chat)): ReturnToCallBar {
         z: 0;
-        call-data: root.active-call-data;
-        remote-video-frames: root.call-remote-video-frames;
-        is-muted: root.call-is-muted;
-        is-video-enabled: root.call-is-video-enabled;
+        call-data: CallView.active-call-data;
+        remote-video-frames: CallView.call-remote-video-frames;
+        is-muted: CallView.call-is-muted;
+        is-video-enabled: CallView.call-is-video-enabled;
         height: root.return-to-call-height;
         width: min(420px, parent.width - 2 * Spacing.lg);
         x: (parent.width - self.width) / 2;
@@ -59,15 +45,15 @@ export component AppBottomChrome inherits Rectangle {
             ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
             : Spacing.lg);
         clicked => {
-            root.active-tab = "chats";
-            root.mobile-show-chat = true;
+            SidebarPane.active-tab = "chats";
+            SidebarPane.mobile-show-chat = true;
             if root.compact-layout {
-                root.active-call-fullscreen = true;
+                CallView.active-call-fullscreen = true;
             }
         }
-        toggle-mute => { root.call-toggle-mute(); }
-        toggle-video => { root.call-toggle-video(); }
-        end-call => { root.call-end(); root.active-call-fullscreen = false; }
+        toggle-mute => { CallView.call-toggle-mute(); }
+        toggle-video => { CallView.call-toggle-video(); }
+        end-call => { CallView.call-end(); CallView.active-call-fullscreen = false; }
     }
 
     // Mobile bottom navigation. Restored as the full multi-tab bar it was
@@ -104,16 +90,16 @@ export component AppBottomChrome inherits Rectangle {
         z: 0;
         width: parent.width;
         y: parent.height - self.height;
-        selected-tab <=> root.active-tab;
-        mobile-show-chat <=> root.mobile-show-chat;
+        selected-tab <=> SidebarPane.active-tab;
+        mobile-show-chat <=> SidebarPane.mobile-show-chat;
         sidebar-user-collapsed <=> root.sidebar-user-collapsed;
-        sidebar-collapsed <=> root.sidebar-collapsed;
-        friends-modal-tab <=> root.friends-modal-tab;
-        user-avatar: root.user-avatar-source;
-        chats-badge: root.total-unread-count;
-        calls-badge: root.missed-call-count;
+        sidebar-collapsed <=> SidebarPane.sidebar-collapsed;
+        friends-modal-tab <=> ModalHostState.friends-modal-tab;
+        user-avatar: SidebarPane.user-avatar-source;
+        chats-badge: SidebarPane.total-unread-count;
+        calls-badge: CallView.missed-call-count;
         contacts-badge: root.contacts-badge;
         safe-area-bottom: root.safe-area-bottom;
-        calls-tab-clicked => { root.calls-tab-clicked(); }
+        calls-tab-clicked => { CallView.calls-tab-clicked(); }
     }
 }

@@ -74,8 +74,8 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             return;
         }
         let ticket = generation.fetch_add(1, Ordering::SeqCst) + 1;
-        w.set_composer_emoji_picker_visible(false);
-        w.set_composer_gif_picker_visible(false);
+        w.global::<crate::ChatPane>().set_composer_emoji_picker_visible(false);
+        w.global::<crate::ChatPane>().set_composer_gif_picker_visible(false);
         w.invoke_release_text_focus();
         g.set_active(true);
         g.set_busy(true);
@@ -260,7 +260,7 @@ async fn send_recording(
                 ready.lock().unwrap().take();
                 g.set_active(false);
                 client.add_pending_attachment(pending);
-                w.invoke_send("".into());
+                w.global::<crate::ChatPane>().invoke_send("".into());
             }
             Err(error) => {
                 tracing::warn!(%error, "Voice upload failed; recording retained for retry");
