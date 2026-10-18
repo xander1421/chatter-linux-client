@@ -92,7 +92,7 @@ impl MessageService {
 
     /// Our mailbox public key for this channel, if we have one (NDSS '21
     /// announcement that rides every SKDM).
-    pub(super) fn our_group_mailbox_pk(&self, channel_id: &ChannelId) -> Option<Vec<u8>> {
+    fn our_group_mailbox_pk(&self, channel_id: &ChannelId) -> Option<Vec<u8>> {
         self.group_mailbox_manager
             .load_group_state(channel_id)
             .ok()
@@ -200,7 +200,7 @@ impl MessageService {
     /// us for our own links) minus this device, falling back to our sessions
     /// when it cannot be fetched. A device we have no session with has no
     /// registration id (`None`), which no delivery records, so it counts as new.
-    pub(super) async fn sender_key_devices(
+    async fn sender_key_devices(
         &self,
         member: &str,
         our_user_id: &str,
@@ -486,7 +486,7 @@ impl MessageService {
     /// rotation), and only while the state is neither failed nor forked.
     /// Signal distributes sender keys to current group members only. Fails
     /// closed: a lookup error hands out nothing.
-    pub(super) fn may_hold_sender_key(&self, channel_id: &ChannelId, user: &UserId) -> bool {
+    fn may_hold_sender_key(&self, channel_id: &ChannelId, user: &UserId) -> bool {
         self.group_gate()
             .for_distribution(channel_id)
             .is_ok_and(|v| v.contains(&user.to_string()))

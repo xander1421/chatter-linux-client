@@ -190,7 +190,7 @@ impl MessageService {
         }
     }
 
-    pub(super) async fn resend_group_message(
+    async fn resend_group_message(
         &self,
         peer_id: &UserId,
         peer_device_id: u32,
@@ -335,7 +335,7 @@ impl MessageService {
     /// Encrypt `plaintext` for each `(user, device)` and deposit that one
     /// device's inbox. A device that fails does not stop the others. `Err`
     /// only when none were reached.
-    pub(super) async fn deliver_group_resend_to(
+    async fn deliver_group_resend_to(
         &self,
         plaintext: &[u8],
         targets: &[(UserId, crate::domain::ids::DeviceId)],
@@ -379,7 +379,7 @@ impl MessageService {
     /// fields the original sender-key `DataMessage` carried (`core.rs`
     /// `send_message`), rebuilt from the local row. `None` for content that
     /// is not a user message.
-    pub(super) fn rebuild_group_content(
+    fn rebuild_group_content(
         &self,
         message: &crate::domain::message::Message,
         verified: &VerifiedChannel,

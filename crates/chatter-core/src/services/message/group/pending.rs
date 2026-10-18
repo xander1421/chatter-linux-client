@@ -147,7 +147,7 @@ impl MessageService {
 
     /// Hand a parked (still sender-key encrypted) message that left the queue
     /// undecrypted to [`Self::request_group_resend`].
-    pub(super) async fn resend_parked(
+    async fn resend_parked(
         &self,
         channel_id: ChannelId,
         sender_id: UserId,
