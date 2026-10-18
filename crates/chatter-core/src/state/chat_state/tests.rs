@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use super::super::*;
+    use crate::state::chat_state::*;
+    #[allow(unused_imports)]
+    use crate::domain::{anon_dm::AnonDmId, anon_group::AnonGroupId, ids::{AttachmentId, MessageId}};
 
     #[test]
     fn is_for_channel_matches_only_its_own_conversation() {
@@ -198,7 +200,9 @@ mod tests {
     // Pinned-bar substate tests (relocated from pinned_state.rs)
     // ========================================================================
     mod pinned_tests {
-        use super::super::*;
+        use crate::state::chat_state::*;
+        #[allow(unused_imports)]
+        use crate::domain::{anon_dm::AnonDmId, anon_group::AnonGroupId, ids::{AttachmentId, MessageId}};
 
         #[test]
         fn test_pinned_state_default() {
@@ -454,7 +458,9 @@ mod tests {
     // Streaming substate tests (relocated from streaming_state.rs)
     // ========================================================================
     mod streaming_tests {
-        use super::super::*;
+        use crate::state::chat_state::*;
+        #[allow(unused_imports)]
+        use crate::domain::{anon_dm::AnonDmId, anon_group::AnonGroupId, ids::{AttachmentId, MessageId}};
         use uuid::Uuid;
 
         fn make_channel_id() -> ChannelId {
@@ -619,7 +625,9 @@ mod tests {
 
 #[cfg(test)]
 mod attachment_tray_tests {
-    use super::super::*;
+    use crate::state::chat_state::*;
+    #[allow(unused_imports)]
+    use crate::domain::{anon_dm::AnonDmId, anon_group::AnonGroupId, ids::{AttachmentId, MessageId}};
 
     fn file(name: &str) -> PendingAttachment {
         PendingAttachment::new(
