@@ -3,7 +3,8 @@ use super::*;
 use crate::config::TRUST_ROOT_PUBLIC_KEY;
 use crate::error::CryptoError;
 use libsignal_protocol::{
-    CiphertextMessageType, DeviceId, ProtocolAddress, SignalProtocolError, Timestamp,
+    CiphertextMessageType, DeviceId, IdentityKeyStore, ProtocolAddress, SignalProtocolError,
+    Timestamp,
 };
 use rand::TryRngCore;
 use rand::rngs::OsRng;
