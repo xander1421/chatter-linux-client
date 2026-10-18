@@ -14,7 +14,6 @@ import { Typography } from "theme/typography.slint";
 import { VoiceRecording } from "chat/voice_recording.slint";
 import { VirtualKeyboard } from "components/modal_container.slint";
 import { Icons } from "theme/icons.slint";
-import { DismissButton } from "components/dismiss_button.slint";
 
 // Import auth screens
 import { LoginPage } from "pages/login.slint";
@@ -66,8 +65,7 @@ import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeDat
 import { ImageViewer, EmojiData } from "components/mod.slint";
 import { Toast } from "components/mod.slint";
 import { ConnectionBanner, MeshOnlyBar } from "components/mod.slint";
-import { CodePreviewPanel } from "components/mod.slint";
-import { PdfPreviewPanel } from "components/mod.slint";
+import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
 import { VideoPlayer } from "components/mod.slint";
 import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
 
@@ -79,8 +77,9 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
 // Import anon mode global + PIN modal
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
+import { KeyboardShortcutsDialog } from "modals/keyboard_shortcuts.slint";
 import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
-import { AnonMode } from "anon_mode/anon_mode_global.slint";
+import { ShieldWash } from "anon_mode/shield_wash.slint";
 
 // Re-export types for Rust binding
 export { ChatRowData, CustomSectionData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
@@ -3569,110 +3568,11 @@ export component MainWindow inherits Window {
         }
 
         // Keyboard shortcuts help dialog
-        if root.is-presented("keyboard-shortcuts"): shortcuts-host := Rectangle {
-            property <bool> shown: root.active-modal == "keyboard-shortcuts";
+        if root.is-presented("keyboard-shortcuts"): KeyboardShortcutsDialog {
+            shown: root.active-modal == "keyboard-shortcuts";
             width: root.width;
             height: root.height;
-            background: Materials.scrim;
-            opacity: self.shown ? 1 : 0;
-            animate opacity { duration: Materials.menu-duration; easing: ease-out; }
-            visible: self.shown || self.opacity > 0;
-
-            TouchArea {
-                enabled: parent.shown;
-                clicked => { root.nav-close("keyboard-shortcuts"); }
-            }
-
-            GlassSurface {
-                material-level: 3;
-                elevation: 5;
-
-                width: min(420px, parent.width - 32px);
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                height: min(shortcuts-layout.preferred-height, parent.height - 48px);
-                border-radius: Spacing.radius-sheet;
-                accessible-role: groupbox;
-                accessible-description: "Keyboard shortcuts";
-
-                TouchArea {} // block click-through
-
-                // Hidden the moment the dialog is logically closed: nothing in
-                // an invisible subtree is a pointer, key, Tab or accessible
-                // target while the shell and scrim finish their fade.
-                Rectangle {
-                    visible: shortcuts-host.shown;
-                    shortcuts-layout := VerticalLayout {
-                        padding: Spacing.lg;
-                        spacing: Spacing.md;
-
-                        // Header
-                        HorizontalLayout {
-                            height: Spacing.header-action-box;
-                            Text {
-                                text: "Keyboard Shortcuts";
-                                color: Colors.text-primary;
-                                font-size: Typography.lg;
-                                font-weight: Typography.semibold;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-
-                            DismissButton {
-                                enabled: shortcuts-host.shown;
-                                clicked => { root.nav-close("keyboard-shortcuts"); }
-                            }
-                        }
-
-                        Rectangle { height: 1px; background: Colors.surface-hover; }
-
-                        // Navigation section
-                        Text {
-                            text: "Navigation";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            font-weight: Typography.semibold;
-                        }
-
-                        for shortcut in [
-                            { key: "Ctrl + K / Ctrl + F", action: "Search" },
-                            { key: "Ctrl + ,", action: "Open settings" },
-                            { key: "Ctrl + J", action: "Toggle AI assistant" },
-                            { key: "Ctrl + /", action: "Show this dialog" },
-                            { key: "Escape", action: "Close modal or panel" },
-                        ]: HorizontalLayout {
-                            height: 28px;
-                            spacing: Spacing.md;
-
-                            Text {
-                                text: shortcut.action;
-                                color: Colors.text-primary;
-                                font-size: Typography.sm;
-                                horizontal-stretch: 1;
-                                vertical-alignment: center;
-                            }
-
-                            Rectangle {
-                                width: key-text.preferred-width + Spacing.md;
-                                height: 24px;
-                                border-radius: Spacing.radius-sm;
-                                background: Colors.surface-hover;
-
-                                key-text := Text {
-                                    text: shortcut.key;
-                                    color: Colors.text-secondary;
-                                    font-size: Typography.xs;
-                                    font-weight: Typography.medium;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        Rectangle { height: Spacing.xs; }
-                    }
-                }
-            }
+            close => { root.nav-close("keyboard-shortcuts"); }
         }
 
         // Jarvis memory browser (centered modal over the backdrop)
@@ -4013,106 +3913,32 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Code preview overlay
-        if root.code-preview-visible: Rectangle {
+        // File previews stay above the modal stack.
+        if root.code-preview-visible: CodePreviewOverlay {
             width: 100%;
             height: 100%;
-            background: Materials.scrim;
-
-            // Click backdrop to close
-            TouchArea {
-                clicked => {
-                    root.code-preview-visible = false;
-                    root.close-code-preview();
-                }
-            }
-
-            // Centered code panel
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: min(parent.width - 80px, 900px);
-                height: min(parent.height - 80px, 700px);
-
-                // Block backdrop clicks
-                TouchArea { }
-
-                CodePreviewPanel {
-                    width: 100%;
-                    height: 100%;
-                    file-name: root.code-preview-filename;
-                    language: root.code-preview-language;
-                    line-count: root.code-preview-line-count;
-                    plain-text: root.code-preview-plain-text;
-
-                    close-clicked => {
-                        root.code-preview-visible = false;
-                        root.close-code-preview();
-                    }
-
-                    copy-clicked => {
-                        root.copy-code();
-                    }
-
-                    open-external-clicked => {
-                        root.open-code-external();
-                    }
-                }
-            }
+            file-name: root.code-preview-filename;
+            language: root.code-preview-language;
+            line-count: root.code-preview-line-count;
+            plain-text: root.code-preview-plain-text;
+            close => { root.code-preview-visible = false; root.close-code-preview(); }
+            copy => { root.copy-code(); }
+            open-external => { root.open-code-external(); }
         }
 
-        // PDF preview overlay
-        if root.pdf-preview-visible: Rectangle {
+        if root.pdf-preview-visible: PdfPreviewOverlay {
             width: 100%;
             height: 100%;
-            background: Materials.scrim;
-
-            // Click backdrop to close
-            TouchArea {
-                clicked => {
-                    root.pdf-preview-visible = false;
-                    root.close-pdf-preview();
-                }
-            }
-
-            // Centered PDF panel
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: min(parent.width - 40px, 900px);
-                height: min(parent.height - 40px, 800px);
-
-                // Block backdrop clicks
-                TouchArea { }
-
-                PdfPreviewPanel {
-                    width: 100%;
-                    height: 100%;
-                    file-name: root.pdf-preview-filename;
-                    page-count: root.pdf-preview-page-count;
-                    current-page: root.pdf-preview-current-page;
-                    error-message: root.pdf-preview-error;
-                    external-only: root.pdf-preview-external-only;
-                    page-image: root.pdf-preview-image;
-
-                    close-clicked => {
-                        root.pdf-preview-visible = false;
-                        root.close-pdf-preview();
-                    }
-
-                    open-external-clicked => {
-                        root.open-pdf-external();
-                    }
-
-                    page-prev-clicked => {
-                        root.pdf-page-prev();
-                    }
-
-                    page-next-clicked => {
-                        root.pdf-page-next();
-                    }
-                }
-            }
+            file-name: root.pdf-preview-filename;
+            page-count: root.pdf-preview-page-count;
+            current-page: root.pdf-preview-current-page;
+            error-message: root.pdf-preview-error;
+            external-only: root.pdf-preview-external-only;
+            page-image: root.pdf-preview-image;
+            close => { root.pdf-preview-visible = false; root.close-pdf-preview(); }
+            open-external => { root.open-pdf-external(); }
+            page-prev => { root.pdf-page-prev(); }
+            page-next => { root.pdf-page-next(); }
         }
 
         // Reaction picker overlay
@@ -4479,18 +4305,9 @@ export component MainWindow inherits Window {
         }
     }
 
-    // A single transparent wash crosses the chrome as Shield changes state.
-    // No pointer item is placed here, so controls underneath keep their hit
-    // targets and the signed-in/onboarding Tor behavior remains independent.
-    Rectangle {
+    ShieldWash {
         z: 10;
         width: root.width;
         height: root.height;
-        background: Appearance.dark
-            ? @linear-gradient(145deg, #36d9ba18 0%, #238cdb0c 100%)
-            : @linear-gradient(145deg, #14ab8d14 0%, #547fd20a 100%);
-        opacity: AnonMode.enabled ? 1 : 0;
-        visible: self.opacity > 0;
-        animate opacity { duration: Materials.motion-emphasized; easing: Materials.glide; }
     }
 }
