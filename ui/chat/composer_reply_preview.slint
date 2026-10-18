@@ -1,0 +1,114 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+
+// Reply preview directly above the field, beneath the raised
+// action circles. Its own row remains reserved during the lift.
+export component ComposerReplyPreview inherits GlassSurface {
+    in property <length> row-padding;
+    in property <length> action-shell-height;
+    in property <length> attachment-band-height;
+    in property <length> raised-toolbar-height;
+    in property <length> reply-row-height;
+    in property <float> reply-reveal;
+    in property <bool> has-attachments;
+    in property <bool> reply-has-thumbnail;
+    in property <image> reply-thumbnail;
+    in property <string> reply-to-sender;
+    in property <string> reply-to-preview;
+    callback cancel-reply();
+    opacity: min(1, max(0, root.reply-reveal));
+    border-radius: Spacing.radius-chrome;
+    clip: true;
+    material-enabled: false;
+    background: Materials.opaque;
+    border-width: Materials.glass-edge-width;
+    border-color: Materials.glass-edge;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: root.row-padding;
+        spacing: Spacing.sm;
+
+        // Reply accent bar
+        Rectangle {
+            width: 4px;
+            height: parent.height - Spacing.sm * 2;
+            y: Spacing.sm;
+            background: Colors.primary;
+            border-radius: 2px;
+        }
+
+        // Thumbnail preview for image replies
+        if root.reply-has-thumbnail: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: Spacing.radius-sm;
+                clip: true;
+                background: Colors.surface-hover;
+
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.reply-thumbnail;
+                    image-fit: cover;
+                }
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Spacing.xxs;
+
+            Text {
+                text: "Reply to " + root.reply-to-sender;
+                color: Colors.primary;
+                font-size: Typography.sm;
+                font-weight: 600;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.reply-to-preview;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                overflow: elide;
+            }
+        }
+
+        // Cancel reply button — a 48dp box, glyph centred in it
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                border-radius: Spacing.radius-chrome-inner;
+                accessible-role: button;
+                accessible-label: "Cancel reply";
+
+                Image {
+                    source: Icons.x;
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-secondary;
+                }
+
+                cancel-reply-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.cancel-reply();
+                    }
+                }
+            }
+        }
+    }
+}
