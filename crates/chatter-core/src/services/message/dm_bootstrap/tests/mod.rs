@@ -309,5 +309,6 @@ fn seed_tokens(ms: &MessageService, n: usize) {
 
 mod fanout;
 mod recovery;
+#[cfg(feature = "dev-trust-root")]
 mod sealed;
 mod shield;
