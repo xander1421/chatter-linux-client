@@ -87,14 +87,4 @@ impl ChatterClient {
             .map_err(ClientError::BackupRestore)
     }
 
-    /// Get the call signaling service (persistent instance for pending state).
-    pub fn call_signaling(&self) -> &crate::services::call_signaling::CallSignalingService {
-        self.call_signaling.get_or_init(|| {
-            crate::services::call_signaling::CallSignalingService::new(
-                self.messages().clone(),
-                self.channels().clone(),
-            )
-        })
-    }
-
 }
