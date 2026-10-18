@@ -16,11 +16,13 @@ use std::sync::Arc;
 use slint::ComponentHandle;
 
 use chatter_core::client::{ChatterClient, ConnectionState};
+#[cfg(test)]
 use chatter_core::state::{OfflineState, OfflineStateData, StateSnapshot};
 use tokio::sync::broadcast;
 
 use crate::MainWindow;
 
+#[cfg(test)]
 fn subscribe_current(
     state: &OfflineState,
 ) -> (
@@ -30,6 +32,7 @@ fn subscribe_current(
     subscribe_then_read(state, || state.connection_state())
 }
 
+#[cfg(test)]
 fn subscribe_then_read(
     state: &OfflineState,
     read: impl FnOnce() -> ConnectionState,
@@ -41,6 +44,7 @@ fn subscribe_then_read(
     (rx, read())
 }
 
+#[cfg(test)]
 async fn next_current(
     state: &OfflineState,
     rx: &mut broadcast::Receiver<StateSnapshot<OfflineStateData>>,
