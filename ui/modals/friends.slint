@@ -1097,7 +1097,21 @@ export component FriendsModal inherits Rectangle {
                                             padding: Spacing.sm;
                                             spacing: Spacing.sm;
 
-                                            Avatar {
+                                            if request.display-name == "Pending request" && !request.has-avatar: Rectangle {
+                                                width: 40px;
+                                                height: 40px;
+                                                border-radius: 20px;
+                                                background: Colors.primary.transparentize(0.7);
+                                                Image {
+                                                    source: Icons.user;
+                                                    width: 22px;
+                                                    height: 22px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    colorize: Colors.text-secondary;
+                                                }
+                                            }
+                                            if request.display-name != "Pending request" || request.has-avatar: Avatar {
                                                 size: 40px;
                                                 source: request.avatar-source;
                                                 name: request.display-name;

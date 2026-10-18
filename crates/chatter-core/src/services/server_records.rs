@@ -279,13 +279,20 @@ pub async fn detail(
                 .await?
                 .notification
                 .ok_or_else(|| NetworkError::InvalidRequest("Notification is unavailable".into()))?;
+            let body = if notification.r#type
+                == crate::proto::chat_v1::NotificationType::DeviceLinked as i32
+            {
+                device_linked_details(&notification.body, &notification.metadata).0
+            } else {
+                notification.body
+            };
             Ok(RecordDetail {
                 title: if notification.title.is_empty() {
                     "Notification".into()
                 } else {
                     notification.title
                 },
-                body: notification.body,
+                body,
                 created_at_ns: notification.created_at,
             })
         }
