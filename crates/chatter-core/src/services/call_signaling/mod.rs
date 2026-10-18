@@ -194,6 +194,5 @@ mod group;
 mod invites;
 mod start_attempts;
 
+pub(crate) use invites::GroupCallInvites;
 pub use invites::PendingGroupCallKey;
-use invites::buffer_newest_per_sender;
-pub(crate) use invites::{GroupCallInvite, GroupCallInvites};

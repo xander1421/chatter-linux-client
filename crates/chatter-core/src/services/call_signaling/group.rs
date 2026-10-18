@@ -283,6 +283,7 @@ fn rotation_recipients(
 
 #[cfg(test)]
 mod rotation_recipient_tests {
+    use super::super::invites::buffer_newest_per_sender;
     use super::*;
 
     /// A key request that crossed the rotation it asks for in flight is not
