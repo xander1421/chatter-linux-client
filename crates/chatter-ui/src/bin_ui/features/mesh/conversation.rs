@@ -21,7 +21,7 @@ use super::core_api::{self, MeshRow};
 
 /// Open the mesh conversation with this derived conversation id.
 pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
-    let Some(row) = core_api::rows(ui_ctx).into_iter().find(|row| row.id == id) else {
+    let Some(row) = core_api::row_for(ui_ctx, id) else {
         tracing::warn!(conversation = %id, "mesh: no conversation with that id");
         return;
     };
@@ -237,9 +237,13 @@ pub(super) fn append_incoming(
     let mut items: Vec<MessageItemData> = model.iter().collect();
     // A courier resend maps onto the id it already had, so the same message
     // can legitimately arrive twice. Show it once.
-    if items
-        .iter()
-        .any(|item| item.message_id.as_str() == id.as_str())
+    if ui_ctx
+        .unseen_history_rows(
+            std::iter::once(id.clone()),
+            items.iter().map(|item| item.message_id.to_string()),
+            |id| id,
+        )
+        .is_empty()
     {
         return;
     }

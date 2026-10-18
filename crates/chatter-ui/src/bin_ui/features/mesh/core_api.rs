@@ -141,22 +141,35 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
             return Vec::new();
         }
     };
-    rows.into_iter()
-        .map(|row| MeshRow {
-            kind: row.kind,
-            scope: row.scope,
-            timestamp: row.timestamp,
-            unread_count: row.unread_count,
-            conversation: row.conversation,
-            id: row.id,
-            title: row.title,
-            reachable: row.reachable,
-            verified: row.verified,
-            muted: row.muted,
-            blocked: row.blocked,
-            binding_label: row.binding_label,
-        })
-        .collect()
+    rows.into_iter().map(map_row).collect()
+}
+
+/// Core resolves which conversation a clicked sidebar id belongs to.
+pub fn row_for(ui_ctx: &Arc<ChatterClient>, id: &str) -> Option<MeshRow> {
+    match ui_ctx.mesh_sidebar_row_for(id) {
+        Ok(row) => row.map(map_row),
+        Err(error) => {
+            tracing::warn!(%error, "mesh: could not find conversation");
+            None
+        }
+    }
+}
+
+fn map_row(row: chatter_core::services::mesh::MeshSidebarRow) -> MeshRow {
+    MeshRow {
+        kind: row.kind,
+        scope: row.scope,
+        timestamp: row.timestamp,
+        unread_count: row.unread_count,
+        conversation: row.conversation,
+        id: row.id,
+        title: row.title,
+        reachable: row.reachable,
+        verified: row.verified,
+        muted: row.muted,
+        blocked: row.blocked,
+        binding_label: row.binding_label,
+    }
 }
 
 pub fn share_identity(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<(), MeshError> {

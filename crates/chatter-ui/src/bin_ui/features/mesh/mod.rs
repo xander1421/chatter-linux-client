@@ -874,11 +874,7 @@ pub fn open_sender_sheet(
 }
 
 fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &str) {
-    let Some(peer) = ui_ctx
-        .mesh_peers()
-        .into_iter()
-        .find(|peer| peer.peer.as_str() == peer_id)
-    else {
+    let Some(peer) = ui_ctx.mesh_peer_by_id(peer_id) else {
         return;
     };
     ui_ctx.mesh_open_session(peer_id);
