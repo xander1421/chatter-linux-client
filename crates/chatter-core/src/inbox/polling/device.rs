@@ -2091,7 +2091,7 @@ fn persist_exact_saved_delete_before_ack(
         && (sync.saved_messages_scope || !sync.saved_message_id.is_empty())
     {
         let own = gateway.settings_repo.current_user_id()?;
-        crate::services::inbox_processor::persist_saved_delete_for_me_sync(
+        crate::services::inbox_processor::sync::persist_saved_delete_for_me_sync(
             &gateway.message_repo,
             Some(own),
             sender,

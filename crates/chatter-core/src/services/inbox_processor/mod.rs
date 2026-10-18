@@ -40,9 +40,7 @@ mod anonymous_group;
 mod messages;
 mod presence;
 mod protocol;
-mod sync;
-
-pub(crate) use sync::persist_saved_delete_for_me_sync;
+pub(crate) mod sync;
 
 impl InboxEventProcessor {
     /// Create from a CoreServices (convenience constructor).
