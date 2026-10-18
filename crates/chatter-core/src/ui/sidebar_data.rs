@@ -110,16 +110,6 @@ pub fn chat_row_top_slot(is_pinned: bool, others: impl IntoIterator<Item = bool>
     }
 }
 
-/// Send-safe intermediate struct for FriendRequestData.
-#[derive(Clone, Debug)]
-pub struct FriendRequestSendData {
-    pub user_id: String,
-    pub display_name: String,
-    pub username: String,
-    pub avatar_bytes: Option<Vec<u8>>,
-    pub sent_at: String,
-}
-
 /// Send-safe intermediate struct for FriendData (Friends-tab rows).
 /// Unifies server-side friendships and accepted anon-DM peers so both
 /// appear in the same list — `is_anon` is the discriminator, `user_id`

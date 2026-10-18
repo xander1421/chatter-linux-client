@@ -1647,7 +1647,7 @@ fn profile_shared_content_drawer_is_wired() {
     for needle in [
         ".shared_content_tabs_scoped(",
         ".shared_content_page_scoped(",
-        ".peer_last_seen_label(",
+        ".peer_last_seen(",
         ".mute_conversation(",
     ] {
         assert!(

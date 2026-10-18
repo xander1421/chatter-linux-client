@@ -589,7 +589,7 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
                 name: name.into(),
                 initials: crate::bin_ui::converters::initials_from_name(name).into(),
                 timestamp: r.started_at.map(crate::bin_ui::converters::sidebar_time).unwrap_or_default().into(),
-                detail: if r.in_progress { "In progress".to_string() } else { crate::bin_ui::converters::call_detail(r.result, r.is_incoming, r.duration_secs) }.into(),
+                detail: (if r.in_progress { "In progress".to_string() } else { crate::bin_ui::converters::call_detail(r.result, r.is_incoming, r.duration_secs) }).into(),
                 is_missed: r.is_missed,
                 is_video: r.is_video,
                 is_incoming: r.is_incoming,

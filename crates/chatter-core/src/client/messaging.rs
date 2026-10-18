@@ -2771,7 +2771,7 @@ mod section_row_tests {
     }
 
     #[tokio::test]
-    async fn group_row_offers_leave_and_carries_badge_and_initials() {
+    async fn group_row_offers_leave_and_carries_badge_and_name() {
         let (client, _dir) = client();
         // A group we belong to (not its owner): Leave is offered.
         client
@@ -2798,7 +2798,6 @@ mod section_row_tests {
             "Book Club",
         ));
         assert_eq!(row.display_name, "Book Club");
-        assert_eq!(row.avatar_name, "Book Club");
         assert!(row.can_leave && !row.can_delete);
         assert!(row.is_pinned);
         assert_eq!(row.unread_count, 3);

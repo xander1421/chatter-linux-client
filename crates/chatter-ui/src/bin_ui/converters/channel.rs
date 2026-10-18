@@ -2,9 +2,19 @@
 
 use crate::bin_ui::converters::initials_from_name;
 
-use chatter_core::ui::sidebar_data::{ChatRowLabel, ChatRowSendData, FriendRequestSendData};
+use chatter_core::ui::sidebar_data::{ChatRowLabel, ChatRowSendData};
 
 use super::utils::avatar_bytes_to_image;
+
+/// Request row assembled for the Friends modal.
+#[derive(Clone, Debug)]
+pub struct FriendRequestSendData {
+    pub user_id: String,
+    pub display_name: String,
+    pub username: String,
+    pub avatar_bytes: Option<Vec<u8>>,
+    pub secondary_text: String,
+}
 
 pub trait ChatRowExt {
     fn to_slint(self) -> crate::ChatRowData;
@@ -22,6 +32,7 @@ impl ChatRowExt for ChatRowSendData {
             (slint::Image::default(), false)
         };
 
+        let initials = initials_from_name(&self.display_name);
         crate::ChatRowData {
             conversation_id: self.id.into(),
             conversation_type: super::conversation_kind(&self.kind),
@@ -36,7 +47,7 @@ impl ChatRowExt for ChatRowSendData {
             .into(),
             avatar_source,
             has_avatar,
-            initials: initials_from_name(&self.display_name).into(),
+            initials: initials.into(),
             last_message: self.last_message.into(),
             timestamp: self
                 .timestamp_at
@@ -106,7 +117,7 @@ impl FriendRequestExt for FriendRequestSendData {
             username: self.username.into(),
             avatar_source,
             has_avatar,
-            sent_at: self.sent_at.into(),
+            sent_at: self.secondary_text.into(),
             note: "".into(),
         }
     }

@@ -1,10 +1,10 @@
-//! Adapt core-owned avatar choices to the shared Slint picker.
+//! Adapt avatar choices to the shared Slint picker.
 use crate::{AvatarOption, MainWindow};
 use slint::{ModelRc, VecModel};
 use std::rc::Rc;
 
 pub(crate) fn install(window: &MainWindow) {
-    let options: Vec<AvatarOption> = chatter_core::ui::DEFAULT_AVATARS
+    let options: Vec<AvatarOption> = crate::bin_ui::converters::DEFAULT_AVATARS
         .iter()
         .map(|choice| {
             let source = choice
@@ -25,7 +25,7 @@ pub(crate) fn install(window: &MainWindow) {
 }
 
 pub(crate) fn show_register_default(window: &MainWindow, index: usize) {
-    let Some(choice) = chatter_core::ui::DEFAULT_AVATARS.get(index) else {
+    let Some(choice) = crate::bin_ui::converters::DEFAULT_AVATARS.get(index) else {
         return;
     };
     let source = choice
@@ -43,7 +43,7 @@ pub(crate) fn show_register_default(window: &MainWindow, index: usize) {
 }
 
 pub(crate) fn show_edit_default(window: &MainWindow, index: usize) {
-    let Some(choice) = chatter_core::ui::DEFAULT_AVATARS.get(index) else {
+    let Some(choice) = crate::bin_ui::converters::DEFAULT_AVATARS.get(index) else {
         return;
     };
     let source = choice

@@ -252,7 +252,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     display_name: peer_name,
                     username: "Private".to_string(),
                     avatar_bytes: dm.peer_avatar.clone(),
-                    sent_at: last_message,
+                    secondary_text: last_message,
                 });
             }
         }

@@ -14,14 +14,14 @@ mod message;
 mod open_bench;
 pub(crate) mod pin_preview;
 mod presentation;
+mod registration_avatar;
 mod utils;
 
 pub use attachment::*;
 pub use channel::*;
-pub use chatter_core::ui::sidebar_data::{
-    ChatRowSendData, FriendDataSendData, FriendRequestSendData,
-};
+pub use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendDataSendData};
 pub use kind::*;
 pub use message::*;
 pub use presentation::*;
+pub use registration_avatar::*;
 pub use utils::*;

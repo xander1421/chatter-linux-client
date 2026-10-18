@@ -191,7 +191,7 @@ pub fn open_user_profile_in_conversation(
         let initials = initials_from_name(&display_name);
 
         // Core's display presence (the local user directory, hidden for a
-        // blocked user) — the same source as `peer_last_seen_label`.
+        // blocked user) — the same source as `peer_last_seen`.
         let presence = ui_ctx.map_or("offline", |ctx| ctx.peer_presence(user_id).as_str());
 
         // From core's local profile, like the avatar below: `user_state` is not
@@ -296,7 +296,9 @@ pub fn open_user_profile_in_conversation(
             // length of one query reads as a bug.
             w.set_profile_shared_loading(true);
             if !scoped_member {
-                w.set_profile_last_seen(ctx.peer_last_seen_label(user_id).into());
+                w.set_profile_last_seen(ctx.peer_last_seen(user_id)
+                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                    .unwrap_or_default().into());
             }
             w.set_profile_is_muted(
                 ctx.is_conversation_muted(if scoped_member {
@@ -349,10 +351,13 @@ fn load_shared_tabs(
         let first = tabs.first().map(|t| t.id.clone());
         let rows: Vec<SharedTab> = tabs
             .into_iter()
-            .map(|t| SharedTab {
-                id: t.id.into(),
-                label: crate::bin_ui::converters::shared_tab_label(&t.id).into(),
-                count: t.count,
+            .map(|t| {
+                let label = crate::bin_ui::converters::shared_tab_label(&t.id);
+                SharedTab {
+                    id: t.id.into(),
+                    label: label.into(),
+                    count: t.count,
+                }
             })
             .collect();
         let _ = slint::invoke_from_event_loop(move || {

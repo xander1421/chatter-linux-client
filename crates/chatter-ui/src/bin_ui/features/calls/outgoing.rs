@@ -337,7 +337,7 @@ fn render_calling_placeholder(
         participants.push(CallParticipantData {
             user_id: peer.user_id.clone().into(),
             display_name: peer.info.display_name.clone().into(),
-            initials: peer.info.initials.clone().into(),
+            initials: initials_from_name(&peer.info.display_name).into(),
             avatar_source: peer
                 .info
                 .avatar_bytes

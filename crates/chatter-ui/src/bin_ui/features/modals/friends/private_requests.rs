@@ -250,7 +250,7 @@ async fn refresh_private_requests(
             display_name: peer_name,
             username: "Private".to_string(),
             avatar_bytes: dm.peer_avatar.clone(),
-            sent_at: dm
+            secondary_text: dm
                 .created_at
                 .with_timezone(&chrono::Local)
                 .format("%b %d, %H:%M")

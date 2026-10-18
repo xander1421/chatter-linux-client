@@ -17,7 +17,7 @@ pub struct SharedContentItemData {
     /// Raw index values used to build the visible title and subtitle.
     pub source_title: String,
     pub size_bytes: u64,
-    pub sent_at: i64,
+    pub sent_at: u64,
     /// Decrypted thumbnail JPEG bytes. Empty when there is none — the UI
     /// paints a category glyph on a flat tile instead.
     pub thumbnail: Vec<u8>,
@@ -32,7 +32,7 @@ impl From<&SharedContentRow> for SharedContentItemData {
             category: row.category.clone(),
             source_title: row.title.clone(),
             size_bytes: row.size_bytes,
-            sent_at: row.sent_at as i64,
+            sent_at: row.sent_at,
             thumbnail,
         }
     }

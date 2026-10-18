@@ -408,7 +408,7 @@ pub fn message_to_display_data_with_replies(
         // identity is used separately for presentation and call direction.
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
-        sender_initials: chatter_core::ui::initials_from_name(sender_name),
+        sender_initials: crate::bin_ui::converters::initials_from_name(sender_name),
         content,
         timestamp: {
             // Convert UTC to local time for display (consistent with sidebar)

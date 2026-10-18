@@ -2,6 +2,7 @@
 
 use chatter_core::domain::attachment::{FileCategory, format_bytes};
 use chatter_core::domain::call::CallResult;
+use chatter_core::domain::user::PresenceStatus;
 use chatter_core::ui::SharedContentItemData;
 use chrono::Duration;
 use chrono::{DateTime, Datelike, Local, Utc};
@@ -33,8 +34,23 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
     local.format("%b %-d, %Y").to_string()
 }
 
+pub fn last_seen_label(presence: PresenceStatus, last_seen_at: Option<i64>) -> String {
+    match presence {
+        PresenceStatus::Online => "online".to_string(),
+        PresenceStatus::Away => "away".to_string(),
+        PresenceStatus::DoNotDisturb => "do not disturb".to_string(),
+        PresenceStatus::Offline => match last_seen_at {
+            Some(secs) => match DateTime::<Utc>::from_timestamp(secs, 0) {
+                Some(dt) => format!("last seen {}", format_timestamp(dt).to_lowercase()),
+                None => "last seen recently".to_string(),
+            },
+            None => "last seen recently".to_string(),
+        },
+    }
+}
+
 pub fn shared_content_lines(row: &SharedContentItemData) -> (String, String, bool) {
-    let when = format_timestamp(DateTime::from_timestamp_nanos(row.sent_at));
+    let when = format_timestamp(DateTime::from_timestamp_nanos(row.sent_at as i64));
     let is_link = row.category == "link";
     let (title, subtitle) = if is_link {
         (link_host(&row.source_title), row.source_title.clone())
