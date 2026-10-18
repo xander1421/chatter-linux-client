@@ -2,7 +2,7 @@ use super::*;
 
 /// URL scheme prefix for QR payloads.
 pub const LINK_URL_SCHEME: &str = "chatter";
-const LINK_URL_HOST: &str = "link";
+pub(super) const LINK_URL_HOST: &str = "link";
 
 /// Errors from device linking flows.
 #[derive(Debug, thiserror::Error)]
