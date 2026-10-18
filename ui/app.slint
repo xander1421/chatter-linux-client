@@ -15,13 +15,8 @@ import { VirtualKeyboard } from "components/modal_container.slint";
 import { Icons } from "theme/icons.slint";
 
 // Import auth screens
-import { LoginPage } from "pages/login.slint";
-import { RegisterPage } from "pages/register.slint";
+import { AuthPages } from "auth_pages.slint";
 import { AvatarOption } from "components/avatar_picker.slint";
-import { AccountRecoveryPage } from "pages/account_recovery.slint";
-import { LinkDevicePage } from "pages/link_device.slint";
-import { LoadingPage } from "pages/loading.slint";
-import { WelcomePage } from "pages/welcome.slint";
 
 // Import main layout components
 import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
@@ -1806,150 +1801,79 @@ export component MainWindow inherits Window {
             height: root.height - root.safe-area-top - root.safe-area-bottom;
             y: root.safe-area-top;
 
-            // Loading page
-            if current-view == "loading": LoadingPage {
-                z: 2;
-                x: root.view-shift("loading");
-                opacity: root.view-opacity("loading");
-                message: root.loading-message;
-                secondary-message: root.loading-secondary-message;
-            }
-
-            // Login page
-            if current-view == "login" || root.exiting-view == "login": LoginPage {
-                z: 2;
-                x: root.view-shift("login");
-                opacity: root.view-opacity("login");
-                touch: root.is-mobile-platform;
-                server-url <=> root.login-server-url;
-                configured-server-url: root.configured-server-url;
-                username <=> root.login-username;
-                password <=> root.login-password;
-                pin <=> root.login-pin;
-                loading: root.login-loading;
-                error: root.login-error;
-                verifying: root.login-verifying;
-                identity-reset-available: root.login-identity-reset-available;
-                accept-new-identity => { root.accept-new-identity(); }
-
-                server-unreachable: root.server-unreachable;
-                account-free-surfaces: root.account-free-surfaces;
-                continue-without-account => { root.continue-without-account(); }
-
-                login(u, p, s, pin) => {
-                    root.login(u, p, s, pin);
-                }
-                register => {
-                    root.go-to-register();
-                }
-                go-to-recovery => {
-                    root.go-to-recovery();
-                }
-                go-to-link-device => {
-                    root.go-to-link-device();
-                }
-            }
-
-            // Register page
-            if current-view == "register" || root.exiting-view == "register": RegisterPage {
-                z: 2;
-                x: root.view-shift("register");
-                opacity: root.view-opacity("register");
-                touch: root.is-mobile-platform;
-                display-name <=> root.register-display-name;
-                username <=> root.register-username;
-                password <=> root.register-password;
-                confirm-password <=> root.register-confirm-password;
-                pin <=> root.register-pin;
-                server-url <=> root.register-server-url;
-                loading: root.register-loading;
-                error: root.register-error;
-                avatar-source: root.register-avatar-source;
-                avatar-options: root.avatar-options;
-                has-avatar: root.register-has-avatar;
-                selected-default-idx <=> root.register-selected-default-idx;
-                avatar-color <=> root.register-avatar-color;
-                password-strength: root.register-password-strength;
-                pin-strength: root.register-pin-strength;
-                server-unreachable: root.server-unreachable;
-                account-free-surfaces: root.account-free-surfaces;
-
-                continue-without-account => { root.continue-without-account(); }
-
-                register(u, p, d, pin, s) => {
-                    root.register(u, p, d, pin, s);
-                }
-                username-validation(u) => { root.register-username-validation(u) }
-                pin-validation(pin) => { root.register-pin-validation(pin) }
-                clear-error => { root.register-clear-error(); }
-                password-changed(p) => {
-                    root.register-password-changed(p);
-                }
-                pin-changed(p) => {
-                    root.register-pin-changed(p);
-                }
-                select-avatar => {
-                    root.register-select-avatar();
-                }
-                select-default-avatar(idx) => {
-                    root.register-select-default-avatar(idx);
-                }
-                remove-avatar => { root.register-remove-avatar(); }
-                go-to-login => {
-                    root.go-to-login();
-                }
-            }
-
-            // Link new device (new-device side QR display)
-            if current-view == "link-device" || root.exiting-view == "link-device": LinkDevicePage {
-                z: 2;
-                x: root.view-shift("link-device");
-                opacity: root.view-opacity("link-device");
-                touch: root.is-mobile-platform;
-                qr-image: root.link-device-qr;
-                link-url: root.link-device-url;
-                status-text: root.link-device-status;
-                error: root.link-device-error;
-                linking: root.link-device-active;
-                has-local-identity: root.link-device-has-local-identity;
-
-                start => { root.link-device-start(); }
-                cancel => { root.link-device-cancel(); }
-                copy-link => { root.link-device-copy(); }
-                go-to-login => { root.go-to-login(); }
-            }
-
-            // Account recovery page
-            if current-view == "recovery" || root.exiting-view == "recovery": AccountRecoveryPage {
-                z: 2;
-                x: root.view-shift("recovery");
-                opacity: root.view-opacity("recovery");
-                username <=> root.recovery-username;
+            AuthPages {
+                width: parent.width;
+                height: parent.height;
+                account-free-surfaces : root.account-free-surfaces;
+                avatar-options : root.avatar-options;
+                configured-server-url : root.configured-server-url;
+                current-view : root.current-view;
+                exiting-view: root.exiting-view;
+                is-mobile-platform : root.is-mobile-platform;
+                link-device-active : root.link-device-active;
+                link-device-error : root.link-device-error;
+                link-device-has-local-identity : root.link-device-has-local-identity;
+                link-device-qr : root.link-device-qr;
+                link-device-status : root.link-device-status;
+                link-device-url : root.link-device-url;
+                loading-message : root.loading-message;
+                loading-secondary-message : root.loading-secondary-message;
+                login-error : root.login-error;
+                login-identity-reset-available : root.login-identity-reset-available;
+                login-loading : root.login-loading;
+                login-password <=> root.login-password;
+                login-pin <=> root.login-pin;
+                login-server-url <=> root.login-server-url;
+                login-username <=> root.login-username;
+                login-verifying : root.login-verifying;
                 recovery-code <=> root.recovery-code;
-                new-password <=> root.recovery-new-password;
-                confirm-password <=> root.recovery-confirm-password;
-                new-pin <=> root.recovery-new-pin;
-                loading: root.recovery-loading;
-                error: root.recovery-error;
-                success: root.recovery-success;
-
-                recover(u, code, pw, pin) => {
-                    root.recover-account(u, code, pw, pin);
-                }
-                go-to-login => {
-                    root.go-to-login();
-                }
-            }
-
-            // Welcome page (shown after first registration)
-            if current-view == "welcome" || root.exiting-view == "welcome": WelcomePage {
-                z: 2;
-                x: root.view-shift("welcome");
-                opacity: root.view-opacity("welcome");
-                display-name: root.user-display-name;
-                add-friends => { root.welcome-add-friends(); }
-                browse-channels => { root.welcome-browse-channels(); }
-                get-started => { root.welcome-get-started(); }
+                recovery-confirm-password <=> root.recovery-confirm-password;
+                recovery-error : root.recovery-error;
+                recovery-loading : root.recovery-loading;
+                recovery-new-password <=> root.recovery-new-password;
+                recovery-new-pin <=> root.recovery-new-pin;
+                recovery-success : root.recovery-success;
+                recovery-username <=> root.recovery-username;
+                register-avatar-color <=> root.register-avatar-color;
+                register-avatar-source : root.register-avatar-source;
+                register-confirm-password <=> root.register-confirm-password;
+                register-display-name <=> root.register-display-name;
+                register-error : root.register-error;
+                register-has-avatar : root.register-has-avatar;
+                register-loading : root.register-loading;
+                register-password <=> root.register-password;
+                register-password-strength : root.register-password-strength;
+                register-pin <=> root.register-pin;
+                register-pin-strength : root.register-pin-strength;
+                register-selected-default-idx <=> root.register-selected-default-idx;
+                register-server-url <=> root.register-server-url;
+                register-username <=> root.register-username;
+                server-unreachable : root.server-unreachable;
+                user-display-name : root.user-display-name;
+                view-progress : root.view-progress;
+                accept-new-identity() => { root.accept-new-identity(); }
+                continue-without-account() => { root.continue-without-account(); }
+                go-to-link-device() => { root.go-to-link-device(); }
+                go-to-login() => { root.go-to-login(); }
+                go-to-recovery() => { root.go-to-recovery(); }
+                go-to-register() => { root.go-to-register(); }
+                link-device-cancel() => { root.link-device-cancel(); }
+                link-device-copy() => { root.link-device-copy(); }
+                link-device-start() => { root.link-device-start(); }
+                login(arg0, arg1, arg2, arg3) => { root.login(arg0, arg1, arg2, arg3); }
+                recover-account(arg0, arg1, arg2, arg3) => { root.recover-account(arg0, arg1, arg2, arg3); }
+                register(arg0, arg1, arg2, arg3, arg4) => { root.register(arg0, arg1, arg2, arg3, arg4); }
+                register-clear-error() => { root.register-clear-error(); }
+                register-password-changed(arg0) => { root.register-password-changed(arg0); }
+                register-pin-changed(arg0) => { root.register-pin-changed(arg0); }
+                register-pin-validation(arg0) => { return root.register-pin-validation(arg0); }
+                register-remove-avatar() => { root.register-remove-avatar(); }
+                register-select-avatar() => { root.register-select-avatar(); }
+                register-select-default-avatar(arg0) => { root.register-select-default-avatar(arg0); }
+                register-username-validation(arg0) => { return root.register-username-validation(arg0); }
+                welcome-add-friends() => { root.welcome-add-friends(); }
+                welcome-browse-channels() => { root.welcome-browse-channels(); }
+                welcome-get-started() => { root.welcome-get-started(); }
             }
 
             // During the brief visual handoff, neither page accepts a stray tap.
