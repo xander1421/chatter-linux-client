@@ -153,4 +153,10 @@ impl ChatterClient {
             .map_err(|e| ClientError::Validation(e.to_string()))
     }
 
+    /// Compute the local Signal identity fingerprint (displayed in settings /
+    /// safety-number flows).
+    pub async fn my_identity_fingerprint(&self) -> Result<String, crate::error::ServiceError> {
+        self.signal().get_identity_fingerprint().await
+    }
+
 }

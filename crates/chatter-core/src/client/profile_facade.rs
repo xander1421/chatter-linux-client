@@ -297,4 +297,10 @@ impl ChatterClient {
         }
     }
 
+    /// Get the current user's display name from settings (same one used for
+    /// outgoing messages / calls). Falls back to an empty option.
+    pub fn my_display_name(&self) -> Option<String> {
+        self.anon_dms().get_my_display_name()
+    }
+
 }

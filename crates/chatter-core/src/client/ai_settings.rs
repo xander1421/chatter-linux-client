@@ -1,26 +1,6 @@
 use super::*;
 
 impl ChatterClient {
-    /// Compute the local Signal identity fingerprint (displayed in settings /
-    /// safety-number flows).
-    pub async fn my_identity_fingerprint(&self) -> Result<String, crate::error::ServiceError> {
-        self.signal().get_identity_fingerprint().await
-    }
-
-    /// Get the current user's display name from settings (same one used for
-    /// outgoing messages / calls). Falls back to an empty option.
-    pub fn my_display_name(&self) -> Option<String> {
-        self.anon_dms().get_my_display_name()
-    }
-
-    /// Look up an anon DM conversation by id.
-    pub fn get_anon_dm_conversation(
-        &self,
-        id: &crate::domain::anon_dm::AnonDmId,
-    ) -> Option<crate::domain::anon_dm::AnonDm> {
-        self.anon_dms().get_conversation(id).ok().flatten()
-    }
-
     // ── Local AI settings façade ─────────────────────────────────────────
 
     pub fn set_local_ai_enabled(

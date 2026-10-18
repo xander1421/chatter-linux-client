@@ -305,4 +305,12 @@ impl ChatterClient {
         self.anon_dms().list_conversations()
     }
 
+    /// Look up an anon DM conversation by id.
+    pub fn get_anon_dm_conversation(
+        &self,
+        id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().get_conversation(id).ok().flatten()
+    }
+
 }
