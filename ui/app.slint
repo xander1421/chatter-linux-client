@@ -214,13 +214,6 @@ export component MainWindow inherits Window {
         duration: root.view-appearing ? Materials.motion-standard : 0ms;
         easing: Materials.glide;
     }
-    function view-shift(name: string) -> length {
-        return root.current-view == name ? (1 - root.view-progress) * 24px
-            : -root.view-progress * 12px;
-    }
-    function view-opacity(name: string) -> float {
-        return root.current-view == name ? root.view-progress : 1 - root.view-progress;
-    }
     view-arrive := Timer {
         interval: 1ms;
         running: false;
