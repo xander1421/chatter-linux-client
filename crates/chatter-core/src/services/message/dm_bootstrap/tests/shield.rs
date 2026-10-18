@@ -184,7 +184,7 @@ async fn shield_empty_token_send_keeps_a_failed_bubble_for_retry() {
     assert_eq!(stored.delivery_status, "failed");
     assert_eq!(
         stored.failure_reason.as_deref(),
-        Some(super::super::core::SHIELD_WAITING_FOR_TOKENS)
+        Some(super::super::super::core::SHIELD_WAITING_FOR_TOKENS)
     );
     assert_eq!(stored.as_text(), Some("keep this"));
     assert_eq!(ms.token_manager.available_token_count().unwrap(), 0);
@@ -222,12 +222,15 @@ async fn shield_parked_post_waits_for_independent_retry_after_refill() {
     ));
     let row = result.message.unwrap();
     assert_eq!(
-        super::super::display_delivery_status(&row.delivery_status, row.failure_reason.as_deref()),
+        super::super::super::display_delivery_status(
+            &row.delivery_status,
+            row.failure_reason.as_deref()
+        ),
         "parked"
     );
     assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
     assert_eq!(
-        super::super::shield_retry::retry_parked_with(ms, me, |_| async {
+        super::super::super::shield_retry::retry_parked_with(ms, me, |_| async {
             panic!("empty pool must not dispatch")
         })
         .await
@@ -273,13 +276,13 @@ async fn shield_parked_post_waits_for_independent_retry_after_refill() {
         std::future::ready(())
     };
     assert_eq!(
-        super::super::shield_retry::retry_parked_with(ms, me, attempt)
+        super::super::super::shield_retry::retry_parked_with(ms, me, attempt)
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        super::super::shield_retry::retry_parked_with(ms, me, |_| async {
+        super::super::super::shield_retry::retry_parked_with(ms, me, |_| async {
             panic!("confirmed row must not repeat")
         })
         .await
