@@ -19,7 +19,7 @@ impl ChatterClient {
 
     /// Upload plaintext is only needed for one send. A process death skips
     /// TempDir's destructor, so remove any leftovers before a client can send.
-    pub(super) fn cleanup_staged_upload_temps(&self) -> std::io::Result<()> {
+    pub(in crate::client) fn cleanup_staged_upload_temps(&self) -> std::io::Result<()> {
         let root = Self::staged_upload_temp_root();
         if root.exists() {
             std::fs::remove_dir_all(&root)?;
@@ -71,7 +71,7 @@ impl ChatterClient {
 
     /// A clean break from the former plaintext layout: only files whose
     /// encryption metadata is readable in SQLCipher may survive startup.
-    pub(super) fn discard_legacy_staging_all(&self) {
+    pub(in crate::client) fn discard_legacy_staging_all(&self) {
         let Ok(accounts) = std::fs::read_dir(self.staging_root()) else {
             return;
         };
