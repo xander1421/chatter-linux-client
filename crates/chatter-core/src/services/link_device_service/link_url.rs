@@ -4,7 +4,7 @@ use super::*;
 ///
 /// `size_px` is clamped to `[128, 1024]`. Returned bytes are a complete
 /// PNG image suitable for `slint::Image::load_from_memory` or saving to disk.
-pub fn qr_png_for_link_url(url: &str, size_px: u32) -> Result<Vec<u8>, LinkDeviceError> {
+pub(super) fn qr_png_for_link_url(url: &str, size_px: u32) -> Result<Vec<u8>, LinkDeviceError> {
     use image::{ImageEncoder, Luma};
     use qrcode::QrCode;
 

@@ -55,8 +55,9 @@ mod reauth;
 mod transfer;
 mod types;
 
-pub use link_url::qr_png_for_link_url;
-use link_url::{base64_url, base64_url_decode, build_link_url, random_provisioning_code};
+use link_url::{
+    base64_url, base64_url_decode, build_link_url, qr_png_for_link_url, random_provisioning_code,
+};
 use new_device::run_flow;
 pub use types::*;
 use types::{LINK_URL_HOST, LinkRequest, verification_code_for_pub};
