@@ -12,17 +12,16 @@ import { Spacing } from "theme/spacing.slint";
 import { Typography } from "theme/typography.slint";
 import { VoiceRecording } from "chat/voice_recording.slint";
 import { VirtualKeyboard } from "components/modal_container.slint";
-import { Icons } from "theme/icons.slint";
 
 // Import auth screens
 import { AuthPages } from "auth_pages.slint";
+import { MainChatShell } from "main_chat_shell.slint";
 import { AvatarOption } from "components/avatar_picker.slint";
 
 // Import main layout components
 import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { SecretTimerModal } from "chat/secret_timer_modal.slint";
-import { ThreadPanel } from "chat/thread_panel.slint";
 import { MeshGlobal } from "mesh/mesh_global.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
@@ -57,7 +56,6 @@ import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeDat
 
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
-import { ConnectionBanner, MeshOnlyBar } from "components/mod.slint";
 import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
 import { VideoPlayer } from "components/mod.slint";
 import { ComposeFab } from "components/compose_fab.slint";
@@ -73,7 +71,6 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 // Import anon mode global + PIN modal
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 import { KeyboardShortcutsDialog } from "modals/keyboard_shortcuts.slint";
-import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
 import { ShieldWash } from "anon_mode/shield_wash.slint";
 
 // Re-export types for Rust binding
@@ -1885,713 +1882,282 @@ export component MainWindow inherits Window {
             }
 
             // Main chat layout — parent Rectangle already accounts for all insets.
-            if current-view == "main": Rectangle {
-                // Keep the sidebar and chat at a fixed origin while notices change.
-                // Layer order: chat column (-2), floating notices (-1), then
-                // the pushed modal layer (0).
+            if current-view == "main": MainChatShell {
                 z: -2;
                 width: 100%;
                 height: parent.height;
-                background: transparent;
-
-                VerticalLayout {
-                    width: 100%;
-                    height: parent.height;
-
-                Rectangle {
-                    vertical-stretch: 1;
-                    width: 100%;
-                    clip: true;
-
-                // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
-                // Hidden entirely in call-fullscreen so the call view fills the whole
-                // window width — a landscape viewport for a landscape screen share.
-                if !root.active-call-fullscreen: Sidebar {
-                    x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
-                    // Keep the list mounted for the reverse push, but do not
-                    // paint its rows after the chat fully covers it. Show it
-                    // immediately when an edge swipe starts, before progress
-                    // has moved off 1 in the first gesture frame.
-                    visible: !root.compact-layout || root.chat-push-progress < 1 || root.chat-edge-swiping;
-                    y: 0px;
-                    height: parent.height;
-                    bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
-                        + (root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px) : 0px;
-                    // Survives dismissing the connection banner: the dot on the
-                    // settings button is what keeps saying the server is down.
-                    server-unreachable: root.server-unreachable;
-                    // `mobile-mode` means "touch input" — it sizes the panel's
-                    // targets. On desktop the panel also keeps its Discord-style
-                    // layout role: an icon rail by default, expanded to the full
-                    // list by the toggle in its footer.
-                    //
-                    // On mobile it no longer does. The rail was kept because it was
-                    // the only always-available navigation, and swapping the whole
-                    // screen "costs a tap for every glance at the conversation
-                    // list" — but the bottom tab bar now pays that cost instead
-                    // (Chats is one tap from anywhere), and the rail was spending
-                    // 16% of the width of every conversation to avoid it. So on a
-                    // phone this is a full-width list that the chat replaces, never
-                    // a rail beside it. A tablet is wide enough for the desktop
-                    // two-pane role, so only its target sizes follow touch.
-                    mobile-mode: root.compact-layout;
-                    touch: root.is-mobile-platform;
-                    mobile-width: root.width;
-                    // The panel is the top-left thing on screen, so it is the one
-                    // that has to keep the macOS traffic lights clear.
-                    traffic-lights-width: root.macos-traffic-lights-width;
-                    titlebar-height: root.macos-titlebar-height;
-                    search-overlay-open: root.unified-search-open;
-                    chat-rows: root.chat-rows;
-                    chat-rows-loading: root.is-signed-in && root.chat-rows-loading;
-                    custom-sections: root.custom-sections;
-                    user-display-name: root.user-display-name;
-                    user-avatar-source: root.user-avatar-source;
-                    user-initials: root.user-initials;
-                    user-presence-status: root.user-presence-status;
-                    // Narrow screens start on the rail and expand on demand. The
-                    // user drives this — `sidebar-user-collapsed` keeps their choice
-                    // from being undone by a resize.
-                    // Never a rail on mobile — when this panel is on screen at all
-                    // it is the whole screen.
-                    collapsed: root.compact-layout ? false : root.sidebar-is-rail;
-                    hidden: root.compact-layout ? false : root.sidebar-hidden;
-                    pending-friend-requests: root.friends-received-requests.length;
-                    pending-message-requests: root.pending-message-requests;
-                    pending-group-invites: root.pending-group-invites;
-                    pending-channel-invites: root.pending-channel-invites;
-                    missed-call-count: root.missed-call-count;
-
-                    channel-selected(id) => {
-                        root.mobile-show-chat = true;
-                        root.channel-selected(id);
-                    }
-                    dm-selected(id) => {
-                        root.mobile-show-chat = true;
-                        root.dm-selected(id);
-                    }
-                    private-group-selected(id) => {
-                        root.mobile-show-chat = true;
-                        root.private-group-selected(id);
-                    }
-                    search-clicked => {
-                        root.unified-search-selected-index = 0;
-                        root.unified-search-open = true;
-                        root.unified-search-opened();
-                    }
-                    saved-messages-clicked => {
-                        // Saved Messages IS a conversation, so it routes like one —
-                        // without this the chat loads behind the list and the tap
-                        // reads as doing nothing.
-                        root.mobile-show-chat = true;
-                        root.saved-messages-clicked();
-                    }
-                    friends-clicked => {
-                        root.active-tab = "contacts";
-                    }
-                    // Wide-layout entry to the Calls screen — the same modal and
-                    // the same load the phone tab bar's Calls tab raises.
-                    calls-clicked => {
-                        root.active-tab = "calls";
-                        root.calls-tab-clicked();
-                    }
-                    // The sidebar's one Requests row fires all four below on every
-                    // tap: the other three refresh their lists, and this one opens
-                    // Contacts › Requests on the first sub-tab that has something
-                    // in it (Received when none).
-                    friend-requests-clicked => {
-                        root.friends-modal-tab = "requests";
-                        root.friends-requests-sub-tab =
-                            root.friends-received-requests.length > 0 ? "received"
-                            : root.pending-message-requests > 0 ? "private"
-                            : root.pending-group-invites > 0 ? "groups"
-                            : root.pending-channel-invites > 0 ? "channels"
-                            : "received";
-                        root.active-tab = "contacts";
-                    }
-                    message-requests-clicked => {
-                        root.message-requests-clicked();
-                    }
-                    group-invites-clicked => {
-                        root.group-invites-clicked();
-                    }
-                    channel-invites-clicked => {
-                        root.channel-invites-clicked();
-                    }
-                    // The avatar and the gear both open the account menu, which
-                    // is where Settings lives now.
-                    profile-clicked => {
-                        root.active-tab = "profile";
-                    }
-                    create-channel-clicked => {
-                        root.start-create-channel();
-                    }
-                    create-clicked => {
-                        root.nav-push("create-menu");
-                    }
-                    join-channel-clicked => {
-                        root.create-channel-initial-tab = 1;
-                        root.nav-push("create-channel");
-                    }
-                    toggle-collapsed => {
-                        // Track user's explicit collapse choice for smart auto-expand
-                        root.sidebar-user-collapsed = !root.sidebar-collapsed;
-                        root.toggle-sidebar();
-                    }
-                    create-section-clicked => {
-                        root.start-create-section();
-                    }
-                    section-toggle-expanded(id) => {
-                        root.section-toggle-expanded(id);
-                    }
-                    section-conversation-selected(conv-id, conv-type) => {
-                        root.mobile-show-chat = true;
-                        root.section-conversation-selected(conv-id, conv-type);
-                    }
-                    delete-section-clicked(id) => {
-                        root.delete-section-clicked(id);
-                    }
-                    rename-section-clicked(id) => {
-                        root.create-section-rename-mode = true;
-                        root.create-section-id = id;
-                        // Rust side should set name/emoji before opening
-                        root.rename-section-clicked(id);
-                        root.nav-push("create-section");
-                    }
-                    move-to-section(conv-id, conv-type, section-id) => {
-                        root.move-to-section(conv-id, conv-type, section-id);
-                    }
-                    set-conversation-pinned(conv-id, pinned) => {
-                        root.set-conversation-pinned(conv-id, pinned);
-                    }
-                    delete-conversation(conv-id, kind) => {
-                        root.delete-conversation(conv-id, kind);
-                    }
-                    leave-conversation(conv-id, kind) => {
-                        root.leave-conversation(conv-id, kind);
-                    }
-                    move-section(section-id, delta) => {
-                        root.move-section(section-id, delta);
-                    }
-                    set-section-sort-mode(section-id, mode) => {
-                        root.set-section-sort-mode(section-id, mode);
-                    }
-                    remove-from-section(conv-id) => {
-                        root.remove-from-section(conv-id);
-                    }
-                    settings-clicked => {
-                        root.active-tab = "profile";
-                    }
-                    mesh-setup-clicked => {
-                        root.nav-push("mesh-setup");
-                    }
-                    anon-mode-clicked => {
-                        root.toggle-anon-mode();
-                    }
-                }
-
-                // The list recedes under the travelling conversation. It is
-                // retained through the whole push and can receive the reverse
-                // motion even after the logical chat route has closed.
-                if root.compact-layout && root.chat-push-progress > 0: Rectangle {
-                    width: parent.width;
-                    height: parent.height;
-                    background: Materials.scrim;
-                    opacity: root.chat-push-progress * 0.32;
-                    TouchArea {}
-                }
-
-                // Right side area (Chat + Panels).
-                //
-                // On phones the pane is added for the push and retained through
-                // its reverse travel; offscreen content never takes layout width.
-                if !root.compact-layout || root.mobile-show-chat || root.chat-push-progress > 0: chat-panel-area := Rectangle {
-                    x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
-                        : root.sidebar-hidden || root.active-call-fullscreen ? 0px
-                        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
-                        : Spacing.sidebar-width;
-                    y: 0px;
-                    width: root.compact-layout ? parent.width : parent.width - self.x;
-                    height: parent.height;
-                    visible: true;
-                    // Clip this area to prevent inner panels from overflowing the whole app
-                    clip: true;
-                    // Space the thread panel occupies. Both row children are sized
-                    // from this ONE expression so chat column + panel always sum to
-                    // exactly the row width — the layout solver never gets to give
-                    // the chat column 100% and push the panel past the clipped edge
-                    // (the "thread opens but never appears" bug, 2026-07-19).
-                    property <length> thread-panel-w: !root.thread-panel-visible ? 0px
-                        : root.is-small-screen ? self.width
-                        : 320px;
-
-                        // Chat column: call dock (when active) on top of ChatLayout.
-                        // The dock collapses to 0px when no call is active so the chat
-                        // layout fills the full space. On mobile, hide the whole column
-                        // when a side panel (members/thread) is open.
-                        // Manually placed (not a HorizontalLayout child): explicit
-                        // geometry doesn't feed the constraint solver, which both
-                        // avoids a binding loop and guarantees column + panel tile
-                        // the row exactly.
-                        VerticalLayout {
-                            x: 0;
-                            y: 0;
-                            width: parent.width - chat-panel-area.thread-panel-w;
-                            height: 100%;
-                            visible: !(root.is-small-screen && root.thread-panel-visible);
-
-                            ActiveCallView {
-                                // Take the chat column's full vertical slot when
-                                // fullscreen, otherwise stay as a fixed dock (the
-                                // child component caps its own height to 280px).
-                                vertical-stretch: root.active-call-fullscreen ? 1 : 0;
-                                show: root.active-call-visible;
-                                fullscreen: root.active-call-fullscreen;
-                                viewport-height: root.height;
-                                call-data: root.active-call-data;
-                                is-muted: root.call-is-muted;
-                                is-video-enabled: root.call-is-video-enabled;
-                                is-screen-sharing: root.call-is-screen-sharing;
-                                speaker-toggle: root.call-speaker-toggle;
-                                speaker-on: root.call-speaker-on;
-                                toggle-speaker => { root.call-toggle-speaker(); }
-                                local-video-frame: root.call-local-video-frame;
-                                remote-video-frames: root.call-remote-video-frames;
-
-                                toggle-mute => { root.call-toggle-mute(); }
-                                toggle-video => { root.call-toggle-video(); }
-                                toggle-screen-share => {
-                                    if root.call-is-screen-sharing {
-                                        root.call-toggle-screen-share();
-                                    } else {
-                                        root.show-screen-source-picker();
-                                    }
-                                }
-                                end-call => { root.call-end(); root.active-call-fullscreen = false; }
-                                show-audio-settings => { root.show-audio-device-picker(); }
-                                show-audio-output-settings => { root.show-audio-output-picker(); }
-                                peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
-                                peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
-                                fullscreen-toggle => {
-                                    root.active-call-fullscreen = !root.active-call-fullscreen;
-                                }
-                            }
-
-                        // `if` (not `visible`): a Slint element hidden via `visible:false`
-                        // still occupies its layout slot, so in fullscreen the hidden
-                        // ChatLayout reserved black space below the call dock. `if`
-                        // removes it from the layout tree entirely.
-                        // Selection mode takes over the channel's own header rather
-                        // than floating above everything: as a root-level overlay it
-                        // covered the sidebar and the header at once, so the count sat
-                        // on top of the nav it was not part of. Sitting here it lines
-                        // up with the header it replaces, which is also why it does not
-                        // apply safe-area-top — ChatHeader does not either, and an
-                        // inset on one of the two would misalign them.
-                        if root.selection-mode
-                            && !root.active-call-fullscreen
-                            && !(root.is-small-screen && root.thread-panel-visible): SelectionBar {
-                            show: true;
-                            backdrop-paused: root.chat-list-scrolling;
-                            touch: root.is-mobile-platform;
-                            count: root.selected-message-count;
-                            cleared => {
-                                root.selection-mode = false;
-                                root.selection-cleared();
-                            }
-                            delete-clicked => {
-                                root.delete-choosing = true;
-                                root.delete-choice-everyone = SelectionChrome.can-delete-everyone;
-                                root.delete-choice-me = true;
-                                root.delete-confirm-sender = "";
-                                root.delete-confirm-everyone = false;
-                                root.delete-confirm-count = root.selected-message-count;
-                            }
-                            copy-clicked => { root.selection-copy-clicked(); }
-                            forward-clicked => { root.selection-forward-clicked(); }
-                        }
-
-                        if !root.active-call-fullscreen
-                            && !(root.is-small-screen && root.thread-panel-visible)
-                            && (root.channel-name != "" || root.loading-messages): conversation-layout := ChatLayout {
-                        vertical-stretch: 1;
-                        hide-header: root.selection-mode;
-                        // No back button: the conversation list is always on
-                        // screen beside this, so there is nothing to go back to —
-                        // and the header is tight enough already.
-                        // The only way back to the list on a phone, so it is not
-                        // optional there. Desktop still shows both panes at once
-                        // and has nothing to go back to.
-                        show-back-button: root.compact-layout;
-                        header-leading-inset: root.chat-traffic-lights-lead;
-                        back-clicked => { root.mobile-show-chat = false; }
-                        selection-mode: root.selection-mode;
-                        // Press-and-hold on a bubble is a touch gesture only.
-                        mobile: root.is-mobile-platform;
-                        composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
-                        rounded-page-top: root.is-mobile-platform && !root.compact-layout;
-                        menu-open: root.context-menu-visible || root.reaction-picker-visible;
-                        // Tier 2 of the hold escalates out of tier 1: close the menu
-                        // as selection engages, so the two are never on screen at
-                        // once. The menu fades (see MessageContextMenu) while the
-                        // row tint animates in, so it reads as an escalation the
-                        // user caused rather than a menu that glitched away.
-                        selection-toggled(id) => {
-                            root.context-menu-visible = false;
-                            root.message-selection-toggled(id);
-                        }
-                        channel-id: root.channel-id;
-                        channel-name: root.channel-name;
-                        conversation-kind: root.conversation-kind;
-                        private-channel: root.private-channel;
-                        privacy-line-override: root.privacy-line-override;
-                        privacy-line-exposed: root.privacy-line-exposed;
-                        is-dm: root.is-dm;
-                        can-forward: root.chat-can-forward;
-                        is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
-                        member-count: root.member-count;
-                        invited-count: root.invited-count;
-                        topic: root.topic;
-                        typing-indicator: root.typing-indicator;
-                        presence-status: root.header-presence-status;
-                        channel-avatar-source: root.channel-avatar-source;
-                        channel-has-avatar: root.channel-has-avatar;
-                        jarvis-thinking: root.jarvis-thinking;
-                        messages: root.messages;
-                        loading-messages: root.loading-messages;
-                        scroll-to-message-index: root.scroll-to-message-index;
-                        highlighted-message-id: root.highlighted-message-id;
-                        message-scroll-position <=> root.message-scroll-position;
-                        message-first-visible-row <=> root.message-first-visible-row;
-                        message-last-visible-row <=> root.message-last-visible-row;
-                        // A new layout's list starts at rest; `changed` does not
-                        // fire for that first value.
-                        init => { root.chat-list-scrolling = false; root.settle-composer(); }
-                        changed composer-composing => { root.composer-composing = self.composer-composing; }
-                        changed composer-composed-text => { root.composer-composed-text = self.composer-composed-text; }
-                        changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }
-                        is-at-bottom <=> root.is-at-bottom;
-                        history-load-failed <=> root.history-load-failed;
-                        unread-index <=> root.unread-index;
-                        unread-count <=> root.unread-count;
-                        should-auto-scroll: root.should-auto-scroll;
-                        current-playing-attachment-id: root.current-playing-attachment-id;
-                        is-media-playing: root.is-media-playing;
-                        audio-progress: root.audio-progress;
-                        audio-elapsed: root.audio-elapsed;
-                        attachment-prepare-serial: root.attachment-prepare-serial;
-                        attachment-restore-serial: root.attachment-restore-serial;
-                        composer-text <=> root.composer-text;
-                        composer-placeholder: root.composer-placeholder;
-                        composer-notice: root.composer-notice;
-                        conversation-read-only: root.conversation-read-only;
-                        header-can-call: root.header-can-call;
-                        active-channel-call-id: root.active-call-visible ? "" : root.active-channel-call-id;
-                        active-channel-call-video: root.active-channel-call-video;
-                        active-channel-call-participants: root.active-channel-call-participants;
-                        refresh-channel-call => { root.refresh-channel-call(); }
-                        join-channel-call => {
-                            if root.active-channel-call-video { root.start-video-call(); }
-                            else { root.start-voice-call(); }
-                        }
-                        header-can-invite: root.header-can-invite;
-                        header-can-open-settings: root.header-can-open-settings;
-                        header-can-open-pinned-list: root.header-can-open-pinned-list;
-                        secret-request-actions: root.secret-request-actions;
-                        secret-request-busy: root.private-request-decision != "";
-                        secret-request-accept-clicked => { root.secret-request-accept-clicked(); }
-                        secret-request-decline-clicked => { root.secret-request-decline-clicked(); }
-                        pending-attachments: root.pending-attachments;
-                        composer-is-editing <=> root.composer-is-editing;
-                        composer-edit-message-id <=> root.composer-edit-message-id;
-                        composer-is-replying: root.composer-is-replying;
-                        reply-focus-serial: root.reply-focus-serial;
-                        keyboard-open: root.keyboard-open;
-                        composer-reply-to-sender-name: root.composer-reply-to-sender-name;
-                        composer-reply-preview: root.composer-reply-preview;
-                        composer-reply-has-thumbnail: root.composer-reply-has-thumbnail;
-                        composer-reply-thumbnail: root.composer-reply-thumbnail;
-
-                        // Picker state
-                        keyboard-inset: root.virtual-keyboard-size.height;
-                        remembered-keyboard-height: root.drawer-keyboard-height;
-                        composer-keyboard-requested(space) => { root.request-composer-keyboard(space); }
-                        composer-input-focused => { root.watch-composer-keyboard(); }
-                        composer-focus-released => { root.release-text-focus(); }
-                        inserted-emoji: root.inserted-emoji;
-                        insert-serial: root.insert-serial;
-                        emoji-list: root.composer-emoji-list;
-                        emoji-category <=> root.composer-emoji-category;
-                        emoji-skin-tone <=> root.composer-emoji-skin-tone;
-                        emoji-search <=> root.composer-emoji-search;
-                        gif-search <=> root.composer-gif-picker-search;
-                        gif-results: root.composer-gif-picker-results;
-                        gif-recent: root.composer-gif-picker-recent;
-                        gif-loading: root.composer-gif-picker-loading;
-                        gif-failed: root.composer-gif-picker-failed;
-                        emoji-selected(emoji) => { root.composer-emoji-selected(emoji); }
-                        emoji-category-changed(category) => { root.composer-emoji-category-changed(category); }
-                        emoji-search-changed(query) => { root.composer-emoji-search-changed(query); }
-                        emoji-skin-tone-changed(tone) => { root.composer-emoji-skin-tone-changed(tone); }
-                        gif-selected(id, url) => { root.composer-gif-selected(id, url); }
-                        gif-search-changed(query) => { root.composer-gif-search-changed(query); }
-                        emoji-picker-visible <=> root.composer-emoji-picker-visible;
-                        gif-picker-visible <=> root.composer-gif-picker-visible;
-                        gifs-available: root.composer-gifs-available;
-
-                        settings-clicked => { root.chat-settings-clicked(); }
-                        voice-call-clicked => { root.start-voice-call(); }
-                        header-more-clicked(video, settings) => {
-                            root.chat-menu-video = video;
-                            root.chat-menu-settings = settings;
-                            root.chat-menu-secret-chat = root.chat-menu-can-start-secret-chat();
-                            root.nav-push("chat-menu");
-                        }
-                        invite-clicked => { root.invite-member(); }
-                        // Peer identity change prompt
-                        identity-change-visible: root.identity-change-visible;
-                        identity-change-title: root.identity-change-title;
-                        identity-change-detail: root.identity-change-detail;
-                        identity-change-attributed: root.identity-change-attributed;
-                        identity-change-accept-clicked => { root.identity-change-accept-clicked(); }
-                        // Pinned bar (Telegram-style)
-                        has-pinned-messages: root.has-pinned-messages;
-                        pinned-message-preview: root.pinned-message-preview;
-                        pinned-current-index: root.pinned-current-index;
-                        pinned-total-count: root.pinned-total-count;
-                        pinned-prev-clicked => { root.pinned-prev-clicked(); }
-                        pinned-next-clicked => { root.pinned-next-clicked(); }
-                        pinned-go-to-message => { root.pinned-go-to-message(); }
-                        pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
-                        pinned-show-clicked => { root.pinned-show-clicked(); }
-                        pinned-thumbnail: root.pinned-thumbnail;
-                        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
-                        open-message-link(url) => { root.open-message-link(url); }
-                        message-clicked(id) => { root.message-clicked(id); }
-                        reply-clicked(sender-id, timestamp-ns) => {
-                            root.reply-clicked(sender-id, timestamp-ns);
-                            root.reply-focus-serial += 1;
-                        }
-                        forward-clicked(sender-id, timestamp-ns) => { root.forward-message-action(sender-id, timestamp-ns); }
-                        react-clicked(sender-id, timestamp-ns, x, y) => {
-                            root.reaction-picker-sender-id = sender-id;
-                            root.reaction-picker-timestamp-ns = timestamp-ns;
-                            root.reaction-picker-anchor-x = x;
-                            root.reaction-picker-anchor-y = y;
-                            root.reaction-picker-visible = true;
-                            root.react-clicked(sender-id, timestamp-ns, x, y);
-                        }
-                        // Tapping an existing reaction toggles it, the way every
-                        // messenger does; the picker stays on long-press (§112w).
-                        reaction-toggled(sender-id, timestamp-ns, emoji) => {
-                            root.reaction-selected(sender-id, timestamp-ns, "", emoji);
-                        }
-                        thread-clicked(id) => { root.thread-clicked(id); }
-                        more-clicked(sender-id, timestamp-ns, x, y) => {
-                            root.context-menu-preview-message = self.menu-preview-message;
-                            root.context-menu-preview-row-x = self.menu-preview-row-x;
-                            root.context-menu-preview-row-y = self.menu-preview-row-y;
-                            root.context-menu-preview-row-width = self.menu-preview-row-width;
-                            root.context-menu-preview-mobile = self.mobile;
-                            root.context-menu-preview-from-thread = false;
-                            root.context-menu-content-top = self.content-top;
-                            root.context-menu-anchor-top = self.menu-anchor-top;
-                            root.context-menu-anchor-bottom = self.menu-anchor-bottom;
-                            root.context-menu-anchor-left = self.menu-anchor-left;
-                            root.context-menu-anchor-right = self.menu-anchor-right;
-                            root.more-clicked(sender-id, timestamp-ns, x, y);
-                        }
-                        quote-clicked(id) => { root.quote-clicked(id); }
-                        view-attachment(id) => {
-                            root.viewer-origin-x = self.viewer-origin-x;
-                            root.viewer-origin-y = self.viewer-origin-y;
-                            root.viewer-origin-width = self.viewer-origin-width;
-                            root.viewer-origin-height = self.viewer-origin-height;
-                            root.view-attachment(id);
-                        }
-                        audio-seek(id, pos) => { root.audio-seek(id, pos); }
-                        load-more => { root.load-more(); }
-                        visible-media-rows(first, last) => { root.visible-media-rows(first, last); }
-                        send(text) => { return root.send(text); }
-                        send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
-                        cancel-edit => { root.cancel-edit(); }
-                        cancel-reply => { root.cancel-reply(); }
-                        attachment-clicked => { root.attachment-clicked(); }
-                        paste-image => { root.paste-image(); }
-                        emoji-clicked => { root.emoji-clicked(); }
-                        gif-clicked => { root.gif-clicked(); }
-
-                        mention-triggered(query) => { root.mention-triggered(query); }
-                        remove-attachment(id) => { root.remove-attachment(id); }
-                        typing-changed(is-typing) => { root.typing-changed(is-typing); }
-                        list-geometry(visible, content, seeking) => {
-                            root.list-geometry(visible, content, seeking);
-                        }
-                    }
-
-                        // Nothing open (the tablet/desktop pane before the first
-                        // pick, or after the open chat was deleted or left). Every
-                        // open path names the conversation, so an empty name means
-                        // none: without this the pane read "No messages yet / Be
-                        // the first to say something! / Public channel".
-                        // An open in flight is not "nothing open": the name arrives
-                        // with the messages, and showing this for those ~300 ms
-                        // flashed the two-pane placeholder on every phone open.
-                        if !root.active-call-fullscreen && root.channel-name == "" && !root.loading-messages: Rectangle {
-                            vertical-stretch: 1;
-                            background: Colors.background;
-                            Text {
-                                text: "Select a conversation";
-                                color: Colors.text-muted;
-                                font-size: Typography.lg;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-                        } // end VerticalLayout (call dock + ChatLayout)
-
-                    // Thread panel (side panel on desktop, full-screen overlay on mobile).
-                    // Always in the layout, width-driven — NOT an `if` conditional, and
-                    // sized from the same `thread-panel-w` expression as the chat column
-                    // (see chat-panel-area) so the two always sum to the row width.
-                    ThreadPanel {
-                        visible: root.thread-panel-visible;
-                        x: parent.width - self.width;
-                        y: 0;
-                        width: chat-panel-area.thread-panel-w;
-                        height: 100%;
-                        // Same expression `thread-panel-w` uses to give the panel
-                        // the whole row: at that width it is a pushed page, so it
-                        // dismisses with a back chevron rather than an X.
-                        mobile: root.is-small-screen;
-                        root-message-id: root.thread-root-message-id;
-                        root-sender-name: root.thread-root-sender-name;
-                        root-content-preview: root.thread-root-content-preview;
-                        reply-count: root.thread-reply-count;
-                        channel-name: root.channel-name;  // threads open on the active conversation
-                        conversation-kind: root.conversation-kind;
-                        replies: root.thread-replies;
-                        loading: root.thread-loading;
-                        composer-text <=> root.thread-composer-text;
-
-                        close-clicked => { root.close-thread-clicked(); }
-                        send-reply(text) => { root.send-thread-reply(text); }
-                        load-more-replies => { root.load-more-thread-replies(); }
-                        open-message-link(url) => { root.open-message-link(url); }
-                        message-clicked(id) => { root.message-clicked(id); }
-                        menu-open: root.context-menu-visible || root.reaction-picker-visible;
-                        reply-clicked(sender-id, timestamp-ns) => {
-                            root.reply-clicked(sender-id, timestamp-ns);
-                            root.reply-focus-serial += 1;
-                        }
-                        quote-clicked(id) => { root.quote-clicked(id); }
-                        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
-                        current-playing-attachment-id: root.current-playing-attachment-id;
-                        is-media-playing: root.is-media-playing;
-                        audio-progress: root.audio-progress;
-                        audio-elapsed: root.audio-elapsed;
-                        view-attachment(id) => {
-                            root.viewer-origin-width = 0px;
-                            root.view-attachment(id);
-                        }
-                        audio-seek(id, pos) => { root.audio-seek(id, pos); }
-                        more-clicked(sender-id, timestamp-ns, x, y) => {
-                            root.context-menu-preview-message = self.menu-preview-message;
-                            root.context-menu-preview-row-x = self.menu-preview-row-x;
-                            root.context-menu-preview-row-y = self.menu-preview-row-y;
-                            root.context-menu-preview-row-width = self.menu-preview-row-width;
-                            root.context-menu-preview-mobile = self.mobile;
-                            root.context-menu-preview-from-thread = true;
-                            // The panel's own header is the menu's ceiling.
-                            root.context-menu-content-top = self.absolute-position.y;
-                            root.context-menu-anchor-top = self.menu-anchor-top;
-                            root.context-menu-anchor-bottom = self.menu-anchor-bottom;
-                            root.context-menu-anchor-left = self.menu-anchor-left;
-                            root.context-menu-anchor-right = self.menu-anchor-right;
-                            root.more-clicked(sender-id, timestamp-ns, x, y);
-                        }
-                        react-clicked(sender-id, timestamp-ns, x, y) => {
-                            root.reaction-picker-sender-id = sender-id;
-                            root.reaction-picker-timestamp-ns = timestamp-ns;
-                            root.reaction-picker-anchor-x = x;
-                            root.reaction-picker-anchor-y = y;
-                            root.reaction-picker-visible = true;
-                            root.react-clicked(sender-id, timestamp-ns, x, y);
-                        }
-                        reaction-toggled(sender-id, timestamp-ns, emoji) => {
-                            root.reaction-selected(sender-id, timestamp-ns, "", emoji);
-                        }
-                    }
-
-                } // end chat-panel-area Rectangle
-                // Only the leading edge handles the gesture, so message
-                // scrolling and text selection remain under the chat pane.
-                if root.compact-layout && root.mobile-show-chat: TouchArea {
-                    x: 0px;
-                    y: Spacing.header-height-touch;
-                    width: 24px;
-                    height: max(0px, parent.height - self.y - 96px);
-                    pointer-event(event) => {
-                        if event.kind == PointerEventKind.down {
-                            root.chat-edge-swiping = true;
-                            root.chat-edge-start = self.absolute-position.x + self.mouse-x;
-                        }
-                        if event.kind == PointerEventKind.move && root.chat-edge-swiping {
-                            root.chat-push-progress = 1 - min(1, max(0,
-                                (self.absolute-position.x + self.mouse-x - root.chat-edge-start) / root.width));
-                        }
-                        // The system Back gesture can take this touch away;
-                        // only a completed in-app swipe may close the chat.
-                        if event.kind == PointerEventKind.cancel {
-                            root.chat-edge-swiping = false;
-                            root.chat-push-progress = 1;
-                        } else if event.kind == PointerEventKind.up {
-                            root.chat-edge-swiping = false;
-                            if root.chat-push-progress < 0.7 { root.mobile-show-chat = false; }
-                            else { root.chat-push-progress = 1; }
-                        }
-                    }
-                }
-            } // end inner page stack (sidebar + chat)
-
-                } // end VerticalLayout (chat area)
-
-                // Status notices float over the header. Their animated height
-                // changes only this overlay's stack, never the list or chat pane.
-                connection-toast := ConnectionBanner {
-                    z: 1;
-                    x: (parent.width - self.width) / 2;
-                    y: self.height > 0px ? Spacing.sm : -self.height - Spacing.sm;
-                    width: min(parent.width - Spacing.sm * 2, 620px);
-                    suppressed: root.connection-banner-dismissed;
-                    connection-state: root.connection-status;
-                    server-unreachable: root.server-unreachable;
-                    reconnect-attempt: root.connection-reconnect-attempt;
-                    dismissed => { root.connection-banner-dismissed = true; }
-                    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
-                }
-
-                // Shield failure is persistent, but uses the same overlay stack.
-                shield-toast := ShieldNetworkBanner {
-                    z: 1;
-                    x: (parent.width - self.width) / 2;
-                    y: connection-toast.height > 0px ? connection-toast.y + connection-toast.height + Spacing.xs : Spacing.sm;
-                    width: min(parent.width - Spacing.sm * 2, 620px);
-                    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
-                }
-
-                // Mesh-only entry stays reachable without occupying list space.
-                MeshOnlyBar {
-                    z: 1;
-                    x: (parent.width - self.width) / 2;
-                    y: shield-toast.height > 0px ? shield-toast.y + shield-toast.height + Spacing.xs
-                        : connection-toast.height > 0px ? connection-toast.y + connection-toast.height + Spacing.xs : Spacing.sm;
-                    width: min(parent.width - Spacing.sm * 2, 620px);
-                    signed-in: root.is-signed-in;
-                    sign-in => { root.go-to-login(); }
-                    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
-                }
-            } // end main view overlay
+                active-call-data : root.active-call-data;
+                active-call-fullscreen <=> root.active-call-fullscreen;
+                active-call-visible : root.active-call-visible;
+                active-channel-call-id : root.active-channel-call-id;
+                active-channel-call-participants : root.active-channel-call-participants;
+                active-channel-call-video : root.active-channel-call-video;
+                active-tab <=> root.active-tab;
+                attachment-prepare-serial : root.attachment-prepare-serial;
+                attachment-restore-serial : root.attachment-restore-serial;
+                audio-elapsed : root.audio-elapsed;
+                audio-progress : root.audio-progress;
+                bottom-nav-visible : root.bottom-nav-visible;
+                call-is-muted : root.call-is-muted;
+                call-is-screen-sharing : root.call-is-screen-sharing;
+                call-is-video-enabled : root.call-is-video-enabled;
+                call-local-video-frame : root.call-local-video-frame;
+                call-remote-video-frames : root.call-remote-video-frames;
+                call-speaker-on : root.call-speaker-on;
+                call-speaker-toggle : root.call-speaker-toggle;
+                channel-avatar-source : root.channel-avatar-source;
+                channel-has-avatar : root.channel-has-avatar;
+                channel-id : root.channel-id;
+                channel-name : root.channel-name;
+                chat-can-forward : root.chat-can-forward;
+                chat-edge-start <=> root.chat-edge-start;
+                chat-edge-swiping <=> root.chat-edge-swiping;
+                chat-list-scrolling <=> root.chat-list-scrolling;
+                chat-menu-secret-chat <=> root.chat-menu-secret-chat;
+                chat-menu-settings <=> root.chat-menu-settings;
+                chat-menu-video <=> root.chat-menu-video;
+                chat-push-progress <=> root.chat-push-progress;
+                chat-rows : root.chat-rows;
+                chat-rows-loading : root.chat-rows-loading;
+                chat-traffic-lights-lead : root.chat-traffic-lights-lead;
+                compact-layout : root.compact-layout;
+                composer-composed-text <=> root.composer-composed-text;
+                composer-composing <=> root.composer-composing;
+                composer-edit-message-id <=> root.composer-edit-message-id;
+                composer-emoji-category <=> root.composer-emoji-category;
+                composer-emoji-list : root.composer-emoji-list;
+                composer-emoji-picker-visible <=> root.composer-emoji-picker-visible;
+                composer-emoji-search <=> root.composer-emoji-search;
+                composer-emoji-skin-tone <=> root.composer-emoji-skin-tone;
+                composer-gif-picker-failed : root.composer-gif-picker-failed;
+                composer-gif-picker-loading : root.composer-gif-picker-loading;
+                composer-gif-picker-recent : root.composer-gif-picker-recent;
+                composer-gif-picker-results : root.composer-gif-picker-results;
+                composer-gif-picker-search <=> root.composer-gif-picker-search;
+                composer-gif-picker-visible <=> root.composer-gif-picker-visible;
+                composer-gifs-available : root.composer-gifs-available;
+                composer-is-editing <=> root.composer-is-editing;
+                composer-is-replying : root.composer-is-replying;
+                composer-notice : root.composer-notice;
+                composer-placeholder : root.composer-placeholder;
+                composer-reply-has-thumbnail : root.composer-reply-has-thumbnail;
+                composer-reply-preview : root.composer-reply-preview;
+                composer-reply-thumbnail : root.composer-reply-thumbnail;
+                composer-reply-to-sender-name : root.composer-reply-to-sender-name;
+                composer-text <=> root.composer-text;
+                connection-banner-dismissed <=> root.connection-banner-dismissed;
+                connection-reconnect-attempt : root.connection-reconnect-attempt;
+                connection-status : root.connection-status;
+                context-menu-anchor-bottom <=> root.context-menu-anchor-bottom;
+                context-menu-anchor-left <=> root.context-menu-anchor-left;
+                context-menu-anchor-right <=> root.context-menu-anchor-right;
+                context-menu-anchor-top <=> root.context-menu-anchor-top;
+                context-menu-content-top <=> root.context-menu-content-top;
+                context-menu-preview-from-thread <=> root.context-menu-preview-from-thread;
+                context-menu-preview-message <=> root.context-menu-preview-message;
+                context-menu-preview-mobile <=> root.context-menu-preview-mobile;
+                context-menu-preview-row-width <=> root.context-menu-preview-row-width;
+                context-menu-preview-row-x <=> root.context-menu-preview-row-x;
+                context-menu-preview-row-y <=> root.context-menu-preview-row-y;
+                context-menu-visible <=> root.context-menu-visible;
+                conversation-kind : root.conversation-kind;
+                conversation-read-only : root.conversation-read-only;
+                create-channel-initial-tab <=> root.create-channel-initial-tab;
+                create-section-id <=> root.create-section-id;
+                create-section-rename-mode <=> root.create-section-rename-mode;
+                current-playing-attachment-id : root.current-playing-attachment-id;
+                custom-sections : root.custom-sections;
+                delete-choice-everyone <=> root.delete-choice-everyone;
+                delete-choice-me <=> root.delete-choice-me;
+                delete-choosing <=> root.delete-choosing;
+                delete-confirm-count <=> root.delete-confirm-count;
+                delete-confirm-everyone <=> root.delete-confirm-everyone;
+                delete-confirm-sender <=> root.delete-confirm-sender;
+                drawer-keyboard-height : root.drawer-keyboard-height;
+                friends-modal-tab <=> root.friends-modal-tab;
+                friends-received-requests : root.friends-received-requests;
+                friends-requests-sub-tab <=> root.friends-requests-sub-tab;
+                has-pinned-messages : root.has-pinned-messages;
+                header-can-call : root.header-can-call;
+                header-can-invite : root.header-can-invite;
+                header-can-open-pinned-list : root.header-can-open-pinned-list;
+                header-can-open-settings : root.header-can-open-settings;
+                header-presence-status : root.header-presence-status;
+                highlighted-message-id : root.highlighted-message-id;
+                history-load-failed <=> root.history-load-failed;
+                identity-change-attributed : root.identity-change-attributed;
+                identity-change-detail : root.identity-change-detail;
+                identity-change-title : root.identity-change-title;
+                identity-change-visible : root.identity-change-visible;
+                insert-serial : root.insert-serial;
+                inserted-emoji : root.inserted-emoji;
+                invited-count : root.invited-count;
+                is-at-bottom <=> root.is-at-bottom;
+                is-dm : root.is-dm;
+                is-media-playing : root.is-media-playing;
+                is-mobile-platform : root.is-mobile-platform;
+                is-signed-in : root.is-signed-in;
+                is-small-screen : root.is-small-screen;
+                jarvis-thinking : root.jarvis-thinking;
+                keyboard-open : root.keyboard-open;
+                loading-messages : root.loading-messages;
+                macos-titlebar-height : root.macos-titlebar-height;
+                macos-traffic-lights-width : root.macos-traffic-lights-width;
+                member-count : root.member-count;
+                message-first-visible-row <=> root.message-first-visible-row;
+                message-last-visible-row <=> root.message-last-visible-row;
+                message-scroll-position <=> root.message-scroll-position;
+                messages : root.messages;
+                missed-call-count : root.missed-call-count;
+                mobile-show-chat <=> root.mobile-show-chat;
+                pending-attachments : root.pending-attachments;
+                pending-channel-invites : root.pending-channel-invites;
+                pending-group-invites : root.pending-group-invites;
+                pending-message-requests : root.pending-message-requests;
+                pinned-current-index : root.pinned-current-index;
+                pinned-message-preview : root.pinned-message-preview;
+                pinned-thumbnail : root.pinned-thumbnail;
+                pinned-total-count : root.pinned-total-count;
+                privacy-line-exposed : root.privacy-line-exposed;
+                privacy-line-override : root.privacy-line-override;
+                private-channel : root.private-channel;
+                private-request-decision : root.private-request-decision;
+                reaction-picker-anchor-x <=> root.reaction-picker-anchor-x;
+                reaction-picker-anchor-y <=> root.reaction-picker-anchor-y;
+                reaction-picker-sender-id <=> root.reaction-picker-sender-id;
+                reaction-picker-timestamp-ns <=> root.reaction-picker-timestamp-ns;
+                reaction-picker-visible <=> root.reaction-picker-visible;
+                reply-focus-serial <=> root.reply-focus-serial;
+                return-to-call-height : root.return-to-call-height;
+                safe-area-bottom : root.safe-area-bottom;
+                scroll-to-message-index : root.scroll-to-message-index;
+                secret-request-actions : root.secret-request-actions;
+                selected-message-count : root.selected-message-count;
+                selection-mode <=> root.selection-mode;
+                server-unreachable : root.server-unreachable;
+                should-auto-scroll : root.should-auto-scroll;
+                sidebar-collapsed : root.sidebar-collapsed;
+                sidebar-hidden : root.sidebar-hidden;
+                sidebar-is-rail : root.sidebar-is-rail;
+                sidebar-user-collapsed <=> root.sidebar-user-collapsed;
+                thread-composer-text <=> root.thread-composer-text;
+                thread-loading : root.thread-loading;
+                thread-panel-visible : root.thread-panel-visible;
+                thread-replies : root.thread-replies;
+                thread-reply-count : root.thread-reply-count;
+                thread-root-content-preview : root.thread-root-content-preview;
+                thread-root-message-id : root.thread-root-message-id;
+                thread-root-sender-name : root.thread-root-sender-name;
+                topic : root.topic;
+                typing-indicator : root.typing-indicator;
+                unified-search-open <=> root.unified-search-open;
+                unified-search-selected-index <=> root.unified-search-selected-index;
+                unread-count <=> root.unread-count;
+                unread-index <=> root.unread-index;
+                user-avatar-source : root.user-avatar-source;
+                user-display-name : root.user-display-name;
+                user-initials : root.user-initials;
+                user-presence-status : root.user-presence-status;
+                viewer-origin-height <=> root.viewer-origin-height;
+                viewer-origin-width <=> root.viewer-origin-width;
+                viewer-origin-x <=> root.viewer-origin-x;
+                viewer-origin-y <=> root.viewer-origin-y;
+                window-height: root.height;
+                keyboard-inset: root.virtual-keyboard-size.height;
+                attachment-clicked() => { root.attachment-clicked(); }
+                audio-seek(arg0, arg1) => { root.audio-seek(arg0, arg1); }
+                call-end() => { root.call-end(); }
+                call-peer-audio-mute-toggle(arg0) => { root.call-peer-audio-mute-toggle(arg0); }
+                call-peer-video-pause-toggle(arg0) => { root.call-peer-video-pause-toggle(arg0); }
+                call-toggle-mute() => { root.call-toggle-mute(); }
+                call-toggle-screen-share() => { root.call-toggle-screen-share(); }
+                call-toggle-speaker() => { root.call-toggle-speaker(); }
+                call-toggle-video() => { root.call-toggle-video(); }
+                calls-tab-clicked() => { root.calls-tab-clicked(); }
+                cancel-edit() => { root.cancel-edit(); }
+                cancel-reply() => { root.cancel-reply(); }
+                channel-invites-clicked() => { root.channel-invites-clicked(); }
+                channel-selected(arg0) => { root.channel-selected(arg0); }
+                chat-menu-can-start-secret-chat() => { return root.chat-menu-can-start-secret-chat(); }
+                chat-settings-clicked() => { root.chat-settings-clicked(); }
+                close-thread-clicked() => { root.close-thread-clicked(); }
+                composer-emoji-category-changed(arg0) => { root.composer-emoji-category-changed(arg0); }
+                composer-emoji-search-changed(arg0) => { root.composer-emoji-search-changed(arg0); }
+                composer-emoji-selected(arg0) => { root.composer-emoji-selected(arg0); }
+                composer-emoji-skin-tone-changed(arg0) => { root.composer-emoji-skin-tone-changed(arg0); }
+                composer-gif-search-changed(arg0) => { root.composer-gif-search-changed(arg0); }
+                composer-gif-selected(arg0, arg1) => { root.composer-gif-selected(arg0, arg1); }
+                delete-conversation(arg0, arg1) => { root.delete-conversation(arg0, arg1); }
+                delete-section-clicked(arg0) => { root.delete-section-clicked(arg0); }
+                dm-selected(arg0) => { root.dm-selected(arg0); }
+                emoji-clicked() => { root.emoji-clicked(); }
+                forward-message-action(arg0, arg1) => { root.forward-message-action(arg0, arg1); }
+                gif-clicked() => { root.gif-clicked(); }
+                go-to-login() => { root.go-to-login(); }
+                group-invites-clicked() => { root.group-invites-clicked(); }
+                identity-change-accept-clicked() => { root.identity-change-accept-clicked(); }
+                invite-member() => { root.invite-member(); }
+                leave-conversation(arg0, arg1) => { root.leave-conversation(arg0, arg1); }
+                list-geometry(arg0, arg1, arg2) => { root.list-geometry(arg0, arg1, arg2); }
+                load-more() => { root.load-more(); }
+                load-more-thread-replies() => { root.load-more-thread-replies(); }
+                mention-triggered(arg0) => { root.mention-triggered(arg0); }
+                message-clicked(arg0) => { root.message-clicked(arg0); }
+                message-requests-clicked() => { root.message-requests-clicked(); }
+                message-selection-toggled(arg0) => { root.message-selection-toggled(arg0); }
+                more-clicked(arg0, arg1, arg2, arg3) => { root.more-clicked(arg0, arg1, arg2, arg3); }
+                move-section(arg0, arg1) => { root.move-section(arg0, arg1); }
+                move-to-section(arg0, arg1, arg2) => { root.move-to-section(arg0, arg1, arg2); }
+                nav-push(arg0) => { root.nav-push(arg0); }
+                open-message-link(arg0) => { root.open-message-link(arg0); }
+                paste-image() => { root.paste-image(); }
+                pinned-dismiss-clicked() => { root.pinned-dismiss-clicked(); }
+                pinned-go-to-message() => { root.pinned-go-to-message(); }
+                pinned-next-clicked() => { root.pinned-next-clicked(); }
+                pinned-prev-clicked() => { root.pinned-prev-clicked(); }
+                pinned-show-clicked() => { root.pinned-show-clicked(); }
+                private-group-selected(arg0) => { root.private-group-selected(arg0); }
+                quote-clicked(arg0) => { root.quote-clicked(arg0); }
+                react-clicked(arg0, arg1, arg2, arg3) => { root.react-clicked(arg0, arg1, arg2, arg3); }
+                reaction-selected(arg0, arg1, arg2, arg3) => { root.reaction-selected(arg0, arg1, arg2, arg3); }
+                refresh-channel-call() => { root.refresh-channel-call(); }
+                release-text-focus() => { root.release-text-focus(); }
+                remove-attachment(arg0) => { root.remove-attachment(arg0); }
+                remove-from-section(arg0) => { root.remove-from-section(arg0); }
+                rename-section-clicked(arg0) => { root.rename-section-clicked(arg0); }
+                reply-clicked(arg0, arg1) => { root.reply-clicked(arg0, arg1); }
+                request-composer-keyboard(arg0) => { root.request-composer-keyboard(arg0); }
+                saved-messages-clicked() => { root.saved-messages-clicked(); }
+                secret-request-accept-clicked() => { root.secret-request-accept-clicked(); }
+                secret-request-decline-clicked() => { root.secret-request-decline-clicked(); }
+                section-conversation-selected(arg0, arg1) => { root.section-conversation-selected(arg0, arg1); }
+                section-toggle-expanded(arg0) => { root.section-toggle-expanded(arg0); }
+                selection-cleared() => { root.selection-cleared(); }
+                selection-copy-clicked() => { root.selection-copy-clicked(); }
+                selection-forward-clicked() => { root.selection-forward-clicked(); }
+                send(arg0) => { return root.send(arg0); }
+                send-edit(arg0, arg1) => { root.send-edit(arg0, arg1); }
+                send-thread-reply(arg0) => { root.send-thread-reply(arg0); }
+                sender-profile-requested(arg0) => { root.sender-profile-requested(arg0); }
+                set-conversation-pinned(arg0, arg1) => { root.set-conversation-pinned(arg0, arg1); }
+                set-section-sort-mode(arg0, arg1) => { root.set-section-sort-mode(arg0, arg1); }
+                settle-composer() => { root.settle-composer(); }
+                show-audio-device-picker() => { root.show-audio-device-picker(); }
+                show-audio-output-picker() => { root.show-audio-output-picker(); }
+                show-screen-source-picker() => { root.show-screen-source-picker(); }
+                start-create-channel() => { root.start-create-channel(); }
+                start-create-section() => { root.start-create-section(); }
+                start-video-call() => { root.start-video-call(); }
+                start-voice-call() => { root.start-voice-call(); }
+                thread-clicked(arg0) => { root.thread-clicked(arg0); }
+                toggle-anon-mode() => { root.toggle-anon-mode(); }
+                toggle-sidebar() => { root.toggle-sidebar(); }
+                typing-changed(arg0) => { root.typing-changed(arg0); }
+                unified-search-opened() => { root.unified-search-opened(); }
+                view-attachment(arg0) => { root.view-attachment(arg0); }
+                visible-media-rows(arg0, arg1) => { root.visible-media-rows(arg0, arg1); }
+                watch-composer-keyboard() => { root.watch-composer-keyboard(); }
+            }
 
         // ========== Modal overlay layer ==========
         // Semi-transparent backdrop when any modal is active. Not under Settings:
