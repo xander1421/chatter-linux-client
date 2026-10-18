@@ -6,6 +6,8 @@ import { Button } from "../components/button.slint";
 import { Icons } from "../theme/icons.slint";
 import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
 
+// Linked devices share the Sessions modal's model and actions. Keep the full
+// modal available for compact screens and its revoke-all action.
 export component DevicesSettings inherits VerticalLayout {
     in property <bool> compact-mode;
     in-out property <int> confirm-revoke-id;

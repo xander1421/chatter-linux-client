@@ -426,9 +426,7 @@ export component SettingsScreen inherits Rectangle {
                             server-message-backup(arg0) => { root.server-message-backup(arg0); }
                         }
 
-                        // Linked devices share the Sessions modal's model and
-                        // actions. Keep the full modal available for compact
-                        // screens and its revoke-all action.
+                        // Linked devices section
                         if active-section == "devices": DevicesSettings {
                             compact-mode : root.compact-mode;
                             confirm-revoke-id <=> root.confirm-revoke-id;
