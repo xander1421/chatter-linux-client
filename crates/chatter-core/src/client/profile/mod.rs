@@ -50,7 +50,6 @@ impl FriendCodeConnectionError {
     }
 }
 
-
 mod anonymous;
 mod attachments;
 mod blocking;
