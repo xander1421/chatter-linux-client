@@ -1,0 +1,60 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component MessageThreadIndicator inherits HorizontalLayout {
+    in property <bool> is-own;
+    in property <string> message-id;
+    in property <string> reply-count-text;
+    callback thread-clicked(string);
+
+    spacing: Spacing.sm;
+    alignment: root.is-own ? end : start;
+    padding-left: Spacing.xs;
+    padding-right: Spacing.xs;
+
+    // Pill button (not bare text) so the thread entry point
+    // reads as clickable.
+    Rectangle {
+        height: Spacing.button-height;
+        width: thread-layout.preferred-width + Spacing.sm * 2;
+        border-radius: self.height / 2;
+        background: thread-touch.has-hover
+            ? Colors.primary.transparentize(0.75)
+            : Colors.primary.transparentize(0.9);
+        accessible-role: button;
+        accessible-label: "Open thread: " + root.reply-count-text;
+
+        thread-layout := HorizontalLayout {
+            height: parent.height;
+            spacing: Spacing.xs;
+            padding-left: Spacing.sm;
+            alignment: center;
+
+            // A y on a layout child fights the layout; centre
+            // the icon on the text's line instead.
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    width: 12px;
+                    height: 12px;
+                    source: Icons.message-circle;
+                    colorize: Colors.primary;
+                }
+            }
+
+            Text {
+                text: root.reply-count-text;
+                color: Colors.primary;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+            }
+        }
+
+        thread-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.thread-clicked(root.message-id); }
+        }
+    }
+}
