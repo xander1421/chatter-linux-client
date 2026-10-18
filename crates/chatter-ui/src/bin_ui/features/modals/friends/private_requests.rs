@@ -249,7 +249,7 @@ async fn refresh_private_requests(
             user_id: conv_id_str,
             display_name: peer_name,
             username: "Private".to_string(),
-            avatar_bytes: dm.peer_avatar.clone().or_else(|| ui_ctx.user_avatar(&dm.peer_id)),
+            avatar_bytes: ui_ctx.anon_dm_avatar(&dm),
             secondary_text: dm
                 .created_at
                 .with_timezone(&chrono::Local)

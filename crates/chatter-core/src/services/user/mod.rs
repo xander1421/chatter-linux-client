@@ -1014,10 +1014,10 @@ impl UserService {
 
             // FK on users(id); then record the friendship without lifting a
             // block — the server lists blocked friends too.
-            self.user_repo.ensure_user_exists(&friend_id).ok();
-            let _ = self
+            self.user_repo.ensure_user_exists(&friend_id)?;
+            self
                 .user_repo
-                .accept_friendship_unless_blocked(&current_user, &friend_id);
+                .accept_friendship_unless_blocked(&current_user, &friend_id)?;
 
             // Build profile from the proto UserProfile already in the response.
             let mut profile = proto_to_domain_profile(friend)?;
@@ -1063,7 +1063,10 @@ impl UserService {
                         .and_then(|stored| stored.avatar_bytes)
                 });
 
-            self.user_repo.upsert_profile(&profile).ok();
+            // Callers use these decrypted bytes from this response. Persist
+            // them before returning so every other avatar surface can resolve
+            // the same friend from the local profile store.
+            self.user_repo.upsert_profile(&profile)?;
 
             results.push((friendship, profile));
         }

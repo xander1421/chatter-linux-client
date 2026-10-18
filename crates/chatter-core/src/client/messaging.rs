@@ -567,11 +567,12 @@ impl ChatterClient {
     /// profile row carries none), anyone else's from their stored, decrypted
     /// profile. `None` = initials.
     pub fn user_avatar(&self, user_id: &crate::domain::ids::UserId) -> Option<Vec<u8>> {
-        if self.session_current_user_id().as_ref() == Some(user_id) {
+        let avatar = if self.session_current_user_id().as_ref() == Some(user_id) {
             self.my_avatar()
         } else {
             self.get_profile_local(user_id).and_then(|p| p.avatar_bytes)
-        }
+        };
+        avatar.filter(|bytes| !bytes.is_empty())
     }
 
     /// Stable `User <id8>` placeholder for a user with no resolvable name.
@@ -938,7 +939,7 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
-                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_bytes: self.anon_dm_avatar(&dm),
                 presence_status: "pending".to_string(),
                 last_message,
                 timestamp_at: Some(dm.created_at),
@@ -967,7 +968,7 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
-                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_bytes: self.anon_dm_avatar(&dm),
                 presence_status: "online".to_string(),
                 last_message,
                 timestamp_at,
@@ -1000,7 +1001,7 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
-                avatar_bytes: dm.peer_avatar.clone(),
+                avatar_bytes: self.anon_dm_avatar(&dm),
                 presence_status: "offline".to_string(),
                 last_message,
                 timestamp_at,
@@ -1299,7 +1300,7 @@ impl ChatterClient {
         match self.list_friends_with_profiles().await {
             Ok(pairs) => {
                 let mut out = Vec::with_capacity(pairs.len());
-                for (friendship, profile) in pairs {
+                for (friendship, _) in pairs {
                     // The server already leaves out its own blocks; this also
                     // drops a friend blocked through their anon DM.
                     if self.is_profile_user_blocked(&friendship.addressee_id) {
@@ -1312,7 +1313,7 @@ impl ChatterClient {
                         // known username reads better (REVIEW-R4 P0-3).
                         display_name: self.display_name(&friendship.addressee_id),
                         username: String::new(),
-                        avatar_bytes: profile.avatar_bytes.clone(),
+                        avatar_bytes: self.user_avatar(&friendship.addressee_id),
                         presence_status: self
                             .peer_presence(&friendship.addressee_id)
                             .as_str()
@@ -1353,7 +1354,7 @@ impl ChatterClient {
                         .clone()
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
                     username: String::new(),
-                    avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_bytes: self.anon_dm_avatar(&dm),
                     presence_status: "online".to_string(),
                     custom_status: String::new(),
                     is_anon: true,
@@ -1365,7 +1366,7 @@ impl ChatterClient {
         self.listed_friends()
             .into_iter()
             .map(|peer| {
-                let avatar_bytes = self.get_profile_local(&peer).and_then(|p| p.avatar_bytes);
+                let avatar_bytes = self.user_avatar(&peer);
                 FriendDataSendData {
                     user_id: peer.to_string(),
                     display_name: self.display_name(&peer),
