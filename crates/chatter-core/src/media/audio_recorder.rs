@@ -170,9 +170,10 @@ impl AudioRecorder {
             let peak = fresh
                 .iter()
                 .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-            // Speech is usually far below digital full scale. A square-root
-            // response makes quiet speech visible while silence stays flat.
-            ((rms * 0.78 + peak * 0.22) * 3.0).sqrt().clamp(0.0, 1.0)
+            // Android microphone speech can sit far below digital full scale.
+            // Compress the range before quantizing to 0..100 so quiet words
+            // still move the bars; true silence remains zero.
+            ((rms * 0.78 + peak * 0.22) * 8.0).sqrt().clamp(0.0, 1.0)
         };
         self.meter_cursor = samples.len();
         self.meter_decay = level.max(self.meter_decay * 0.72);
