@@ -57,7 +57,7 @@ mod types;
 
 pub use link_url::qr_png_for_link_url;
 use link_url::{base64_url, base64_url_decode, build_link_url, random_provisioning_code};
-use new_device::{adopt_provisioned_settings, run_flow};
+use new_device::run_flow;
 pub use types::*;
 use types::{LinkRequest, verification_code_for_pub};
 
@@ -211,6 +211,7 @@ impl LinkDeviceService {
 
 #[cfg(test)]
 mod tests {
+    use super::new_device::adopt_provisioned_settings;
     use super::*;
 
     /// Only approved-and-still-open sessions are pending, labelled by their
