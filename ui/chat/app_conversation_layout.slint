@@ -1,0 +1,399 @@
+import { ChatLayout } from "chat_layout.slint";
+import { MessageItemData, PendingAttachmentData } from "../chat/chat_layout.slint";
+import { ConversationKind } from "../chat/conversation_kind.slint";
+import { MessageContextMenu } from "../chat/message_context_menu.slint";
+import { EmojiData } from "../components/emoji_picker.slint";
+import { GifData } from "../components/gif_picker.slint";
+import { EmojiData } from "../components/mod.slint";
+
+// Conversation view wiring stays close to ChatLayout, while MainWindow owns state.
+export component AppConversationLayout inherits Rectangle {
+    in property <bool> active-call-fullscreen;
+    in property <bool> active-call-visible;
+    in property <string> active-channel-call-id;
+    in property <int> active-channel-call-participants;
+    in property <bool> active-channel-call-video;
+    in property <int> attachment-prepare-serial;
+    in property <int> attachment-restore-serial;
+    in property <string> audio-elapsed;
+    in property <float> audio-progress;
+    in property <image> channel-avatar-source;
+    in property <bool> channel-has-avatar;
+    in property <string> channel-id;
+    in property <string> channel-name;
+    in property <bool> chat-can-forward;
+    in-out property <bool> chat-list-scrolling;
+    in-out property <bool> chat-menu-secret-chat;
+    in-out property <bool> chat-menu-settings;
+    in-out property <bool> chat-menu-video;
+    in property <length> chat-traffic-lights-lead;
+    in property <bool> compact-layout;
+    in-out property <string> composer-composed-text;
+    in-out property <bool> composer-composing;
+    in-out property <string> composer-edit-message-id;
+    in-out property <int> composer-emoji-category;
+    in property <[EmojiData]> composer-emoji-list;
+    in-out property <bool> composer-emoji-picker-visible;
+    in-out property <string> composer-emoji-search;
+    in-out property <int> composer-emoji-skin-tone;
+    in property <bool> composer-gif-picker-failed;
+    in property <bool> composer-gif-picker-loading;
+    in property <[GifData]> composer-gif-picker-recent;
+    in property <[GifData]> composer-gif-picker-results;
+    in-out property <string> composer-gif-picker-search;
+    in-out property <bool> composer-gif-picker-visible;
+    in property <bool> composer-gifs-available;
+    in-out property <bool> composer-is-editing;
+    in property <bool> composer-is-replying;
+    in property <string> composer-notice;
+    in property <string> composer-placeholder;
+    in property <bool> composer-reply-has-thumbnail;
+    in property <string> composer-reply-preview;
+    in property <image> composer-reply-thumbnail;
+    in property <string> composer-reply-to-sender-name;
+    in-out property <string> composer-text;
+    in-out property <length> context-menu-anchor-bottom;
+    in-out property <length> context-menu-anchor-left;
+    in-out property <length> context-menu-anchor-right;
+    in-out property <length> context-menu-anchor-top;
+    in-out property <length> context-menu-content-top;
+    in-out property <bool> context-menu-preview-from-thread;
+    in-out property <MessageItemData> context-menu-preview-message;
+    in-out property <bool> context-menu-preview-mobile;
+    in-out property <length> context-menu-preview-row-width;
+    in-out property <length> context-menu-preview-row-x;
+    in-out property <length> context-menu-preview-row-y;
+    in-out property <bool> context-menu-visible;
+    in property <ConversationKind> conversation-kind;
+    in property <bool> conversation-read-only;
+    in property <string> current-playing-attachment-id;
+    in property <length> drawer-keyboard-height;
+    in property <bool> has-pinned-messages;
+    in property <bool> header-can-call;
+    in property <bool> header-can-invite;
+    in property <bool> header-can-open-pinned-list;
+    in property <bool> header-can-open-settings;
+    in property <string> header-presence-status;
+    in property <string> highlighted-message-id;
+    in-out property <bool> history-load-failed;
+    in property <bool> identity-change-attributed;
+    in property <string> identity-change-detail;
+    in property <string> identity-change-title;
+    in property <bool> identity-change-visible;
+    in property <int> insert-serial;
+    in property <string> inserted-emoji;
+    in property <int> invited-count;
+    in-out property <bool> is-at-bottom;
+    in property <bool> is-dm;
+    in property <bool> is-media-playing;
+    in property <bool> is-mobile-platform;
+    in property <bool> is-small-screen;
+    in property <bool> jarvis-thinking;
+    in property <length> keyboard-inset;
+    in property <bool> keyboard-open;
+    in property <bool> loading-messages;
+    in property <int> member-count;
+    in-out property <int> message-first-visible-row;
+    in-out property <int> message-last-visible-row;
+    in-out property <length> message-scroll-position;
+    in property <[MessageItemData]> messages;
+    in-out property <bool> mobile-show-chat;
+    in property <[PendingAttachmentData]> pending-attachments;
+    in property <int> pinned-current-index;
+    in property <string> pinned-message-preview;
+    in property <image> pinned-thumbnail;
+    in property <int> pinned-total-count;
+    in property <bool> privacy-line-exposed;
+    in property <string> privacy-line-override;
+    in property <bool> private-channel;
+    in property <string> private-request-decision;
+    in-out property <length> reaction-picker-anchor-x;
+    in-out property <length> reaction-picker-anchor-y;
+    in-out property <string> reaction-picker-sender-id;
+    in-out property <string> reaction-picker-timestamp-ns;
+    in-out property <bool> reaction-picker-visible;
+    in-out property <int> reply-focus-serial;
+    in property <int> scroll-to-message-index;
+    in property <bool> secret-request-actions;
+    in property <bool> selection-mode;
+    in property <bool> should-auto-scroll;
+    in property <bool> thread-panel-visible;
+    in property <string> topic;
+    in property <string> typing-indicator;
+    in-out property <int> unread-count;
+    in-out property <int> unread-index;
+    in-out property <length> viewer-origin-height;
+    in-out property <length> viewer-origin-width;
+    in-out property <length> viewer-origin-x;
+    in-out property <length> viewer-origin-y;
+    in property <length> window-width;
+    callback attachment-clicked();
+    callback audio-seek(string, float);
+    callback cancel-edit();
+    callback cancel-reply();
+    callback chat-menu-can-start-secret-chat() -> bool;
+    callback chat-settings-clicked();
+    callback composer-emoji-category-changed(int);
+    callback composer-emoji-search-changed(string);
+    callback composer-emoji-selected(string);
+    callback composer-emoji-skin-tone-changed(int);
+    callback composer-gif-search-changed(string);
+    callback composer-gif-selected(string, string);
+    callback emoji-clicked();
+    callback forward-message-action(string, string);
+    callback gif-clicked();
+    callback identity-change-accept-clicked();
+    callback invite-member();
+    callback list-geometry(float, float, bool);
+    callback load-more();
+    callback mention-triggered(string);
+    callback message-clicked(string);
+    callback message-selection-toggled(string);
+    callback more-clicked(string, string, length, length);
+    callback nav-push(string);
+    callback open-message-link(string);
+    callback paste-image();
+    callback pinned-dismiss-clicked();
+    callback pinned-go-to-message();
+    callback pinned-next-clicked();
+    callback pinned-prev-clicked();
+    callback pinned-show-clicked();
+    callback quote-clicked(string);
+    callback react-clicked(string, string, length, length);
+    callback reaction-selected(string, string, string, string);
+    callback refresh-channel-call();
+    callback release-text-focus();
+    callback remove-attachment(string);
+    callback reply-clicked(string, string);
+    callback request-composer-keyboard(length);
+    callback secret-request-accept-clicked();
+    callback secret-request-decline-clicked();
+    callback send(string) -> bool;
+    callback send-edit(string, string);
+    callback sender-profile-requested(string);
+    callback settle-composer();
+    callback start-video-call();
+    callback start-voice-call();
+    callback thread-clicked(string);
+    callback typing-changed(bool);
+    callback view-attachment(string);
+    callback visible-media-rows(int, int);
+    callback watch-composer-keyboard();
+    background: transparent;
+    ChatLayout {
+        width: 100%;
+        height: 100%;
+    hide-header: root.selection-mode;
+    // No back button: the conversation list is always on
+    // screen beside this, so there is nothing to go back to —
+    // and the header is tight enough already.
+    // The only way back to the list on a phone, so it is not
+    // optional there. Desktop still shows both panes at once
+    // and has nothing to go back to.
+    show-back-button: root.compact-layout;
+    header-leading-inset: root.chat-traffic-lights-lead;
+    back-clicked => { root.mobile-show-chat = false; }
+    selection-mode: root.selection-mode;
+    // Press-and-hold on a bubble is a touch gesture only.
+    mobile: root.is-mobile-platform;
+    composer-enter-sends: !root.is-mobile-platform || root.window-width >= 840px;
+    rounded-page-top: root.is-mobile-platform && !root.compact-layout;
+    menu-open: root.context-menu-visible || root.reaction-picker-visible;
+    // Tier 2 of the hold escalates out of tier 1: close the menu
+    // as selection engages, so the two are never on screen at
+    // once. The menu fades (see MessageContextMenu) while the
+    // row tint animates in, so it reads as an escalation the
+    // user caused rather than a menu that glitched away.
+    selection-toggled(id) => {
+        root.context-menu-visible = false;
+        root.message-selection-toggled(id);
+    }
+    channel-id: root.channel-id;
+    channel-name: root.channel-name;
+    conversation-kind: root.conversation-kind;
+    private-channel: root.private-channel;
+    privacy-line-override: root.privacy-line-override;
+    privacy-line-exposed: root.privacy-line-exposed;
+    is-dm: root.is-dm;
+    can-forward: root.chat-can-forward;
+    is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
+    member-count: root.member-count;
+    invited-count: root.invited-count;
+    topic: root.topic;
+    typing-indicator: root.typing-indicator;
+    presence-status: root.header-presence-status;
+    channel-avatar-source: root.channel-avatar-source;
+    channel-has-avatar: root.channel-has-avatar;
+    jarvis-thinking: root.jarvis-thinking;
+    messages: root.messages;
+    loading-messages: root.loading-messages;
+    scroll-to-message-index: root.scroll-to-message-index;
+    highlighted-message-id: root.highlighted-message-id;
+    message-scroll-position <=> root.message-scroll-position;
+    message-first-visible-row <=> root.message-first-visible-row;
+    message-last-visible-row <=> root.message-last-visible-row;
+    // A new layout's list starts at rest; `changed` does not
+    // fire for that first value.
+    init => { root.chat-list-scrolling = false; root.settle-composer(); }
+    changed composer-composing => { root.composer-composing = self.composer-composing; }
+    changed composer-composed-text => { root.composer-composed-text = self.composer-composed-text; }
+    changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }
+    is-at-bottom <=> root.is-at-bottom;
+    history-load-failed <=> root.history-load-failed;
+    unread-index <=> root.unread-index;
+    unread-count <=> root.unread-count;
+    should-auto-scroll: root.should-auto-scroll;
+    current-playing-attachment-id: root.current-playing-attachment-id;
+    is-media-playing: root.is-media-playing;
+    audio-progress: root.audio-progress;
+    audio-elapsed: root.audio-elapsed;
+    attachment-prepare-serial: root.attachment-prepare-serial;
+    attachment-restore-serial: root.attachment-restore-serial;
+    composer-text <=> root.composer-text;
+    composer-placeholder: root.composer-placeholder;
+    composer-notice: root.composer-notice;
+    conversation-read-only: root.conversation-read-only;
+    header-can-call: root.header-can-call;
+    active-channel-call-id: root.active-call-visible ? "" : root.active-channel-call-id;
+    active-channel-call-video: root.active-channel-call-video;
+    active-channel-call-participants: root.active-channel-call-participants;
+    refresh-channel-call => { root.refresh-channel-call(); }
+    join-channel-call => {
+        if root.active-channel-call-video { root.start-video-call(); }
+        else { root.start-voice-call(); }
+    }
+    header-can-invite: root.header-can-invite;
+    header-can-open-settings: root.header-can-open-settings;
+    header-can-open-pinned-list: root.header-can-open-pinned-list;
+    secret-request-actions: root.secret-request-actions;
+    secret-request-busy: root.private-request-decision != "";
+    secret-request-accept-clicked => { root.secret-request-accept-clicked(); }
+    secret-request-decline-clicked => { root.secret-request-decline-clicked(); }
+    pending-attachments: root.pending-attachments;
+    composer-is-editing <=> root.composer-is-editing;
+    composer-edit-message-id <=> root.composer-edit-message-id;
+    composer-is-replying: root.composer-is-replying;
+    reply-focus-serial: root.reply-focus-serial;
+    keyboard-open: root.keyboard-open;
+    composer-reply-to-sender-name: root.composer-reply-to-sender-name;
+    composer-reply-preview: root.composer-reply-preview;
+    composer-reply-has-thumbnail: root.composer-reply-has-thumbnail;
+    composer-reply-thumbnail: root.composer-reply-thumbnail;
+
+    // Picker state
+    keyboard-inset: root.keyboard-inset;
+    remembered-keyboard-height: root.drawer-keyboard-height;
+    composer-keyboard-requested(space) => { root.request-composer-keyboard(space); }
+    composer-input-focused => { root.watch-composer-keyboard(); }
+    composer-focus-released => { root.release-text-focus(); }
+    inserted-emoji: root.inserted-emoji;
+    insert-serial: root.insert-serial;
+    emoji-list: root.composer-emoji-list;
+    emoji-category <=> root.composer-emoji-category;
+    emoji-skin-tone <=> root.composer-emoji-skin-tone;
+    emoji-search <=> root.composer-emoji-search;
+    gif-search <=> root.composer-gif-picker-search;
+    gif-results: root.composer-gif-picker-results;
+    gif-recent: root.composer-gif-picker-recent;
+    gif-loading: root.composer-gif-picker-loading;
+    gif-failed: root.composer-gif-picker-failed;
+    emoji-selected(emoji) => { root.composer-emoji-selected(emoji); }
+    emoji-category-changed(category) => { root.composer-emoji-category-changed(category); }
+    emoji-search-changed(query) => { root.composer-emoji-search-changed(query); }
+    emoji-skin-tone-changed(tone) => { root.composer-emoji-skin-tone-changed(tone); }
+    gif-selected(id, url) => { root.composer-gif-selected(id, url); }
+    gif-search-changed(query) => { root.composer-gif-search-changed(query); }
+    emoji-picker-visible <=> root.composer-emoji-picker-visible;
+    gif-picker-visible <=> root.composer-gif-picker-visible;
+    gifs-available: root.composer-gifs-available;
+
+    settings-clicked => { root.chat-settings-clicked(); }
+    voice-call-clicked => { root.start-voice-call(); }
+    header-more-clicked(video, settings) => {
+        root.chat-menu-video = video;
+        root.chat-menu-settings = settings;
+        root.chat-menu-secret-chat = root.chat-menu-can-start-secret-chat();
+        root.nav-push("chat-menu");
+    }
+    invite-clicked => { root.invite-member(); }
+    // Peer identity change prompt
+    identity-change-visible: root.identity-change-visible;
+    identity-change-title: root.identity-change-title;
+    identity-change-detail: root.identity-change-detail;
+    identity-change-attributed: root.identity-change-attributed;
+    identity-change-accept-clicked => { root.identity-change-accept-clicked(); }
+    // Pinned bar (Telegram-style)
+    has-pinned-messages: root.has-pinned-messages;
+    pinned-message-preview: root.pinned-message-preview;
+    pinned-current-index: root.pinned-current-index;
+    pinned-total-count: root.pinned-total-count;
+    pinned-prev-clicked => { root.pinned-prev-clicked(); }
+    pinned-next-clicked => { root.pinned-next-clicked(); }
+    pinned-go-to-message => { root.pinned-go-to-message(); }
+    pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
+    pinned-show-clicked => { root.pinned-show-clicked(); }
+    pinned-thumbnail: root.pinned-thumbnail;
+    sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
+    open-message-link(url) => { root.open-message-link(url); }
+    message-clicked(id) => { root.message-clicked(id); }
+    reply-clicked(sender-id, timestamp-ns) => {
+        root.reply-clicked(sender-id, timestamp-ns);
+        root.reply-focus-serial += 1;
+    }
+    forward-clicked(sender-id, timestamp-ns) => { root.forward-message-action(sender-id, timestamp-ns); }
+    react-clicked(sender-id, timestamp-ns, x, y) => {
+        root.reaction-picker-sender-id = sender-id;
+        root.reaction-picker-timestamp-ns = timestamp-ns;
+        root.reaction-picker-anchor-x = x;
+        root.reaction-picker-anchor-y = y;
+        root.reaction-picker-visible = true;
+        root.react-clicked(sender-id, timestamp-ns, x, y);
+    }
+    // Tapping an existing reaction toggles it, the way every
+    // messenger does; the picker stays on long-press (§112w).
+    reaction-toggled(sender-id, timestamp-ns, emoji) => {
+        root.reaction-selected(sender-id, timestamp-ns, "", emoji);
+    }
+    thread-clicked(id) => { root.thread-clicked(id); }
+    more-clicked(sender-id, timestamp-ns, x, y) => {
+        root.context-menu-preview-message = self.menu-preview-message;
+        root.context-menu-preview-row-x = self.menu-preview-row-x;
+        root.context-menu-preview-row-y = self.menu-preview-row-y;
+        root.context-menu-preview-row-width = self.menu-preview-row-width;
+        root.context-menu-preview-mobile = self.mobile;
+        root.context-menu-preview-from-thread = false;
+        root.context-menu-content-top = self.content-top;
+        root.context-menu-anchor-top = self.menu-anchor-top;
+        root.context-menu-anchor-bottom = self.menu-anchor-bottom;
+        root.context-menu-anchor-left = self.menu-anchor-left;
+        root.context-menu-anchor-right = self.menu-anchor-right;
+        root.more-clicked(sender-id, timestamp-ns, x, y);
+    }
+    quote-clicked(id) => { root.quote-clicked(id); }
+    view-attachment(id) => {
+        root.viewer-origin-x = self.viewer-origin-x;
+        root.viewer-origin-y = self.viewer-origin-y;
+        root.viewer-origin-width = self.viewer-origin-width;
+        root.viewer-origin-height = self.viewer-origin-height;
+        root.view-attachment(id);
+    }
+    audio-seek(id, pos) => { root.audio-seek(id, pos); }
+    load-more => { root.load-more(); }
+    visible-media-rows(first, last) => { root.visible-media-rows(first, last); }
+    send(text) => { return root.send(text); }
+    send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
+    cancel-edit => { root.cancel-edit(); }
+    cancel-reply => { root.cancel-reply(); }
+    attachment-clicked => { root.attachment-clicked(); }
+    paste-image => { root.paste-image(); }
+    emoji-clicked => { root.emoji-clicked(); }
+    gif-clicked => { root.gif-clicked(); }
+
+    mention-triggered(query) => { root.mention-triggered(query); }
+    remove-attachment(id) => { root.remove-attachment(id); }
+    typing-changed(is-typing) => { root.typing-changed(is-typing); }
+    list-geometry(visible, content, seeking) => {
+        root.list-geometry(visible, content, seeking);
+    }
+    }
+}

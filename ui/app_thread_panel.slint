@@ -1,0 +1,119 @@
+import { ThreadPanel } from "chat/thread_panel.slint";
+import { MessageItemData } from "chat/chat_layout.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+
+export component AppThreadPanel inherits Rectangle {
+    in property <string> audio-elapsed;
+    in property <float> audio-progress;
+    in property <string> channel-name;
+    in-out property <length> context-menu-anchor-bottom;
+    in-out property <length> context-menu-anchor-left;
+    in-out property <length> context-menu-anchor-right;
+    in-out property <length> context-menu-anchor-top;
+    in-out property <length> context-menu-content-top;
+    in-out property <bool> context-menu-preview-from-thread;
+    in-out property <MessageItemData> context-menu-preview-message;
+    in-out property <bool> context-menu-preview-mobile;
+    in-out property <length> context-menu-preview-row-width;
+    in-out property <length> context-menu-preview-row-x;
+    in-out property <length> context-menu-preview-row-y;
+    in property <bool> context-menu-visible;
+    in property <ConversationKind> conversation-kind;
+    in property <string> current-playing-attachment-id;
+    in property <bool> is-media-playing;
+    in property <bool> is-small-screen;
+    in-out property <length> reaction-picker-anchor-x;
+    in-out property <length> reaction-picker-anchor-y;
+    in-out property <string> reaction-picker-sender-id;
+    in-out property <string> reaction-picker-timestamp-ns;
+    in-out property <bool> reaction-picker-visible;
+    in-out property <int> reply-focus-serial;
+    in-out property <string> thread-composer-text;
+    in property <bool> thread-loading;
+    in property <bool> thread-panel-visible;
+    in property <[MessageItemData]> thread-replies;
+    in property <int> thread-reply-count;
+    in property <string> thread-root-content-preview;
+    in property <string> thread-root-message-id;
+    in property <string> thread-root-sender-name;
+    in-out property <length> viewer-origin-width;
+    callback audio-seek(string, float);
+    callback close-thread-clicked();
+    callback load-more-thread-replies();
+    callback message-clicked(string);
+    callback more-clicked(string, string, length, length);
+    callback open-message-link(string);
+    callback quote-clicked(string);
+    callback react-clicked(string, string, length, length);
+    callback reaction-selected(string, string, string, string);
+    callback reply-clicked(string, string);
+    callback send-thread-reply(string);
+    callback sender-profile-requested(string);
+    callback view-attachment(string);
+    background: transparent;
+    ThreadPanel {
+        width: 100%;
+        height: 100%;
+        // Same expression `thread-panel-w` uses to give the panel
+        // the whole row: at that width it is a pushed page, so it
+        // dismisses with a back chevron rather than an X.
+        mobile: root.is-small-screen;
+        root-message-id: root.thread-root-message-id;
+        root-sender-name: root.thread-root-sender-name;
+        root-content-preview: root.thread-root-content-preview;
+        reply-count: root.thread-reply-count;
+        channel-name: root.channel-name;  // threads open on the active conversation
+        conversation-kind: root.conversation-kind;
+        replies: root.thread-replies;
+        loading: root.thread-loading;
+        composer-text <=> root.thread-composer-text;
+
+        close-clicked => { root.close-thread-clicked(); }
+        send-reply(text) => { root.send-thread-reply(text); }
+        load-more-replies => { root.load-more-thread-replies(); }
+        open-message-link(url) => { root.open-message-link(url); }
+        message-clicked(id) => { root.message-clicked(id); }
+        menu-open: root.context-menu-visible || root.reaction-picker-visible;
+        reply-clicked(sender-id, timestamp-ns) => {
+            root.reply-clicked(sender-id, timestamp-ns);
+            root.reply-focus-serial += 1;
+        }
+        quote-clicked(id) => { root.quote-clicked(id); }
+        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
+        current-playing-attachment-id: root.current-playing-attachment-id;
+        is-media-playing: root.is-media-playing;
+        audio-progress: root.audio-progress;
+        audio-elapsed: root.audio-elapsed;
+        view-attachment(id) => {
+            root.viewer-origin-width = 0px;
+            root.view-attachment(id);
+        }
+        audio-seek(id, pos) => { root.audio-seek(id, pos); }
+        more-clicked(sender-id, timestamp-ns, x, y) => {
+            root.context-menu-preview-message = self.menu-preview-message;
+            root.context-menu-preview-row-x = self.menu-preview-row-x;
+            root.context-menu-preview-row-y = self.menu-preview-row-y;
+            root.context-menu-preview-row-width = self.menu-preview-row-width;
+            root.context-menu-preview-mobile = self.mobile;
+            root.context-menu-preview-from-thread = true;
+            // The panel's own header is the menu's ceiling.
+            root.context-menu-content-top = self.absolute-position.y;
+            root.context-menu-anchor-top = self.menu-anchor-top;
+            root.context-menu-anchor-bottom = self.menu-anchor-bottom;
+            root.context-menu-anchor-left = self.menu-anchor-left;
+            root.context-menu-anchor-right = self.menu-anchor-right;
+            root.more-clicked(sender-id, timestamp-ns, x, y);
+        }
+        react-clicked(sender-id, timestamp-ns, x, y) => {
+            root.reaction-picker-sender-id = sender-id;
+            root.reaction-picker-timestamp-ns = timestamp-ns;
+            root.reaction-picker-anchor-x = x;
+            root.reaction-picker-anchor-y = y;
+            root.reaction-picker-visible = true;
+            root.react-clicked(sender-id, timestamp-ns, x, y);
+        }
+        reaction-toggled(sender-id, timestamp-ns, emoji) => {
+            root.reaction-selected(sender-id, timestamp-ns, "", emoji);
+        }
+    }
+}

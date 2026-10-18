@@ -1,0 +1,62 @@
+import { ActiveCallView } from "mod.slint";
+import { ActiveCallData } from "../calls/mod.slint";
+
+// The active call occupies the chat column above the conversation.
+export component AppCallDock inherits ActiveCallView {
+    in property <ActiveCallData> active-call-data;
+    in-out property <bool> active-call-fullscreen;
+    in property <bool> active-call-visible;
+    in property <bool> call-is-muted;
+    in property <bool> call-is-screen-sharing;
+    in property <bool> call-is-video-enabled;
+    in property <image> call-local-video-frame;
+    in property <[image]> call-remote-video-frames;
+    in property <bool> call-speaker-on;
+    in property <bool> call-speaker-toggle;
+    in property <length> window-height;
+    callback call-end();
+    callback call-peer-audio-mute-toggle(string);
+    callback call-peer-video-pause-toggle(string);
+    callback call-toggle-mute();
+    callback call-toggle-screen-share();
+    callback call-toggle-speaker();
+    callback call-toggle-video();
+    callback show-audio-device-picker();
+    callback show-audio-output-picker();
+    callback show-screen-source-picker();
+
+        // Take the chat column's full vertical slot when
+        // fullscreen, otherwise stay as a fixed dock (the
+        // child component caps its own height to 280px).
+        vertical-stretch: root.active-call-fullscreen ? 1 : 0;
+        show: root.active-call-visible;
+        fullscreen: root.active-call-fullscreen;
+        viewport-height: root.window-height;
+        call-data: root.active-call-data;
+        is-muted: root.call-is-muted;
+        is-video-enabled: root.call-is-video-enabled;
+        is-screen-sharing: root.call-is-screen-sharing;
+        speaker-toggle: root.call-speaker-toggle;
+        speaker-on: root.call-speaker-on;
+        toggle-speaker => { root.call-toggle-speaker(); }
+        local-video-frame: root.call-local-video-frame;
+        remote-video-frames: root.call-remote-video-frames;
+
+        toggle-mute => { root.call-toggle-mute(); }
+        toggle-video => { root.call-toggle-video(); }
+        toggle-screen-share => {
+            if root.call-is-screen-sharing {
+                root.call-toggle-screen-share();
+            } else {
+                root.show-screen-source-picker();
+            }
+        }
+        end-call => { root.call-end(); root.active-call-fullscreen = false; }
+        show-audio-settings => { root.show-audio-device-picker(); }
+        show-audio-output-settings => { root.show-audio-output-picker(); }
+        peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
+        peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
+        fullscreen-toggle => {
+            root.active-call-fullscreen = !root.active-call-fullscreen;
+        }
+}
