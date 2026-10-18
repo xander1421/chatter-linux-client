@@ -35,13 +35,20 @@ struct ActiveCapture {
     preview: Option<LocalPreview>,
     front: bool,
     last_preview: Option<Instant>,
+    stats_started: Instant,
+    captured_frames: u32,
+    preview_frames: u32,
     ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
     last_frame: Instant,
     received_frame: bool,
 }
 
-// Match desktop self-preview (~12fps) without slowing published camera video.
-const PREVIEW_INTERVAL: Duration = Duration::from_millis(80);
+// The self view should track a 30 fps camera without making the UI upload
+// capture-resolution pixels (the same frame is also shown in the call pill).
+// Allow a few milliseconds of camera timestamp jitter so a nominal 30 fps
+// stream does not accidentally become 15 fps when one frame arrives early.
+const PREVIEW_INTERVAL: Duration = Duration::from_millis(30);
+const PREVIEW_MAX_EDGE: u32 = 640;
 
 /// Register the platform camera driver. Called once by chatter-ui at startup.
 pub fn register_platform_camera(cam: Box<dyn PlatformCamera>) {
@@ -72,6 +79,9 @@ pub fn run_capture(
         preview: local_preview,
         front,
         last_preview: None,
+        stats_started: Instant::now(),
+        captured_frames: 0,
+        preview_frames: 0,
         ready_tx: Some(ready_tx),
         last_frame: Instant::now(),
         received_frame: false,
@@ -163,7 +173,7 @@ pub fn push_frame_i420(data: &[u8], width: u32, height: u32, rotation_degrees: i
         _ => VideoRotation::VideoRotation0,
     };
 
-    let frame = VideoFrame {
+    let mut frame = VideoFrame {
         rotation,
         timestamp_us: ts_us,
         frame_metadata: None,
@@ -172,14 +182,28 @@ pub fn push_frame_i420(data: &[u8], width: u32, height: u32, rotation_degrees: i
     capture.sink.capture_frame(&frame);
     capture.last_frame = Instant::now();
     capture.received_frame = true;
+    capture.captured_frames += 1;
     if let Some(ready_tx) = capture.ready_tx.take() {
         let _ = ready_tx.send(());
     }
-    capture.publish_preview(&frame.buffer, width, height, rotation_degrees);
+    capture.publish_preview(&mut frame.buffer, width, height, rotation_degrees);
+    let elapsed = capture.stats_started.elapsed();
+    if elapsed >= Duration::from_secs(5) {
+        tracing::info!(
+            "Android camera preview: capture_fps={:.1} preview_fps={:.1} source={}x{}",
+            capture.captured_frames as f64 / elapsed.as_secs_f64(),
+            capture.preview_frames as f64 / elapsed.as_secs_f64(),
+            width,
+            height,
+        );
+        capture.stats_started = Instant::now();
+        capture.captured_frames = 0;
+        capture.preview_frames = 0;
+    }
 }
 
 impl ActiveCapture {
-    fn publish_preview(&mut self, buffer: &I420Buffer, width: u32, height: u32, rotation: i32) {
+    fn publish_preview(&mut self, buffer: &mut I420Buffer, width: u32, height: u32, rotation: i32) {
         let Some(preview) = self.preview.as_ref() else {
             return;
         };
@@ -190,17 +214,34 @@ impl ActiveCapture {
         {
             return;
         }
+        // Scale only the preview after LiveKit has received the original frame.
+        // libwebrtc's I420 scaler avoids a full-size RGBA conversion and cuts
+        // Android's per-frame Slint buffer copy and texture upload as well.
+        let (preview_width, preview_height) = if width.max(height) > PREVIEW_MAX_EDGE {
+            let divisor = width.max(height);
+            let scaled_width =
+                ((width as u64 * PREVIEW_MAX_EDGE as u64 / divisor as u64) as u32 & !1).max(2);
+            let scaled_height =
+                ((height as u64 * PREVIEW_MAX_EDGE as u64 / divisor as u64) as u32 & !1).max(2);
+            (scaled_width, scaled_height)
+        } else {
+            (width, height)
+        };
+        let scaled = (preview_width != width || preview_height != height)
+            .then(|| buffer.scale(preview_width as i32, preview_height as i32));
+        let preview_buffer = scaled.as_ref().unwrap_or(buffer);
         let rgba = crate::calls::video_playback::convert_i420_into(
             None,
-            buffer,
-            width,
-            height,
-            width as usize * height as usize * 4,
+            preview_buffer,
+            preview_width,
+            preview_height,
+            preview_width as usize * preview_height as usize * 4,
         );
         // Android's Slint CPU image consumer does not apply rotation metadata.
         // Rotate pixels upright and mirror only the front-camera self view;
         // the published LiveKit frame above retains its original sensor metadata.
-        let (rgba, width, height) = orient_preview(&rgba, width, height, rotation, self.front);
+        let (rgba, width, height) =
+            orient_preview(&rgba, preview_width, preview_height, rotation, self.front);
         preview.shared.set_frame(
             preview.local_id.clone(),
             Arc::new(rgba),
@@ -209,6 +250,7 @@ impl ActiveCapture {
             false,
         );
         self.last_preview = Some(now);
+        self.preview_frames += 1;
     }
 }
 
