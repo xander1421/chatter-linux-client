@@ -7,7 +7,7 @@ use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::state::ActiveConversation;
 use chatter_ui::bin_ui::features::chat::refresh_reaction_in_ui;
 use chatter_ui::{MainWindow, MessageItemData, ReactionEntry};
-use slint::{Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 #[test]
 fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_completions() {
@@ -105,7 +105,9 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             own: false,
         }]));
         row.reaction_summary = "stale".into();
-        window.set_messages(ModelRc::new(VecModel::from(vec![row])));
+        window
+            .global::<chatter_ui::ChatPane>()
+            .set_messages(ModelRc::new(VecModel::from(vec![row])));
         client
             .messages()
             .record_reaction(
@@ -130,6 +132,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         );
         assert_eq!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -143,6 +146,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         refresh_reaction_in_ui(&window, &client, scope, &author, sent_at);
         assert_eq!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -154,6 +158,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         );
         assert!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -200,6 +205,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         }
         assert_eq!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -226,6 +232,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         refresh_reaction_in_ui(&window, &client, scope, &author, sent_at);
         assert_eq!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -237,6 +244,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         );
         assert!(
             !window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -281,6 +289,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         refresh_reaction_in_ui(&window, &client, scope, &author, sent_at);
         assert_eq!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -293,13 +302,18 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
         );
         client.select_conversation(scope);
         refresh_reaction_in_ui(&window, &client, scope, &author, sent_at);
-        let row = window.get_messages().row_data(0).unwrap();
+        let row = window
+            .global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_data(0)
+            .unwrap();
         assert!(!row.has_reactions);
         assert_eq!(row.reactions.row_count(), 0);
         assert!(row.reaction_summary.is_empty());
         refresh_reaction_in_ui(&window, &client, scope, &author, sent_at);
         assert_eq!(
             window
+                .global::<chatter_ui::ChatPane>()
                 .get_messages()
                 .row_data(0)
                 .unwrap()
@@ -311,14 +325,20 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
     // Simulate a real SQL read failure in this disposable fixture database.
     // Refresh must leave the presented row intact, not manufacture a count.
     let scope = client.active_conversation();
-    let mut row = window.get_messages().row_data(0).unwrap();
+    let mut row = window
+        .global::<chatter_ui::ChatPane>()
+        .get_messages()
+        .row_data(0)
+        .unwrap();
     row.has_reactions = true;
     row.reactions = ModelRc::new(VecModel::from(vec![ReactionEntry {
         emoji: "👍".into(),
         count: 77,
         own: false,
     }]));
-    window.set_messages(ModelRc::new(VecModel::from(vec![row])));
+    window
+        .global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![row])));
     let db = chatter_core::storage::Database::open(
         &dir.path().join("data/chatter.db"),
         "reaction-fixture-passphrase",
@@ -345,6 +365,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
     refresh_reaction_in_ui(&window, &client, scope, &author, 1000);
     assert_eq!(
         window
+            .global::<chatter_ui::ChatPane>()
             .get_messages()
             .row_data(0)
             .unwrap()

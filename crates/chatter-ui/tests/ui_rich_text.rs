@@ -124,35 +124,37 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
     let w = MainWindow::new().expect("MainWindow::new");
     w.window().set_size(slint::LogicalSize::new(1100.0, 800.0));
     w.set_current_view("main".into());
-    w.set_channel_name("dev".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("dev".into());
     w.show().unwrap();
     pump(&w, 200);
 
     let words = "flowing ".repeat(60);
-    w.set_messages(ModelRc::new(VecModel::from(vec![
-        row(
-            0,
-            "bold italic strike".into(),
-            styled(&[
-                ("bold", Some(Style::Strong)),
-                (" ", None),
-                ("italic", Some(Style::Emphasis)),
-                (" ", None),
-                ("strike", Some(Style::Strikethrough)),
-            ]),
-        ),
-        row(1, "x".into(), styled(&[("x", Some(Style::Strong))])),
-        row(
-            2,
-            format!("bold {words}"),
-            styled(&[
-                ("bold", Some(Style::Strong)),
-                (" ", None),
-                (&words, Some(Style::Emphasis)),
-            ]),
-        ),
-    ])));
-    w.set_is_at_bottom(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![
+            row(
+                0,
+                "bold italic strike".into(),
+                styled(&[
+                    ("bold", Some(Style::Strong)),
+                    (" ", None),
+                    ("italic", Some(Style::Emphasis)),
+                    (" ", None),
+                    ("strike", Some(Style::Strikethrough)),
+                ]),
+            ),
+            row(1, "x".into(), styled(&[("x", Some(Style::Strong))])),
+            row(
+                2,
+                format!("bold {words}"),
+                styled(&[
+                    ("bold", Some(Style::Strong)),
+                    (" ", None),
+                    (&words, Some(Style::Emphasis)),
+                ]),
+            ),
+        ])));
+    w.global::<chatter_ui::ChatPane>().set_is_at_bottom(true);
     pump(&w, 500);
 
     let texts = styled_texts(&w);
@@ -199,11 +201,13 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
 
     let menu: Rc<RefCell<Vec<String>>> = Rc::default();
     let m = menu.clone();
-    w.on_more_clicked(move |_, ts, _, _| m.borrow_mut().push(ts.to_string()));
+    w.global::<chatter_ui::ChatPane>()
+        .on_more_clicked(move |_, ts, _, _| m.borrow_mut().push(ts.to_string()));
 
     let clicked: Rc<RefCell<Vec<String>>> = Rc::default();
     let clicks = clicked.clone();
-    w.on_message_clicked(move |id| clicks.borrow_mut().push(id.to_string()));
+    w.global::<chatter_ui::ChatPane>()
+        .on_message_clicked(move |id| clicks.borrow_mut().push(id.to_string()));
     press(&w, mixed, PointerEventButton::Left);
     release(&w, mixed, PointerEventButton::Left);
     pump(&w, 60);
@@ -253,14 +257,16 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
         text: slint::StyledText::from_paragraphs([paragraph]),
         ..Default::default()
     };
-    w.set_messages(ModelRc::new(VecModel::from(vec![row(
-        3,
-        "Open website".into(),
-        block,
-    )])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![row(
+            3,
+            "Open website".into(),
+            block,
+        )])));
     let links: Rc<RefCell<Vec<String>>> = Rc::default();
     let received = links.clone();
-    w.on_open_message_link(move |url| received.borrow_mut().push(url.to_string()));
+    w.global::<chatter_ui::ChatPane>()
+        .on_open_message_link(move |url| received.borrow_mut().push(url.to_string()));
     pump(&w, 300);
     let link = styled_texts(&w)[0];
     press(&w, link, PointerEventButton::Left);
@@ -414,8 +420,9 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
 
     let selected: Rc<RefCell<Vec<String>>> = Rc::default();
     let selections = selected.clone();
-    w.on_message_selection_toggled(move |id| selections.borrow_mut().push(id.to_string()));
-    w.set_selection_mode(true);
+    w.global::<chatter_ui::ChatPane>()
+        .on_message_selection_toggled(move |id| selections.borrow_mut().push(id.to_string()));
+    w.global::<chatter_ui::ChatPane>().set_selection_mode(true);
     pump(&w, 100);
     let link = styled_texts(&w)[0];
     press(&w, link, PointerEventButton::Left);
@@ -449,7 +456,7 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
     );
 
     // The next ordinary tap resets hold-tier and works after hold/drag/cancel.
-    w.set_selection_mode(false);
+    w.global::<chatter_ui::ChatPane>().set_selection_mode(false);
     pump(&w, 100);
     let link = styled_texts(&w)[0];
     press(&w, link, PointerEventButton::Left);
@@ -471,12 +478,13 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
         "link-owned gesture leaked a bubble click"
     );
 
-    w.set_messages(ModelRc::new(VecModel::from(vec![row(
-        4,
-        "ordinary".into(),
-        styled(&[("ordinary", Some(Style::Strong))]),
-    )])));
-    w.set_selection_mode(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![row(
+            4,
+            "ordinary".into(),
+            styled(&[("ordinary", Some(Style::Strong))]),
+        )])));
+    w.global::<chatter_ui::ChatPane>().set_selection_mode(true);
     pump(&w, 300);
     let ordinary = styled_texts(&w)[0];
     press(&w, ordinary, PointerEventButton::Left);

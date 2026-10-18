@@ -35,9 +35,12 @@ fn reactions_sit_on_the_clock_row() {
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_conversation_kind(ConversationKind::Channel);
-    w.set_channel_name("Reaction footer fixture".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(ConversationKind::Channel);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Reaction footer fixture".into());
     let row = |id: &str, own: bool, reacted: bool| MessageItemData {
         message_id: id.into(),
         sender_id: id.into(),
@@ -66,11 +69,12 @@ fn reactions_sit_on_the_clock_row() {
         })),
         ..Default::default()
     };
-    w.set_messages(ModelRc::new(VecModel::from(vec![
-        row("peer", false, true),
-        row("own", true, true),
-        row("plain", false, false),
-    ])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![
+            row("peer", false, true),
+            row("own", true, true),
+            row("plain", false, false),
+        ])));
     for width in [360.0, 412.0] {
         pump(&w, width);
         for id in ["peer", "own"] {

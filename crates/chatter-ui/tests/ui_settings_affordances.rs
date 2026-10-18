@@ -90,20 +90,30 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     let w = MainWindow::new().unwrap();
     chatter_ui::bin_ui::features::modals::settings::wire_settings_callbacks(&w, &client);
     chatter_ui::bin_ui::features::back::wire(&w);
-    w.set_settings_read_receipts(false); // Optimistic Slint switch state.
-    w.invoke_settings_read_receipts_changed(false);
+    w.global::<chatter_ui::SettingsPane>()
+        .set_settings_read_receipts(false); // Optimistic Slint switch state.
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_read_receipts_changed(false);
     assert!(client.read_receipts_enabled().unwrap());
-    assert!(w.get_settings_read_receipts());
+    assert!(
+        w.global::<chatter_ui::SettingsPane>()
+            .get_settings_read_receipts()
+    );
     assert!(w.get_toast_visible());
     assert!(
         w.get_toast_message()
             .contains("Couldn't save read receipts")
     );
     w.set_toast_visible(false);
-    w.set_settings_typing_indicators(false);
-    w.invoke_settings_typing_indicators_changed(false);
+    w.global::<chatter_ui::SettingsPane>()
+        .set_settings_typing_indicators(false);
+    w.global::<chatter_ui::SettingsPane>()
+        .invoke_settings_typing_indicators_changed(false);
     assert!(client.typing_indicators_enabled().unwrap());
-    assert!(w.get_settings_typing_indicators());
+    assert!(
+        w.global::<chatter_ui::SettingsPane>()
+            .get_settings_typing_indicators()
+    );
     assert!(w.get_toast_visible());
     assert!(
         w.get_toast_message()
@@ -111,22 +121,28 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     );
 
     w.set_current_view("main".into());
-    w.set_channel_name("Fixture".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Fixture".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
     w.window().set_size(slint::LogicalSize::new(360.0, 740.0));
     w.show().unwrap();
     w.set_toast_visible(false);
-    w.set_composer_gif_picker_visible(true);
-    w.set_composer_gif_picker_search("lemon".into());
-    w.set_composer_gif_picker_results(ModelRc::new(VecModel::from(vec![GifData {
-        id: "kept-gif".into(),
-        ..Default::default()
-    }])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_visible(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_search("lemon".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_results(ModelRc::new(VecModel::from(vec![GifData {
+            id: "kept-gif".into(),
+            ..Default::default()
+        }])));
     w.set_composer_gif_generation(17);
     let callbacks = std::rc::Rc::new(std::cell::Cell::new(0));
     let witness = callbacks.clone();
-    w.on_gif_clicked(move || witness.set(witness.get() + 1));
+    w.global::<chatter_ui::ChatPane>()
+        .on_gif_clicked(move || witness.set(witness.get() + 1));
     pump(&w);
     let tab = ElementHandle::find_by_accessible_label(&w, "GIFs")
         .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
@@ -138,10 +154,16 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         0,
         "selected tab must not request trending GIFs"
     );
-    assert_eq!(w.get_composer_gif_picker_search().as_str(), "lemon");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_gif_picker_search()
+            .as_str(),
+        "lemon"
+    );
     assert_eq!(w.get_composer_gif_generation(), 17);
     assert_eq!(
-        w.get_composer_gif_picker_results()
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_gif_picker_results()
             .row_data(0)
             .unwrap()
             .id
@@ -166,19 +188,28 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
 
     // Ordinary members can inspect the already privacy-shaped local roster;
     // this does not grant moderation or introduce a username/name lookup.
-    w.set_composer_gif_picker_visible(false);
-    w.set_channel_settings_id("settings-identity-fixture".into());
-    w.set_channel_id("settings-identity-fixture".into());
-    w.set_channel_settings_type("private-group".into());
-    w.set_channel_settings_name("Scoped group".into());
-    w.set_channel_settings_created_at("".into());
-    w.set_channel_settings_member_count(1);
-    w.set_channel_settings_can_manage_members(false);
-    w.set_channel_settings_members(ModelRc::new(VecModel::from(vec![ChannelMemberData {
-        display_name: "Conversation-scoped alias".into(),
-        role: "member".into(),
-        ..Default::default()
-    }])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_visible(false);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_id("settings-identity-fixture".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_id("settings-identity-fixture".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_type("private-group".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_name("Scoped group".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_created_at("".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_member_count(1);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_can_manage_members(false);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_members(ModelRc::new(VecModel::from(vec![ChannelMemberData {
+            display_name: "Conversation-scoped alias".into(),
+            role: "member".into(),
+            ..Default::default()
+        }])));
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
     pump(&w);
     assert!(
@@ -204,7 +235,8 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             ("private", "Private channel icon"),
             ("public", "Channel icon"),
         ] {
-            w.set_channel_settings_type(kind.into());
+            w.global::<chatter_ui::ModalHostState>()
+                .set_channel_settings_type(kind.into());
             pump(&w);
             let icon = ElementHandle::find_by_accessible_label(&w, label)
                 .find(|e| e.type_name().is_some_and(|name| name == "Image"))
@@ -213,13 +245,16 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             assert!((icon.size().height - 36.0).abs() < 0.5);
         }
     }
-    w.set_channel_settings_type("private-group".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_type("private-group".into());
     w.global::<chatter_ui::Appearance>()
         .set_theme("light".into());
-    w.set_channel_avatar_source(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
-        slint::Rgba8Pixel,
-    >::new(2, 2)));
-    w.set_channel_has_avatar(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_avatar_source(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+            slint::Rgba8Pixel,
+        >::new(2, 2)));
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_has_avatar(true);
     pump(&w);
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Avatar for Scoped group").any(|e| (e
@@ -235,7 +270,8 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             .next()
             .is_none()
     );
-    w.set_channel_id("different-conversation".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_id("different-conversation".into());
     pump(&w);
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Group icon")
@@ -243,8 +279,10 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             .is_some(),
         "an unrelated active conversation avatar must not be attributed to this settings screen"
     );
-    w.set_channel_id("settings-identity-fixture".into());
-    w.set_channel_has_avatar(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_id("settings-identity-fixture".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_has_avatar(false);
     pump(&w);
     let members = ElementHandle::find_by_accessible_label(&w, "Members")
         .find(|e| e.size().width > 0.0)
@@ -288,9 +326,10 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     w.set_is_mobile_platform(false);
     pump(&w);
     scroll_to_label(&w, "Backup passphrase (for file backup)");
-    let passphrase = ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
-        .next()
-        .expect("file backup passphrase input");
+    let passphrase =
+        ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
+            .next()
+            .expect("file backup passphrase input");
     click(&w, &passphrase);
     w.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
@@ -302,7 +341,11 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         let action = ElementHandle::find_by_accessible_label(&w, label)
             .next()
             .expect("file backup action reachable after scrolling");
-        assert_eq!(action.accessible_enabled(), Some(true), "{label} must be enabled");
+        assert_eq!(
+            action.accessible_enabled(),
+            Some(true),
+            "{label} must be enabled"
+        );
     }
     // Reproduce a compact navigation pill partly clipped beside fixed Back.
     w.set_is_mobile_platform(true);
@@ -364,7 +407,8 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
 
     chatter_ui::bin_ui::features::back::close(&w, "settings");
     w.set_is_mobile_platform(true);
-    w.set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
     pump(&w);
     let more = ElementHandle::find_by_accessible_label(&w, "More options")
         .find(|e| e.size().width > 0.0)

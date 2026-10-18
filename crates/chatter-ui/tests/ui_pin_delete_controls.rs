@@ -45,9 +45,12 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_conversation_kind(ConversationKind::ServerDm);
-    w.set_channel_name("Owned pin/delete fixture".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(ConversationKind::ServerDm);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Owned pin/delete fixture".into());
     let weak = w.as_weak();
     w.on_back_pressed(move || {
         if let Some(w) = weak.upgrade() {
@@ -57,24 +60,29 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     let local = Rc::new(Cell::new(0));
     let both = Rc::new(Cell::new(0));
     let l = local.clone();
-    w.on_selection_delete_clicked(move || l.set(l.get() + 1));
+    w.global::<chatter_ui::ChatPane>()
+        .on_selection_delete_clicked(move || l.set(l.get() + 1));
     let b = both.clone();
     w.global::<SelectionChrome>()
         .on_delete_everyone(move || b.set(b.get() + 1));
     let thumbnail =
         slint::Image::from_rgb8(slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(120, 60));
-    w.set_has_pinned_messages(true);
-    w.set_pinned_thumbnail(thumbnail.clone());
-    w.set_pinned_message_preview("A pinned landscape image".into());
-    w.set_pinned_items(ModelRc::new(VecModel::from(vec![PinnedItem {
-        message_id: "pin".into(),
-        preview: "A long pinned message\nwith multiple lines\nto make a taller row".into(),
-        thumbnail,
-    }])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_has_pinned_messages(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_pinned_thumbnail(thumbnail.clone());
+    w.global::<chatter_ui::ChatPane>()
+        .set_pinned_message_preview("A pinned landscape image".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_pinned_items(ModelRc::new(VecModel::from(vec![PinnedItem {
+            message_id: "pin".into(),
+            preview: "A long pinned message\nwith multiple lines\nto make a taller row".into(),
+            thumbnail,
+        }])));
     for dark in [false, true] {
         w.global::<Appearance>()
             .set_theme(if dark { "dark" } else { "light" }.into());
-        w.set_selection_mode(false);
+        w.global::<chatter_ui::ChatPane>().set_selection_mode(false);
         settle(&w);
         let bar = testing::ElementHandle::find_by_element_type_name(&w, "PinnedBar")
             .next()
@@ -114,8 +122,9 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         chatter_ui::bin_ui::features::back::close(&w, "pinned-messages");
         settle(&w);
         for eligible in [false, true] {
-            w.set_selection_mode(true);
-            w.set_selected_message_count(2);
+            w.global::<chatter_ui::ChatPane>().set_selection_mode(true);
+            w.global::<chatter_ui::ChatPane>()
+                .set_selected_message_count(2);
             w.global::<SelectionChrome>()
                 .set_can_delete_everyone(eligible);
             settle(&w);
@@ -155,27 +164,39 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
                     (old.0 + 1, old.1)
                 }
             );
-            assert_eq!(w.get_delete_confirm_count(), 0);
+            assert_eq!(
+                w.global::<chatter_ui::ChatPane>()
+                    .get_delete_confirm_count(),
+                0
+            );
         }
     }
-    w.set_selection_mode(false);
+    w.global::<chatter_ui::ChatPane>().set_selection_mode(false);
     let single = Rc::new(Cell::new(0));
     let recorded = single.clone();
-    w.on_delete_message(move |_, _| recorded.set(recorded.get() + 1));
+    w.global::<chatter_ui::ChatPane>()
+        .on_delete_message(move |_, _| recorded.set(recorded.get() + 1));
     for remote in [false, true] {
         let flags = w.global::<MessageMenuActions>();
         flags.set_delete_for_me(true);
         flags.set_delete_for_everyone(remote);
-        w.set_context_menu_sender_id("author".into());
-        w.set_context_menu_timestamp_ns("123".into());
-        w.set_context_menu_visible(true);
+        w.global::<chatter_ui::ChatPane>()
+            .set_context_menu_sender_id("author".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_context_menu_timestamp_ns("123".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_context_menu_visible(true);
         settle(&w);
         click(&w, "More");
         click(&w, "Delete");
         assert_eq!(visible(&w, "Delete for both").is_some(), remote);
         assert!(chatter_ui::bin_ui::features::back::handle_back(&w));
         settle(&w);
-        assert_eq!(w.get_delete_confirm_count(), 0);
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_delete_confirm_count(),
+            0
+        );
         assert_eq!(single.get(), 0, "Back cancels the scope choice");
     }
 
@@ -183,32 +204,38 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     // pointer clicks through both stages and inspect the final target payload.
     let remote_target = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
     let capture = remote_target.clone();
-    w.on_delete_everyone_message(move |author, stamp| {
-        capture
-            .borrow_mut()
-            .push((author.to_string(), stamp.to_string()));
-    });
+    w.global::<chatter_ui::ChatPane>()
+        .on_delete_everyone_message(move |author, stamp| {
+            capture
+                .borrow_mut()
+                .push((author.to_string(), stamp.to_string()));
+        });
     let local_target = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
     let capture = local_target.clone();
-    w.on_delete_message(move |author, stamp| {
-        capture
-            .borrow_mut()
-            .push((author.to_string(), stamp.to_string()));
-    });
+    w.global::<chatter_ui::ChatPane>()
+        .on_delete_message(move |author, stamp| {
+            capture
+                .borrow_mut()
+                .push((author.to_string(), stamp.to_string()));
+        });
     for (kind, label) in [
         (ConversationKind::ServerDm, "Delete for both"),
         (ConversationKind::AnonDm, "Delete for both"),
         (ConversationKind::Channel, "Delete for everyone"),
         (ConversationKind::AnonGroup, "Delete for everyone"),
     ] {
-        w.set_conversation_kind(kind);
+        w.global::<chatter_ui::ChatPane>()
+            .set_conversation_kind(kind);
         let flags = w.global::<MessageMenuActions>();
         flags.set_delete_for_me(true);
         flags.set_delete_for_everyone(true);
         for remote in [false, true] {
-            w.set_context_menu_sender_id("exact-author".into());
-            w.set_context_menu_timestamp_ns("987654321".into());
-            w.set_context_menu_visible(true);
+            w.global::<chatter_ui::ChatPane>()
+                .set_context_menu_sender_id("exact-author".into());
+            w.global::<chatter_ui::ChatPane>()
+                .set_context_menu_timestamp_ns("987654321".into());
+            w.global::<chatter_ui::ChatPane>()
+                .set_context_menu_visible(true);
             settle(&w);
             click(&w, "More");
             click(&w, "Delete");
@@ -247,7 +274,8 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         }
         // Actual Escape dispatch must dismiss either stage without deletion.
         for confirm in [false, true] {
-            w.set_context_menu_visible(true);
+            w.global::<chatter_ui::ChatPane>()
+                .set_context_menu_visible(true);
             settle(&w);
             click(&w, "More");
             click(&w, "Delete");
@@ -261,7 +289,8 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
             w.window().dispatch_event(WindowEvent::KeyReleased { text });
             settle(&w);
             assert_eq!(
-                w.get_delete_confirm_count(),
+                w.global::<chatter_ui::ChatPane>()
+                    .get_delete_confirm_count(),
                 0,
                 "Escape cancels either delete stage"
             );
@@ -271,7 +300,8 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
             );
         }
     }
-    w.set_conversation_kind(ConversationKind::ServerDm);
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(ConversationKind::ServerDm);
 
     // The real wire must refuse a stale eligibility snapshot when a selected
     // row disappeared before confirmation, without deleting another subset.
@@ -295,27 +325,31 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         .build()
         .unwrap();
     chatter_ui::bin_ui::features::chat::wire(&w, &client);
-    w.set_messages(ModelRc::new(VecModel::from(vec![
-        chatter_ui::MessageItemData {
-            message_id: "removed-call-message".into(),
-            ..Default::default()
-        },
-    ])));
-    w.invoke_message_selection_toggled("removed-call-message".into());
-    w.set_messages(ModelRc::new(
-        VecModel::<chatter_ui::MessageItemData>::default(),
-    ));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![
+            chatter_ui::MessageItemData {
+                message_id: "removed-call-message".into(),
+                ..Default::default()
+            },
+        ])));
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_message_selection_toggled("removed-call-message".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(
+            VecModel::<chatter_ui::MessageItemData>::default(),
+        ));
     w.global::<SelectionChrome>().set_can_delete_everyone(true);
     let sent = Rc::new(Cell::new(0));
     let observed = sent.clone();
-    w.on_delete_everyone_message(move |_, _| observed.set(observed.get() + 1));
+    w.global::<chatter_ui::ChatPane>()
+        .on_delete_everyone_message(move |_, _| observed.set(observed.get() + 1));
     click(&w, "Delete selected");
     click(&w, "Delete for both");
     click(&w, "Delete for both");
     assert_eq!(sent.get(), 0);
     assert!(!w.global::<SelectionChrome>().get_can_delete_everyone());
     assert!(
-        w.get_selection_mode(),
+        w.global::<chatter_ui::ChatPane>().get_selection_mode(),
         "rejected deletion keeps the selection"
     );
     // A vanished row is reported as such (650b5754), before any scope check.

@@ -26,9 +26,12 @@ fn visible(w: &MainWindow, label: &str) -> testing::ElementHandle {
         .unwrap_or_else(|| {
             panic!(
                 "Missing visible {label}; scroll={}, estimated rows={}..{}",
-                w.get_message_scroll_position(),
-                w.get_message_first_visible_row(),
-                w.get_message_last_visible_row()
+                w.global::<chatter_ui::ChatPane>()
+                    .get_message_scroll_position(),
+                w.global::<chatter_ui::ChatPane>()
+                    .get_message_first_visible_row(),
+                w.global::<chatter_ui::ChatPane>()
+                    .get_message_last_visible_row()
             )
         })
 }
@@ -65,10 +68,11 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
         chatter_core::domain::ids::ChannelId::new(),
     );
     client.select_conversation(a);
-    w.set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
-        message_id: "collision".into(),
-        ..Default::default()
-    }])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
+            message_id: "collision".into(),
+            ..Default::default()
+        }])));
     let queued_client = client.clone();
     w.as_weak()
         .upgrade_in_event_loop(move |w| {
@@ -83,7 +87,9 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
     client.select_conversation(b);
     pump(&w, 412.0);
     assert_eq!(
-        w.get_messages().row_count(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_count(),
         1,
         "Queued old-chat delete must preserve the new chat"
     );
@@ -100,24 +106,36 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
         .unwrap();
     pump(&w, 412.0);
     assert_eq!(
-        w.get_messages().row_count(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_count(),
         0,
         "Current-chat deletion must still remove the bubble"
     );
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_conversation_kind(ConversationKind::Channel);
-    w.set_channel_name("Owned layout fixture".into());
-    w.set_media_viewer_has_previous(true);
-    w.set_media_viewer_has_next(true);
-    w.set_media_viewer_position("11 / 12".into());
-    w.set_image_viewer_filename("very-long-peer-filename-".repeat(20).into());
-    w.set_video_player_filename("very-long-peer-filename-".repeat(20).into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(ConversationKind::Channel);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Owned layout fixture".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_media_viewer_has_previous(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_media_viewer_has_next(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_media_viewer_position("11 / 12".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_image_viewer_filename("very-long-peer-filename-".repeat(20).into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_video_player_filename("very-long-peer-filename-".repeat(20).into());
     for width in [360.0, 412.0] {
         for video in [false, true] {
-            w.set_image_viewer_visible(!video);
-            w.set_video_player_visible(video);
+            w.global::<chatter_ui::ChatPane>()
+                .set_image_viewer_visible(!video);
+            w.global::<chatter_ui::ChatPane>()
+                .set_video_player_visible(video);
             pump(&w, width);
             let labels = if video {
                 vec!["Previous media", "Next media", "Download", "Open downloads"]
@@ -161,8 +179,10 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
             }
         }
     }
-    w.set_image_viewer_visible(false);
-    w.set_video_player_visible(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_image_viewer_visible(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_video_player_visible(false);
     let rows: Vec<_> = (0..140)
         .map(|i| MessageItemData {
             message_id: format!("geometry-{i}").into(),
@@ -222,13 +242,15 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
             ..Default::default()
         })
         .collect();
-    w.set_messages(ModelRc::new(VecModel::from(rows)));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(rows)));
     pump(&w, 412.0);
     // Alternate distant forward/backward seeks at both phone widths. The
     // mixed delegates force Slint to rebase its live-row height estimate.
     for width in [360.0, 412.0] {
         for index in [62, 14, 102, 30] {
-            w.set_scroll_to_message_index(index);
+            w.global::<chatter_ui::ChatPane>()
+                .set_scroll_to_message_index(index);
             // Check again after settling: an estimate or a stale delegate
             // coordinate must not appear to land and then move the target away.
             for _ in 0..2 {

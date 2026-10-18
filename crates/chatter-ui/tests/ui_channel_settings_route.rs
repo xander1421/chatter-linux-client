@@ -77,34 +77,67 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
         .insert(&row)
         .unwrap();
     client.select_conversation(ActiveConversation::Channel(stored));
-    w.invoke_chat_settings_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
-    pump_until(&w, || !w.get_channel_settings_loading());
+    pump_until(&w, || {
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    });
     assert_eq!(
-        w.get_channel_settings_name().as_str(),
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_name()
+            .as_str(),
         "Invite-only fixture"
     );
-    assert_eq!(w.get_channel_settings_type().as_str(), "private");
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_type()
+            .as_str(),
+        "private"
+    );
     assert!(
-        w.get_channel_settings_error()
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_error()
             .starts_with("Couldn't load members:")
     );
-    assert!(!w.get_channel_settings_loading());
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    );
     back::close(&w, "channel-settings");
 
     let channel = ChannelId::new();
     client.select_conversation(ActiveConversation::Channel(channel));
-    w.invoke_chat_settings_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
     assert_eq!(
         w.get_active_modal().as_str(),
         "channel-settings",
         "settings must open before background work"
     );
-    assert!(w.get_channel_settings_loading());
-    assert!(!w.get_channel_settings_can_delete());
-    pump_until(&w, || !w.get_channel_settings_loading());
-    assert_eq!(w.get_channel_settings_error().as_str(), "Channel not found");
-    assert!(!w.get_channel_settings_loading());
+    assert!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    );
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_can_delete()
+    );
+    pump_until(&w, || {
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    });
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_error()
+            .as_str(),
+        "Channel not found"
+    );
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
 
     assert!(
@@ -116,18 +149,28 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
     back::close(&w, "channel-settings");
     let group = AnonGroupId::new();
     client.select_conversation(ActiveConversation::AnonGroup(group));
-    w.invoke_chat_settings_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
-    pump_until(&w, || !w.get_channel_settings_loading());
+    pump_until(&w, || {
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    });
     assert_eq!(
-        w.get_channel_settings_error().as_str(),
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_error()
+            .as_str(),
         "Private group not found"
     );
-    assert!(!w.get_channel_settings_loading());
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    );
 
     // Finishing a read must not move settings above a newer modal.
     back::close(&w, "channel-settings");
-    w.invoke_chat_settings_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
     back::push(&w, "settings");
     pump(&w);
     assert_eq!(w.get_active_modal().as_str(), "settings");
@@ -136,24 +179,40 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
     // A dismissed screen must stay dismissed when its queued error arrives.
     back::close(&w, "channel-settings");
     client.select_conversation(ActiveConversation::Channel(channel));
-    w.invoke_chat_settings_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
     back::close(&w, "channel-settings");
-    w.set_channel_settings_error("dismissed sentinel".into());
+    w.global::<chatter_ui::ModalHostState>()
+        .set_channel_settings_error("dismissed sentinel".into());
     pump(&w);
     assert_ne!(w.get_active_modal().as_str(), "channel-settings");
     assert_eq!(
-        w.get_channel_settings_error().as_str(),
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_error()
+            .as_str(),
         "dismissed sentinel"
     );
 
     // Nor may an old channel paint overwrite the new conversation's screen.
-    w.invoke_chat_settings_clicked();
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
     client.select_conversation(ActiveConversation::AnonGroup(group));
-    w.invoke_chat_settings_clicked();
-    pump_until(&w, || !w.get_channel_settings_loading());
-    assert_eq!(w.get_channel_settings_id().as_str(), group.to_string());
+    w.global::<chatter_ui::ChatPane>()
+        .invoke_chat_settings_clicked();
+    pump_until(&w, || {
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_loading()
+    });
     assert_eq!(
-        w.get_channel_settings_error().as_str(),
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_id()
+            .as_str(),
+        group.to_string()
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_channel_settings_error()
+            .as_str(),
         "Private group not found"
     );
 
