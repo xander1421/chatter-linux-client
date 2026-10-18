@@ -5703,9 +5703,13 @@ fn call_duration_uses_core_connection_time() {
         active.contains("ctx.end_active_call().await"),
         "hangup duration must also come from core"
     );
-    let worker = include_str!("../../chatter-core/src/services/call_worker.rs");
+    let worker = [
+        include_str!("../../chatter-core/src/services/call_worker/lifecycle.rs"),
+        include_str!("../../chatter-core/src/services/call_worker/actor.rs"),
+    ]
+    .concat();
     assert!(
-        squash(worker).contains("if encryption_root_key == &[0u8; 32] { call.ring();"),
+        squash(&worker).contains("if encryption_root_key == &[0u8; 32] { call.ring();"),
         "a DM room alone is not an answered call"
     );
     assert!(
