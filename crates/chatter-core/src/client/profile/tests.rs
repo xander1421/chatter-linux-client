@@ -575,4 +575,3 @@
         assert_eq!(client.is_anon_dm_conversation_blocked(&dm.id), Some(false));
         assert!(client.blocked_users().iter().all(|b| b.id != peer));
     }
-}

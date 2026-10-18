@@ -107,7 +107,7 @@ impl ChatterClient {
         Ok(profile)
     }
 
-    fn profile_response_in_session(
+    pub(super) fn profile_response_in_session(
         &self,
         profile: crate::domain::user::Profile,
         user: crate::domain::ids::UserId,
