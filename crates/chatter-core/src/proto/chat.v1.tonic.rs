@@ -3102,6 +3102,7 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_channel_integrations(
             &mut self,
             request: impl tonic::IntoRequest<super::GetChannelIntegrationsRequest>,

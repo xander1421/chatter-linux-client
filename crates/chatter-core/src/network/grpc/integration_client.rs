@@ -581,7 +581,6 @@ mod tests {
             supported_models: vec!["claude-3-opus".to_string(), "claude-3-sonnet".to_string()],
             include_history: true,
             history_limit: 10,
-            respond_to_all: false,
             webhook_url: String::new(),
             timeout_seconds: 30,
             retry_enabled: true,
