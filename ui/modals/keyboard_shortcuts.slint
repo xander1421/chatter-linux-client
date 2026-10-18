@@ -1,0 +1,111 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
+import { Materials } from "../theme/materials.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component KeyboardShortcutsDialog inherits Rectangle {
+    in property <bool> shown;
+    callback close();
+    background: Materials.scrim;
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    visible: root.shown || root.opacity > 0;
+
+    TouchArea {
+        enabled: parent.shown;
+        clicked => { root.close(); }
+    }
+
+    GlassSurface {
+        material-level: 3;
+        elevation: 5;
+
+        width: min(420px, parent.width - 32px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        height: min(shortcuts-layout.preferred-height, parent.height - 48px);
+        border-radius: Spacing.radius-sheet;
+        accessible-role: groupbox;
+        accessible-description: "Keyboard shortcuts";
+
+        TouchArea {} // block click-through
+
+        // Hidden the moment the dialog is logically closed: nothing in
+        // an invisible subtree is a pointer, key, Tab or accessible
+        // target while the shell and scrim finish their fade.
+        Rectangle {
+            visible: root.shown;
+            shortcuts-layout := VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+
+                // Header
+                HorizontalLayout {
+                    height: Spacing.header-action-box;
+                    Text {
+                        text: "Keyboard Shortcuts";
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    DismissButton {
+                        enabled: root.shown;
+                        clicked => { root.close(); }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Colors.surface-hover; }
+
+                // Navigation section
+                Text {
+                    text: "Navigation";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    font-weight: Typography.semibold;
+                }
+
+                for shortcut in [
+                    { key: "Ctrl + K / Ctrl + F", action: "Search" },
+                    { key: "Ctrl + ,", action: "Open settings" },
+                    { key: "Ctrl + J", action: "Toggle AI assistant" },
+                    { key: "Ctrl + /", action: "Show this dialog" },
+                    { key: "Escape", action: "Close modal or panel" },
+                ]: HorizontalLayout {
+                    height: 28px;
+                    spacing: Spacing.md;
+
+                    Text {
+                        text: shortcut.action;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: key-text.preferred-width + Spacing.md;
+                        height: 24px;
+                        border-radius: Spacing.radius-sm;
+                        background: Colors.surface-hover;
+
+                        key-text := Text {
+                            text: shortcut.key;
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle { height: Spacing.xs; }
+            }
+        }
+    }
+}
