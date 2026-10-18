@@ -454,7 +454,7 @@ impl RoomManager {
         }
         #[cfg(target_os = "android")]
         {
-            super::android_screen::stop();
+            super::super::android_screen::stop();
             self.screen_share_track_sid.write().take();
         }
 

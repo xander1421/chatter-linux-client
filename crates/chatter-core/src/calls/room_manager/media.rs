@@ -106,7 +106,7 @@ impl RoomManager {
         let local_preview =
             self.shared_frames
                 .as_ref()
-                .map(|shared| super::video_capture::LocalPreview {
+                .map(|shared| super::super::video_capture::LocalPreview {
                     shared: shared.clone(),
                     local_id: local_participant.identity().to_string(),
                     screen_share: false,
@@ -190,9 +190,9 @@ impl RoomManager {
         let local_preview =
             self.shared_frames
                 .as_ref()
-                .map(|shared| super::video_capture::LocalPreview {
+                .map(|shared| super::super::video_capture::LocalPreview {
                     shared: shared.clone(),
-                    local_id: super::screen_share_frame_id(
+                    local_id: super::super::screen_share_frame_id(
                         &local_participant.identity().to_string(),
                         true,
                     ),
@@ -315,7 +315,7 @@ impl RoomManager {
 
     #[cfg(target_os = "android")]
     pub async fn publish_screen_share(&self) -> Result<(), CallError> {
-        use super::android_screen;
+        use super::super::android_screen;
         let local_participant = {
             let room = self.room.read();
             room.as_ref()
@@ -325,9 +325,9 @@ impl RoomManager {
         let preview =
             self.shared_frames
                 .as_ref()
-                .map(|shared| super::video_capture::LocalPreview {
+                .map(|shared| super::super::video_capture::LocalPreview {
                     shared: shared.clone(),
-                    local_id: super::screen_share_frame_id(
+                    local_id: super::super::screen_share_frame_id(
                         &local_participant.identity().to_string(),
                         true,
                     ),
@@ -429,7 +429,7 @@ impl RoomManager {
             capture.stop();
         }
         #[cfg(target_os = "android")]
-        super::android_screen::stop();
+        super::super::android_screen::stop();
         let sid = self.screen_share_track_sid.write().take();
         let Some(sid) = sid else { return };
         let local_participant = {
@@ -446,7 +446,7 @@ impl RoomManager {
         // Drop the local screen frame (its own tile key) so the screen tile
         // clears. The camera tile (bare local id) is untouched.
         if let Some(ref shared) = self.shared_frames {
-            shared.remove_frame(&super::screen_share_frame_id(
+            shared.remove_frame(&super::super::screen_share_frame_id(
                 &local_participant.identity().to_string(),
                 true,
             ));
@@ -495,7 +495,7 @@ impl RoomManager {
         }
         #[cfg(target_os = "android")]
         {
-            super::android_screen::is_running()
+            super::super::android_screen::is_running()
         }
         #[cfg(target_os = "ios")]
         {
@@ -505,7 +505,7 @@ impl RoomManager {
 
     #[cfg(target_os = "android")]
     pub fn screen_share_capture_failed(&self) -> bool {
-        self.screen_share_track_sid.read().is_some() && !super::android_screen::is_running()
+        self.screen_share_track_sid.read().is_some() && !super::super::android_screen::is_running()
     }
 
     /// Set playback volume for remote audio (0.0 to 1.0).
@@ -573,12 +573,12 @@ impl RoomManager {
     pub fn get_video_frame(
         &self,
         participant_id: &str,
-    ) -> Option<super::shared_frames::VideoFrameData> {
+    ) -> Option<super::super::shared_frames::VideoFrameData> {
         self.video_playback.read().get_frame(participant_id)
     }
 
     /// Get all remote video frames as raw data.
-    pub fn get_all_video_frames(&self) -> Vec<super::shared_frames::VideoFrameData> {
+    pub fn get_all_video_frames(&self) -> Vec<super::super::shared_frames::VideoFrameData> {
         self.video_playback.read().get_all_frames()
     }
 
