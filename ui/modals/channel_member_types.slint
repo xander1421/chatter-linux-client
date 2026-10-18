@@ -1,0 +1,33 @@
+// Member data for the member list
+export struct ChannelMemberData {
+    user-id: string,
+    display-name: string,
+    username: string,
+    role: string,  // "owner", "admin", "moderator", "member"
+    joined-at: string,
+    // The member's photo; an empty image falls back to initials.
+    avatar-source: image,
+    // Moderator-muted: the server refuses this member's sends.
+    muted: bool,
+    // What the viewer may do to this member, computed in core.
+    can-ban: bool,
+    can-mute: bool,
+    // Only the owner may hand the channel to this member.
+    can-make-owner: bool,
+    // Listed by the server but outside the verified membership: gets no
+    // sender keys. Decided in core (`is_unverified_channel_member`).
+    unverified: bool,
+    // Private-group invitation is still pending until a mailbox key arrives.
+    invited: bool,
+    // Private groups: anyone but us may be blocked in the group (their
+    // posts are dropped on this device), and is shown so.
+    can-block: bool,
+    blocked: bool,
+}
+
+// A banned user in the members pane's Banned list.
+export struct BannedMemberData {
+    user-id: string,
+    display-name: string,
+    avatar-source: image,
+}

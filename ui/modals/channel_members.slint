@@ -1,0 +1,612 @@
+import { ChannelMemberData, BannedMemberData } from "channel_member_types.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Button } from "../components/button.slint";
+
+export component ChannelMembersSection inherits VerticalLayout {
+    in property <[BannedMemberData]> banned-members;
+    in property <bool> can-manage-members;
+    in property <bool> can-view-bans;
+    in property <string> channel-name;
+    in-out property <string> confirm-action;
+    in property <bool> is-owner;
+    in property <bool> is-private-group;
+    in property <bool> loading;
+    in property <int> member-count;
+    in property <[ChannelMemberData]> members;
+    in property <bool> narrow;
+    in-out property <string> role-picker-user;
+    callback ban-member(string);
+    callback block-member(string, bool);
+    callback change-member-role(string, string);
+    callback invite-channel-members();
+    callback invite-members();
+    callback remove-member(string);
+    callback set-member-muted(string, bool, int);
+    callback transfer-ownership(string);
+    callback unban-member(string);
+
+    // Helper to get role display color
+    pure function role-color(role: string) -> color {
+        if role == "owner" {
+            return Colors.warning;
+        } else if role == "admin" {
+            return Colors.error;
+        } else if role == "moderator" {
+            return Colors.info;
+        } else {
+            return Colors.text-secondary;
+        }
+    }
+
+    // The members menu's mute choices.
+    private property <[{label: string, minutes: int}]> mute-options: [
+        { label: "Mute 1h", minutes: 60 },
+        { label: "Mute 1 day", minutes: 1440 },
+        { label: "Mute until unmuted", minutes: 0 },
+    ];
+    // The assignable roles (ownership moves only by transfer), with labels.
+    private property <[{role: string, label: string}]> role-options: [
+        { role: "member", label: "Member" },
+        { role: "moderator", label: "Moderator" },
+        { role: "admin", label: "Admin" },
+    ];
+
+    spacing: Spacing.md;
+    alignment: start;
+
+    HorizontalLayout {
+        spacing: Spacing.sm;
+
+        Text {
+            text: "Members";
+            color: Colors.text-primary;
+            font-size: Typography.lg;
+            font-weight: Typography.semibold;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.member-count + " total";
+            color: Colors.text-muted;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+        }
+
+        // V1 private-group invitations require the real owner.
+        if root.is-private-group && root.is-owner: Rectangle {
+            width: max(invite-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
+            height: Spacing.touch-target-min;
+            accessible-role: button;
+            accessible-label: "Invite members";
+            accessible-action-default => { root.invite-members(); }
+            background: invite-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
+            border-radius: Spacing.radius-sm;
+
+            invite-btn-text := Text {
+                text: "+ Invite";
+                color: Colors.on-action;
+                font-size: Typography.xs;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            invite-btn-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.invite-members(); }
+            }
+        }
+
+        // Invite button for regular channels (admins/owners only)
+        if !root.is-private-group && root.can-manage-members: Rectangle {
+            width: max(invite-ch-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
+            height: Spacing.touch-target-min;
+            accessible-role: button;
+            accessible-label: "Invite members";
+            accessible-action-default => { root.invite-channel-members(); }
+            background: invite-ch-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
+            border-radius: Spacing.radius-sm;
+
+            invite-ch-btn-text := Text {
+                text: "+ Invite";
+                color: Colors.on-action;
+                font-size: Typography.xs;
+                font-weight: Typography.medium;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            invite-ch-btn-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.invite-channel-members(); }
+            }
+        }
+    }
+
+    // Member list
+    if root.members.length == 0: Text {
+        text: root.loading ? "Loading members…" : "No members to show yet";
+        color: Colors.text-secondary;
+        font-size: Typography.sm;
+        wrap: word-wrap;
+    }
+    for member in root.members: Rectangle {
+        height: member-col.preferred-height;
+        background: root.role-picker-user == member.user-id ? Colors.surface-section : transparent;
+        border-radius: Spacing.radius-md;
+        clip: true;
+        animate height { duration: Materials.motion-standard; easing: Materials.glide; }
+        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+
+        member-col := VerticalLayout {
+            HorizontalLayout {
+                height: 52px;
+                spacing: Spacing.sm;
+                padding: Spacing.xs;
+
+                // Photo in a clipped circle, initials when there is none.
+                Avatar {
+                    size: 36px;
+                    source: member.avatar-source;
+                    // Private-group members are anonymous identities.
+                    anonymous: root.is-private-group;
+                    name: member.display-name;
+                    fallback-text: "?";
+                }
+
+                // Name on its own line so it gets the whole
+                // column; the role badge sits with the handle
+                // underneath instead of eating the name.
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                    alignment: center;
+
+                    Text {
+                        text: member.display-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        overflow: elide;
+                    }
+
+                    if member.role != "member" || member.username != "" || member.muted || member.unverified || member.invited: HorizontalLayout {
+                        spacing: Spacing.xs;
+
+                        if member.role != "member": Rectangle {
+                            width: role-text.preferred-width + Spacing.sm;
+                            height: Spacing.badge-md;
+                            background: root.role-color(member.role).with-alpha(0.15);
+                            border-radius: Spacing.radius-sm;
+
+                            role-text := Text {
+                                x: Spacing.xs;
+                                text: member.role;
+                                color: root.role-color(member.role);
+                                font-size: Typography.xs;
+                                font-weight: Typography.medium;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                        }
+
+                        if member.invited: Rectangle {
+                            width: invited-text.preferred-width + Spacing.sm;
+                            height: Spacing.badge-md;
+                            background: Colors.info.with-alpha(0.15);
+                            border-radius: Spacing.radius-sm;
+
+                            invited-text := Text {
+                                x: Spacing.xs;
+                                text: "invited";
+                                color: Colors.info;
+                                font-size: Typography.xs;
+                                font-weight: Typography.medium;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                        }
+
+                        // Moderator mute: the server refuses their sends.
+                        if member.muted: Rectangle {
+                            width: muted-text.preferred-width + Spacing.sm;
+                            height: Spacing.badge-md;
+                            background: Colors.error.with-alpha(0.15);
+                            border-radius: Spacing.radius-sm;
+
+                            muted-text := Text {
+                                x: Spacing.xs;
+                                text: "muted";
+                                color: Colors.error;
+                                font-size: Typography.xs;
+                                font-weight: Typography.medium;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                        }
+
+                        // Outside the verified membership: no sender keys.
+                        if member.unverified: Rectangle {
+                            width: unverified-text.preferred-width + Spacing.sm;
+                            height: Spacing.badge-md;
+                            background: Colors.warning.with-alpha(0.15);
+                            border-radius: Spacing.radius-sm;
+
+                            unverified-text := Text {
+                                x: Spacing.xs;
+                                text: "unverified";
+                                color: Colors.warning;
+                                font-size: Typography.xs;
+                                font-weight: Typography.medium;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                        }
+
+                        // Empty when the peer's handle is not known locally.
+                        if member.username != "": Text {
+                            text: "@" + member.username;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        // Badges are fixed-width, so without a stretchable
+                        // child this row caps the name column's max width:
+                        // the name elided and the ⋮ drifted mid-row.
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+
+                // One ⋮ instead of Role + Remove, which on a phone
+                // squeezed the name to "…". Tapping it expands the
+                // action row below. Only if can manage and not owner.
+                // Also for a moderator/admin who can only mute or ban.
+                if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner || member.can-block: Rectangle {
+                    width: Spacing.touch-target-min;
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-sm;
+                    background: member-more.has-hover || root.role-picker-user == member.user-id
+                        ? Colors.surface-hover : transparent;
+                    transform-scale-x: member-more.pressed ? 0.88 : 1;
+                    transform-scale-y: member-more.pressed ? 0.88 : 1;
+                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                    accessible-role: button;
+                    accessible-label: "Actions for " + member.display-name;
+                    accessible-action-default => {
+                        root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                    }
+
+                    // Icons.more-vertical, not U+22EE (no glyph in Inter).
+                    Image {
+                        source: Icons.more-vertical;
+                        colorize: Colors.text-secondary;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    member-more := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                        }
+                    }
+                }
+            }
+
+            // Remove / Ban / Make owner confirmation, like Block in user_profile.
+            if root.role-picker-user == member.user-id && root.confirm-action != "": VerticalLayout {
+                spacing: Spacing.sm;
+                padding: Spacing.xs;
+
+                Text {
+                    text: root.confirm-action == "ban"
+                        ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
+                        : root.confirm-action == "owner"
+                        ? "Make " + member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
+                        : member.invited && root.is-private-group
+                        ? "Cancel " + member.display-name + "'s invite?"
+                        : "Remove " + member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                    height: self.preferred-height;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: "Cancel";
+                        variant: "secondary";
+                        horizontal-stretch: 1;
+                        clicked => { root.confirm-action = ""; }
+                    }
+
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : member.invited && root.is-private-group ? "Cancel invite" : "Remove";
+                        variant: root.confirm-action == "owner" ? "primary" : "destructive";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            if root.confirm-action == "ban" {
+                                root.ban-member(member.user-id);
+                            } else if root.confirm-action == "owner" {
+                                root.transfer-ownership(member.user-id);
+                            } else {
+                                root.remove-member(member.user-id);
+                            }
+                            root.role-picker-user = "";
+                        }
+                    }
+                }
+            }
+
+            // Roles are a server-channel concept (anon groups have
+            // no role RPC), and ownership moves only by transfer
+            // ("Make owner…"; the role RPC rejects OWNER), so the
+            // picker offers only the three assignable roles.
+            // On a phone the pane is ~230px wide (360dp); the three
+            // role buttons alone need ~270px, so the actions stack
+            // one per line there instead of running off the card.
+            if root.role-picker-user == member.user-id && root.confirm-action == "" && root.narrow: VerticalLayout {
+                spacing: Spacing.xs;
+                padding: Spacing.xs;
+
+                if !root.is-private-group && root.can-manage-members: VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Role";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+
+                    for r in root.role-options: Button {
+                        height: Spacing.touch-target-min;
+                        text: r.label;
+                        variant: r.role == member.role ? "primary" : "secondary";
+
+                        clicked => {
+                            root.role-picker-user = "";
+                            if r.role != member.role {
+                                root.change-member-role(member.user-id, r.role);
+                            }
+                        }
+                    }
+                }
+
+                if member.can-mute && member.muted: Button {
+                    height: Spacing.touch-target-min;
+                    text: "Unmute";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.role-picker-user = "";
+                        root.set-member-muted(member.user-id, false, 0);
+                    }
+                }
+
+                // Timed or until unmuted (minutes 0); the server lifts a timed mute.
+                if member.can-mute && !member.muted: VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Mute in channel";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+
+                    for opt in root.mute-options: Button {
+                        height: Spacing.touch-target-min;
+                        text: opt.label;
+                        variant: "secondary";
+
+                        clicked => {
+                            root.role-picker-user = "";
+                            root.set-member-muted(member.user-id, true, opt.minutes);
+                        }
+                    }
+                }
+
+                if member.can-make-owner: Button {
+                    height: Spacing.touch-target-min;
+                    text: "Make owner…";
+                    variant: "secondary";
+
+                    clicked => { root.confirm-action = "owner"; }
+                }
+
+                if member.can-block && !member.invited: Button {
+                    height: Spacing.touch-target-min;
+                    text: member.blocked ? "Unblock in group" : "Block in group";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.role-picker-user = "";
+                        root.block-member(member.user-id, !member.blocked);
+                    }
+                }
+
+                if root.can-manage-members && member.role != "owner": Button {
+                    height: Spacing.touch-target-min;
+                    text: member.invited && root.is-private-group ? "Cancel invite" : root.is-private-group ? "Remove from group" : "Remove from channel";
+                    variant: "destructive";
+
+                    clicked => { root.confirm-action = "remove"; }
+                }
+
+                if member.can-ban: Button {
+                    height: Spacing.touch-target-min;
+                    text: "Ban (can't rejoin)";
+                    variant: "destructive";
+
+                    clicked => { root.confirm-action = "ban"; }
+                }
+            }
+
+            // Wide: one row per group (roles, mute, Remove/Ban).
+            // All eight buttons on one line ran past the modal edge.
+            if root.role-picker-user == member.user-id && root.confirm-action == "" && !root.narrow: VerticalLayout {
+                spacing: Spacing.xs;
+                padding: Spacing.xs;
+
+                if !root.is-private-group && root.can-manage-members: HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: end;
+
+                    for r in root.role-options: Button {
+                        height: Spacing.touch-target-min;
+                        text: r.label;
+                        variant: r.role == member.role ? "primary" : "secondary";
+
+                        clicked => {
+                            root.role-picker-user = "";
+                            if r.role != member.role {
+                                root.change-member-role(member.user-id, r.role);
+                            }
+                        }
+                    }
+                }
+
+                if member.can-mute && member.muted: HorizontalLayout {
+                    alignment: end;
+
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: "Unmute";
+                        variant: "secondary";
+
+                        clicked => {
+                            root.role-picker-user = "";
+                            root.set-member-muted(member.user-id, false, 0);
+                        }
+                    }
+                }
+
+                // Timed or until unmuted (minutes 0); the server lifts a timed mute.
+                if member.can-mute && !member.muted: HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: end;
+
+                    for opt in root.mute-options: Button {
+                        height: Spacing.touch-target-min;
+                        text: opt.label;
+                        variant: "secondary";
+
+                        clicked => {
+                            root.role-picker-user = "";
+                            root.set-member-muted(member.user-id, true, opt.minutes);
+                        }
+                    }
+                }
+
+                if member.can-make-owner: HorizontalLayout {
+                    alignment: end;
+
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: "Make owner…";
+                        variant: "secondary";
+
+                        clicked => { root.confirm-action = "owner"; }
+                    }
+                }
+
+                if member.can-block && !member.invited: HorizontalLayout {
+                    alignment: end;
+
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: member.blocked ? "Unblock in group" : "Block in group";
+                        variant: "secondary";
+
+                        clicked => {
+                            root.role-picker-user = "";
+                            root.block-member(member.user-id, !member.blocked);
+                        }
+                    }
+                }
+
+                if (root.can-manage-members && member.role != "owner") || member.can-ban: HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: end;
+
+                    if root.can-manage-members && member.role != "owner": Button {
+                        height: Spacing.touch-target-min;
+                        text: member.invited && root.is-private-group ? "Cancel invite" : "Remove";
+                        variant: "destructive";
+
+                        clicked => { root.confirm-action = "remove"; }
+                    }
+
+                    if member.can-ban: Button {
+                        height: Spacing.touch-target-min;
+                        text: "Ban";
+                        variant: "destructive";
+
+                        clicked => { root.confirm-action = "ban"; }
+                    }
+                }
+            }
+        }
+
+        // Bottom border
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: Colors.divider;
+        }
+    }
+
+    // Banned users (owner/admin only — the roles that can unban).
+    if root.can-view-bans && root.banned-members.length > 0: Text {
+        text: "Banned";
+        color: Colors.text-primary;
+        font-size: Typography.base;
+        font-weight: Typography.semibold;
+    }
+
+    if root.can-view-bans: VerticalLayout {
+        for banned in root.banned-members: HorizontalLayout {
+            height: 52px;
+            spacing: Spacing.sm;
+            padding: Spacing.xs;
+
+            Avatar {
+                size: 36px;
+                source: banned.avatar-source;
+                name: banned.display-name;
+                fallback-text: "?";
+            }
+
+            Text {
+                text: banned.display-name;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            Button {
+                height: Spacing.touch-target-min;
+                text: "Unban";
+                variant: "secondary";
+                clicked => { root.unban-member(banned.user-id); }
+            }
+        }
+    }
+                    
+}
