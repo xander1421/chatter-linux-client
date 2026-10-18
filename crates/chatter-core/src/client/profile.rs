@@ -122,6 +122,31 @@ impl ChatterClient {
         }
     }
 
+    /// Outgoing requests do not disclose the recipient's encrypted profile.
+    /// A server ID or placeholder is never a useful display name.
+    pub fn outgoing_friend_request_peer_name(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        username: &str,
+    ) -> String {
+        let name = self.display_name(user_id);
+        let opaque = |value: &str| {
+            value == user_id.to_string()
+                || (value.len() >= 24 && value.chars().all(|c| c.is_ascii_hexdigit()))
+        };
+        if name != crate::services::user::friend_display_name_placeholder(user_id)
+            && !opaque(&name)
+        {
+            return name;
+        }
+        let username = username.trim();
+        if !username.is_empty() && !opaque(username)
+        {
+            return username.to_string();
+        }
+        "Pending request".to_string()
+    }
+
     /// Resolve a display name *within a conversation*, so anonymous channels
     /// never leak the global profile name. In an anon group the per-group
     /// member name wins; everywhere else this is just `display_name`.
@@ -1799,6 +1824,7 @@ mod tests {
             display_name: String::new(),
             username: String::new(),
             encrypted_intro: Vec::new(),
+            created_at_ns: 0,
         };
         let other = UserId::from_uuid(uuid::Uuid::from_u128(8));
         let shown = client.visible_friend_requests(vec![req(&peer), req(&other)]);

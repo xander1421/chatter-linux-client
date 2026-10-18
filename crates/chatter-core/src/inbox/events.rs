@@ -678,6 +678,8 @@ pub struct FriendRequestInfo {
     /// `ChatterClient::decrypt_friend_request_note` (needs our identity key,
     /// unavailable in the inbox emit paths). Empty = no note.
     pub encrypted_intro: Vec<u8>,
+    /// Server creation time in nanoseconds; zero when unavailable.
+    pub created_at_ns: u64,
 }
 
 #[cfg(test)]

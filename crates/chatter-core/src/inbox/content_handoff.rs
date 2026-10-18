@@ -503,11 +503,31 @@ impl ContentHandoff {
         }
         let this = self.clone();
         let repo = repo.clone();
-        let artifact = artifact.clone();
+        let apply_artifact = artifact.clone();
         let receipt =
-            tokio::task::spawn_blocking(move || this.apply_blocking(&repo, &artifact, true))
+            tokio::task::spawn_blocking(move || this.apply_blocking(&repo, &apply_artifact, true))
                 .await
                 .map_err(|error| error.to_string())??;
+        // Group posts need the same after-persist acknowledgement as secret DMs.
+        // Decode only after apply_blocking has admitted and stored the post.
+        if artifact.kind == ReceiveKind::Content && artifact.key.transport == "anon_group" {
+            use crate::proto::content_v1::content::Content as Body;
+            if let Ok(content) = crate::network::validation::protovalidate::decode_inbound_content(
+                &artifact.content, "secret_group_receipt",
+            ) && let Some(Body::AnonGroupMessage(wrapper)) = content.content
+                && let Some(inner) = wrapper.inner_content
+                && matches!(inner.content, Some(Body::DataMessage(_)))
+                && let Some(id) = crate::domain::anon_group::AnonGroupId::try_from_slice(&wrapper.group_id)
+                && let Ok(author) = artifact.sender.parse::<UserId>()
+            {
+                let group = self.group.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = group.send_delivery_receipt(&id, &author, inner.timestamp).await {
+                        tracing::warn!(%error, "Secret group delivery receipt failed");
+                    }
+                });
+            }
+        }
         if let Some((id, timestamp)) = receipt {
             let dm = self.dm.clone();
             tokio::spawn(async move {

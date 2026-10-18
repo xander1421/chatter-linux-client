@@ -44,7 +44,11 @@ pub(super) async fn handle_friend_requests_updated(
             .map(|u| ui_ctx.friend_request_peer_name(&u, &r.username))
             .unwrap_or_default()
     };
-    let sent_names: Vec<String> = sent.iter().map(peer_name).collect();
+    let sent_names: Vec<String> = sent.iter().map(|r| {
+        r.user_id.parse::<UserId>()
+            .map(|u| ui_ctx.outgoing_friend_request_peer_name(&u, &r.username))
+            .unwrap_or_else(|_| "Pending request".to_string())
+    }).collect();
     // Outgoing rows show the peer's avatar when a local profile already has it.
     let sent_avatars: Vec<Option<(u32, u32, Vec<u8>)>> = sent
         .iter()
@@ -119,14 +123,16 @@ pub(super) async fn handle_friend_requests_updated(
                         ),
                         None => (slint::Image::default(), false),
                     };
-                    // Name resolved by core (`friend_request_peer_name`).
+                    // Name resolved by core without exposing an opaque recipient ID.
                     crate::FriendRequestData {
                         user_id: r.user_id.into(),
                         display_name: display_name.into(),
                         username: r.username.into(),
                         avatar_source,
                         has_avatar,
-                        sent_at: "".into(),
+                        sent_at: if r.created_at_ns > 0 {
+                            crate::bin_ui::converters::server_record_time(r.created_at_ns).into()
+                        } else { "".into() },
                         note: "".into(),
                     }
                 })

@@ -75,6 +75,7 @@ pub async fn poll_friend_requests(
                 display_name: r.display_name,
                 username: r.username,
                 encrypted_intro: r.encrypted_message,
+                created_at_ns: r.added_at,
             })
             .collect(),
         Err(e) => {
@@ -96,6 +97,7 @@ pub async fn poll_friend_requests(
                 display_name: r.display_name,
                 username: r.username,
                 encrypted_intro: r.encrypted_message,
+                created_at_ns: r.added_at,
             })
             .collect(),
         Err(e) => {

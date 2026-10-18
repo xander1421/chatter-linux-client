@@ -863,6 +863,36 @@ impl AnonGroupService {
         .await
     }
 
+    /// Acknowledge an applied post to its author through their anonymous mailbox.
+    pub async fn send_delivery_receipt(
+        &self,
+        group_id: &AnonGroupId,
+        author: &crate::domain::UserId,
+        sent_at: u64,
+    ) -> Result<(), AnonGroupError> {
+        let Some(member) = self.anon_group_repo.get_member(group_id, author)? else {
+            return Ok(());
+        };
+        let Some(mailbox_pk) = member.mailbox_pk else {
+            return Ok(());
+        };
+        let inner = crate::services::gateway::build_delivery_receipt_content_with_channel(
+            vec![sent_at], Some(&ChannelId::from(*group_id).to_string()),
+        );
+        let content = Content {
+            content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
+                content_v1::AnonGroupMessage {
+                    group_id: group_id.to_vec(),
+                    inner_content: Some(Box::new(inner)),
+                },
+            ))),
+            timestamp: TimestampNanos::now().as_u64(),
+            padding: Self::generate_padding(160),
+            ..Default::default()
+        };
+        self.send_to_anon_mailbox(author, member.device_id, &mailbox_pk, content).await
+    }
+
     /// Send an ephemeral message (reaction, typing, receipt) to all group members.
     ///
     /// Unlike `send_message`, this skips rate limiting since ephemeral messages

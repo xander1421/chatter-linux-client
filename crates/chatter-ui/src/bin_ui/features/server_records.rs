@@ -57,7 +57,10 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                     match result {
                         Ok(detail) => {
                             g.set_detail_title(detail.title.into());
-                            g.set_detail_body(detail.body.into());
+                            let body = if detail.created_at_ns > 0 {
+                                format!("{}\n{}", detail.body, crate::bin_ui::converters::server_record_time(detail.created_at_ns))
+                            } else { detail.body };
+                            g.set_detail_body(body.into());
                         }
                         Err(error) => {
                             g.set_detail_title("Details unavailable".into());
@@ -153,7 +156,8 @@ fn request(
                     }).collect::<Vec<_>>();
                     g.set_notifications(ModelRc::new(VecModel::from(notifications)));
                     let rows = page.rows.into_iter().map(|r| ServerRecordRow {
-                        id: r.id.into(), title: r.title.into(), body: r.body.into(),
+                        id: r.id.into(), title: r.title.into(),
+                        body: if r.created_at_ns > 0 { format!("{} · {}", r.body, crate::bin_ui::converters::server_record_time(r.created_at_ns)).into() } else { r.body.into() },
                         primary: r.primary.into(), secondary: r.secondary.into(),
                     }).collect::<Vec<_>>();
                     g.set_rows(ModelRc::new(VecModel::from(rows)));

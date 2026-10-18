@@ -171,3 +171,11 @@ pub fn format_call_duration(seconds: i64) -> String {
         format!("{}:{:02}", m, s)
     }
 }
+
+/// Full local date and time for server record details.
+pub fn server_record_time(nanos: u64) -> String {
+    DateTime::from_timestamp_nanos(nanos as i64)
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
