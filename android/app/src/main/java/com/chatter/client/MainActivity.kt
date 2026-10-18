@@ -131,6 +131,18 @@ class MainActivity : GameActivity() {
         ViewerMediaExport.finish(this, token, success)
 
     @Suppress("unused")
+    @androidx.annotation.Keep
+    fun loadViewerPdf(bytes: ByteArray): LongArray? = ViewerPdfRenderer.load(this, bytes)
+
+    @Suppress("unused")
+    @androidx.annotation.Keep
+    fun renderViewerPdfPage(token: Long, page: Int): IntArray? = ViewerPdfRenderer.render(this, token, page)
+
+    @Suppress("unused")
+    @androidx.annotation.Keep
+    fun closeViewerPdf(token: Long) = ViewerPdfRenderer.close(token)
+
+    @Suppress("unused")
     fun openViewerDownloads() {
         runOnUiThread {
             try { ViewerMediaExport.openDownloads(this) }
@@ -180,6 +192,7 @@ class MainActivity : GameActivity() {
         messagingSignedIn = MessagingService.wasSignedIn(this)
         messagingBackground = true
         ViewerMediaExport.startup(this)
+        ViewerPdfRenderer.startup(this)
         // Until Slint's first frame the window background is all there is.
         // themes.xml resolves it from the SYSTEM night mode, so a Light app on
         // a dark phone launched on ~1.4 s of black. Paint the app's own theme,
