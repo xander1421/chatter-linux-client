@@ -1290,12 +1290,7 @@ impl ChatterClient {
         pointer.voice_note = true;
         pointer.waveform = note.waveform.clone();
         pointer.duration_ms = note.duration_ms;
-        pointer.file_name = if cfg!(target_os = "android") {
-            "Voice message.m4a"
-        } else {
-            "Voice message.wav"
-        }
-        .into();
+        pointer.file_name = crate::domain::attachment::GENERIC_VOICE_NOTE_FILENAME.into();
         // The sender renders from the already-uploaded local attachment row;
         // receivers render from the pointer. Keep the same metadata on both.
         let mut attachment = self
