@@ -1,0 +1,280 @@
+import { ServerRecordsGlobal } from "server_records/screen.slint";
+import { Spacing } from "theme/spacing.slint";
+import { FriendsModal, FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { AccountMenu } from "settings/account_menu.slint";
+import { CallHistoryScreen, CallHistoryRow } from "calls/mod.slint";
+
+export component AppTabScreens inherits Rectangle {
+    in property <bool> active-call-visible;
+    in-out property <string> active-tab;
+    in property <bool> bottom-nav-visible;
+    in property <string> call-history-error;
+    in-out property <string> call-history-filter;
+    in property <bool> call-history-loading;
+    in property <bool> call-history-paging-paused;
+    in property <[CallHistoryRow]> call-history-rows;
+    in property <int> call-history-selected-count;
+    in property <bool> call-history-selecting;
+    in-out property <bool> calls-more-menu-visible;
+    in property <bool> compact-layout;
+    in property <[BlockedUserData]> friends-blocked-users;
+    in property <[FriendRequestData]> friends-channel-invites;
+    in-out property <string> friends-code-input;
+    in-out property <string> friends-code-status;
+    in property <[FriendRequestData]> friends-group-invites;
+    in property <[FriendData]> friends-list;
+    in property <bool> friends-loading;
+    in-out property <string> friends-modal-tab;
+    in-out property <string> friends-my-code;
+    in property <[FriendRequestData]> friends-private-requests;
+    in-out property <image> friends-qr-code-image;
+    in property <[FriendRequestData]> friends-received-requests;
+    in-out property <string> friends-request-note;
+    in-out property <string> friends-requests-sub-tab;
+    in property <[FriendRequestData]> friends-sent-requests;
+    in-out property <bool> friends-show-qr;
+    in property <string> group-invite-decision;
+    in property <string> group-invite-error;
+    in property <string> group-invite-error-id;
+    in property <bool> is-mobile-platform;
+    in-out property <bool> mobile-show-chat;
+    in property <string> private-request-decision;
+    in property <length> return-to-call-height;
+    in property <length> safe-area-bottom;
+    in property <string> settings-username;
+    in property <image> user-avatar-source;
+    in property <string> user-display-name;
+    in property <string> user-initials;
+    callback call-history-clear();
+    callback call-history-delete-selected();
+    callback call-history-end-selection();
+    callback call-history-filter-changed(string);
+    callback call-history-load-more();
+    callback call-history-open(string, string);
+    callback call-history-redial(string, string, bool);
+    callback call-history-retry();
+    callback call-history-select-all(bool);
+    callback call-history-toggle-select(string);
+    callback friends-accept-channel-invite(string);
+    callback friends-accept-group-invite(string);
+    callback friends-accept-private-request(string);
+    callback friends-accept-request(string);
+    callback friends-block-private-request(string);
+    callback friends-cancel-request(string);
+    callback friends-connect-via-code(string);
+    callback friends-copy-code();
+    callback friends-decline-channel-invite(string);
+    callback friends-decline-group-invite(string);
+    callback friends-decline-private-request(string);
+    callback friends-decline-request(string);
+    callback friends-generate-code(bool);
+    callback friends-generate-qr(bool);
+    callback friends-modal-switch-tab(string);
+    callback friends-paste-code();
+    callback friends-remove-blocked-user(string);
+    callback friends-scan-code();
+    callback friends-start-dm(string);
+    callback friends-unblock-user(string);
+    callback friends-view-profile(string);
+    callback nav-push(string);
+    callback profile-clicked();
+    callback saved-messages-clicked();
+    callback settings-clicked();
+    callback start-create-channel();
+
+    background: transparent;
+
+    // Account menu — the "Profile" tab. A tab screen like Calls and Contacts:
+    // z -1, under anything pushed over it and under the bottom bar. Settings
+    // and My Profile are pushed from here, so Back returns to it.
+    if root.active-tab == "profile": AccountMenu {
+        z: -1;
+        show-modal: true;
+        mobile-mode: root.compact-layout;
+        root-screen: true;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        display-name: root.user-display-name;
+        username: root.settings-username;
+        avatar: root.user-avatar-source;
+        initials: root.user-initials;
+
+        close => {
+            root.active-tab = "chats";
+        }
+        notifications => {
+            root.nav-push("server-records");
+            ServerRecordsGlobal.open("notifications", "");
+        }
+        my-profile => {
+            root.nav-push("user-profile");
+            root.profile-clicked();
+        }
+        saved-messages => {
+            root.active-tab = "chats";
+            root.mobile-show-chat = true;
+            root.saved-messages-clicked();
+        }
+        new-channel => {
+            root.start-create-channel();
+        }
+        settings => {
+            root.nav-push("settings");
+            root.settings-clicked();
+        }
+    }
+
+    // Calls screen — the "Calls" tab. Like Contacts it is a tab
+    // screen, not a modal: z -1 keeps it under anything pushed over it and
+    // under the bottom bar, whose strip it leaves free.
+    if root.active-tab == "calls": CallHistoryScreen {
+        z: -1;
+        mobile-mode: root.compact-layout;
+        // A tab's root screen: the tab bar navigates, no back chevron.
+        root-screen: true;
+        // During a call the return bar occupies the strip above the dock.
+        // Reserve it for fixed confirmation controls as well as list rows.
+        bottom-inset: (root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px)
+            + (root.compact-layout && root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
+        show-modal: true;
+        rows: root.call-history-rows;
+        loading: root.call-history-loading;
+        paging-paused: root.call-history-paging-paused;
+        error-message: root.call-history-error;
+        active-filter: root.call-history-filter;
+        show-more-menu <=> root.calls-more-menu-visible;
+        selecting: root.call-history-selecting;
+        selected-count: root.call-history-selected-count;
+        retry => { root.call-history-retry(); }
+        load-more => { root.call-history-load-more(); }
+        toggle-select(id) => { root.call-history-toggle-select(id); }
+        select-all(all) => { root.call-history-select-all(all); }
+        end-selection => { root.call-history-end-selection(); }
+        delete-selected => { root.call-history-delete-selected(); }
+
+        close => {
+            root.active-tab = "chats";
+        }
+        filter-changed(f) => {
+            root.call-history-filter = f;
+            root.call-history-filter-changed(f);
+        }
+        open-conversation(id, kind) => {
+            root.active-tab = "chats";
+            root.mobile-show-chat = true;
+            root.call-history-open(id, kind);
+        }
+        call-back(id, kind, video) => {
+            root.active-tab = "chats";
+            root.mobile-show-chat = true;
+            root.call-history-redial(id, kind, video);
+        }
+        clear-history => {
+            root.call-history-clear();
+        }
+    }
+
+    // Friends Modal
+    if root.active-tab == "contacts": FriendsModal {
+        init => {
+            if (root.friends-modal-tab == "find") { root.friends-modal-switch-tab("find"); }
+        }
+        z: -1;
+        mobile-mode: root.compact-layout;
+        // A tab's root screen: the tab bar navigates, no back chevron.
+        root-screen: true;
+        // Keep the tab bar visible under the Contacts screen — unless the
+        // keyboard has replaced it, in which case there is nothing to leave
+        // room for.
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+        show-modal: true;
+        active-tab <=> root.friends-modal-tab;
+        friends: root.friends-list;
+        requests-sub-tab <=> root.friends-requests-sub-tab;
+        received-requests: root.friends-received-requests;
+        sent-requests: root.friends-sent-requests;
+        private-requests: root.friends-private-requests;
+        private-request-decision: root.private-request-decision;
+        group-invites: root.friends-group-invites;
+        group-invite-decision: root.group-invite-decision;
+        group-invite-error-id: root.group-invite-error-id;
+        group-invite-error: root.group-invite-error;
+        channel-invites: root.friends-channel-invites;
+        blocked-users: root.friends-blocked-users;
+        loading: root.friends-loading;
+        // Friend code (privacy-first discovery)
+        my-code <=> root.friends-my-code;
+        code-input <=> root.friends-code-input;
+        code-status <=> root.friends-code-status;
+        request-note <=> root.friends-request-note;
+        qr-code-image <=> root.friends-qr-code-image;
+        show-qr <=> root.friends-show-qr;
+
+        close => {
+            root.active-tab = "chats";
+        }
+        switch-tab(tab) => {
+            root.friends-modal-switch-tab(tab);
+        }
+        view-profile(user-id) => {
+            root.friends-view-profile(user-id);
+        }
+        start-dm(user-id) => {
+            root.friends-start-dm(user-id);
+        }
+        accept-request(user-id) => {
+            root.friends-accept-request(user-id);
+        }
+        decline-request(user-id) => {
+            root.friends-decline-request(user-id);
+        }
+        cancel-request(user-id) => {
+            root.friends-cancel-request(user-id);
+        }
+        unblock-user(user-id) => {
+            root.friends-unblock-user(user-id);
+        }
+        remove-blocked-user(user-id) => {
+            root.friends-remove-blocked-user(user-id);
+        }
+        generate-code(private-mode) => {
+            root.friends-generate-code(private-mode);
+        }
+        generate-qr(private-mode) => {
+            root.friends-generate-qr(private-mode);
+        }
+        copy-code => {
+            root.friends-copy-code();
+        }
+        can-scan: root.is-mobile-platform;
+        paste-code => {
+            root.friends-paste-code();
+        }
+        scan-code => {
+            root.friends-scan-code();
+        }
+        connect-via-code(code) => {
+            root.friends-connect-via-code(code);
+        }
+        accept-private-request(conversation-id) => {
+            root.friends-accept-private-request(conversation-id);
+        }
+        decline-private-request(conversation-id) => {
+            root.friends-decline-private-request(conversation-id);
+        }
+        block-private-request(conversation-id) => {
+            root.friends-block-private-request(conversation-id);
+        }
+        accept-group-invite(group-id) => {
+            root.friends-accept-group-invite(group-id);
+        }
+        decline-group-invite(group-id) => {
+            root.friends-decline-group-invite(group-id);
+        }
+        accept-channel-invite(channel-id) => {
+            root.friends-accept-channel-invite(channel-id);
+        }
+        decline-channel-invite(channel-id) => {
+            root.friends-decline-channel-invite(channel-id);
+        }
+    }
+}
