@@ -929,7 +929,30 @@ impl AttachmentService {
                 }
             }
         } else if mime_type.starts_with("video/") {
-            // Video processing uses GStreamer — only available with desktop-media feature
+            // Desktop uses GStreamer; Android installs its platform metadata
+            // extractor at startup. Both populate the same attachment fields.
+            #[cfg(target_os = "android")]
+            {
+                let path_for_video = file_path.to_path_buf();
+                match tokio::task::spawn_blocking(move || {
+                    crate::media::analyze_video(&path_for_video)
+                })
+                .await
+                {
+                    Ok(Ok(video)) => {
+                        if !video.thumbnail.is_empty() {
+                            meta.thumbnail = Some(video.thumbnail);
+                            meta.thumbnail_width = Some(video.thumbnail_width);
+                            meta.thumbnail_height = Some(video.thumbnail_height);
+                        }
+                        meta.width = Some(video.width);
+                        meta.height = Some(video.height);
+                        meta.duration_ms = video.duration_ms;
+                    }
+                    Ok(Err(e)) => tracing::warn!("Failed to analyze Android video: {e}"),
+                    Err(e) => tracing::warn!("Android video metadata task panicked: {e}"),
+                }
+            }
             #[cfg(feature = "desktop-gstreamer")]
             {
                 let path_for_thumb = file_path.to_path_buf();

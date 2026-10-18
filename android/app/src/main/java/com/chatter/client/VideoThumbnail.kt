@@ -5,6 +5,7 @@ import android.media.MediaDataSource
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
@@ -24,6 +25,54 @@ class VideoThumbnail {
         }
         return try { future.get(5, TimeUnit.SECONDS) }
         catch (_: Exception) { null }
+    }
+
+    /** Local user-selected file on send. Header: five big-endian numbers,
+     * followed by the bounded JPEG thumbnail. Never accepts a network URL. */
+    fun extractFile(path: String): ByteArray? {
+        if (Build.VERSION.SDK_INT < 27 || !permit.tryAcquire()) return null
+        val future = executor.submit<ByteArray?> {
+            try { fileFrame(path) } finally { permit.release() }
+        }
+        return try { future.get(5, TimeUnit.SECONDS) }
+        catch (_: Exception) { null }
+    }
+
+    private fun fileFrame(path: String): ByteArray? {
+        val retriever = MediaMetadataRetriever()
+        var bitmap: Bitmap? = null
+        try {
+            retriever.setDataSource(path)
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: return null
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: return null
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            if (width !in 1..8192 || height !in 1..8192 || width.toLong() * height > 16_777_216 || duration < 0) return null
+            val scale = 384.0 / maxOf(width, height)
+            val w = maxOf(1, (width * minOf(1.0, scale)).toInt())
+            val h = maxOf(1, (height * minOf(1.0, scale)).toInt())
+            bitmap = try {
+                retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
+            } catch (_: Exception) { null }
+            val bytes = ByteArrayOutputStream()
+            if (bitmap != null) {
+                if (bitmap.width !in 1..384 || bitmap.height !in 1..384) return null
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 80, bytes) || bytes.size() > 256 * 1024) return null
+            }
+            val packed = ByteArrayOutputStream()
+            DataOutputStream(packed).use { output ->
+                output.writeInt(bitmap?.width ?: 0)
+                output.writeInt(bitmap?.height ?: 0)
+                output.writeInt(width)
+                output.writeInt(height)
+                output.writeLong(duration)
+                output.write(bytes.toByteArray())
+            }
+            return packed.toByteArray()
+        } catch (_: Exception) { return null }
+        finally {
+            bitmap?.recycle()
+            try { retriever.release() } catch (_: Exception) {}
+        }
     }
 
     private fun frame(token: Long): ByteArray? {
