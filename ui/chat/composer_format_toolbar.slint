@@ -1,0 +1,167 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Formatting toolbar (toggled)
+export component ComposerFormatToolbar inherits Rectangle {
+    callback apply-format(string);
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.xxs;
+        alignment: start;
+
+        // Bold button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Bold";
+
+                Text {
+                    text: "B";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-bold-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("bold"); }
+                }
+            }
+        }
+
+        // Italic button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Italic";
+
+                Text {
+                    text: "I";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-italic: true;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-italic-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("italic"); }
+                }
+            }
+        }
+
+        // Strikethrough button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Strikethrough";
+
+                Text {
+                    text: "S";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                // Strikethrough line
+                Rectangle {
+                    width: 10px;
+                    height: 1px;
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height / 2;
+                    background: Colors.text-secondary;
+                }
+
+                fmt-strike-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("strikethrough"); }
+                }
+            }
+        }
+
+        // Code button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Inline code";
+
+                Text {
+                    text: "</>";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xxs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-code-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("code"); }
+                }
+            }
+        }
+
+        // Separator
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 1px;
+                height: 20px;
+                background: Colors.divider;
+            }
+        }
+
+        // Code block button
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: Spacing.radius-sm;
+                background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Code block";
+
+                Text {
+                    text: "```";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xxs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-codeblock-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.apply-format("codeblock"); }
+                }
+            }
+        }
+    }
+}

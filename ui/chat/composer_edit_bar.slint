@@ -1,0 +1,74 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+// Edit mode indicator bar
+export component ComposerEditBar inherits Rectangle {
+    callback cancel-edit();
+    background: Colors.primary.transparentize(0.9);
+    // The tint is a separate layer above the rounded accessory shell.
+    // Match its corners so it cannot paint a square backing outside it.
+    border-radius: Spacing.radius-chrome;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.sm;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            alignment: start;
+
+            Image {
+                source: Icons.edit;
+                width: 16px;
+                height: 16px;
+                y: (parent.height - self.height) / 2;
+                colorize: Colors.primary;
+            }
+
+            Text {
+                text: "Editing message";
+                color: Colors.primary;
+                font-size: Typography.sm;
+                font-weight: 500;
+                vertical-alignment: center;
+            }
+        }
+
+        // Cancel button — a 48dp box, glyph centred in it
+        Rectangle {
+            width: Spacing.touch-target-min;
+            height: Spacing.touch-target-min;
+            background: cancel-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+            border-radius: Spacing.radius-sm;
+            accessible-role: button;
+            accessible-label: "Cancel edit";
+
+            Image {
+                source: Icons.x;
+                width: 18px;
+                height: 18px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: Colors.text-secondary;
+            }
+
+            cancel-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    // Drop the IME composition too. The Rust handler
+                    // clears `composer_text`, but that only clears the
+                    // COMMITTED text -- anything the keyboard was still
+                    // composing survives and is re-rendered, so
+                    // cancelling an edit left that text in the box with
+                    // Send active, ready to post as a NEW message
+                    // (OPEN-ITEMS §112g).
+                    root.cancel-edit();
+                }
+            }
+        }
+    }
+}

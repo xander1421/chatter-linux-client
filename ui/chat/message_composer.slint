@@ -1,6 +1,12 @@
 import { GlassSurface } from "../components/glass_surface.slint";
-import { VoiceRecording, LiveVoiceWaveform } from "voice_recording.slint";
-import { HeaderButton } from "../components/header_button.slint";
+import { VoiceRecording } from "voice_recording.slint";
+import { LiquidComposerSilhouette, DropletNeck } from "composer_geometry.slint";
+import { ComposerFormatToolbar } from "composer_format_toolbar.slint";
+import { ComposerReplyPreview } from "composer_reply_preview.slint";
+import { ComposerAttachmentStrip } from "composer_attachment_strip.slint";
+import { ComposerRecordingPanel } from "composer_recording_panel.slint";
+import { ComposerEditBar } from "composer_edit_bar.slint";
+import { ComposerEmojiButton, ComposerAttachButton } from "composer_action_buttons.slint";
 // Message composer component
 //
 // Enhanced message input with attachment, emoji, GIF buttons, and @ mention detection.
@@ -22,87 +28,8 @@ export global TextFormat {
     pure callback byte-length(string) -> int;
 }
 
-// Pending attachment data for the attachment tray
-export struct PendingAttachmentData {
-    id: string,
-    filename: string,
-    size-display: string,
-    category: string,   // "image", "video", "audio", "document", "code", "archive", "other"
-    is-ready: bool,
-    has-thumbnail: bool,
-    thumbnail: image,
-}
-
-// The field keeps its own clean edge. Its two brief surface waves are strongest
-// while the controls leave their slots and disappear once they float free.
-component LiquidComposerSilhouette inherits Path {
-    in property <float> rise;
-    in property <float> velocity;
-    in property <float> field-top;
-    in property <bool> trailing-drop;
-    property <float> w: self.width / 1px;
-    property <float> h: self.height / 1px;
-    property <float> p: min(1, max(0, rise));
-    // The bar's own GlassSurface edge uses radius-chrome; a different corner
-    // here drew a second, offset outline at every corner.
-    property <float> r: Spacing.radius-chrome / 1px;
-    property <float> k: r * 0.4477;
-    property <float> wave: min(10, max(0, (1 - p) * p * 36 + max(0, -velocity) * 14));
-    // The bar's GlassSurface owns the backdrop. A thin tint grows only with
-    // the lifted wave, keeping the resting bar identical to the bottom dock.
-    fill: Appearance.glass-effects ? transparent.mix(Materials.ultra-thin, p) : transparent;
-    stroke: Materials.glass-edge;
-    stroke-width: Materials.glass-edge-width;
-    viewbox-width: w;
-    viewbox-height: h;
-    fit: fill;
-    MoveTo { x: 0; y: h - r; }
-    LineTo { x: 0; y: field-top + r; }
-    CubicTo { control-1-x: 0; control-1-y: field-top + k;
-        control-2-x: k; control-2-y: field-top; x: r; y: field-top; }
-    CubicTo { control-1-x: r + 5; control-1-y: field-top - wave;
-        control-2-x: r + 14; control-2-y: field-top - wave; x: r + 26; y: field-top; }
-    LineTo { x: trailing-drop ? w - r - 26 : w - r; y: field-top; }
-    CubicTo { control-1-x: trailing-drop ? w - r - 14 : w - r;
-        control-1-y: trailing-drop ? field-top - wave : field-top;
-        control-2-x: trailing-drop ? w - r - 5 : w - r;
-        control-2-y: trailing-drop ? field-top - wave : field-top;
-        x: w - r; y: field-top; }
-    CubicTo { control-1-x: w - k; control-1-y: field-top;
-        control-2-x: w; control-2-y: field-top + k; x: w; y: field-top + r; }
-    LineTo { x: w; y: h - r; }
-    CubicTo { control-1-x: w; control-1-y: h - k;
-        control-2-x: w - k; control-2-y: h; x: w - r; y: h; }
-    LineTo { x: r; y: h; }
-    CubicTo { control-1-x: k; control-1-y: h;
-        control-2-x: 0; control-2-y: h - k; x: 0; y: h - r; }
-    Close { }
-}
-
-// A transient tapered bridge pinches off as the circle separates. Reversing
-// the same lift progress reconnects it on the way back into the bar.
-component DropletNeck inherits Path {
-    in property <float> rise;
-    in property <float> field-top;
-    in property <float> circle-bottom;
-    property <float> p: min(1, max(0, rise));
-    property <float> start: min(circle-bottom - 7, field-top - 6);
-    property <float> half-width: 2 + 12 * (1 - p);
-    width: 48px;
-    fill: Appearance.glass-effects ? Materials.regular : Materials.opaque;
-    opacity: min(1, max(0, (p - 0.08) * 8)) * min(1, max(0, (0.96 - p) * 14));
-    viewbox-width: 48;
-    viewbox-height: self.height / 1px;
-    fit: fill;
-    MoveTo { x: 15; y: start; }
-    CubicTo { control-1-x: 20; control-1-y: start + 3;
-        control-2-x: 24 - half-width; control-2-y: field-top - 3;
-        x: 24 - half-width; y: field-top + 2; }
-    LineTo { x: 24 + half-width; y: field-top + 2; }
-    CubicTo { control-1-x: 24 + half-width; control-1-y: field-top - 3;
-        control-2-x: 28; control-2-y: start + 3; x: 33; y: start; }
-    Close { }
-}
+import { PendingAttachmentData } from "composer_types.slint";
+export { PendingAttachmentData }
 
 export component MessageComposer inherits GlassSurface {
     material-enabled: false;
@@ -523,240 +450,17 @@ export component MessageComposer inherits GlassSurface {
         opacity: min(1, max(0, 1 - root.recording-reveal));
 
         // Edit mode indicator bar
-        if root.is-editing: Rectangle {
+        if root.is-editing: ComposerEditBar {
             width: 100%;
             height: root.edit-bar-height;
-            background: Colors.primary.transparentize(0.9);
-            // The tint is a separate layer above the rounded accessory shell.
-            // Match its corners so it cannot paint a square backing outside it.
-            border-radius: Spacing.radius-chrome;
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    Image {
-                        source: Icons.edit;
-                        width: 16px;
-                        height: 16px;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.primary;
-                    }
-
-                    Text {
-                        text: "Editing message";
-                        color: Colors.primary;
-                        font-size: Typography.sm;
-                        font-weight: 500;
-                        vertical-alignment: center;
-                    }
-                }
-
-                // Cancel button — a 48dp box, glyph centred in it
-                Rectangle {
-                    width: Spacing.touch-target-min;
-                    height: Spacing.touch-target-min;
-                    background: cancel-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "Cancel edit";
-
-                    Image {
-                        source: Icons.x;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-secondary;
-                    }
-
-                    cancel-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            // Drop the IME composition too. The Rust handler
-                            // clears `composer_text`, but that only clears the
-                            // COMMITTED text -- anything the keyboard was still
-                            // composing survives and is re-rendered, so
-                            // cancelling an edit left that text in the box with
-                            // Send active, ready to post as a NEW message
-                            // (OPEN-ITEMS §112g).
-                            root.reset-composition();
-                            root.cancel-edit();
-                        }
-                    }
-                }
-            }
+            cancel-edit => { root.reset-composition(); root.cancel-edit(); }
         }
 
         // Formatting toolbar (toggled)
-        if root.show-formatting: Rectangle {
+        if root.show-formatting: ComposerFormatToolbar {
             width: 100%;
             height: root.format-bar-height;
-            background: transparent;
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.xxs;
-                alignment: start;
-
-                // Bold button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Bold";
-
-                        Text {
-                            text: "B";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.bold;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-bold-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("bold"); }
-                        }
-                    }
-                }
-
-                // Italic button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Italic";
-
-                        Text {
-                            text: "I";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-italic: true;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-italic-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("italic"); }
-                        }
-                    }
-                }
-
-                // Strikethrough button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Strikethrough";
-
-                        Text {
-                            text: "S";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        // Strikethrough line
-                        Rectangle {
-                            width: 10px;
-                            height: 1px;
-                            x: (parent.width - self.width) / 2;
-                            y: parent.height / 2;
-                            background: Colors.text-secondary;
-                        }
-
-                        fmt-strike-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("strikethrough"); }
-                        }
-                    }
-                }
-
-                // Code button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Inline code";
-
-                        Text {
-                            text: "</>";
-                            color: Colors.text-secondary;
-                            font-size: Typography.xxs;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-code-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("code"); }
-                        }
-                    }
-                }
-
-                // Separator
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 1px;
-                        height: 20px;
-                        background: Colors.divider;
-                    }
-                }
-
-                // Code block button
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        border-radius: Spacing.radius-sm;
-                        background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Code block";
-
-                        Text {
-                            text: "```";
-                            color: Colors.text-secondary;
-                            font-size: Typography.xxs;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        fmt-codeblock-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.apply-format("codeblock"); }
-                        }
-                    }
-                }
-            }
+            apply-format(fmt) => { root.apply-format(fmt); }
         }
 
         // Populated actions have compact shells with transparent space between them.
@@ -812,370 +516,66 @@ export component MessageComposer inherits GlassSurface {
 
             // Reply preview directly above the field, beneath the raised
             // action circles. Its own row remains reserved during the lift.
-            if root.is-replying: reply-chip := GlassSurface {
+            if root.is-replying: ComposerReplyPreview {
                 x: root.row-padding;
                 y: root.action-shell-height + Spacing.xs
                     + (root.has-attachments ? root.attachment-band-height + Spacing.xs : 0px);
                 width: max(0px, parent.width - root.row-padding * 2);
                 height: min(root.reply-row-height,
                     max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
-                opacity: min(1, max(0, root.reply-reveal));
-                border-radius: Spacing.radius-chrome;
-                clip: true;
-                material-enabled: false;
-                background: Materials.opaque;
-                border-width: Materials.glass-edge-width;
-                border-color: Materials.glass-edge;
+                row-padding: root.row-padding;
+                action-shell-height: root.action-shell-height;
+                attachment-band-height: root.attachment-band-height;
+                raised-toolbar-height: root.raised-toolbar-height;
+                reply-row-height: root.reply-row-height;
+                reply-reveal: root.reply-reveal;
+                has-attachments: root.has-attachments;
+                reply-has-thumbnail: root.reply-has-thumbnail;
+                reply-thumbnail: root.reply-thumbnail;
+                reply-to-sender: root.reply-to-sender;
+                reply-to-preview: root.reply-to-preview;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
-
-                HorizontalLayout {
-                    padding-left: Spacing.md;
-                    padding-right: root.row-padding;
-                    spacing: Spacing.sm;
-
-                    // Reply accent bar
-                    Rectangle {
-                        width: 4px;
-                        height: parent.height - Spacing.sm * 2;
-                        y: Spacing.sm;
-                        background: Colors.primary;
-                        border-radius: 2px;
-                    }
-
-                    // Thumbnail preview for image replies
-                    if root.reply-has-thumbnail: VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 36px;
-                            height: 36px;
-                            border-radius: Spacing.radius-sm;
-                            clip: true;
-                            background: Colors.surface-hover;
-
-                            Image {
-                                width: 100%;
-                                height: 100%;
-                                source: root.reply-thumbnail;
-                                image-fit: cover;
-                            }
-                        }
-                    }
-
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        spacing: Spacing.xxs;
-
-                        Text {
-                            text: "Reply to " + root.reply-to-sender;
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                            font-weight: 600;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: root.reply-to-preview;
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            overflow: elide;
-                        }
-                    }
-
-                    // Cancel reply button — a 48dp box, glyph centred in it
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: Spacing.touch-target-min;
-                            height: Spacing.touch-target-min;
-                            background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                            border-radius: Spacing.radius-chrome-inner;
-                            accessible-role: button;
-                            accessible-label: "Cancel reply";
-
-                            Image {
-                                source: Icons.x;
-                                width: 18px;
-                                height: 18px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                colorize: Colors.text-secondary;
-                            }
-
-                            cancel-reply-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.cancel-reply();
-                                }
-                            }
-                        }
-                    }
-                }
+                cancel-reply => { root.cancel-reply(); }
             }
 
             // Attachment cards sit between the controls and the reply row.
-            if root.has-attachments: attachment-strip := GlassSurface {
+            if root.has-attachments: ComposerAttachmentStrip {
                 x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
                 y: root.action-shell-height + Spacing.xs;
                 width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
                 height: min(root.attachment-band-height,
                     max(0px, root.raised-toolbar-height - self.y - Spacing.xs));
-                opacity: min(1, max(0, root.strip-reveal));
-                // One material with the reply chip and the action shells; the
-                // cards are wells inside it, not a second card style.
-                border-radius: Spacing.radius-chrome;
-                clip: true;
-                material-enabled: false;
-                background: Materials.opaque;
-                border-width: Materials.glass-edge-width;
-                border-color: Materials.glass-edge;
+                row-padding: root.row-padding;
+                action-shell-height: root.action-shell-height;
+                attachment-band-height: root.attachment-band-height;
+                raised-toolbar-height: root.raised-toolbar-height;
+                attachment-chip-height: root.attachment-chip-height;
+                strip-reveal: root.strip-reveal;
+                show-attachment-action: root.show-attachment-action;
+                disabled: root.disabled;
+                pending-attachments: root.pending-attachments;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
-
-                attachment-scroll := Flickable {
-                    width: 100%;
-                    height: 100%;
-                    // The viewport is exactly the cards plus the add button, or
-                    // the strip when that is wider: a strip that fits is centred
-                    // in the gap, a longer one scrolls. The row was `start`-
-                    // aligned (and the estimate below omitted the padding), so a
-                    // single staged image sat hard left with dead space on the
-                    // right (S9, RC88).
-                    viewport-width: max(self.width, attachment-cards.preferred-width);
-                    viewport-height: self.height;
-                    interactive: true;
-
-                    attachment-cards := HorizontalLayout {
-                        width: attachment-scroll.viewport-width;
-                        height: attachment-scroll.viewport-height;
-                        padding-left: root.row-padding;
-                        padding-right: root.row-padding;
-                        padding-top: Spacing.sm;
-                        padding-bottom: Spacing.sm;
-                        spacing: Spacing.xs;
-                        alignment: center;
-
-                        // Pending attachment items: inset wells, concentric with
-                        // the shell (radius-chrome-inner − chrome-inset).
-                        for attachment in root.pending-attachments: Rectangle {
-                            width: 180px;
-                            height: root.attachment-chip-height;
-                            background: Colors.inset;
-                            border-radius: Spacing.radius-lg;
-                            opacity: attachment.is-ready ? 1.0 : 0.7;
-
-                            property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
-                                                          attachment.category == "video" ? Colors.cat-video :
-                                                          attachment.category == "audio" ? Colors.cat-audio :
-                                                          attachment.category == "document" ? Colors.cat-document :
-                                                          attachment.category == "code" ? Colors.cat-code :
-                                                          attachment.category == "archive" ? Colors.cat-archive :
-                                                          Colors.text-muted;
-
-                            property <string> category-emoji: attachment.category == "image" ? "\u{1F4F7}" :
-                                                              attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
-                                                              attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
-                                                              attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
-                                                              attachment.category == "code" ? "\u{1F4DD}\u{FE0F}" :
-                                                              attachment.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
-                                                              "\u{1F4CE}\u{FE0F}";
-
-                            HorizontalLayout {
-                                padding-left: root.row-padding;
-                                padding-right: 0px;
-                                spacing: Spacing.xs;
-
-                                // Icon or thumbnail with loading indicator
-                                Rectangle {
-                                    width: 32px;
-                                    height: 32px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
-                                    clip: true;
-
-                                    // Show thumbnail for images
-                                    if attachment.has-thumbnail && attachment.is-ready: Image {
-                                        width: 100%;
-                                        height: 100%;
-                                        source: attachment.thumbnail;
-                                        image-fit: cover;
-                                    }
-
-                                    // Show icon for non-images when ready
-                                    if !attachment.has-thumbnail && attachment.is-ready: Text {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: category-emoji;
-                                        font-family: Typography.font-family-emoji;
-                                        font-size: Typography.lg;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-
-                                    // Loading indicator when not ready
-                                    if !attachment.is-ready: Text {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: "\u{23F3}";  // Hourglass
-                                        font-size: Typography.lg;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                // File info
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    alignment: center;
-                                    spacing: Spacing.xxs;
-
-                                    Text {
-                                        text: attachment.filename;
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        overflow: elide;
-                                    }
-                                    HorizontalLayout {
-                                        spacing: Spacing.xs;
-
-                                        Text {
-                                            text: attachment.is-ready ? attachment.size-display : "Encrypting...";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                            overflow: elide;
-                                        }
-                                    }
-                                }
-
-                                // Remove button: the reply chip's dismiss, exactly.
-                                // A 48dp hit box, quiet at rest, error tint only
-                                // under the pointer — the filled pink disc was the
-                                // loudest thing in the composer.
-                                Rectangle {
-                                    width: Spacing.touch-target-min;
-                                    height: Spacing.touch-target-min;
-                                    background: remove-touch.pressed ? Colors.error.transparentize(0.7)
-                                        : remove-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                                    border-radius: Spacing.radius-chrome-inner;
-                                    accessible-role: button;
-                                    accessible-label: "Remove attachment";
-                                    accessible-action-default => { root.remove-attachment(attachment.id); }
-
-                                    Image {
-                                        source: Icons.x;
-                                        width: 18px;
-                                        height: 18px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        colorize: remove-touch.has-hover ? Colors.error : Colors.text-secondary;
-                                    }
-
-                                    remove-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.remove-attachment(attachment.id);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Add more: the same 48dp box as the remove control,
-                        // centred in the row, with the bundled plus glyph.
-                        VerticalLayout {
-                            height: root.attachment-chip-height;
-                            alignment: center;
-                            Rectangle {
-                                width: Spacing.touch-target-min;
-                                height: Spacing.touch-target-min;
-                                background: add-more-touch.pressed ? Materials.pressed
-                                    : add-more-touch.has-hover ? Materials.hover : Colors.inset;
-                                border-radius: Spacing.radius-chrome-inner;
-                                accessible-role: button;
-                                accessible-label: "Add attachment";
-                                accessible-action-default => { if !root.disabled { root.attachment-clicked(); } }
-
-                                Image {
-                                    source: Icons.plus;
-                                    width: 18px;
-                                    height: 18px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: Colors.text-secondary;
-                                }
-
-                                add-more-touch := TouchArea {
-                                    enabled: !root.disabled;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.attachment-clicked();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                remove-attachment(id) => { root.remove-attachment(id); }
+                attachment-clicked => { root.attachment-clicked(); }
             }
 
-            // Emoji & GIF button (unified — pickers toggle via tabs inside).
-            // 48px, not 36px: measured on a phone the old box was a 36dp target,
-            // under the 48dp minimum. The icon keeps its size; only the box grows.
-            Rectangle {
+            ComposerEmojiButton {
                 x: root.row-padding * (1 - root.lift-layout);
                 y: parent.action-y + root.droplet-bob;
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                background: transparent;
-                opacity: root.disabled ? 0.5 : 1.0;
-                accessible-role: button;
-                // On a phone the open drawer stands where the keyboard was, so
-                // the button offers the keyboard back; a desktop window has no
-                // soft keyboard, so there the same click is "close".
-                accessible-label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
-
-                GlassSurface {
-                    width: parent.width - (emoji-touch.pressed ? 4px : 0px);
-                    height: parent.height - (emoji-touch.pressed ? 4px : 0px);
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    material-enabled: root.lift-layout > 0.6;
-                    material-level: root.material-level;
-                    elevation: root.lift-layout > 0.6 ? 3 : 0;
-                    backdrop-paused: root.backdrop-paused;
-                    background: root.picker-open && !root.mobile ? Colors.tint-strong
-                        : emoji-touch.pressed ? Materials.pressed
-                        : emoji-touch.has-hover ? Materials.hover
-                        : transparent;
-                    border-radius: self.width / 2;
-                    opacity: emoji-touch.pressed || emoji-touch.has-hover || (root.picker-open && !root.mobile)
-                        ? 1 : min(1, max(0, (root.lift-layout - 0.6) * 2.5));
-                    animate width { duration: Materials.feedback-duration; easing: Materials.spring; }
-                    animate height { duration: Materials.feedback-duration; easing: Materials.spring; }
-                }
-
-                Image {
-                    source: root.picker-open && root.mobile ? Icons.keyboard : Icons.smile;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: root.picker-open && !root.mobile ? Colors.glass-accent
-                        : emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                }
-
-                emoji-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        if !root.picker-open { root.suspend-input(); }
-                        if root.picker-open { root.keyboard-requested(); }
-                        root.emoji-clicked();
-                        if !root.picker-open { root.restore-input(); }
-                    }
-                }
+                lift-layout: root.lift-layout;
+                picker-open: root.picker-open;
+                mobile: root.mobile;
+                disabled: root.disabled;
+                surface-material-level: root.material-level;
+                surface-backdrop-paused: root.backdrop-paused;
+                suspend-input => { root.suspend-input(); }
+                restore-input => { root.restore-input(); }
+                keyboard-requested => { root.keyboard-requested(); }
+                emoji-clicked => { root.emoji-clicked(); }
             }
 
             // One native input below the toolbar beside Send; compact inline when empty.
@@ -1296,65 +696,15 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // Attachment button.
-            //
-            // Present in the mesh room and in a cell, absent in a mesh DM. The
-            // bitchat protocol does carry file transfer (`FileTransfer = 0x22`,
-            // plus our streamed chunking on top), so hiding it everywhere in the
-            // mesh — as this did while the feature was unimplemented — now
-            // withholds something that works.
-            //
-            // A mesh DM is the exception and stays without it: a file packet is
-            // cleartext, every mesh DM is Noise-sealed, and core refuses a
-            // directed file for exactly that reason. Offering the button there
-            // would be an offer the transport declines. Hidden while editing:
-            // an edit changes text only.
-            if root.show-attachment-action: Rectangle {
+            if root.show-attachment-action: ComposerAttachButton {
                 x: parent.width - root.row-padding * (1 - root.lift-layout) - Spacing.touch-target-min
                     - (1 - root.lift-layout) * root.inline-terminal-width;
                 y: parent.action-y + root.droplet-bob;
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                background: transparent;
-                opacity: root.disabled ? 0.5 : 1.0;
-                accessible-role: button;
-                accessible-label: "Attach file";
-
-                GlassSurface {
-                    width: parent.width - (attachment-touch.pressed ? 4px : 0px);
-                    height: parent.height - (attachment-touch.pressed ? 4px : 0px);
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    material-enabled: root.lift-layout > 0.6;
-                    material-level: root.material-level;
-                    elevation: root.lift-layout > 0.6 ? 3 : 0;
-                    backdrop-paused: root.backdrop-paused;
-                    background: attachment-touch.pressed ? Materials.pressed
-                        : attachment-touch.has-hover ? Materials.hover
-                        : transparent;
-                    border-radius: self.width / 2;
-                    opacity: attachment-touch.pressed || attachment-touch.has-hover
-                        ? 1 : min(1, max(0, (root.lift-layout - 0.6) * 2.5));
-                    animate width { duration: Materials.feedback-duration; easing: Materials.spring; }
-                    animate height { duration: Materials.feedback-duration; easing: Materials.spring; }
-                }
-
-                Image {
-                    source: Icons.paperclip;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: attachment-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                }
-
-                attachment-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.attachment-clicked();
-                    }
-                }
+                lift-layout: root.lift-layout;
+                disabled: root.disabled;
+                surface-material-level: root.material-level;
+                surface-backdrop-paused: root.backdrop-paused;
+                attachment-clicked => { root.attachment-clicked(); }
             }
 
             // Tap starts recording. The recording bar owns Cancel and Send;
@@ -1443,62 +793,14 @@ export component MessageComposer inherits GlassSurface {
         // This is a basic heuristic - in practice, you'd want cursor position tracking
         // to properly detect when user types @
     }
-    recording-panel := Rectangle {
-        visible: VoiceRecording.active;
-        opacity: min(1, max(0, root.recording-reveal));
+    ComposerRecordingPanel {
         width: parent.width;
         height: parent.height;
-        background: transparent;
-        TouchArea { }
-        recording-layout := VerticalLayout {
-            height: parent.height;
-            padding: root.row-padding;
-            GlassSurface {
-                horizontal-stretch: 1;
-                height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-chrome;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
-                HorizontalLayout {
-                    width: parent.width;
-                    height: parent.height;
-                    spacing: Spacing.xs;
-                    HeaderButton {
-                        backdrop-paused: root.backdrop-paused;
-                        icon: Icons.trash;
-                        label: "Cancel voice message";
-                        touch: true;
-                        plain: true;
-                        destructive: true;
-                        clicked => { VoiceRecording.cancel(); }
-                    }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        spacing: 0px;
-                        Text {
-                            text: VoiceRecording.elapsed;
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                        }
-                        LiveVoiceWaveform {
-                            height: 30px;
-                        }
-                    }
-                    HeaderButton {
-                        backdrop-paused: root.backdrop-paused;
-                        icon: Icons.send;
-                        label: "Send voice message";
-                        touch: true;
-                        plain: true;
-                        enabled: !VoiceRecording.busy;
-                        clicked => { VoiceRecording.finish(); }
-                    }
-                }
-            }
-        }
+        recording-reveal: root.recording-reveal;
+        row-padding: root.row-padding;
+        surface-material-level: root.material-level;
+        surface-elevation: root.elevation;
+        surface-backdrop-paused: root.backdrop-paused;
     }
 
 }
