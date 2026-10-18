@@ -3,7 +3,7 @@ use chrono::{Duration, Utc};
 use crate::domain::UserId;
 use crate::error::MailboxError;
 
-use super::super::DmMailbox;
+use super::super::{DmMailbox, PeerMailbox};
 
 impl super::DmConversationManager {
     /// Save/update our mailbox for a conversation.

@@ -4,6 +4,7 @@
 //! (CallSignalingService). This module provides the UI-side handler
 //! that delegates to core and updates Slint properties from the result.
 
+use slint::ComponentHandle as _;
 use std::sync::Arc;
 
 use crate::MainWindow;

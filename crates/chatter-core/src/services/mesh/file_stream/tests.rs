@@ -1,6 +1,7 @@
 use super::*;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::tlv::file_stream::{FileManifest, MAX_REQUESTED_CHUNKS};
+use chatter_mesh::tlv::hex_encode;
 use sha2::{Digest, Sha256};
 
 const ID: TransferId = [1, 2, 3, 4, 5, 6, 7, 8];

@@ -12,6 +12,7 @@ pub mod gif;
 mod mentions;
 mod voice;
 
+use slint::ComponentHandle as _;
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;

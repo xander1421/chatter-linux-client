@@ -435,10 +435,10 @@ mod rotation_recipient_tests {
         buffer_newest_per_sender(&mut held, rotator, [3u8; 32], 5);
         assert_eq!(*held[&rotator].0, [3u8; 32]);
 
-        for _ in 0..MAX_BUFFERED_KEY_SENDERS {
+        for _ in 0..crate::services::call_signaling::invites::MAX_BUFFERED_KEY_SENDERS {
             buffer_newest_per_sender(&mut held, UserId::new(), [0u8; 32], 1);
         }
-        assert_eq!(held.len(), MAX_BUFFERED_KEY_SENDERS);
+        assert_eq!(held.len(), crate::services::call_signaling::invites::MAX_BUFFERED_KEY_SENDERS);
         assert!(held.contains_key(&rotator), "held senders keep their slot");
     }
 }

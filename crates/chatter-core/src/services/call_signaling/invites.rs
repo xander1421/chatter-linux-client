@@ -1,6 +1,6 @@
 use super::*;
 
-const MAX_BUFFERED_KEY_SENDERS: usize = 32;
+pub(super) const MAX_BUFFERED_KEY_SENDERS: usize = 32;
 
 /// A channel group call we were rung for (or are joining unrung), held from
 /// the ring until we have joined it, declined it, or it rang out. The ring

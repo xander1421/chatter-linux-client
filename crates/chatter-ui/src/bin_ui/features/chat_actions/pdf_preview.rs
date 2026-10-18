@@ -148,6 +148,7 @@ mod pdf_renderer {
     use pdfium_render::prelude::*;
 
     use crate::MainWindow;
+    use slint::ComponentHandle;
     use crate::bin_ui::slint_conversions::rgba_to_slint_image;
 
     /// Target render width in pixels. Height is calculated from page aspect ratio.
