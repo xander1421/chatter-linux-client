@@ -1,6 +1,7 @@
 //! Thumbnail decoder source is independent of the active playback source.
 use super::activity;
 use crate::platform::video_source::{ThumbnailSource, VideoSource};
+use chatter_core::media::VideoMetadata;
 use chatter_core::services::attachment::{CbcRangeDecryptor, ImageDecodeResult, ThumbnailOwner};
 use jni::{
     objects::{JByteArray, JClass, JObject, JValue},
@@ -22,6 +23,77 @@ static NEXT: AtomicI64 = AtomicI64::new(1);
 
 pub fn init() {
     chatter_core::services::attachment::register_video_thumbnail_extractor(extract);
+    chatter_core::media::register_video_metadata_extractor(extract_file);
+}
+
+fn extract_file(path: &std::path::Path) -> Result<VideoMetadata, String> {
+    let path = path.to_str().ok_or("video path is not UTF-8")?;
+    let packed = activity::with_jni_env(|env| {
+        let result = env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
+            let loader = env
+                .call_method(
+                    activity::activity()
+                        .map_err(|_| jni::errors::Error::NullPtr("activity"))?
+                        .as_obj(),
+                    jni::jni_str!("getClassLoader"),
+                    jni::jni_sig!("()Ljava/lang/ClassLoader;"),
+                    &[],
+                )?
+                .l()?;
+            let name = env.new_string("com.chatter.client.VideoThumbnail")?;
+            let class = env
+                .call_method(
+                    loader,
+                    jni::jni_str!("loadClass"),
+                    jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                    &[JValue::Object(name.as_ref())],
+                )?
+                .l()?;
+            let helper =
+                env.new_object(env.cast_local::<JClass>(class)?, jni::jni_sig!("()V"), &[])?;
+            let jpath = env.new_string(path)?;
+            let bytes = env
+                .call_method(
+                    helper,
+                    jni::jni_str!("extractFile"),
+                    jni::jni_sig!("(Ljava/lang/String;)[B"),
+                    &[JValue::Object(jpath.as_ref())],
+                )?
+                .l()?;
+            if bytes.is_null() {
+                return Err(jni::errors::Error::NullPtr("video metadata unavailable"));
+            }
+            let bytes = env.cast_local::<JByteArray>(bytes)?;
+            if bytes.len(env)? > 256 * 1024 + 24 {
+                return Err(jni::errors::Error::NullPtr("video metadata budget"));
+            }
+            env.convert_byte_array(bytes)
+        });
+        let _ = env.exception_clear();
+        result.map_err(|e| e.to_string())
+    })?;
+    if packed.len() < 24 {
+        return Err("short video metadata".into());
+    }
+    let word = |offset: usize| u32::from_be_bytes(packed[offset..offset + 4].try_into().unwrap());
+    let duration_ms = u64::from_be_bytes(packed[16..24].try_into().unwrap());
+    let thumbnail = packed[24..].to_vec();
+    if !thumbnail.is_empty() {
+        let dimensions =
+            chatter_core::media::ImageProcessor::get_dimensions_from_memory(&thumbnail)
+                .map_err(|e| e.to_string())?;
+        if dimensions != (word(0), word(4)) {
+            return Err("video thumbnail dimensions mismatch".into());
+        }
+    }
+    Ok(VideoMetadata {
+        thumbnail,
+        thumbnail_width: word(0),
+        thumbnail_height: word(4),
+        width: word(8),
+        height: word(12),
+        duration_ms,
+    })
 }
 fn extract(
     source: Arc<CbcRangeDecryptor>,
