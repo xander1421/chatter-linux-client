@@ -457,10 +457,7 @@ fn update_sidebar_row(
 /// open conversation and recomputes the Chats-tab badge, which counts the
 /// same rows.
 pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
-    let mut rows = ui_ctx.sidebar_rows();
-    for row in rows.iter_mut() {
-        row.pre_decode_avatar();
-    }
+    let rows = ui_ctx.sidebar_rows();
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
         apply_chat_list(&w, &ui_ctx, rows);

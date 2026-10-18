@@ -10,9 +10,10 @@ mod channel;
 mod kind;
 pub(crate) mod markdown;
 mod message;
-pub(crate) mod pin_preview;
 #[cfg(test)]
 mod open_bench;
+pub(crate) mod pin_preview;
+mod presentation;
 mod utils;
 
 pub use attachment::*;
@@ -22,4 +23,5 @@ pub use chatter_core::ui::sidebar_data::{
 };
 pub use kind::*;
 pub use message::*;
+pub use presentation::*;
 pub use utils::*;

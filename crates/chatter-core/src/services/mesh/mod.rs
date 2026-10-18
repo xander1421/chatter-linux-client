@@ -98,7 +98,7 @@ pub struct MeshSidebarRow {
     pub kind: &'static str,
     pub scope: String,
     pub title: String,
-    pub timestamp: String,
+    pub last_message_at: Option<chrono::DateTime<chrono::Utc>>,
     pub unread_count: i32,
     pub reachable: bool,
     pub verified: bool,
@@ -1043,7 +1043,7 @@ impl MeshService {
             let blocked = matches!(&conversation, MeshConversation::Dm(peer) if self.peer_blocked(peer));
             Some(MeshSidebarRow {
                 conversation, id: row.id, kind, scope, title: row.name,
-                timestamp: row.last_message_at.map(crate::ui::format_timestamp).unwrap_or_default(),
+                last_message_at: row.last_message_at,
                 unread_count: i32::try_from(row.unread_count).unwrap_or(i32::MAX),
                 reachable, verified, muted, blocked, binding_label,
             })

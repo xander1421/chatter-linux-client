@@ -1,9 +1,14 @@
-//! Sidebar data structures for Slint UI bindings.
-//!
-//! Provides Rust structs that map to Slint struct definitions for
-//! sidebar components like channel list items.
+//! Raw sidebar rows and their ordering rules.
 
 use crate::domain::message::ConversationType;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChatRowLabel {
+    #[default]
+    Plain,
+    IncomingSecretRequest,
+    OutgoingSecretRequest,
+}
 
 // ============================================================================
 // Chat list row
@@ -24,14 +29,13 @@ pub struct ChatRowSendData {
     /// DM rows: the peer. Empty otherwise.
     pub user_id: String,
     pub display_name: String,
+    pub label: ChatRowLabel,
     /// Raw avatar bytes (a DM peer's photo, a channel's icon).
     pub avatar_bytes: Option<Vec<u8>>,
-    /// Pre-decoded RGBA pixels (width, height, data).
-    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
-    pub initials: String,
     pub presence_status: String,
     pub last_message: String,
-    pub timestamp: String,
+    /// Activity time shown at the right of the row, before local formatting.
+    pub timestamp_at: Option<chrono::DateTime<chrono::Utc>>,
     pub unread_count: u32,
     pub is_typing: bool,
     /// Local-only pin flag; pinned rows lead the list.
@@ -57,17 +61,17 @@ impl ChatRowSendData {
         id: impl Into<String>,
         display_name: impl Into<String>,
     ) -> Self {
+        let display_name = display_name.into();
         Self {
             kind,
             id: id.into(),
             user_id: String::new(),
-            display_name: display_name.into(),
+            display_name,
+            label: ChatRowLabel::Plain,
             avatar_bytes: None,
-            avatar_decoded: None,
-            initials: String::new(),
             presence_status: String::new(),
             last_message: String::new(),
-            timestamp: String::new(),
+            timestamp_at: None,
             unread_count: 0,
             is_typing: false,
             is_pinned: false,
@@ -83,20 +87,6 @@ impl ChatRowSendData {
     #[must_use]
     pub fn is_anon_dm(&self) -> bool {
         self.kind == ConversationType::AnonDm
-    }
-
-    /// Pre-decode avatar bytes to RGBA.
-    pub fn pre_decode_avatar(&mut self) {
-        if self.avatar_decoded.is_some() {
-            return;
-        }
-        if let Some(bytes) = &self.avatar_bytes {
-            if let Ok(img) = image::load_from_memory(bytes) {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                self.avatar_decoded = Some((w, h, rgba.into_raw()));
-            }
-        }
     }
 }
 
@@ -127,25 +117,7 @@ pub struct FriendRequestSendData {
     pub display_name: String,
     pub username: String,
     pub avatar_bytes: Option<Vec<u8>>,
-    /// Pre-decoded RGBA pixels (width, height, data).
-    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
     pub sent_at: String,
-}
-
-impl FriendRequestSendData {
-    /// Pre-decode avatar bytes to RGBA.
-    pub fn pre_decode_avatar(&mut self) {
-        if self.avatar_decoded.is_some() {
-            return;
-        }
-        if let Some(bytes) = &self.avatar_bytes {
-            if let Ok(img) = image::load_from_memory(bytes) {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                self.avatar_decoded = Some((w, h, rgba.into_raw()));
-            }
-        }
-    }
 }
 
 /// Send-safe intermediate struct for FriendData (Friends-tab rows).
@@ -158,25 +130,9 @@ pub struct FriendDataSendData {
     pub display_name: String,
     pub username: String,
     pub avatar_bytes: Option<Vec<u8>>,
-    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
     pub presence_status: String,
     pub custom_status: String,
     pub is_anon: bool,
-}
-
-impl FriendDataSendData {
-    pub fn pre_decode_avatar(&mut self) {
-        if self.avatar_decoded.is_some() {
-            return;
-        }
-        if let Some(bytes) = &self.avatar_bytes {
-            if let Ok(img) = image::load_from_memory(bytes) {
-                let rgba = img.to_rgba8();
-                let (w, h) = rgba.dimensions();
-                self.avatar_decoded = Some((w, h, rgba.into_raw()));
-            }
-        }
-    }
 }
 
 #[cfg(test)]

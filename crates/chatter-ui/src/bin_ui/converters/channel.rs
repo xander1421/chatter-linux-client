@@ -1,8 +1,8 @@
 //! Channel and DM converters.
 
-use chatter_core::ui::initials_from_name;
+use crate::bin_ui::converters::initials_from_name;
 
-use chatter_core::ui::sidebar_data::{ChatRowSendData, FriendRequestSendData};
+use chatter_core::ui::sidebar_data::{ChatRowLabel, ChatRowSendData, FriendRequestSendData};
 
 use super::utils::avatar_bytes_to_image;
 
@@ -13,12 +13,7 @@ pub trait ChatRowExt {
 impl ChatRowExt for ChatRowSendData {
     /// UI thread only: builds the row's `slint::Image`.
     fn to_slint(self) -> crate::ChatRowData {
-        let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            (
-                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h),
-                true,
-            )
-        } else if let Some(bytes) = &self.avatar_bytes {
+        let (avatar_source, has_avatar) = if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
                 None => (slint::Image::default(), false),
@@ -31,12 +26,23 @@ impl ChatRowExt for ChatRowSendData {
             conversation_id: self.id.into(),
             conversation_type: super::conversation_kind(&self.kind),
             user_id: self.user_id.into(),
-            display_name: self.display_name.into(),
+            display_name: match self.label {
+                ChatRowLabel::Plain => self.display_name,
+                ChatRowLabel::IncomingSecretRequest => format!("\u{1F4E9} {}", self.display_name),
+                ChatRowLabel::OutgoingSecretRequest => {
+                    format!("\u{1F4EE} {} (pending)", self.display_name)
+                }
+            }
+            .into(),
             avatar_source,
             has_avatar,
-            initials: self.initials.into(),
+            initials: initials_from_name(&self.display_name).into(),
             last_message: self.last_message.into(),
-            timestamp: self.timestamp.into(),
+            timestamp: self
+                .timestamp_at
+                .map(super::sidebar_time)
+                .unwrap_or_default()
+                .into(),
             presence_status: self.presence_status.into(),
             private_channel: self.private_channel,
             member_count: self.member_count as i32,
@@ -57,12 +63,7 @@ pub trait FriendDataExt {
 
 impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
     fn to_slint(self) -> crate::FriendData {
-        let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            (
-                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h),
-                true,
-            )
-        } else if let Some(bytes) = &self.avatar_bytes {
+        let (avatar_source, has_avatar) = if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
                 None => (slint::Image::default(), false),
@@ -90,12 +91,7 @@ pub trait FriendRequestExt {
 
 impl FriendRequestExt for FriendRequestSendData {
     fn to_slint(self) -> crate::FriendRequestData {
-        let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
-            (
-                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, w, h),
-                true,
-            )
-        } else if let Some(bytes) = &self.avatar_bytes {
+        let (avatar_source, has_avatar) = if let Some(bytes) = &self.avatar_bytes {
             match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
                 None => (slint::Image::default(), false),

@@ -11,7 +11,7 @@ mod registration_avatar;
 pub mod shared_content_data;
 pub mod sidebar_data;
 
-pub use call_history_data::{CallHistoryRowData, format_call_duration};
+pub use call_history_data::CallHistoryRowData;
 pub use chat_data::{format_timestamp, initials_from_name};
 pub use registration_avatar::{
     DEFAULT_AVATARS, default_avatar_bytes, random_preset_avatar_index, registration_avatar,

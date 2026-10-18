@@ -749,10 +749,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(
                         &channel,
                     );
-                let mut rows = ui_ctx.sidebar_rows();
-                for row in &mut rows {
-                    row.pre_decode_avatar();
-                }
+                let rows = ui_ctx.sidebar_rows();
                 (metadata, rows)
             });
             let ctx_for_paint = ui_ctx.clone();
@@ -2010,10 +2007,7 @@ mod deletion_tests {
         // exact production Save-success handler; no transport/keyring/device.
         repo.update(&channel).unwrap();
         let complete = |epoch| {
-            let mut rows = client.sidebar_rows();
-            for row in &mut rows {
-                row.pre_decode_avatar();
-            }
+            let rows = client.sidebar_rows();
             apply_saved_channel(
                 &w,
                 &client,

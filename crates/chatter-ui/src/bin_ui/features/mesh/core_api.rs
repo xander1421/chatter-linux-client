@@ -145,7 +145,10 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
         .map(|row| MeshRow {
             kind: row.kind,
             scope: row.scope,
-            timestamp: row.timestamp,
+            timestamp: row
+                .last_message_at
+                .map(crate::bin_ui::converters::format_timestamp)
+                .unwrap_or_default(),
             unread_count: row.unread_count,
             conversation: row.conversation,
             id: row.id,

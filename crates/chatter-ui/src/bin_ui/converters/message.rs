@@ -80,7 +80,7 @@ pub struct MessageDisplayData {
     pub content: String,
     pub timestamp: String,
     pub timestamp_ns: String, // Nanosecond timestamp as string for event matching
-    /// Core's day chip for this message (`ui::chat_data::day_label`).
+    /// Local day chip for this message.
     pub day_label: String,
     pub is_edited: bool,
     pub is_deleted: bool,
@@ -419,7 +419,7 @@ pub fn message_to_display_data_with_replies(
                 .to_string()
         },
         timestamp_ns: msg.sent_at.to_string(),
-        day_label: chatter_core::ui::chat_data::day_label(msg.created_at),
+        day_label: crate::bin_ui::converters::day_label(msg.created_at),
         is_edited: msg.is_edited,
         is_deleted: msg.is_deleted,
         is_system,

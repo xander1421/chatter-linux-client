@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::bin_ui::converters::initials_from_name;
 use crate::{CallParticipantData, MainWindow};
 use chatter_core::calls::{LiveKitRoomEvent, RoomState, tiles};
 use chatter_core::client::ChatterClient;
-use chatter_core::ui::initials_from_name;
 
 /// Core's tile order ([`chatter_core::calls::tiles::order_tiles`]).
 fn order_participants(

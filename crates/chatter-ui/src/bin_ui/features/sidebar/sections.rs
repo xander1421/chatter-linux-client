@@ -455,9 +455,7 @@ fn build_section_data(
                 .map(|conv| {
                     // Core shapes the row; only the avatar decode happens here,
                     // off the UI thread.
-                    let mut row = ui_ctx.section_row(conv);
-                    row.pre_decode_avatar();
-                    row
+                    ui_ctx.section_row(conv)
                 })
                 .collect(),
         })

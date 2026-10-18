@@ -263,7 +263,9 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
                     .unwrap_or_default()
                     .into(),
             );
-            w.set_user_initials(chatter_core::ui::initials_from_name(&profile.display_name).into());
+            w.set_user_initials(
+                crate::bin_ui::converters::initials_from_name(&profile.display_name).into(),
+            );
             w.set_profile_initials(w.get_user_initials());
             w.set_user_display_name(profile.display_name.into());
             crate::bin_ui::features::back::close(w, "edit-profile");

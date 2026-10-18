@@ -11,12 +11,12 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::bin_ui::converters::avatar_bytes_to_image;
+use crate::bin_ui::converters::initials_from_name;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::OutgoingCallStart;
 use chatter_core::domain::call::CallType;
 use chatter_core::state::ActiveConversation;
-use chatter_core::ui::initials_from_name;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 

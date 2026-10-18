@@ -10,8 +10,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
+use crate::bin_ui::converters::initials_from_name;
 use crate::{MainWindow, SharedContentItem, SharedTab};
-use chatter_core::ui::initials_from_name;
 
 mod avatar_edit;
 
@@ -351,7 +351,7 @@ fn load_shared_tabs(
             .into_iter()
             .map(|t| SharedTab {
                 id: t.id.into(),
-                label: t.label.into(),
+                label: crate::bin_ui::converters::shared_tab_label(&t.id).into(),
                 count: t.count,
             })
             .collect();
@@ -438,7 +438,10 @@ fn request_shared_page(
                 // At most four missing videos per requested page, with no remote download.
                 for item in page
                     .iter_mut()
-                    .filter(|i| i.is_video && i.thumbnail.is_empty())
+                    .filter(|i| {
+                        crate::bin_ui::converters::shared_content_is_video(i)
+                            && i.thumbnail.is_empty()
+                    })
                     .take(4)
                 {
                     if let Ok(id) = item.attachment_id.parse() {
@@ -497,6 +500,8 @@ fn request_shared_page(
                 Vec::new()
             };
             rows.extend(page.iter().map(|item| {
+                let (title, subtitle, is_video) =
+                    crate::bin_ui::converters::shared_content_lines(item);
                 let thumbnail = crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
                     .unwrap_or_default();
                 let has_thumbnail = thumbnail.size().width > 0;
@@ -504,11 +509,11 @@ fn request_shared_page(
                     message_id: item.message_id.clone().into(),
                     attachment_id: item.attachment_id.clone().into(),
                     category: item.category.clone().into(),
-                    title: shared_content_display_title(&item.category, &item.title).into(),
-                    subtitle: item.subtitle.clone().into(),
+                    title: shared_content_display_title(&item.category, &title).into(),
+                    subtitle: subtitle.into(),
                     thumbnail,
                     has_thumbnail,
-                    is_video: item.is_video,
+                    is_video,
                 }
             }));
             w.set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
