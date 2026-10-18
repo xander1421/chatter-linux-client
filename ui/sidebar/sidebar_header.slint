@@ -1,0 +1,113 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { HeaderButton } from "../components/header_button.slint";
+import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+
+export component SidebarHeader inherits GlassSurface {
+    in property <length> panel-width;
+    in property <length> top-row-height;
+    in property <length> quick-link-inset;
+    in property <length> quick-link-slot;
+    in property <length> quick-link-icon-size;
+    in property <brush> quick-link-text-color;
+    in property <length> quick-link-text-size;
+    in property <length> traffic-lights-width;
+    in property <length> header-control-shell;
+    in property <length> header-control-glyph;
+    in property <bool> search-overlay-open;
+    in property <bool> mobile-mode;
+    in property <bool> touch;
+    callback search-clicked();
+    callback create-clicked();
+    callback anon-mode-clicked();
+
+            // Bound backdrop and shadow painting to this chrome silhouette.
+            clip: true;
+            material-level: 0;
+            elevation: 3;
+            background: transparent;
+            border-radius: root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
+
+            // Pinned to the top: without x/y a sized element is centred. On a
+            // phone it floats inset from the edges like the chat header.
+            x: root.mobile-mode ? Spacing.sm : Spacing.none;
+            y: 0;
+            width: root.panel-width - 2 * self.x;
+            height: root.top-row-height;
+            opacity: root.search-overlay-open ? 0 : 1;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+            accessible-role: button;
+            accessible-label: "Search";
+            HorizontalLayout {
+                // The phone's floating surface starts one `sm` inside the
+                // list. Cancel that inset so this slot keeps the same centre
+                // as Saved Messages and the conversation avatars below it.
+                // macOS traffic lights still reserve their titlebar space.
+                padding-left: root.quick-link-inset - parent.x + root.traffic-lights-width;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: start;
+                // Use the same column on phones, tablets and desktop so the
+                // lens and label track the rows at every touch density.
+                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                    HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
+                }
+                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+            }
+            search-touch := TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+            // Create — New Chat / New Channel / New Section. Two-pane only; a
+            // phone has the floating button on the Chats tab instead. Left of
+            // the Shield toggle.
+            if !root.mobile-mode: HeaderButton {
+                touch: root.touch;
+                active: true;
+                shell: root.header-control-shell;
+                glyph: root.header-control-glyph;
+                x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
+                y: (parent.height - self.height) / 2;
+                icon: Icons.plus;
+                label: "Create";
+                clicked => { root.create-clicked(); }
+            }
+            // Shield toggle — the chat list's own header control (owner decision
+            // 2026-09-26: Shield is a mode of this list, not a tab). Declared
+            // after `search-touch` so it sits above the row's search target.
+            // Tinted when on; the dot is Tor status.
+            //
+            // Offered in every build: Shield is the anonymous-mailbox mode and
+            // works without Tor. A build without the `onion` feature stays
+            // direct, core reports TorStatus Unavailable and the
+            // ShieldNetworkBanner says so. Only the Tor dot is gated on
+            // AnonMode.onion-built — without Tor it would be a permanent red.
+            HeaderButton {
+                touch: root.touch;
+                plain: root.mobile-mode;
+                shell: root.header-control-shell;
+                glyph: root.header-control-glyph;
+                x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
+                icon: Icons.shield;
+                label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
+                active: AnonMode.enabled;
+                clicked => { root.anon-mode-clicked(); }
+                // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                // red=error, muted=off. State 0 is Off — traffic is going
+                // direct — and it used to fall through to amber, i.e. the
+                // dot claimed "connecting" forever on a build with no Tor
+                // in it. Shield mode only, and only where Tor exists.
+                Rectangle {
+                    visible: AnonMode.enabled && AnonMode.onion-built;
+                    width: 8px; height: 8px; border-radius: 4px;
+                    // On the glyph's top-right corner, not the box's.
+                    x: (parent.width + root.header-control-glyph) / 2 - self.width * 0.75;
+                    y: (parent.height - root.header-control-glyph) / 2 - self.height * 0.25;
+                    border-width: 1px; border-color: Colors.surface;
+                    background: TorStatus.state == 2 ? Colors.success
+                        : TorStatus.state >= 3 ? Colors.error
+                        : TorStatus.state == 1 ? Colors.warning
+                        : Colors.text-muted;
+                }
+            }
+}
