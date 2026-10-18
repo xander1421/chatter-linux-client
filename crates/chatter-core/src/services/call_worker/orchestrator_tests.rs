@@ -160,9 +160,9 @@ mod group_ring_cancel_tests {
     async fn saturated_queue_withdrawal_waits_then_completes_once() {
         let worker = worker();
         let log = Arc::new(NotificationLog::default());
-        let bridge = super::super::call_notification_bridge::spawn_call_notification_bridge(
+        let bridge = crate::services::call_notification_bridge::spawn_call_notification_bridge(
             worker.clone(),
-            Arc::new(super::super::notification_service::NotificationService::new(log.clone())),
+            Arc::new(crate::services::notification_service::NotificationService::new(log.clone())),
         );
         worker.orch_mark_connected(
             CallHandle::from("unrelated-active"),
@@ -269,7 +269,7 @@ mod group_ring_cancel_tests {
 
     #[tokio::test]
     async fn shared_invite_accept_cancel_orders_preserve_newest_keys_before_join_or_replace() {
-        use super::super::call_signaling::GroupCallInvites;
+        use crate::services::call_signaling::GroupCallInvites;
         for replaces_active in [false, true] {
             for cancel_first in [false, true] {
                 let worker = worker();
@@ -374,7 +374,7 @@ mod group_ring_cancel_tests {
 
     #[tokio::test]
     async fn failed_actor_accept_does_not_mark_signaling_accepted() {
-        use super::super::call_signaling::GroupCallInvites;
+        use crate::services::call_signaling::GroupCallInvites;
         let worker = worker();
         let call = CallHandle::from("pending");
         present(&worker, &call).await;
