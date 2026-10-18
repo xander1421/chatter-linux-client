@@ -21,6 +21,7 @@ pub async fn download_attachments(
     ui_ctx: Arc<chatter_core::client::ChatterClient>,
     weak_window: slint::Weak<MainWindow>,
     conversation_id: String,
+    own_sent: bool,
 ) {
     for att in attachments {
         let cdn_key = match &att.remote_url {
@@ -34,7 +35,7 @@ pub async fn download_attachments(
         let is_image = att.metadata.is_image();
         let is_video = att.metadata.is_video();
         let is_gif = att.metadata.is_gif();
-        let has_thumbnail = att
+        let mut has_thumbnail = att
             .metadata
             .thumbnail
             .as_ref()
@@ -62,6 +63,7 @@ pub async fn download_attachments(
         // from the full download below.
         if (is_image || is_video) && !has_thumbnail {
             if let Some(thumb_bytes) = ui_ctx.ensure_attachment_thumbnail(&att_id).await {
+                has_thumbnail = true;
                 let weak = weak_window.clone();
                 let att_id_p = att_id.to_string();
                 let conv = conversation_id.clone();
@@ -70,9 +72,9 @@ pub async fn download_attachments(
                     if let Some(window) = weak.upgrade() {
                         match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes)
                         {
-                            Ok(image) => update_attachment_thumbnail(
-                                &window, &ui_p, &att_id_p, image, &conv,
-                            ),
+                            Ok(image) => {
+                                update_attachment_thumbnail(&window, &ui_p, &att_id_p, image, &conv)
+                            }
                             Err(e) => {
                                 tracing::debug!(error = ?e, "Failed to decode sidecar thumbnail for preview")
                             }
@@ -82,7 +84,10 @@ pub async fn download_attachments(
             }
         }
 
-        if !att.should_auto_download() {
+        // The originating device already has the video, but its linked device
+        // may have received no sidecar (older sends or a failed sidecar upload).
+        // Recover that device's own preview from the authenticated full blob.
+        if !att.should_auto_download() && !(own_sent && is_video && !has_thumbnail) {
             continue;
         }
 
@@ -91,7 +96,7 @@ pub async fn download_attachments(
             filename = %filename,
             content_type = %mime,
             conversation_id = %conversation_id,
-            "Auto-downloading image attachment"
+            "Auto-downloading media attachment"
         );
 
         // Download encrypted content to filesystem
@@ -316,7 +321,7 @@ fn handle_video(
                         update_attachment_thumbnail_with_dims(
                             &window,
                             &ui_ctx_video,
-                            &att_id.to_string(),
+                            &cdn_key,
                             image,
                             width as i32,
                             height as i32,
@@ -355,6 +360,11 @@ pub fn update_attachment_thumbnail(
                 if let Some(att) = attachments.row_data(att_idx) {
                     if att.id.as_str() == attachment_id {
                         let mut updated_att = att.clone();
+                        let size = image.size();
+                        if updated_att.width <= 0 || updated_att.height <= 0 {
+                            updated_att.width = size.width as i32;
+                            updated_att.height = size.height as i32;
+                        }
                         updated_att.thumbnail = image;
                         updated_att.has_thumbnail = true;
                         updated_att.is_downloading = false;
@@ -436,6 +446,15 @@ fn is_conversation_active(
         .parse()
         .map(|id| active.matches_channel(&id))
         .unwrap_or(false);
+    let dm_channel_match = conversation_id
+        .parse()
+        .map(|id| match &active {
+            chatter_core::state::chat_state::ActiveConversation::ServerDm { peer_id } => {
+                chatter_core::domain::ids::ChannelId::from(*peer_id) == id
+            }
+            _ => false,
+        })
+        .unwrap_or(false);
     let anon_dm_match = conversation_id
         .parse()
         .map(|id| active.matches_anon_dm(&id))
@@ -448,5 +467,5 @@ fn is_conversation_active(
         .parse()
         .map(|id| active.matches_dm_peer(&id))
         .unwrap_or(false);
-    channel_match || anon_dm_match || anon_group_match || peer_match
+    channel_match || dm_channel_match || anon_dm_match || anon_group_match || peer_match
 }
