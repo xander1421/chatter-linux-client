@@ -91,12 +91,13 @@ export component ServerRecordsScreen inherits Rectangle {
                     spacing: 1px;
                     for row in ServerRecordsGlobal.notifications: Rectangle {
                         width: inbox.visible-width;
-                        height: 112px;
+                        height: inbox-row-content.preferred-height;
                         background: row.read ? Colors.surface : Colors.surface-section;
                         TouchArea { clicked => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); } }
-                        HorizontalLayout {
+                        inbox-row-content := HorizontalLayout {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;
+                            alignment: start;
                             Rectangle {
                                 min-width: 42px; max-width: 42px; height: 42px;
                                 border-radius: 21px;
@@ -117,9 +118,22 @@ export component ServerRecordsScreen inherits Rectangle {
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                alignment: center;
                                 spacing: 2px;
-                                Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; }
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; }
+                                    Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; }
+                                    Rectangle {
+                                        min-width: 8px; max-width: 8px; height: 8px;
+                                        border-radius: 4px; background: row.read ? transparent : Colors.primary;
+                                    }
+                                    Button {
+                                        text: "×"; label: "Delete notification"; variant: "icon"; size: "small";
+                                        min-width: 36px; max-width: 36px;
+                                        disabled: ServerRecordsGlobal.loading;
+                                        clicked => { ServerRecordsGlobal.act(row.id, "Delete"); }
+                                    }
+                                }
                                 Text { text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                                 if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
                                 Button {
@@ -130,17 +144,6 @@ export component ServerRecordsScreen inherits Rectangle {
                                         if !row.read { ServerRecordsGlobal.act(row.id, "Mark read"); }
                                     }
                                 }
-                            }
-                            Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; }
-                            Rectangle {
-                                min-width: 8px; max-width: 8px; height: 8px;
-                                border-radius: 4px; background: row.read ? transparent : Colors.primary;
-                            }
-                            Button {
-                                text: "×"; label: "Delete notification"; variant: "icon"; size: "small";
-                                min-width: 36px; max-width: 36px;
-                                disabled: ServerRecordsGlobal.loading;
-                                clicked => { ServerRecordsGlobal.act(row.id, "Delete"); }
                             }
                         }
                     }
