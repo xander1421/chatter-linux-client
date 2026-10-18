@@ -1153,7 +1153,7 @@ export component MessageItem inherits Rectangle {
                                 // Each row occupies the attachment column, including when
                                 // another attachment or message text makes the bubble wider.
                                 width: parent.width;
-                                alignment: center;
+                                alignment: attachment.is-image || attachment.category == "video" ? center : start;
 
                                 // Image attachments
                                 if attachment.is-image: Rectangle {
