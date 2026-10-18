@@ -31,7 +31,7 @@ pub fn open_private_group_invite_modal(
 ) {
     let Some(fence) = weak
         .upgrade()
-        .and_then(|w| super::create_channel::RequestFence::capture(&w, &ui_ctx))
+        .and_then(|w| crate::bin_ui::features::modals::create_channel::RequestFence::capture(&w, &ui_ctx))
     else {
         return;
     };

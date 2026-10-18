@@ -148,7 +148,7 @@ impl ChannelEventService {
     }
 
     /// Handle a channel event from the stream.
-    async fn handle_stream_event(&self, event: channel_event::Event, channel_id: &str) {
+    pub(super) async fn handle_stream_event(&self, event: channel_event::Event, channel_id: &str) {
         use channel_event::Event;
 
         // The server's keepalive (also its first item once subscribed). It

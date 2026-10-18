@@ -9,7 +9,7 @@ impl ChatterClient {
         format!("ui.composer_recovery.{}", owner.0)
     }
 
-    fn staging_root(&self) -> PathBuf {
+    pub(super) fn staging_root(&self) -> PathBuf {
         self.directories().data_dir().join("composer-staging")
     }
 

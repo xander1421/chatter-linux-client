@@ -550,7 +550,12 @@ fn channel_settings_mute_toggle_reaches_core() {
     w.invoke_channel_settings_toggle_mute(true);
 
     // ---- L2 static: handler reaches the mute_conversation core method --------
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
     let idx = src
         .find("on_channel_settings_toggle_mute")
         .expect("mute handler present");
@@ -634,7 +639,12 @@ fn channel_settings_save_reaches_core_and_drafts_are_wired() {
     );
 
     // L2 static (Rust): the handler reaches ChatterClient::update_channel.
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
     let idx = src
         .find("on_channel_settings_save")
         .expect("save handler present");
@@ -717,7 +727,12 @@ fn channel_settings_icon_picker_is_wired() {
     );
 
     // L2 static (Rust): pick handler stashes the path; Save reads it + uploads.
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
     let pick_idx = src
         .find("on_channel_settings_pick_icon")
         .expect("pick-icon handler present");
@@ -4948,7 +4963,12 @@ fn channel_settings_moderation_reaches_core() {
     w.invoke_channel_settings_set_member_muted(target.clone(), true, 0);
     w.invoke_channel_settings_set_member_muted(target, false, 0);
 
-    let src = include_str!("../src/bin_ui/features/modals/channel_settings.rs");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/channel_settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/actions.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/invites.rs"),
+        include_str!("../src/bin_ui/features/modals/channel_settings/moderation.rs"),
+    );
     for call in [
         ".ban_user(",
         ".unban_user(",
