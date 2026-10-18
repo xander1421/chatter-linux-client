@@ -127,6 +127,16 @@ pub struct SelectionActions {
 }
 
 impl ChatterClient {
+    /// Remove rows already displayed before inserting an older history page.
+    pub fn unseen_history_rows<T>(
+        &self,
+        rows: impl IntoIterator<Item = T>,
+        visible_ids: impl IntoIterator<Item = String>,
+        row_id: impl Fn(&T) -> &str,
+    ) -> Vec<T> {
+        crate::services::message::MessageService::unseen_history_rows(rows, visible_ids, row_id)
+    }
+
     // ── Messages façade ──────────────────────────────────────────────────
 
     /// Execute a selected-message delete using the captured account/session.

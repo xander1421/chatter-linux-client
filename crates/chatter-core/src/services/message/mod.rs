@@ -35,6 +35,7 @@ pub(crate) use shield_retry::spawn_shield_send_recovery;
 mod receipts;
 pub use receipts::{advance_delivery_status, display_delivery_status};
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
@@ -484,6 +485,19 @@ impl SolicitedResends {
 }
 
 impl MessageService {
+    /// Keep only history rows that are not already visible in the conversation.
+    /// A fetched page can overlap the current model after a live delivery.
+    pub fn unseen_history_rows<T>(
+        rows: impl IntoIterator<Item = T>,
+        visible_ids: impl IntoIterator<Item = String>,
+        row_id: impl Fn(&T) -> &str,
+    ) -> Vec<T> {
+        let visible: HashSet<String> = visible_ids.into_iter().collect();
+        rows.into_iter()
+            .filter(|row| !visible.contains(row_id(row)))
+            .collect()
+    }
+
     /// Create a new MessageService with dependencies.
     #[allow(clippy::too_many_arguments)]
     pub fn new(

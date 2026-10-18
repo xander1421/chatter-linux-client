@@ -768,6 +768,19 @@ impl ChatterClient {
         self.mesh().sidebar_rows(self.session_current_user_id())
     }
 
+    #[cfg(feature = "mesh")]
+    pub fn mesh_sidebar_row_for(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::services::mesh::MeshSidebarRow>, crate::services::mesh::MeshError> {
+        self.mesh().sidebar_row_for(self.session_current_user_id(), id)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_peer_by_id(&self, peer_id: &str) -> Option<crate::services::mesh::MeshPeer> {
+        self.mesh().peer_by_id(peer_id)
+    }
+
     /// Which mesh scope a sidebar row refers to.
     #[cfg(feature = "mesh")]
     pub fn mesh_conversation_for(

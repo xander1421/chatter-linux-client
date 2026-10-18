@@ -858,20 +858,18 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 .collect();
 
             let current_model = w.get_messages();
-            let current_ids: std::collections::HashSet<String> = current_model
-                .iter()
-                .map(|msg| msg.message_id.to_string())
-                .collect();
+            let current_ids = current_model.iter().map(|msg| msg.message_id.to_string());
 
             // Prepend older messages (older go at top), skipping
             // duplicates. Inserted in place: rows added above the
             // first visible one shift the list's index without
             // moving what is on screen, so history loads without
             // a jump.
-            let older: Vec<_> = slint_messages
-                .into_iter()
-                .filter(|msg| !current_ids.contains(msg.message_id.as_str()))
-                .collect();
+            let older = ui_ctx.unseen_history_rows(
+                slint_messages,
+                current_ids,
+                |msg: &crate::MessageItemData| msg.message_id.as_str(),
+            );
             tracing::debug!("Loaded {} older messages for channel", older.len());
             crate::bin_ui::features::chat::edit_messages(&w, |model| {
                 for (i, msg) in older.into_iter().enumerate() {

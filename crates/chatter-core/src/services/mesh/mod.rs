@@ -1050,6 +1050,25 @@ impl MeshService {
         }).collect())
     }
 
+    /// Resolve one row using the same visibility and scope rules as the sidebar.
+    pub fn sidebar_row_for(
+        &self,
+        owner: Option<UserId>,
+        id: &str,
+    ) -> Result<Option<MeshSidebarRow>, MeshError> {
+        Ok(self
+            .sidebar_rows(owner)?
+            .into_iter()
+            .find(|row| row.id == id))
+    }
+
+    /// Resolve one nearby peer by its transport identity.
+    pub fn peer_by_id(&self, peer_id: &str) -> Option<MeshPeer> {
+        self.peers()
+            .into_iter()
+            .find(|peer| peer.peer.as_str() == peer_id)
+    }
+
     /// The mesh conversation a sidebar row refers to, or `None` when the id is
     /// not one of ours.
     ///
