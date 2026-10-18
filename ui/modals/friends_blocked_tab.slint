@@ -1,0 +1,182 @@
+import { BlockedUserData } from "friends_data.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Button } from "../components/button.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component BlockedTab inherits VerticalLayout {
+    in property <bool> mobile-mode;
+    in property <length> bottom-inset;
+    in property <length> row-height;
+    in property <[BlockedUserData]> blocked-users;
+    in-out property <string> confirm-remove-id;
+    callback unblock-user(string);
+    callback remove-blocked-user(string);
+    vertical-stretch: 1;
+    spacing: Spacing.sm;
+
+    // No "0 blocked users" over the empty state saying the same.
+    if root.blocked-users.length > 0: Text {
+        text: root.blocked-users.length + (root.blocked-users.length == 1 ? " blocked user" : " blocked users");
+        color: Colors.text-secondary;
+        font-size: Typography.xs;
+        font-weight: Typography.medium;
+    }
+
+    if root.blocked-users.length == 0: VerticalLayout {
+        vertical-stretch: 1;
+        alignment: center;
+        spacing: Spacing.sm;
+
+        // U+1F6AB is another tofu box on the S9 (§112u).
+        HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.slash;
+                    width: 40px;
+                    height: 40px;
+                    colorize: Colors.text-muted;
+                }
+            }
+
+            Text {
+                text: "No blocked users";
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Users you block won't be able to message you";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+
+    if root.blocked-users.length > 0: Rectangle {
+        vertical-stretch: 1;
+        property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
+        scroll-blocked-list := Flickable {
+            property <length> chrome-inset: parent.chrome-inset;
+            width: parent.width;
+            y: root.mobile-mode ? -parent.chrome-inset : 0px;
+            height: root.mobile-mode ? root.height : parent.height;
+
+            viewport-height: blocked-list.preferred-height;
+
+            blocked-list := VerticalLayout {
+                padding-top: root.mobile-mode ? scroll-blocked-list.chrome-inset : Spacing.none;
+                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                // Rows stack from the top (see friends-list).
+                alignment: start;
+                spacing: Spacing.xs;
+
+                for user in root.blocked-users: Rectangle {
+                    height: root.row-height;
+                    background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-md;
+
+                    // TouchArea first (behind) for hover detection
+                    blocked-touch := TouchArea {}
+
+                    HorizontalLayout {
+                        padding: Spacing.sm;
+                        spacing: Spacing.sm;
+
+                        Avatar {
+                            size: 40px;
+                            source: user.avatar-source;
+                            anonymous: user.anon;
+                            name: user.display-name;
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: Spacing.xxs;
+
+                            Text {
+                                text: user.display-name;
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                                overflow: elide;
+                            }
+
+                            if root.confirm-remove-id == user.user-id: Text {
+                                text: user.anon ? "Delete this chat? They stay blocked." : "Remove from friends and unblock?";
+                                color: Colors.text-secondary;
+                                font-size: Typography.xs;
+                                overflow: elide;
+                            }
+
+                            if root.confirm-remove-id != user.user-id && user.blocked-at != "": Text {
+                                text: "Blocked " + user.blocked-at;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+                        }
+
+                        if root.confirm-remove-id != user.user-id: HorizontalLayout {
+                            alignment: center;
+                            spacing: Spacing.xs;
+
+                            Button {
+                                touch: root.mobile-mode;
+                                text: "Unblock";
+                                variant: "ghost";
+
+                                clicked => {
+                                    root.unblock-user(user.user-id);
+                                }
+                            }
+
+                            // An anon peer has no friendship; its second action
+                            // deletes the stored chat (Signal: Delete on a
+                            // blocked chat), and there is none once deleted.
+                            if !user.anon || user.anon-chat: Button {
+                                touch: root.mobile-mode;
+                                text: user.anon ? "Delete chat" : "Remove";
+                                variant: "ghost";
+
+                                clicked => {
+                                    root.confirm-remove-id = user.user-id;
+                                }
+                            }
+                        }
+
+                        if root.confirm-remove-id == user.user-id: HorizontalLayout {
+                            alignment: center;
+                            spacing: Spacing.xs;
+
+                            Button {
+                                touch: root.mobile-mode;
+                                text: "Cancel";
+                                variant: "ghost";
+
+                                clicked => {
+                                    root.confirm-remove-id = "";
+                                }
+                            }
+
+                            Button {
+                                touch: root.mobile-mode;
+                                text: user.anon ? "Delete" : "Remove";
+                                variant: "destructive";
+
+                                clicked => {
+                                    root.confirm-remove-id = "";
+                                    root.remove-blocked-user(user.user-id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+}
