@@ -1,5 +1,6 @@
 package com.chatter.client
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -8,6 +9,7 @@ import android.bluetooth.BluetoothProfile
 import android.util.Log
 
 /** Client GATT events; state and JNI dispatch remain owned by MeshBleBridge. */
+@SuppressLint("MissingPermission") // Permission checked in start() and guarded by the bridge.
 internal fun MeshBleBridge.createGattClientCallback(): BluetoothGattCallback = object : BluetoothGattCallback() {
 
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
