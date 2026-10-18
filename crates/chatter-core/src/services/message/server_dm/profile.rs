@@ -145,9 +145,9 @@ const PROFILE_KEY_RETRY: Backoff = Backoff {
 
 #[derive(Clone, Copy)]
 pub(super) struct Backoff {
-    attempts: u32,
-    first: std::time::Duration,
-    max: std::time::Duration,
+    pub(super) attempts: u32,
+    pub(super) first: std::time::Duration,
+    pub(super) max: std::time::Duration,
 }
 
 /// Run `attempt` until it succeeds, retrying with doubling delays while
