@@ -227,7 +227,8 @@ impl ChatterClient {
     }
 
     /// How long typing must pause on a complete handle before it is looked up.
-    const INVITE_LOOKUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
+    pub(super) const INVITE_LOOKUP_PAUSE: std::time::Duration =
+        std::time::Duration::from_millis(500);
 
     /// Build the list of people the user can invite to `channel_id`: their DM
     /// contacts (regular server DMs + anon DMs — the same set shown in the

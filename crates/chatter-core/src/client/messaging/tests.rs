@@ -1,5 +1,3 @@
-use super::*;
-
 mod shield_mode_tests {
     //! Shield (anon) mode is enforced in core: identity-revealing calls refuse
     //! or take the anon path themselves, whatever the UI offers.
