@@ -1,5 +1,6 @@
 import { ActiveCallView } from "mod.slint";
 import { ActiveCallData } from "../calls/mod.slint";
+import { CallView } from "../app_call_view.slint";
 
 // The active call occupies the chat column above the conversation.
 export component AppCallDock inherits ActiveCallView {
@@ -57,6 +58,8 @@ export component AppCallDock inherits ActiveCallView {
         peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
         peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
         fullscreen-toggle => {
+            if !root.active-call-fullscreen { CallView.save-call-route(); }
             root.active-call-fullscreen = !root.active-call-fullscreen;
+            if !root.active-call-fullscreen { CallView.restore-call-route(); }
         }
 }
