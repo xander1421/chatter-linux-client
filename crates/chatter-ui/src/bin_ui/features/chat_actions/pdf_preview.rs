@@ -1,7 +1,6 @@
 //! PDF preview callbacks.
 //!
-//! Handles PDF file viewing with in-app rendering via pdfium-render (desktop)
-//! or export-to-external-viewer fallback.
+//! Handles PDF file viewing with inline desktop and Android renderers.
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FilePicker, FilePickerConfig};
@@ -88,14 +87,17 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
     });
 
     // Page navigation
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "desktop", target_os = "android"))]
     {
         let weak = window.as_weak();
         window
             .global::<crate::ChatPane>()
             .on_pdf_page_prev(move || {
                 if let Some(w) = weak.upgrade() {
+                    #[cfg(feature = "desktop")]
                     pdf_renderer::navigate(&w, -1);
+                    #[cfg(target_os = "android")]
+                    android_renderer::navigate(&w, -1);
                 }
             });
 
@@ -104,7 +106,10 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
             .global::<crate::ChatPane>()
             .on_pdf_page_next(move || {
                 if let Some(w) = weak.upgrade() {
+                    #[cfg(feature = "desktop")]
                     pdf_renderer::navigate(&w, 1);
+                    #[cfg(target_os = "android")]
+                    android_renderer::navigate(&w, 1);
                 }
             });
     }
@@ -113,8 +118,8 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
 /// Render first page of a PDF and display in the preview panel.
 ///
 /// Called from `attachment_view::display_pdf_from_buffer` after the PDF
-/// data is decrypted into memory. On desktop, uses pdfium-render for inline
-/// rendering. Falls back to metadata-only display if PDFium is unavailable.
+/// data is decrypted into memory. Desktop uses pdfium-render; Android uses
+/// the platform PdfRenderer on a worker thread.
 #[cfg(feature = "desktop")]
 pub fn render_pdf_preview(window: &MainWindow, pdf_data: &[u8]) {
     window
@@ -123,7 +128,20 @@ pub fn render_pdf_preview(window: &MainWindow, pdf_data: &[u8]) {
     pdf_renderer::load_and_render(window, pdf_data);
 }
 
-#[cfg(not(feature = "desktop"))]
+#[cfg(target_os = "android")]
+pub fn render_pdf_preview(window: &MainWindow, pdf_data: &[u8]) {
+    let pane = window.global::<crate::ChatPane>();
+    pane.set_pdf_preview_external_only(false);
+    pane.set_pdf_preview_image(slint::Image::default());
+    android_renderer::load_and_render(window, pdf_data);
+}
+
+#[cfg(target_os = "android")]
+pub(super) fn clear_android_renderer() {
+    android_renderer::clear();
+}
+
+#[cfg(all(not(feature = "desktop"), not(target_os = "android")))]
 pub fn render_pdf_preview(window: &MainWindow, _pdf_data: &[u8]) {
     window
         .global::<crate::ChatPane>()
@@ -134,6 +152,151 @@ pub fn render_pdf_preview(window: &MainWindow, _pdf_data: &[u8]) {
     window
         .global::<crate::ChatPane>()
         .set_pdf_preview_error("".into());
+}
+
+#[cfg(target_os = "android")]
+mod android_renderer {
+    use super::super::media_viewer;
+    use crate::MainWindow;
+    use crate::bin_ui::slint_conversions::rgba_to_slint_image;
+    use slint::ComponentHandle;
+    use std::sync::Mutex;
+    use zeroize::Zeroize;
+
+    struct State {
+        generation: u64,
+        document: Option<Document>,
+    }
+    struct Document {
+        token: i64,
+        pages: i32,
+        current: i32,
+    }
+    static STATE: Mutex<State> = Mutex::new(State {
+        generation: 0,
+        document: None,
+    });
+
+    pub fn clear() {
+        let old = {
+            let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+            state.generation = state.generation.wrapping_add(1);
+            state.document.take().map(|doc| doc.token)
+        };
+        if let Some(token) = old {
+            std::thread::spawn(move || crate::platform::android::pdf_renderer::close(token));
+        }
+    }
+
+    pub fn load_and_render(window: &MainWindow, pdf_data: &[u8]) {
+        clear();
+        let generation = STATE.lock().unwrap_or_else(|e| e.into_inner()).generation;
+        let request = media_viewer::current_request();
+        let weak = window.as_weak();
+        let mut data = pdf_data.to_vec();
+        std::thread::spawn(move || {
+            let loaded = crate::platform::android::pdf_renderer::load(&data);
+            data.zeroize();
+            let mut result = loaded.and_then(|(token, pages)| {
+                let current =
+                    STATE.lock().unwrap_or_else(|e| e.into_inner()).generation == generation;
+                if !current || !media_viewer::is_current(request) {
+                    crate::platform::android::pdf_renderer::close(token);
+                    return Err("PDF preview closed".into());
+                }
+                match crate::platform::android::pdf_renderer::render(token, 0) {
+                    Ok(image) => Ok((token, pages, image)),
+                    Err(error) => {
+                        crate::platform::android::pdf_renderer::close(token);
+                        Err(error)
+                    }
+                }
+            });
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+                if state.generation != generation
+                    || !media_viewer::is_current(request)
+                    || !window.global::<crate::ChatPane>().get_pdf_preview_visible()
+                {
+                    if let Ok((token, _, (_, _, rgba))) = &mut result {
+                        rgba.zeroize();
+                        let token = *token;
+                        std::thread::spawn(move || {
+                            crate::platform::android::pdf_renderer::close(token)
+                        });
+                    }
+                    return;
+                }
+                match result {
+                    Ok((token, pages, (width, height, mut rgba))) => {
+                        state.document = Some(Document {
+                            token,
+                            pages,
+                            current: 0,
+                        });
+                        let pane = window.global::<crate::ChatPane>();
+                        pane.set_pdf_preview_page_count(pages);
+                        pane.set_pdf_preview_current_page(1);
+                        pane.set_pdf_preview_image(rgba_to_slint_image(&rgba, width, height));
+                        rgba.zeroize();
+                        pane.set_pdf_preview_error("".into());
+                    }
+                    Err(error) if error != "PDF preview closed" => {
+                        window
+                            .global::<crate::ChatPane>()
+                            .set_pdf_preview_error(error.into());
+                    }
+                    Err(_) => {}
+                }
+            });
+        });
+    }
+
+    pub fn navigate(window: &MainWindow, delta: i32) {
+        let (token, page, generation) = {
+            let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+            let generation = state.generation;
+            let Some(document) = state.document.as_mut() else {
+                return;
+            };
+            let page = document.current + delta;
+            if page < 0 || page >= document.pages {
+                return;
+            }
+            document.current = page;
+            (document.token, page, generation)
+        };
+        let request = media_viewer::current_request();
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let mut result = crate::platform::android::pdf_renderer::render(token, page);
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                let state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+                if state.generation != generation
+                    || !media_viewer::is_current(request)
+                    || state
+                        .document
+                        .as_ref()
+                        .is_none_or(|doc| doc.current != page || doc.token != token)
+                {
+                    if let Ok((_, _, rgba)) = &mut result {
+                        rgba.zeroize();
+                    }
+                    return;
+                }
+                let pane = window.global::<crate::ChatPane>();
+                match result {
+                    Ok((width, height, mut rgba)) => {
+                        pane.set_pdf_preview_image(rgba_to_slint_image(&rgba, width, height));
+                        rgba.zeroize();
+                        pane.set_pdf_preview_current_page(page + 1);
+                        pane.set_pdf_preview_error("".into());
+                    }
+                    Err(error) => pane.set_pdf_preview_error(error.into()),
+                }
+            });
+        });
+    }
 }
 
 // ==========================================================================
@@ -148,8 +311,8 @@ mod pdf_renderer {
     use pdfium_render::prelude::*;
 
     use crate::MainWindow;
-    use slint::ComponentHandle;
     use crate::bin_ui::slint_conversions::rgba_to_slint_image;
+    use slint::ComponentHandle;
 
     /// Target render width in pixels. Height is calculated from page aspect ratio.
     const RENDER_WIDTH: u32 = 800;

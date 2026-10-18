@@ -22,6 +22,8 @@ static GALLERY: std::sync::Mutex<(ActiveConversation, Vec<String>, bool, u64)> =
 static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn invalidate() {
+    #[cfg(target_os = "android")]
+    super::pdf_preview::clear_android_renderer();
     REQUEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     GALLERY
         .lock()
@@ -73,6 +75,8 @@ fn thumbnail(w: &MainWindow, id: &str) -> slint::Image {
 
 pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
     let request = REQUEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    #[cfg(target_os = "android")]
+    super::pdf_preview::clear_android_renderer();
     #[cfg(target_os = "android")]
     crate::platform::android::media::invalidate_pending_video();
     let conversation = CLIENT

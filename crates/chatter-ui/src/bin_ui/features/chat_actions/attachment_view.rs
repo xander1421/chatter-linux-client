@@ -1043,11 +1043,13 @@ fn display_pdf_from_buffer(
     filename: &str,
     request: u64,
 ) {
-    let data = secure_buffer.as_slice().to_vec();
+    let mut data = zeroize::Zeroizing::new(secure_buffer.as_slice().to_vec());
     let filename_for_ui = filename.to_string();
     let filename_for_state = filename.to_string();
     #[cfg(feature = "desktop")]
-    let data_for_render = data.clone();
+    let data_for_render = data.to_vec();
+    #[cfg(target_os = "android")]
+    let data_for_render = zeroize::Zeroizing::new(data.to_vec());
 
     // Install content only after validating the viewer request on the UI thread.
     let _ = slint::invoke_from_event_loop(move || {
@@ -1056,7 +1058,7 @@ fn display_pdf_from_buffer(
                 return;
             }
             preview_state::clear_pdf_preview();
-            preview_state::set_pdf_preview_content(filename_for_state, data);
+            preview_state::set_pdf_preview_content(filename_for_state, std::mem::take(&mut *data));
             w.global::<crate::ChatPane>()
                 .set_pdf_preview_filename(filename_for_ui.into());
             w.global::<crate::ChatPane>().set_pdf_preview_page_count(0);
@@ -1064,10 +1066,10 @@ fn display_pdf_from_buffer(
                 .set_pdf_preview_error("".into());
             w.global::<crate::ChatPane>().set_pdf_preview_visible(true);
 
-            // Render first page inline (desktop only — uses pdfium-render)
-            #[cfg(feature = "desktop")]
+            // Android renders on a worker; desktop uses pdfium-render.
+            #[cfg(any(feature = "desktop", target_os = "android"))]
             super::pdf_preview::render_pdf_preview(&w, &data_for_render);
-            #[cfg(not(feature = "desktop"))]
+            #[cfg(all(not(feature = "desktop"), not(target_os = "android")))]
             super::pdf_preview::render_pdf_preview(&w, &[]);
 
             tracing::info!("Opened PDF preview");
