@@ -73,7 +73,6 @@
         assert!(super::bundle_device_ids(GetPreKeyBundleResponse::default()).is_empty());
     }
 
-    use super::*;
     use std::time::{Duration, Instant};
 
     #[test]

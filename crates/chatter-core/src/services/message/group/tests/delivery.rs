@@ -1,3 +1,9 @@
+    /// S25, channel 5dd10bcb: three messages sent before the SKDM Bob holds
+    /// ("old counter") were given up as delivery issues, yet the channel's
+    /// sync failed every 60 s. Giving up cleared the gate, so the next
+    /// re-fetch counted from one again and held the checkpoint, and stream
+    /// resync rejected the dropped row. A given-up message must stay settled
+    /// across re-fetches while later messages keep arriving.
     #[tokio::test]
     async fn given_up_old_counter_messages_stop_holding_the_sync_checkpoint() {
         use crate::domain::ids::MessageId;
