@@ -1,0 +1,207 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Button } from "../components/button.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+import { MembershipGlobal } from "../chat/membership_global.slint";
+
+export component ChannelAccessSection inherits VerticalLayout {
+    in property <string> channel-id;
+    in-out property <bool> link-needs-approval;
+
+    spacing: Spacing.md;
+
+    Text {
+        text: "Access";
+        color: Colors.text-primary;
+        font-size: Typography.lg;
+        font-weight: Typography.semibold;
+        wrap: word-wrap;
+    }
+
+    if MembershipGlobal.access-public-badge != "": Rectangle {
+        height: public-text.preferred-height + Spacing.sm * 2;
+        background: Colors.warning.with-alpha(0.12);
+        border-radius: Spacing.radius-sm;
+        public-text := Text {
+            x: Spacing.sm;
+            width: parent.width - Spacing.sm * 2;
+            text: MembershipGlobal.access-public-badge;
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+
+    // Server-run readers (AI integrations): not members
+    // anyone signed in, but they read this channel.
+    for bot in MembershipGlobal.server-operated: HorizontalLayout {
+        spacing: Spacing.sm;
+        Image {
+            source: Icons.sparkles;
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            colorize: Colors.warning;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            Text {
+                text: bot.name;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                overflow: elide;
+            }
+            Text {
+                text: bot.label;
+                color: Colors.warning;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // ---- Join links ----
+    if MembershipGlobal.can-manage-invites: VerticalLayout {
+        spacing: Spacing.sm;
+
+        Text {
+            text: "Join links";
+            color: Colors.text-secondary;
+            font-size: Typography.sm;
+            font-weight: Typography.medium;
+        }
+        Text {
+            text: "Anyone with a link can join. The link can be copied only now, when it is created.";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+        }
+
+        ToggleRow {
+            height: Spacing.touch-target-min;
+            checked <=> root.link-needs-approval;
+            accessible-text: "Require approval";
+            Text {
+                text: "Require approval";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "People who use the link wait until an admin lets them in";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                height: Spacing.touch-target-min;
+                text: "Create link";
+                variant: "primary";
+                disabled: MembershipGlobal.access-busy;
+                loading: MembershipGlobal.access-busy;
+                clicked => { MembershipGlobal.create-link(root.channel-id, root.link-needs-approval); }
+            }
+        }
+
+        if MembershipGlobal.new-link != "": Rectangle {
+            height: new-link-col.preferred-height + Spacing.sm * 2;
+            background: Colors.inset;
+            border-radius: Spacing.radius-sm;
+            new-link-col := VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.sm;
+                Text {
+                    text: MembershipGlobal.new-link;
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    wrap: char-wrap;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: "Copy link";
+                        variant: "secondary";
+                        clicked => { MembershipGlobal.copy-link(MembershipGlobal.new-link); }
+                    }
+                }
+            }
+        }
+
+        for link in MembershipGlobal.invite-links: HorizontalLayout {
+            spacing: Spacing.sm;
+            min-height: Spacing.touch-target-min;
+            Text {
+                horizontal-stretch: 1;
+                text: link.summary;
+                color: Colors.text-primary;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+            Button {
+                height: Spacing.touch-target-min;
+                text: "Revoke";
+                variant: "destructive";
+                disabled: MembershipGlobal.access-busy;
+                clicked => { MembershipGlobal.revoke-link(root.channel-id, link.id); }
+            }
+        }
+    }
+
+    // ---- Join requests ----
+    if MembershipGlobal.can-approve-joins: VerticalLayout {
+        spacing: Spacing.sm;
+
+        Text {
+            text: MembershipGlobal.join-requests.length == 0 ? "No join requests" : "Join requests";
+            color: Colors.text-secondary;
+            font-size: Typography.sm;
+            font-weight: Typography.medium;
+        }
+
+        for req in MembershipGlobal.join-requests: VerticalLayout {
+            spacing: Spacing.xs;
+            Text {
+                text: req.display-name;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: start;
+                Button {
+                    height: Spacing.touch-target-min;
+                    text: "Approve";
+                    variant: "primary";
+                    disabled: MembershipGlobal.access-busy;
+                    clicked => { MembershipGlobal.approve-request(root.channel-id, req.user-id); }
+                }
+                Button {
+                    height: Spacing.touch-target-min;
+                    text: "Reject";
+                    variant: "secondary";
+                    disabled: MembershipGlobal.access-busy;
+                    clicked => { MembershipGlobal.reject-request(root.channel-id, req.user-id); }
+                }
+            }
+        }
+    }
+
+    if MembershipGlobal.access-status != "": Text {
+        text: MembershipGlobal.access-status;
+        color: Colors.text-secondary;
+        font-size: Typography.xs;
+        wrap: word-wrap;
+    }
+                    
+}
