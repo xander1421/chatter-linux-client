@@ -26,7 +26,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let menu_x = click_x;
         let menu_y = click_y;
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }

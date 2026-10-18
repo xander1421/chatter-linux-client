@@ -882,11 +882,8 @@ pub async fn app_init() -> Result<AppState, String> {
     window.set_is_signed_in(ui_ctx.is_logged_in());
 
     if ui_ctx.is_logged_in() {
-        if let Some((user_id, device_id)) = ui_ctx.current_user() {
-            let display_name = ui_ctx.display_name(&user_id);
-            ui_ctx
-                .auth_state()
-                .set_logged_in(user_id, device_id, display_name);
+        if ui_ctx.current_user().is_some() {
+            ui_ctx.publish_restored_auth_state();
             tracing::info!("Restored auth state");
         }
 

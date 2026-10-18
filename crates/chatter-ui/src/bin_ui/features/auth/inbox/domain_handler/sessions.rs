@@ -29,10 +29,10 @@ pub(super) fn handle_device_linked(
     let weak = window.clone();
     let client = ui_ctx.clone();
     let owner = client.session_current_user_id();
-    let revision = client.auth_state().get().session_revision;
+    let revision = client.auth_snapshot().session_revision;
     let _ = slint::invoke_from_event_loop(move || {
         if client.session_current_user_id() != owner
-            || client.auth_state().get().session_revision != revision
+            || client.auth_snapshot().session_revision != revision
         {
             return;
         }

@@ -101,7 +101,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let session_owner = super::super::history_owner::SessionOwner::capture(ui_ctx);
     let history_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
         ui_ctx,
-        ui_ctx.chat_state().active_conversation(),
+        ui_ctx.active_conversation(),
     );
     tracing::info!("Loading initial data...");
 
@@ -189,8 +189,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
     // Get user profile info
     let user_display_name = ui_ctx
-        .auth_state()
-        .get()
+        .auth_snapshot()
         .display_name
         .clone()
         .unwrap_or_default();
@@ -344,7 +343,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let startup_owner = history_owner.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if !startup_owner.is_current()
-                || initial_client.chat_state().active_conversation()
+                || initial_client.active_conversation()
                     != chatter_core::state::ActiveConversation::None
             {
                 return;

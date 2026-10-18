@@ -68,6 +68,11 @@ impl OfflineState {
         }
     }
 
+    /// Return a detached copy of the current connection state.
+    pub fn get(&self) -> OfflineStateData {
+        self.store.get()
+    }
+
     /// Set the connection state.
     ///
     /// This updates both the connection_state and derived is_online fields,

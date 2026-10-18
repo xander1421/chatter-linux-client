@@ -542,7 +542,7 @@ pub(crate) fn conversation_removed(
     conv: chatter_core::state::ActiveConversation,
 ) {
     let ui_ctx_ui = ui_ctx.clone();
-    let session_revision = ui_ctx.auth_state().get().session_revision;
+    let session_revision = ui_ctx.auth_snapshot().session_revision;
     run_ui!(weak, |w| {
         if ui_ctx_ui.composer_session_is_current(session_revision)
             && ui_ctx_ui.active_conversation() == conv

@@ -26,25 +26,25 @@ pub(super) struct RequestFence {
 impl RequestFence {
     /// Call on the UI thread when the request is submitted.
     pub(super) fn capture(w: &MainWindow, client: &ChatterClient) -> Option<Self> {
-        let auth = client.auth_state().get();
+        let auth = client.auth_snapshot();
         Some(Self {
             owner: auth.current_user_id?,
             session_revision: auth.session_revision,
-            conversation: client.chat_state().active_conversation(),
+            conversation: client.active_conversation(),
             stack: w.get_modal_stack().iter().collect(),
             modal_generation: w.get_modal_generation(),
         })
     }
 
     pub(super) fn session_current(&self, client: &ChatterClient) -> bool {
-        let auth = client.auth_state().get();
+        let auth = client.auth_snapshot();
         auth.current_user_id == Some(self.owner) && auth.session_revision == self.session_revision
     }
 
     /// Call on the UI thread at completion.
     pub(super) fn owns_ui(&self, w: &MainWindow, client: &ChatterClient) -> bool {
         self.session_current(client)
-            && client.chat_state().active_conversation() == self.conversation
+            && client.active_conversation() == self.conversation
             && w.get_modal_stack().iter().eq(self.stack.iter().cloned())
             && w.get_modal_generation() == self.modal_generation
     }

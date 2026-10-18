@@ -972,7 +972,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
             let mesh_owner = active_session();
             let owner = super::history_owner::HistoryOwner::capture(
                 ui_ctx,
-                ui_ctx.chat_state().active_conversation(),
+                ui_ctx.active_conversation(),
             );
             let session = super::history_owner::SessionOwner::capture(ui_ctx);
             let is_open = mesh_owner

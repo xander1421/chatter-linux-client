@@ -91,7 +91,7 @@ pub(crate) fn show_pending_bubble(
     let now_ns = now.timestamp_nanos_opt().unwrap_or_default().max(0) as u64;
     let _ = slint::invoke_from_event_loop(move || {
         if !ui_ctx.composer_session_is_current(session_revision)
-            || ui_ctx.chat_state().active_conversation() != conversation
+            || ui_ctx.active_conversation() != conversation
         {
             return;
         }
@@ -350,7 +350,7 @@ fn set_send_notice(
     channel_id: chatter_core::domain::ids::ChannelId,
     notice: String,
 ) {
-    if ui_ctx.chat_state().get().active_channel_id != Some(channel_id) {
+    if ui_ctx.chat_snapshot().active_channel_id != Some(channel_id) {
         return;
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
@@ -382,8 +382,8 @@ fn set_send_notice(
 /// channel on entering. Live mute changes arrive as `MemberUpdated`
 /// ([`show_send_notice`]); the open re-reads the roster in case one was missed.
 fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let mut current = ui_ctx.chat_state().get().active_channel_id;
-    let mut rx = ui_ctx.chat_state().subscribe();
+    let mut current = ui_ctx.chat_snapshot().active_channel_id;
+    let mut rx = ui_ctx.subscribe_chat_snapshots();
     let weak = window.as_weak();
     let ctx = ui_ctx.clone();
     tokio::spawn(async move {
@@ -462,7 +462,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {
             let ui_ctx = ui_ctx_jarvis.clone();
             let conversation = chat_state.active_conversation();
-            let auth = ui_ctx.auth_state().get();
+            let auth = ui_ctx.auth_snapshot();
             let owner =
                 auth.current_user_id
                     .map(|user_id| chatter_core::client::JarvisSessionOwner {
@@ -667,7 +667,7 @@ pub(crate) fn show_reply_image(
 
 /// Put a failed send back into the (empty) composer it came from.
 pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
-    let chat = ui_ctx.chat_state().get();
+    let chat = ui_ctx.chat_snapshot();
     if !ui_ctx.composer_session_is_current(send.session_revision)
         || chat.active_conversation != send.conversation
     {
@@ -972,7 +972,7 @@ async fn deliver_inner(
         // Only into the conversation it was sent to. A send that outlived a
         // switch (an upload takes up to 30s per file) is in the store, and
         // shows when its conversation is opened again.
-        if ui_ctx.chat_state().active_conversation() == conversation {
+        if ui_ctx.active_conversation() == conversation {
             // A peer can receipt a secret mailbox post before this send
             // returns and its own bubble is appended. The receipt event then
             // finds only the provisional row (with a different timestamp).

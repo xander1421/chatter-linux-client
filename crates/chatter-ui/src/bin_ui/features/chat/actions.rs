@@ -80,7 +80,7 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
 
         // Move service lookups to background task
         tokio::spawn(async move {
@@ -191,7 +191,7 @@ fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> 
         return Vec::new();
     };
     ui_ctx
-        .conversation(ui_ctx.chat_state().active_conversation())
+        .conversation(ui_ctx.active_conversation())
         .forward_destinations(&sources, query)
         .into_iter()
         .map(|d| ForwardTarget {
@@ -219,7 +219,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
 
         // Move service lookups and clipboard to background thread
         std::thread::spawn(move || {
@@ -288,9 +288,9 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
         let weak = weak.clone();
-        let revision = ui_ctx.auth_state().get().session_revision;
+        let revision = ui_ctx.auth_snapshot().session_revision;
 
         std::thread::spawn(move || {
             // Parse sender_id for Signal-style lookup
@@ -341,7 +341,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let weak = weak.clone();
                     ui_ctx.runtime_handle().spawn(async move {
                         let result = async {
-                            if client.auth_state().get().session_revision != revision {
+                            if client.auth_snapshot().session_revision != revision {
                                 return Err("Session changed".to_string());
                             }
                             if attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded {
@@ -351,7 +351,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             crate::platform::android::media_export::save_attachment(&client, &att_id, revision)
                         }.await;
                         let _ = weak.upgrade_in_event_loop(move |w| {
-                            if client.auth_state().get().session_revision != revision { return; }
+                            if client.auth_snapshot().session_revision != revision { return; }
                             let (message, variant) = match result {
                                 Ok(()) => ("Saved to Chatter downloads".to_string(), "success"),
                                 Err(error) => (error, "error"),
@@ -370,20 +370,20 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let weak = weak.clone();
                     ui_ctx.runtime_handle().spawn(async move {
                         let result = async {
-                            if client.auth_state().get().session_revision != revision {
+                            if client.auth_snapshot().session_revision != revision {
                                 return Err("Session changed".to_string());
                             }
                             if attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded {
                                 client.download_attachment_to_filesystem(&att_id).await
                                     .map_err(|_| "Unable to download attachment".to_string())?;
                             }
-                            if client.auth_state().get().session_revision != revision {
+                            if client.auth_snapshot().session_revision != revision {
                                 return Err("Session changed".to_string());
                             }
                             crate::bin_ui::features::chat_actions::media_viewer::export(&client, &att_id, false)
                         }.await;
                         let _ = weak.upgrade_in_event_loop(move |w| {
-                            if client.auth_state().get().session_revision != revision { return; }
+                            if client.auth_snapshot().session_revision != revision { return; }
                             let (message, variant) = match result {
                                 Ok(message) => (message, "success"),
                                 Err(error) => (error, "error"),

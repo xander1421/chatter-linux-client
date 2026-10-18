@@ -338,12 +338,12 @@ fn handle_local_attachment(
         && mime_type != "application/pdf"
         && !filename.to_lowercase().ends_with(".pdf")
     {
-        let revision = ui_ctx.auth_state().get().session_revision;
+        let revision = ui_ctx.auth_snapshot().session_revision;
         let result =
             crate::platform::android::media_export::save_attachment(&ui_ctx, &att_id, revision);
         let _ = weak.upgrade_in_event_loop(move |w| {
             if !super::media_viewer::is_current(request)
-                || ui_ctx.auth_state().get().session_revision != revision
+                || ui_ctx.auth_snapshot().session_revision != revision
             {
                 return;
             }
@@ -368,7 +368,7 @@ fn handle_local_attachment(
         None
     };
     if let Some(limit) = preview_limit {
-        let revision = ui_ctx.auth_state().get().session_revision;
+        let revision = ui_ctx.auth_snapshot().session_revision;
         let reader = match ui_ctx.open_attachment_range(&att_id) {
             Ok(reader) => reader,
             Err(error) => {
@@ -388,7 +388,7 @@ fn handle_local_attachment(
             let result = super::media_viewer::export(&ui_ctx, &att_id, false);
             let _ = weak.upgrade_in_event_loop(move |w| {
                 if !super::media_viewer::is_current(request)
-                    || ui_ctx.auth_state().get().session_revision != revision
+                    || ui_ctx.auth_snapshot().session_revision != revision
                 {
                     return;
                 }
@@ -405,7 +405,7 @@ fn handle_local_attachment(
         let buffer =
             chatter_core::prelude::SecureBuffer::new(reader.read_range(0, reader.plaintext_size()));
         if buffer.as_slice().len() != reader.plaintext_size()
-            || ui_ctx.auth_state().get().session_revision != revision
+            || ui_ctx.auth_snapshot().session_revision != revision
             || !super::media_viewer::is_current(request)
         {
             return;

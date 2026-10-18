@@ -6199,7 +6199,7 @@ impl GifHarness {
 
     /// Navigate the way the app does: core state first, then the draft swap.
     fn open(&self, to: chatter_core::domain::ids::ChannelId) {
-        let from = match self.client.chat_state().active_conversation() {
+        let from = match self.client.active_conversation() {
             chatter_core::state::ActiveConversation::Channel(id) => id,
             _ => unreachable!(),
         };
@@ -6678,7 +6678,7 @@ fn queued_draft_navigation_uses_actual_owner_and_expires_on_session_reset() {
     h.w.set_composer_text("A draft".into());
     h.w.set_composer_is_replying(true);
     h.stage("a.png");
-    let revision = h.client.chat_state().get().attachment_revision;
+    let revision = h.client.chat_snapshot().attachment_revision;
     h.client
         .chat_state()
         .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));

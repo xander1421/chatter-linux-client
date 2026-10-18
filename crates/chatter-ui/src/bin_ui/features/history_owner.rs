@@ -20,7 +20,7 @@ impl SessionOwner {
     pub fn capture(client: &ChatterClient) -> Self {
         Self {
             auth: client.auth_state().clone(),
-            revision: client.auth_state().get().session_revision,
+            revision: client.auth_snapshot().session_revision,
         }
     }
     pub fn is_current(&self) -> bool {
@@ -53,7 +53,7 @@ impl HistoryOwner {
         Self {
             auth: client.auth_state().clone(),
             chat: client.chat_state().clone(),
-            revision: client.auth_state().get().session_revision,
+            revision: client.auth_snapshot().session_revision,
             conversation,
             epoch: MAIN.load(Ordering::SeqCst),
             // Mesh scopes all use ActiveConversation::None. Their independent
@@ -71,15 +71,15 @@ impl HistoryOwner {
     pub fn admit_older(client: &ChatterClient, conversation: ActiveConversation) -> Option<Self> {
         let mut owner = Self::capture(client, conversation);
         let channel = conversation.channel_id()?;
-        if !owner.is_current() || client.message_state().is_loading(&channel) {
+        if !owner.is_current() || client.message_is_loading(&channel) {
             return None;
         }
-        client.message_state().set_loading(channel, true);
+        client.set_message_loading(channel, true);
         owner.older = Some(OLDER.fetch_add(1, Ordering::SeqCst) + 1);
         Some(owner)
     }
     pub fn thread(client: &ChatterClient, root: MessageId, replace: bool) -> Self {
-        let mut owner = Self::capture(client, client.chat_state().active_conversation());
+        let mut owner = Self::capture(client, client.active_conversation());
         let epoch = if replace {
             THREAD.fetch_add(1, Ordering::SeqCst) + 1
         } else {

@@ -29,7 +29,7 @@ pub(crate) fn jump_to_conversation_message(
     conversation: ActiveConversation,
     message_id: &str,
 ) {
-    if ui_ctx.chat_state().active_conversation() == conversation && !w.get_loading_messages() {
+    if ui_ctx.active_conversation() == conversation && !w.get_loading_messages() {
         jump_to_message(w, ui_ctx, message_id);
         return;
     }
@@ -46,7 +46,7 @@ pub(crate) fn finish_pending_jump(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let target = PENDING_JUMP.with(|pending| {
         let mut pending = pending.borrow_mut();
         if pending.as_ref().is_some_and(|(conversation, _)| {
-            *conversation == ui_ctx.chat_state().active_conversation()
+            *conversation == ui_ctx.active_conversation()
         }) {
             pending.take()
         } else {
@@ -103,7 +103,7 @@ pub(crate) fn refresh_visible_media(
     if window.get_loading_messages() || last < first || last < 0 {
         return;
     }
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     if conversation.channel_id().is_none() {
         return;
     }
@@ -264,8 +264,8 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_pinned_show_clicked(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_show.clone();
-        let conversation = ui_ctx.chat_state().active_conversation();
-        let revision = ui_ctx.auth_state().get().session_revision;
+        let conversation = ui_ctx.active_conversation();
+        let revision = ui_ctx.auth_snapshot().session_revision;
         tokio::spawn(async move {
             let mut items = ui_ctx.pinned_display_items(conversation).await;
             for item in &mut items {
@@ -293,10 +293,10 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let Some(w) = weak.upgrade() else {
                     return;
                 };
-                if ui_ctx.auth_state().get().session_revision != revision {
+                if ui_ctx.auth_snapshot().session_revision != revision {
                     return;
                 }
-                if ui_ctx.chat_state().active_conversation() != conversation {
+                if ui_ctx.active_conversation() != conversation {
                     return;
                 }
                 let rows: Vec<crate::PinnedItem> = items
@@ -401,7 +401,7 @@ pub(crate) fn refresh_pinned_ui(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         w.as_weak(),
         ui_ctx.chat_state().clone(),
         ui_ctx.clone(),
-        ui_ctx.chat_state().active_conversation(),
+        ui_ctx.active_conversation(),
     );
 }
 
@@ -456,7 +456,7 @@ fn update_pinned_ui_from_loaded_messages(
     }
 
     // Fall back to DB lookup in background thread
-    let revision = ui_ctx.auth_state().get().session_revision;
+    let revision = ui_ctx.auth_snapshot().session_revision;
     std::thread::spawn(move || {
         let preview = match current_msg_id {
             Some(msg_id) => pinned_plaintext_preview(
@@ -482,9 +482,9 @@ fn update_pinned_ui_from_loaded_messages(
         };
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
-                if ui_ctx.chat_state().active_conversation() != conversation
+                if ui_ctx.active_conversation() != conversation
                     || ui_ctx.chat_state().pinned_current_message_id() != current_msg_id
-                    || ui_ctx.auth_state().get().session_revision != revision
+                    || ui_ctx.auth_snapshot().session_revision != revision
                 {
                     return;
                 }
@@ -515,7 +515,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             let weak = weak_window.clone();
             let opened = ActiveConversation::AnonGroup(group_id);
             if !super::modals::settings_open_allowed(
-                ui_ctx.chat_state().active_conversation(),
+                ui_ctx.active_conversation(),
                 opened,
             ) {
                 return;
@@ -546,7 +546,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                             .iter()
                             .any(|s| s.as_str() == "channel-settings");
                         if !super::modals::settings_refresh_allowed(
-                            ui_ctx.chat_state().active_conversation(),
+                            ui_ctx.active_conversation(),
                             opened,
                             current_id.as_str(),
                             &id,
@@ -571,7 +571,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                         .iter()
                         .any(|s| s.as_str() == "channel-settings");
                     if !super::modals::settings_refresh_allowed(
-                        ui_ctx.chat_state().active_conversation(),
+                        ui_ctx.active_conversation(),
                         opened,
                         current_id.as_str(),
                         &group_id_str,
@@ -751,7 +751,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
     }
     // Bind this request before spawning; a later manual switch must never
     // reinterpret the target as belonging to the newly opened conversation.
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     let Some(channel_id) = conversation.channel_id() else {
         return;
     };
@@ -772,9 +772,8 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
     let ui_ctx = ui_ctx.clone();
 
     std::thread::spawn(move || {
-        let message_state = ui_ctx.message_state();
         if !owner.is_current() {
-            message_state.set_loading(channel_id, false);
+            ui_ctx.set_message_loading(channel_id, false);
             return;
         }
         let older_messages = match before.as_ref() {
@@ -789,7 +788,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 .map(|id| ui_ctx.get_history_target_local(id, &channel_id, &conversation_type))
                 .unwrap_or_default()),
         };
-        message_state.set_loading(channel_id, false);
+        ui_ctx.set_message_loading(channel_id, false);
         let older_messages = match older_messages {
             Ok(msgs) => msgs,
             Err(e) => {

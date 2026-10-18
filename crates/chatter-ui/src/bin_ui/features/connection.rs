@@ -86,7 +86,8 @@ fn presentation(client: &ChatterClient, state: ConnectionState) -> (&'static str
 
 /// Wire connection state to the UI banner.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let (mut rx, state) = subscribe_current(ui_ctx.offline_state());
+    let mut rx = ui_ctx.subscribe_offline_snapshots();
+    let state = ui_ctx.offline_snapshot().connection_state;
     let (label, unreachable, attempt) = presentation(ui_ctx, state);
     window.set_connection_status(label.into());
     window.set_server_unreachable(unreachable);
@@ -118,8 +119,11 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     tokio::spawn(async move {
         loop {
-            let Some(state) = next_current(ui_ctx_for_task.offline_state(), &mut rx).await else {
-                break;
+            let state = match rx.recv().await {
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                    ui_ctx_for_task.offline_snapshot().connection_state
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
             };
             let (label, unreachable, attempt) = presentation(&ui_ctx_for_task, state);
             let state_string = label.to_owned();
@@ -164,14 +168,13 @@ mod tests {
                 .startup_connect(std::time::Duration::from_secs(1))
                 .await
         );
-        let (_, captured) = subscribe_current(client.offline_state());
+        let _rx = client.subscribe_offline_snapshots();
+        let captured = client.offline_snapshot().connection_state;
         assert_eq!(presentation(&client, captured), ("disconnected", false, 0));
         assert!(client.connect().await.is_err());
-        let failed = client.offline_state().connection_state();
+        let failed = client.offline_snapshot().connection_state;
         assert_eq!(presentation(&client, failed), ("disconnected", true, 0));
-        client
-            .offline_state()
-            .set_connection_state(ConnectionState::Connected);
+        client.set_offline_connection_state_for_testing(ConnectionState::Connected);
         assert_eq!(presentation(&client, failed), ("disconnected", true, 0));
         assert_eq!(
             presentation(&client, ConnectionState::Connected),

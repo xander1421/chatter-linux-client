@@ -389,9 +389,9 @@ pub fn attachment_display_resolver(
 ) -> impl Fn(&chatter_core::domain::ids::AttachmentId) -> Option<Attachment> + '_ {
     #[cfg(target_os = "android")]
     let remaining = std::cell::Cell::new(4usize);
-    let revision = client.auth_state().get().session_revision;
+    let revision = client.auth_snapshot().session_revision;
     move |id| {
-        if client.auth_state().get().session_revision != revision {
+        if client.auth_snapshot().session_revision != revision {
             return None;
         }
         let attachment = client.get_attachment_metadata(id)?;
@@ -411,6 +411,6 @@ pub fn attachment_display_resolver(
                 attachment.metadata.thumbnail = Some(result.image_bytes);
             }
         }
-        (client.auth_state().get().session_revision == revision).then_some(attachment)
+        (client.auth_snapshot().session_revision == revision).then_some(attachment)
     }
 }

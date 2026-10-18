@@ -49,8 +49,9 @@ pub mod wire;
 // ── Internal modules ────────────────────────────────────────────────────────
 
 // Temporary external-access allowlist while the client façade is expanded:
-// - app, mailbox, proto, and util: core integration fixtures construct or
-//   inspect these implementation objects directly.
+// - mailbox, proto, and util: core integration fixtures construct or inspect
+//   these implementation objects directly.
+// - app: exposed only to integration fixtures under `testing`.
 // - network, services, and storage: current client signatures and platform/UI
 //   adapters still expose transport, service, and persistence types.
 // - config, inbox, local_ai, cloud_ai, ai_policy, and ui: consumers still use
@@ -60,8 +61,11 @@ pub mod wire;
 
 /// Arbiter between the two AI silos — outside both by design.
 pub mod ai_policy;
+#[cfg(feature = "testing")]
 #[doc(hidden)]
 pub mod app;
+#[cfg(not(feature = "testing"))]
+pub(crate) mod app;
 /// Off-device inference providers. Siloed from `local_ai`.
 pub mod cloud_ai;
 #[doc(hidden)]

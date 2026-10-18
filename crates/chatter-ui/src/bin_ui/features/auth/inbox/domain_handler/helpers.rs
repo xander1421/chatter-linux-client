@@ -86,7 +86,7 @@ pub(super) fn handle_pin_ui_update(
     // this was queued for has to be the one still open when it runs — same
     // session, conversation and history epoch (`HistoryOwner`), checked
     // again inside the UI closure before any state is moved.
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
     let handle = ui_ctx.conversation(conversation);
     if !handle

@@ -312,7 +312,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
     }
     // Simulate a real SQL read failure in this disposable fixture database.
     // Refresh must leave the presented row intact, not manufacture a count.
-    let scope = client.chat_state().active_conversation();
+    let scope = client.active_conversation();
     let mut row = window.get_messages().row_data(0).unwrap();
     row.has_reactions = true;
     row.reactions = ModelRc::new(VecModel::from(vec![ReactionEntry {

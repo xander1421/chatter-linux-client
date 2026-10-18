@@ -33,7 +33,7 @@ fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Ok(seconds) = u32::try_from(seconds) else {
             return;
         };
-        let ActiveConversation::AnonDm(id) = ctx.chat_state().active_conversation() else {
+        let ActiveConversation::AnonDm(id) = ctx.active_conversation() else {
             return;
         };
         let (ctx, weak) = (ctx.clone(), weak.clone());
@@ -199,7 +199,7 @@ pub fn hide_for_profile(w: &MainWindow) {
 
 /// The open conversation's timer onto the header.
 fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let state = ui_ctx.disappearing_state(ui_ctx.chat_state().active_conversation());
+    let state = ui_ctx.disappearing_state(ui_ctx.active_conversation());
     let now = chatter_core::util::time::TimestampNanos::now().as_u64();
     let seconds = state.effective_seconds(now);
     let g = w.global::<DisappearingGlobal>();

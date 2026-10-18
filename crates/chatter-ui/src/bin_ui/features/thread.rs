@@ -68,7 +68,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // now, not after the autosave delay, so a restart cannot resend it.
         // A reply that then fails is given back below.
         ui_ctx.set_thread_draft(&thread.root_message_id, "");
-        let session_revision = ui_ctx.auth_state().get().session_revision;
+        let session_revision = ui_ctx.auth_snapshot().session_revision;
         let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
         tokio::spawn(async move {
             if !owner.is_current() {

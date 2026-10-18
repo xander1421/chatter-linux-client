@@ -218,7 +218,7 @@ fn refresh_reaction_snapshot(
 ) {
     // No chat open (the reaction is stored; nothing on screen to refresh).
     if conversation == chatter_core::state::ActiveConversation::None
-        || client.chat_state().active_conversation() != conversation
+        || client.active_conversation() != conversation
     {
         return;
     }
@@ -285,7 +285,7 @@ pub fn remove_messages_in_conversation(
     conversation: chatter_core::state::ActiveConversation,
     gone: impl Fn(&crate::MessageItemData) -> bool,
 ) {
-    if client.chat_state().active_conversation() == conversation {
+    if client.active_conversation() == conversation {
         remove_messages_where(window, gone);
     }
 }

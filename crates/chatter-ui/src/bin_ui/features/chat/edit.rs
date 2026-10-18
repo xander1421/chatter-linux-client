@@ -42,7 +42,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
         // Session + conversation epoch at the tap: a logout, a reload or
         // another conversation opened meanwhile retires this request.
         let owner = HistoryOwner::capture(&ui_ctx, conversation);
@@ -132,7 +132,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let sender_id_str = parts[0].to_string();
         let timestamp_ns_str = parts[1].to_string();
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
@@ -284,7 +284,7 @@ pub fn apply_message_edit_in_conversation(
     new_text: &str,
 ) {
     use slint::{Model, ModelRc, VecModel};
-    if ui_ctx.chat_state().active_conversation() != conversation {
+    if ui_ctx.active_conversation() != conversation {
         return;
     }
     let mut pin_id = message_id.to_string();

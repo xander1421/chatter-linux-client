@@ -209,7 +209,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Switch to main view
                     let weak_for_view = weak.clone();
                     let view_client = ui_ctx.clone();
-                    let view_revision = ui_ctx.auth_state().get().session_revision;
+                    let view_revision = ui_ctx.auth_snapshot().session_revision;
                     let _ = slint::invoke_from_event_loop(move || {
                         if !view_client.auth_state().session_is_current(view_revision) {
                             return;

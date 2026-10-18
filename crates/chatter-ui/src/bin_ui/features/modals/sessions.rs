@@ -50,7 +50,7 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
     if owner.is_none() {
         return;
     }
-    let revision = client.auth_state().get().session_revision;
+    let revision = client.auth_snapshot().session_revision;
     let generation = w.get_sessions_generation().wrapping_add(1);
     w.set_sessions_generation(generation);
     let listing = matches!(&action, Action::List);
@@ -68,7 +68,7 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
     tokio::spawn(async move {
         let current = || {
             client.session_current_user_id() == owner
-                && client.auth_state().get().session_revision == revision
+                && client.auth_snapshot().session_revision == revision
         };
         if !current() {
             return;
@@ -146,7 +146,7 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
                 return;
             };
             if client.session_current_user_id() != owner
-                || client.auth_state().get().session_revision != revision
+                || client.auth_snapshot().session_revision != revision
                 || !sessions_visible(&w)
                 || w.get_sessions_generation() != generation
             {

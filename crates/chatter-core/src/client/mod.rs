@@ -2589,6 +2589,16 @@ impl ChatterClient {
         self.auth().restore_session()
     }
 
+    /// Publish the restored account identity for subscribers at startup.
+    pub fn publish_restored_auth_state(&self) {
+        if let Some((user_id, device_id)) = self.current_user() {
+            let display_name = self.display_name(&user_id);
+            self.services
+                .auth_state
+                .set_logged_in(user_id, device_id, display_name);
+        }
+    }
+
     pub async fn cleanup_failed_registration(
         &self,
     ) -> Result<(), crate::services::auth_service::AuthError> {
@@ -2724,6 +2734,25 @@ impl ChatterClient {
     ) -> tokio::sync::broadcast::Receiver<crate::state::StateSnapshot<crate::state::ChatStateData>>
     {
         self.services.chat_state.subscribe()
+    }
+
+    pub fn offline_snapshot(&self) -> crate::state::OfflineStateData {
+        self.services.offline_state.get()
+    }
+
+    pub fn subscribe_offline_snapshots(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::state::StateSnapshot<crate::state::OfflineStateData>>
+    {
+        self.services.offline_state.subscribe()
+    }
+
+    pub fn message_is_loading(&self, channel: &crate::domain::ids::ChannelId) -> bool {
+        self.services.message_state.is_loading(channel)
+    }
+
+    pub fn set_message_loading(&self, channel: crate::domain::ids::ChannelId, loading: bool) {
+        self.services.message_state.set_loading(channel, loading);
     }
     pub fn message_state(&self) -> &MessageState {
         &self.services.message_state
@@ -3114,8 +3143,16 @@ impl ChatterClient {
         Ok(())
     }
 
-    pub fn offline_state(&self) -> &OfflineState {
+    pub(crate) fn offline_state(&self) -> &OfflineState {
         &self.services.offline_state
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn set_offline_connection_state_for_testing(
+        &self,
+        state: crate::network::connection::ConnectionState,
+    ) {
+        self.services.offline_state.set_connection_state(state);
     }
     #[cfg(feature = "jarvis")]
     pub fn jarvis_state(&self) -> &JarvisState {

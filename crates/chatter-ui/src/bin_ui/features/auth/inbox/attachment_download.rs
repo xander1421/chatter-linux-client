@@ -288,7 +288,7 @@ fn handle_video(
     let cdn_key = cdn_key.to_string();
     let weak = weak_window.clone();
     let conv_id = conversation_id.to_string();
-    let revision = ui_ctx.auth_state().get().session_revision;
+    let revision = ui_ctx.auth_snapshot().session_revision;
 
     tokio::task::spawn_blocking(move || {
         let thumb = match ui_ctx_video.decrypt_and_extract_video_thumbnail(&att_id) {
@@ -299,7 +299,7 @@ fn handle_video(
             }
         };
 
-        if ui_ctx_video.auth_state().get().session_revision != revision {
+        if ui_ctx_video.auth_snapshot().session_revision != revision {
             return;
         }
         let width = thumb.width;
@@ -307,7 +307,7 @@ fn handle_video(
         let thumb_bytes = thumb.image_bytes;
 
         let _ = slint::invoke_from_event_loop(move || {
-            if ui_ctx_video.auth_state().get().session_revision != revision {
+            if ui_ctx_video.auth_snapshot().session_revision != revision {
                 return;
             }
             if let Some(window) = weak.upgrade() {

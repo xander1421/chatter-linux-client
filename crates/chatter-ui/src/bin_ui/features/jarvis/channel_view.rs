@@ -65,7 +65,7 @@ pub async fn handle_jarvis_channel_send(
 ) {
     use chatter_core::domain::jarvis::JarvisContext;
 
-    let author_id = ui_ctx.auth_state().get().current_user_id;
+    let author_id = ui_ctx.auth_snapshot().current_user_id;
     let own_row = JarvisRow::own(&ui_ctx.jarvis_own_name(), &text);
     let thinking_row = JarvisRow::thinking();
     let thinking_id = thinking_row.id.clone();

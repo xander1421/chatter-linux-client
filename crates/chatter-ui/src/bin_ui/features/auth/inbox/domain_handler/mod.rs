@@ -196,7 +196,7 @@ pub async fn handle_domain_event(
             message_timestamps, ..
         } => {
             if matches!(
-                ui_ctx.chat_state().active_conversation(),
+                ui_ctx.active_conversation(),
                 chatter_core::state::ActiveConversation::AnonDm(_)
                     | chatter_core::state::ActiveConversation::AnonGroup(_)
             ) {
@@ -208,7 +208,7 @@ pub async fn handle_domain_event(
             message_timestamps, ..
         } => {
             if matches!(
-                ui_ctx.chat_state().active_conversation(),
+                ui_ctx.active_conversation(),
                 chatter_core::state::ActiveConversation::AnonDm(_)
                     | chatter_core::state::ActiveConversation::AnonGroup(_)
             ) {
@@ -555,7 +555,7 @@ pub async fn handle_domain_event(
         // Core persisted this event. Reload the same metadata/sidebar paths
         // used by Save, including icon and description, with UI-time guards.
         DomainEvent::ChannelUpdated { channel_id, .. } => {
-            let session_revision = ui_ctx.auth_state().get().session_revision;
+            let session_revision = ui_ctx.auth_snapshot().session_revision;
             let opened = ui_ctx.active_conversation();
             let metadata = ui_ctx
                 .get_channel_local(&channel_id)
@@ -701,7 +701,7 @@ pub async fn handle_domain_event(
         DomainEvent::PeerIdentityChanged { peer_user_id, .. } => {
             let ui_ctx = ui_ctx.clone();
             let _ = window.upgrade_in_event_loop(move |w| {
-                if ui_ctx.chat_state().active_conversation()
+                if ui_ctx.active_conversation()
                     == (chatter_core::state::ActiveConversation::ServerDm {
                         peer_id: peer_user_id,
                     })

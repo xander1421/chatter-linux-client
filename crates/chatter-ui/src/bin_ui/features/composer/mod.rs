@@ -289,7 +289,7 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 /// Apply queued navigation to the actual current conversation and draft owner.
 /// Intermediate snapshots may have been overtaken; old-account callbacks expire.
 pub fn sync_composer_draft(w: &MainWindow, ctx: &ChatterClient, revision: u64) {
-    let latest = ctx.chat_state().get();
+    let latest = ctx.chat_snapshot();
     if latest.attachment_revision != revision {
         return;
     }

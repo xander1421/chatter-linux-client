@@ -60,7 +60,7 @@ impl HistoryRequest {
     fn begin(client: &ChatterClient) -> Self {
         Self {
             generation: HISTORY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1,
-            session: client.auth_state().get().session_revision,
+            session: client.auth_snapshot().session_revision,
         }
     }
     fn matches(self, generation: u64, session: u64) -> bool {
@@ -211,7 +211,7 @@ fn wire_clear(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 complete_clear(
                     &w,
                     request.session,
-                    client.auth_state().get().session_revision,
+                    client.auth_snapshot().session_revision,
                     result,
                     |w| reload(w, &client),
                 );
@@ -274,7 +274,7 @@ fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let result = ui_ctx.delete_call_history_entries(ids).await;
             let client = ui_ctx.clone();
             run_ui!(weak, |w| {
-                if request.session != client.auth_state().get().session_revision {
+                if request.session != client.auth_snapshot().session_revision {
                     return;
                 }
                 match result {
@@ -450,7 +450,7 @@ fn request_page(
                 &w,
                 request,
                 HISTORY_GENERATION.load(Ordering::SeqCst),
-                client.auth_state().get().session_revision,
+                client.auth_snapshot().session_revision,
                 page,
                 paint,
             );
@@ -473,13 +473,13 @@ pub(crate) fn refresh_badge(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     let generation = HISTORY_GENERATION.load(Ordering::SeqCst);
-    let session = ui_ctx.auth_state().get().session_revision;
+    let session = ui_ctx.auth_snapshot().session_revision;
     tokio::spawn(async move {
         let missed = ui_ctx.try_missed_call_count().await;
         let client = ui_ctx.clone();
         run_ui!(weak, |w| {
             if generation == HISTORY_GENERATION.load(Ordering::SeqCst)
-                && session == client.auth_state().get().session_revision
+                && session == client.auth_snapshot().session_revision
             {
                 match missed {
                     Ok(count) => w.set_missed_call_count(count as i32),
