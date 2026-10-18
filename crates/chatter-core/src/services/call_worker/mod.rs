@@ -908,8 +908,8 @@ use ratchet::*;
 pub use bridge::spawn_call_orchestrator_bridge;
 
 #[cfg(test)]
-mod tests_a;
+mod media_key_tests;
 #[cfg(test)]
-mod tests_b;
+mod reconnect_verification_tests;
 #[cfg(test)]
-mod tests_c;
+mod orchestrator_tests;
