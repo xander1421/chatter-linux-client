@@ -14,12 +14,14 @@ import "../../assets/fonts/Inter-Italic.ttf";
 import "../../assets/fonts/Inter-MediumItalic.ttf";
 import "../../assets/fonts/Inter-SemiBoldItalic.ttf";
 import "../../assets/fonts/Inter-BoldItalic.ttf";
+// Color emoji for Android versions whose system font lacks newer glyphs.
+import "../../assets/fonts/NotoColorEmoji.ttf";
 
 import { Appearance } from "appearance.slint";
 
 export global Typography {
-    // Inter everywhere; glyphs Inter lacks (CJK, emoji) fall back to the
-    // system fonts on their own. ONE family name, not a CSS list: Slint 1.17
+    // Inter everywhere; glyphs Inter lacks fall back to bundled Noto Color
+    // Emoji, then the system fonts. ONE family name, not a CSS list: Slint 1.17
     // passes the string to parley as a single named family
     // (sharedparley.rs FontFamilyName::named), so "Inter, sans-serif" matched
     // nothing and the whole app rendered in the platform fallback — whose

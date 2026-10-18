@@ -244,6 +244,10 @@ impl LayoutWithoutLineBreaksBuilder {
         }
 
         if let Some(ref font_request) = self.font_request {
+            // Prefer the embedded emoji font for glyphs missing from Inter. In
+            // particular, older Android system fonts lack newer emoji bases and
+            // otherwise render only their skin-tone modifier as a colored box.
+            let emoji_family = parley::style::FontFamilyName::named("Noto Color Emoji");
             let mut fallback_family_iter = sharedfontique::FALLBACK_FAMILIES
                 .into_iter()
                 .map(parley::style::FontFamilyName::Generic);
@@ -253,15 +257,17 @@ impl LayoutWithoutLineBreaksBuilder {
             {
                 let mut iter =
                     core::iter::once(parley::style::FontFamilyName::named(family.as_str()))
+                        .chain(core::iter::once(emoji_family))
                         .chain(fallback_family_iter);
                 &core::array::from_fn::<
                     _,
-                    { sharedfontique::FALLBACK_FAMILIES.as_slice().len() + 1 },
+                    { sharedfontique::FALLBACK_FAMILIES.as_slice().len() + 2 },
                     _,
                 >(|_| iter.next().unwrap())
             } else {
-                &core::array::from_fn::<_, { sharedfontique::FALLBACK_FAMILIES.as_slice().len() }, _>(
-                    |_| fallback_family_iter.next().unwrap(),
+                let mut iter = core::iter::once(emoji_family).chain(fallback_family_iter);
+                &core::array::from_fn::<_, { sharedfontique::FALLBACK_FAMILIES.as_slice().len() + 1 }, _>(
+                    |_| iter.next().unwrap(),
                 )
             };
 
