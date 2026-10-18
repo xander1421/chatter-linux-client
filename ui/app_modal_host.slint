@@ -1,0 +1,524 @@
+import { MeshPeerSheet } from "mesh/mesh_peer_sheet.slint";
+import { MeshSetupSheet } from "mesh/mesh_setup_sheet.slint";
+import { Materials } from "theme/materials.slint";
+import { ServerRecordsScreen, ServerRecordsGlobal } from "server_records/screen.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
+import { CreateChannelModal, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { UserProfileModal, SharedContentItem, SharedTab, EditProfileModal, RecoveryCodesModal, SealedSenderIntroModal, LinkDeviceApproveModal } from "modals/mod.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
+import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
+import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
+import { SettingsScreen } from "settings/settings_screen.slint";
+
+export component AppModalHost inherits Rectangle {
+    in property <string> active-modal;
+    in-out property <string> active-tab;
+    in property <[AvatarOption]> avatar-options;
+    in property <bool> compact-layout;
+    in-out property <string> create-channel-ai-model;
+    in property <[AIModelOption]> create-channel-ai-models;
+    in property <string> create-channel-ai-models-error;
+    in property <bool> create-channel-ai-models-loading;
+    in-out property <string> create-channel-ai-provider;
+    in-out property <[PrivateGroupFriend]> create-channel-available-friends;
+    in-out property <string> create-channel-description;
+    in property <string> create-channel-error;
+    in-out property <bool> create-channel-has-icon-preview;
+    in-out property <image> create-channel-icon-preview;
+    in-out property <string> create-channel-icon-url;
+    in property <int> create-channel-initial-tab;
+    in property <bool> create-channel-loading;
+    in-out property <string> create-channel-name;
+    in-out property <int> create-channel-selected-friend-count;
+    in-out property <string> create-channel-template;
+    in property <image> edit-profile-avatar;
+    in property <color> edit-profile-avatar-color;
+    in-out property <string> edit-profile-bio;
+    in-out property <string> edit-profile-display-name;
+    in property <string> edit-profile-error;
+    in property <bool> edit-profile-has-photo;
+    in property <bool> edit-profile-loading;
+    in property <int> edit-profile-selected-default-idx;
+    in property <string> exiting-modal;
+    in-out property <string> friends-modal-tab;
+    in-out property <string> friends-requests-sub-tab;
+    in property <string> invite-member-channel-name;
+    in property <bool> invite-member-loading;
+    in-out property <int> invite-member-selected-count;
+    in-out property <[InviteUser]> invite-member-users;
+    in-out property <[PrivateGroupFriend]> invite-private-group-friends;
+    in property <bool> invite-private-group-loading;
+    in-out property <int> invite-private-group-selected-count;
+    in property <bool> is-mobile-platform;
+    in property <string> join-channel-error;
+    in property <bool> join-channel-joining;
+    in property <[SearchResultChannel]> join-channel-results;
+    in-out property <string> join-channel-search-query;
+    in property <bool> join-channel-searching;
+    in-out property <string> join-channel-selected-id;
+    in property <bool> link-approve-busy;
+    in property <string> link-approve-error;
+    in-out property <string> link-approve-password;
+    in property <string> link-approve-preview-name;
+    in property <bool> link-approve-preview-ready;
+    in property <string> link-approve-preview-server;
+    in property <string> link-approve-status;
+    in-out property <string> link-approve-url;
+    in property <string> link-approve-verification-code;
+    in-out property <bool> mobile-show-chat;
+    in property <string> presented-modal;
+    in property <image> profile-avatar-source;
+    in property <string> profile-bio;
+    in property <bool> profile-can-start-secret-chat;
+    in property <string> profile-display-name;
+    in property <string> profile-initials;
+    in property <bool> profile-is-anonymous;
+    in property <bool> profile-is-blocked;
+    in property <bool> profile-is-friend;
+    in property <bool> profile-is-muted;
+    in property <bool> profile-is-self;
+    in property <bool> profile-is-verified;
+    in property <string> profile-last-seen;
+    in property <bool> profile-loading;
+    in property <string> profile-presence;
+    in property <string> profile-safety-number;
+    in property <bool> profile-scoped-member;
+    in property <string> profile-share-link;
+    in property <image> profile-share-qr;
+    in property <string> profile-share-status;
+    in property <[SharedContentItem]> profile-shared-items;
+    in property <bool> profile-shared-loading;
+    in-out property <string> profile-shared-tab;
+    in property <[SharedTab]> profile-shared-tabs;
+    in-out property <bool> profile-show-safety-number;
+    in property <string> profile-status-text;
+    in property <string> profile-user-id;
+    in property <string> profile-username;
+    in property <[string]> recovery-codes;
+    in-out property <bool> recovery-codes-regenerated;
+    in-out property <bool> settings-sealed-sender-unrestricted;
+    in-out property <string> user-presence-mode;
+    callback change-user-status(string /* status */);
+    callback channel-selected(string);
+    callback create-channel(string, string, string, CreateChannelConfig, string, string);
+    callback create-channel-pick-icon();
+    callback create-channel-provider-selected(string);
+    callback create-channel-template-selected(string);
+    callback create-private-group(string, [PrivateGroupFriend]);
+    callback edit-profile-change-avatar();
+    callback edit-profile-remove-avatar();
+    callback edit-profile-save(string, string);
+    callback edit-profile-select-default-avatar(int);
+    callback friends-modal-switch-tab(string);
+    callback friends-start-dm(string);
+    callback friends-view-profile(string);
+    callback invite-member-confirm();
+    callback invite-member-search-changed(string);
+    callback invite-member-toggle-user(int);
+    callback invite-to-private-group([PrivateGroupFriend]);
+    callback join-channel(string);
+    callback link-approve-close();
+    callback link-approve-paste-changed(string);
+    callback link-approve-scan();
+    callback link-approve-submit(string);
+    callback nav-close(string);
+    callback nav-pop();
+    callback nav-push(string);
+    callback profile-add-friend();
+    callback profile-block-user();
+    callback profile-copy-share-link();
+    callback profile-edit-profile();
+    callback profile-generate-share-link();
+    callback profile-open-shared-item(string, string, string, string);
+    callback profile-remove-friend();
+    callback profile-reset-share-link();
+    callback profile-send-message();
+    callback profile-shared-load-more();
+    callback profile-shared-tab-selected(string /* category */);
+    callback profile-start-call(bool /* is-video */);
+    callback profile-start-secret-chat();
+    callback profile-toggle-mute();
+    callback profile-toggle-verified();
+    callback profile-view-safety-number();
+    callback recovery-codes-confirmed() -> bool;
+    callback recovery-codes-copy-all();
+    callback sealed-sender-intro-confirmed(bool);
+    callback search-channels(string);
+    callback toggle-friend-role(int);
+    callback toggle-friend-selection(int);
+    callback toggle-invite-friend-role(int);
+    callback toggle-invite-friend-selection(int);
+    function is-presented(name: string) -> bool {
+        return root.presented-modal == name || root.exiting-modal == name;
+    }
+
+    background: transparent;
+
+    // ========== Modal overlay layer ==========
+    // Semi-transparent backdrop when any modal is active. Not under Settings:
+    // it is a full-screen page drawn at z -1 (see SettingsScreen below), so a
+    // backdrop here would sit over it and turn every tap into a close.
+    // One scrim per dialog: each modal draws Materials.scrim itself
+    // (ModalContainer, the menus, the intro/recovery sheets), so this
+    // layer only blocks and routes the outside tap. A tint here stacked
+    // a second dim under every card.
+    if active-modal != "none" && active-modal != "settings": Rectangle {
+        background: transparent;
+
+        // Block clicks from reaching content below
+        TouchArea {
+            clicked => {
+                // Close modal when clicking backdrop
+                root.nav-pop();
+            }
+        }
+    }
+
+    if root.is-presented("mesh-setup"): MeshSetupSheet {
+        show-modal: root.active-modal == "mesh-setup";
+        touch: root.is-mobile-platform;
+        close => { root.nav-close("mesh-setup"); }
+    }
+
+    // Mesh peer details
+    if root.is-presented("mesh-peer"): MeshPeerSheet {
+        show-modal: root.active-modal == "mesh-peer";
+        close => { root.nav-close("mesh-peer"); }
+    }
+
+    // Create Channel Modal
+    if root.is-presented("create-channel"): CreateChannelModal {
+        show-modal: root.active-modal == "create-channel";
+        channel-name <=> root.create-channel-name;
+        channel-description <=> root.create-channel-description;
+        selected-template <=> root.create-channel-template;
+        error-message: root.create-channel-error;
+        loading: root.create-channel-loading;
+        ai-provider <=> root.create-channel-ai-provider;
+        ai-model <=> root.create-channel-ai-model;
+        ai-models: root.create-channel-ai-models;
+        ai-models-loading: root.create-channel-ai-models-loading;
+        ai-models-error: root.create-channel-ai-models-error;
+        available-friends <=> root.create-channel-available-friends;
+        selected-friend-count <=> root.create-channel-selected-friend-count;
+        icon-url <=> root.create-channel-icon-url;
+        icon-preview <=> root.create-channel-icon-preview;
+        has-icon-preview <=> root.create-channel-has-icon-preview;
+
+        // Join tab state
+        active-tab: root.create-channel-initial-tab;
+        join-search-query <=> root.join-channel-search-query;
+        join-results: root.join-channel-results;
+        join-searching: root.join-channel-searching;
+        join-error: root.join-channel-error;
+        join-selected-id <=> root.join-channel-selected-id;
+        join-joining: root.join-channel-joining;
+
+        close => {
+            root.nav-close("create-channel");
+        }
+        join-search(q) => {
+            root.search-channels(q);
+        }
+        join-channel(id) => {
+            root.join-channel(id);
+        }
+        create(name, desc, template, config, ai-provider, ai-model) => {
+            root.create-channel(name, desc, template, config, ai-provider, ai-model);
+        }
+        provider-selected(provider) => {
+            root.create-channel-provider-selected(provider);
+        }
+        pick-channel-icon => {
+            root.create-channel-pick-icon();
+        }
+        create-private-group(name, friends) => {
+            root.create-private-group(name, friends);
+        }
+        toggle-friend-selection(idx) => {
+            root.toggle-friend-selection(idx);
+        }
+        toggle-friend-role(idx) => {
+            root.toggle-friend-role(idx);
+        }
+        template-selected(template) => {
+            root.create-channel-template-selected(template);
+        }
+    }
+
+    // Invite to Private Group Modal
+    if root.is-presented("invite-private-group"): InvitePrivateGroupModal {
+        show-modal: root.active-modal == "invite-private-group";
+        available-friends <=> root.invite-private-group-friends;
+        selected-count <=> root.invite-private-group-selected-count;
+        loading: root.invite-private-group-loading;
+
+        close => {
+            root.nav-close("invite-private-group");
+        }
+        invite(friends) => {
+            root.invite-to-private-group(friends);
+        }
+        toggle-selection(idx) => {
+            root.toggle-invite-friend-selection(idx);
+        }
+        toggle-role(idx) => {
+            root.toggle-invite-friend-role(idx);
+        }
+    }
+
+    // Invite Member to Channel Modal
+    if root.is-presented("invite-member"): InviteMemberModal {
+        show-modal: root.active-modal == "invite-member";
+        channel-name: root.invite-member-channel-name;
+        users <=> root.invite-member-users;
+        selected-count <=> root.invite-member-selected-count;
+        loading: root.invite-member-loading;
+
+        close => {
+            root.nav-close("invite-member");
+        }
+        toggle-user(idx) => {
+            root.invite-member-toggle-user(idx);
+        }
+        invite => {
+            root.invite-member-confirm();
+        }
+        search-changed(q) => {
+            root.invite-member-search-changed(q);
+        }
+    }
+
+    // User Profile — a pushed screen (anyone's profile, or your own from the
+    // account menu's My Profile), over whatever tab it was opened from; Back
+    // returns there. Stays mounted under Edit Profile — the only way into
+    // that modal is this page's Edit button — so its backdrop dims the
+    // profile it edits (§112u).
+    if root.is-presented("user-profile") || root.is-presented("edit-profile"): UserProfileModal {
+        // Fill the window: left to its preferred height the modal ended
+        // where its content was measured to, and on a phone the lower
+        // controls painted past that edge received no input.
+        width: 100%;
+        height: 100%;
+        show-modal: root.active-modal == "user-profile" || root.active-modal == "edit-profile";
+        user-id: root.profile-user-id;
+        is-anonymous: root.profile-is-anonymous;
+        scoped-member: root.profile-scoped-member;
+        display-name: root.profile-display-name;
+        username: root.profile-username;
+        avatar-source: root.profile-avatar-source;
+        initials: root.profile-initials;
+        status-text: root.profile-status-text;
+        presence: root.profile-presence;
+        bio: root.profile-bio;
+        is-friend: root.profile-is-friend;
+        is-blocked: root.profile-is-blocked;
+        can-start-secret-chat: root.profile-can-start-secret-chat;
+        is-self: root.profile-is-self;
+        status-mode: root.user-presence-mode;
+        loading: root.profile-loading;
+        is-verified: root.profile-is-verified;
+        safety-number: root.profile-safety-number;
+        show-safety-number <=> root.profile-show-safety-number;
+        share-link: root.profile-share-link;
+        share-qr: root.profile-share-qr;
+        share-status: root.profile-share-status;
+        last-seen: root.profile-last-seen;
+        is-muted: root.profile-is-muted;
+        shared-tabs: root.profile-shared-tabs;
+        shared-tab <=> root.profile-shared-tab;
+        shared-items: root.profile-shared-items;
+        shared-loading: root.profile-shared-loading;
+        mobile-mode: root.compact-layout;
+
+        close => {
+            root.nav-close("user-profile");
+            root.profile-show-safety-number = false;
+        }
+        toggle-mute => {
+            root.profile-toggle-mute();
+        }
+        start-call(is-video) => {
+            root.profile-start-call(is-video);
+        }
+        shared-tab-selected(category) => {
+            root.profile-shared-tab = category;
+            root.profile-shared-tab-selected(category);
+        }
+        shared-load-more => {
+            root.profile-shared-load-more();
+        }
+        open-shared-item(message-id, attachment-id, category, selected-url) => {
+            root.profile-open-shared-item(message-id, attachment-id, category, selected-url);
+        }
+        change-status(mode) => {
+            root.user-presence-mode = mode;
+            root.change-user-status(mode);
+        }
+        generate-share-link => {
+            root.profile-generate-share-link();
+        }
+        copy-share-link => {
+            root.profile-copy-share-link();
+        }
+        reset-share-link => {
+            root.profile-reset-share-link();
+        }
+        send-message => {
+            root.profile-send-message();
+        }
+        start-secret-chat => {
+            root.profile-start-secret-chat();
+        }
+        add-friend => {
+            root.profile-add-friend();
+        }
+        remove-friend => {
+            root.profile-remove-friend();
+        }
+        block-user => {
+            root.profile-block-user();
+        }
+        // Unblocking lives only in Friends › Blocked.
+        manage-blocked => {
+            root.friends-modal-tab = "blocked";
+            root.nav-close("user-profile");
+            root.active-tab = "contacts";
+            root.friends-modal-switch-tab("blocked");
+        }
+        edit-profile => {
+            root.profile-edit-profile();
+        }
+        view-safety-number => {
+            root.profile-view-safety-number();
+        }
+        toggle-verified => {
+            root.profile-toggle-verified();
+        }
+    }
+
+    // Edit Profile Modal
+    if root.is-presented("edit-profile"): EditProfileModal {
+        show-modal: root.active-modal == "edit-profile";
+        display-name <=> root.edit-profile-display-name;
+        bio <=> root.edit-profile-bio;
+        avatar: root.edit-profile-avatar;
+        avatar-options: root.avatar-options;
+        avatar-color: root.edit-profile-avatar-color;
+        selected-default-idx: root.edit-profile-selected-default-idx;
+        has-photo: root.edit-profile-has-photo;
+        loading: root.edit-profile-loading;
+        error-message: root.edit-profile-error;
+
+        close => {
+            root.nav-close("edit-profile");
+        }
+        save(display-name, bio) => {
+            root.edit-profile-save(display-name, bio);
+        }
+        change-avatar => {
+            root.edit-profile-change-avatar();
+        }
+        select-default-avatar(idx) => { root.edit-profile-select-default-avatar(idx); }
+        remove-avatar => { root.edit-profile-remove-avatar(); }
+    }
+
+    // Recovery Codes Modal
+    if root.is-presented("recovery-codes"): RecoveryCodesModal {
+        show-modal: root.active-modal == "recovery-codes";
+        codes: root.recovery-codes;
+
+        confirmed => {
+            if root.recovery-codes-confirmed() {
+                if root.recovery-codes-regenerated {
+                    root.recovery-codes-regenerated = false;
+                    root.nav-close("recovery-codes");
+                } else {
+                    // After recovery codes, show the sealed-sender explainer.
+                    root.nav-close("recovery-codes");
+                    root.nav-push("sealed-sender-intro");
+                }
+            }
+        }
+        copy-all => {
+            root.recovery-codes-copy-all();
+        }
+    }
+
+    // Sealed Sender onboarding explainer (shown right after recovery codes)
+    if root.is-presented("sealed-sender-intro"): SealedSenderIntroModal {
+        show-modal: root.active-modal == "sealed-sender-intro";
+        allow-from-anyone <=> root.settings-sealed-sender-unrestricted;
+
+        confirmed => {
+            root.nav-close("sealed-sender-intro");
+            root.sealed-sender-intro-confirmed(root.settings-sealed-sender-unrestricted);
+        }
+    }
+
+    // Link Device Approve Modal (primary side)
+    if root.is-presented("link-device-approve"): LinkDeviceApproveModal {
+        show-modal: root.active-modal == "link-device-approve";
+        link-url <=> root.link-approve-url;
+        password <=> root.link-approve-password;
+        preview-device-name: root.link-approve-preview-name;
+        preview-server-url: root.link-approve-preview-server;
+        verification-code: root.link-approve-verification-code;
+        preview-ready: root.link-approve-preview-ready;
+        status: root.link-approve-status;
+        error: root.link-approve-error;
+        approving: root.link-approve-busy;
+
+        close => {
+            root.nav-close("link-device-approve");
+            root.link-approve-close();
+        }
+        can-scan: root.is-mobile-platform;
+        scan => { root.link-approve-scan(); }
+        paste-changed(t) => { root.link-approve-paste-changed(t); }
+        approve(p) => { root.link-approve-submit(p); }
+    }
+
+    if root.is-presented("server-records"): ServerRecordsScreen {
+        show: root.active-modal == "server-records";
+        mobile-mode: root.compact-layout;
+        close => { root.nav-pop(); }
+        open-notification(id, kind, target, status) => {
+            if id != "" { ServerRecordsGlobal.act(id, "Mark read"); }
+            if kind == "friend-request" && status == "Accepted" && target != "" {
+                root.nav-pop();
+                root.active-tab = "chats";
+                root.mobile-show-chat = true;
+                root.friends-start-dm(target);
+            } else if kind == "friend-request" && (status == "Declined" || status == "Blocked" || status == "No longer pending") && target != "" {
+                root.nav-pop();
+                root.friends-view-profile(target);
+            } else if kind == "friend-request" {
+                root.nav-pop();
+                root.active-tab = "contacts";
+                root.friends-modal-tab = "requests";
+                root.friends-requests-sub-tab = "received";
+            } else if kind == "channel-invite" && status == "Joined" && target != "" {
+                root.nav-pop();
+                root.active-tab = "chats";
+                root.mobile-show-chat = true;
+                root.channel-selected(target);
+            } else if kind == "channel-invite" {
+                root.nav-pop();
+                root.active-tab = "contacts";
+                root.friends-modal-tab = "requests";
+                root.friends-requests-sub-tab = "channels";
+            } else if kind == "friend-accepted" && target != "" {
+                root.nav-pop();
+                root.active-tab = "chats";
+                root.mobile-show-chat = true;
+                root.friends-start-dm(target);
+            } else if (kind == "message" || kind == "mention" || kind == "reply" || kind == "reaction") && target != "" {
+                root.nav-pop();
+                root.active-tab = "chats";
+                root.mobile-show-chat = true;
+                root.channel-selected(target);
+            }
+        }
+    }
+}

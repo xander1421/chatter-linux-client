@@ -1,0 +1,257 @@
+import { Sidebar } from "sidebar/sidebar.slint";
+import { Spacing } from "theme/spacing.slint";
+import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { FriendRequestData } from "modals/friends.slint";
+
+// Sidebar wiring and list navigation for the main conversation shell.
+export component AppSidebarHost inherits Rectangle {
+    in property <bool> active-call-visible;
+    in-out property <string> active-tab;
+    in property <bool> bottom-nav-visible;
+    in property <bool> chat-edge-swiping;
+    in property <float> chat-push-progress;
+    in property <[ChatRowData]> chat-rows;
+    in property <bool> chat-rows-loading;
+    in property <bool> compact-layout;
+    in-out property <int> create-channel-initial-tab;
+    in-out property <string> create-section-id;
+    in-out property <bool> create-section-rename-mode;
+    in property <[CustomSectionData]> custom-sections;
+    in-out property <string> friends-modal-tab;
+    in property <[FriendRequestData]> friends-received-requests;
+    in-out property <string> friends-requests-sub-tab;
+    in property <bool> is-mobile-platform;
+    in property <bool> is-signed-in;
+    in property <length> macos-titlebar-height;
+    in property <length> macos-traffic-lights-width;
+    in property <int> missed-call-count;
+    in-out property <bool> mobile-show-chat;
+    in property <int> pending-channel-invites;
+    in property <int> pending-group-invites;
+    in property <int> pending-message-requests;
+    in property <length> return-to-call-height;
+    in property <length> safe-area-bottom;
+    in property <bool> server-unreachable;
+    in property <bool> sidebar-collapsed;
+    in property <bool> sidebar-hidden;
+    in property <bool> sidebar-is-rail;
+    in-out property <bool> sidebar-user-collapsed;
+    in-out property <bool> unified-search-open;
+    in-out property <int> unified-search-selected-index;
+    in property <image> user-avatar-source;
+    in property <string> user-display-name;
+    in property <string> user-initials;
+    in property <string> user-presence-status;
+    in property <length> window-width;
+    callback calls-tab-clicked();
+    callback channel-invites-clicked();
+    callback channel-selected(string);
+    callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback delete-section-clicked(/* section-id */ string);
+    callback dm-selected(string);
+    callback group-invites-clicked();
+    callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback message-requests-clicked();
+    callback move-section(/* section-id */ string, /* delta */ int);
+    callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
+    callback nav-push(string);
+    callback private-group-selected(string);
+    callback remove-from-section(/* conversation-id */ string);
+    callback rename-section-clicked(/* section-id */ string);
+    callback saved-messages-clicked();
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
+    callback section-toggle-expanded(/* section-id */ string);
+    callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback set-section-sort-mode(/* section-id */ string, /* mode */ string);
+    callback start-create-channel();
+    callback start-create-section();
+    callback toggle-anon-mode();
+    callback toggle-sidebar();
+    callback unified-search-opened();
+
+        background: transparent;
+    Sidebar {
+        height: parent.height;
+    x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
+        // Keep the list mounted for the reverse push, but do not
+        // paint its rows after the chat fully covers it. Show it
+        // immediately when an edge swipe starts, before progress
+        // has moved off 1 in the first gesture frame.
+        visible: !root.compact-layout || root.chat-push-progress < 1 || root.chat-edge-swiping;
+        y: 0px;
+        bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+            + (root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px) : 0px;
+        // Survives dismissing the connection banner: the dot on the
+        // settings button is what keeps saying the server is down.
+        server-unreachable: root.server-unreachable;
+        // `mobile-mode` means "touch input" — it sizes the panel's
+        // targets. On desktop the panel also keeps its Discord-style
+        // layout role: an icon rail by default, expanded to the full
+        // list by the toggle in its footer.
+        //
+        // On mobile it no longer does. The rail was kept because it was
+        // the only always-available navigation, and swapping the whole
+        // screen "costs a tap for every glance at the conversation
+        // list" — but the bottom tab bar now pays that cost instead
+        // (Chats is one tap from anywhere), and the rail was spending
+        // 16% of the width of every conversation to avoid it. So on a
+        // phone this is a full-width list that the chat replaces, never
+        // a rail beside it. A tablet is wide enough for the desktop
+        // two-pane role, so only its target sizes follow touch.
+        mobile-mode: root.compact-layout;
+        touch: root.is-mobile-platform;
+        mobile-width: root.window-width;
+        // The panel is the top-left thing on screen, so it is the one
+        // that has to keep the macOS traffic lights clear.
+        traffic-lights-width: root.macos-traffic-lights-width;
+        titlebar-height: root.macos-titlebar-height;
+        search-overlay-open: root.unified-search-open;
+        chat-rows: root.chat-rows;
+        chat-rows-loading: root.is-signed-in && root.chat-rows-loading;
+        custom-sections: root.custom-sections;
+        user-display-name: root.user-display-name;
+        user-avatar-source: root.user-avatar-source;
+        user-initials: root.user-initials;
+        user-presence-status: root.user-presence-status;
+        // Narrow screens start on the rail and expand on demand. The
+        // user drives this — `sidebar-user-collapsed` keeps their choice
+        // from being undone by a resize.
+        // Never a rail on mobile — when this panel is on screen at all
+        // it is the whole screen.
+        collapsed: root.compact-layout ? false : root.sidebar-is-rail;
+        hidden: root.compact-layout ? false : root.sidebar-hidden;
+        pending-friend-requests: root.friends-received-requests.length;
+        pending-message-requests: root.pending-message-requests;
+        pending-group-invites: root.pending-group-invites;
+        pending-channel-invites: root.pending-channel-invites;
+        missed-call-count: root.missed-call-count;
+
+        channel-selected(id) => {
+            root.mobile-show-chat = true;
+            root.channel-selected(id);
+        }
+        dm-selected(id) => {
+            root.mobile-show-chat = true;
+            root.dm-selected(id);
+        }
+        private-group-selected(id) => {
+            root.mobile-show-chat = true;
+            root.private-group-selected(id);
+        }
+        search-clicked => {
+            root.unified-search-selected-index = 0;
+            root.unified-search-open = true;
+            root.unified-search-opened();
+        }
+        saved-messages-clicked => {
+            // Saved Messages IS a conversation, so it routes like one —
+            // without this the chat loads behind the list and the tap
+            // reads as doing nothing.
+            root.mobile-show-chat = true;
+            root.saved-messages-clicked();
+        }
+        friends-clicked => {
+            root.active-tab = "contacts";
+        }
+        // Wide-layout entry to the Calls screen — the same modal and
+        // the same load the phone tab bar's Calls tab raises.
+        calls-clicked => {
+            root.active-tab = "calls";
+            root.calls-tab-clicked();
+        }
+        // The sidebar's one Requests row fires all four below on every
+        // tap: the other three refresh their lists, and this one opens
+        // Contacts › Requests on the first sub-tab that has something
+        // in it (Received when none).
+        friend-requests-clicked => {
+            root.friends-modal-tab = "requests";
+            root.friends-requests-sub-tab =
+                root.friends-received-requests.length > 0 ? "received"
+                : root.pending-message-requests > 0 ? "private"
+                : root.pending-group-invites > 0 ? "groups"
+                : root.pending-channel-invites > 0 ? "channels"
+                : "received";
+            root.active-tab = "contacts";
+        }
+        message-requests-clicked => {
+            root.message-requests-clicked();
+        }
+        group-invites-clicked => {
+            root.group-invites-clicked();
+        }
+        channel-invites-clicked => {
+            root.channel-invites-clicked();
+        }
+        // The avatar and the gear both open the account menu, which
+        // is where Settings lives now.
+        profile-clicked => {
+            root.active-tab = "profile";
+        }
+        create-channel-clicked => {
+            root.start-create-channel();
+        }
+        create-clicked => {
+            root.nav-push("create-menu");
+        }
+        join-channel-clicked => {
+            root.create-channel-initial-tab = 1;
+            root.nav-push("create-channel");
+        }
+        toggle-collapsed => {
+            // Track user's explicit collapse choice for smart auto-expand
+            root.sidebar-user-collapsed = !root.sidebar-collapsed;
+            root.toggle-sidebar();
+        }
+        create-section-clicked => {
+            root.start-create-section();
+        }
+        section-toggle-expanded(id) => {
+            root.section-toggle-expanded(id);
+        }
+        section-conversation-selected(conv-id, conv-type) => {
+            root.mobile-show-chat = true;
+            root.section-conversation-selected(conv-id, conv-type);
+        }
+        delete-section-clicked(id) => {
+            root.delete-section-clicked(id);
+        }
+        rename-section-clicked(id) => {
+            root.create-section-rename-mode = true;
+            root.create-section-id = id;
+            // Rust side should set name/emoji before opening
+            root.rename-section-clicked(id);
+            root.nav-push("create-section");
+        }
+        move-to-section(conv-id, conv-type, section-id) => {
+            root.move-to-section(conv-id, conv-type, section-id);
+        }
+        set-conversation-pinned(conv-id, pinned) => {
+            root.set-conversation-pinned(conv-id, pinned);
+        }
+        delete-conversation(conv-id, kind) => {
+            root.delete-conversation(conv-id, kind);
+        }
+        leave-conversation(conv-id, kind) => {
+            root.leave-conversation(conv-id, kind);
+        }
+        move-section(section-id, delta) => {
+            root.move-section(section-id, delta);
+        }
+        set-section-sort-mode(section-id, mode) => {
+            root.set-section-sort-mode(section-id, mode);
+        }
+        remove-from-section(conv-id) => {
+            root.remove-from-section(conv-id);
+        }
+        settings-clicked => {
+            root.active-tab = "profile";
+        }
+        mesh-setup-clicked => {
+            root.nav-push("mesh-setup");
+        }
+        anon-mode-clicked => {
+            root.toggle-anon-mode();
+        }
+    }
+}
