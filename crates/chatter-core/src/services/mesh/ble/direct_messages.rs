@@ -34,7 +34,7 @@ impl BleRuntime {
                         .iter()
                         .any(|message| message.message_id == message_id)
                     {
-                        pending.push(super::state::PendingDm {
+                        pending.push(super::super::state::PendingDm {
                             message_id: message_id.to_string(),
                             content: content.to_string(),
                             queued_at_ms: now_millis(),
@@ -175,7 +175,7 @@ impl BleRuntime {
         let compatible = self.state.with(|state| {
             state.chatter_hello.get(peer).is_some_and(|hello| {
                 hello.compatible()
-                    && hello.capabilities & super::chatter_hello::SIGNAL_MESH != 0
+                    && hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
                     && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32
             })
         });
@@ -214,7 +214,7 @@ impl BleRuntime {
                     .to_string()
                     .to_uppercase(),
                 peer: Some(peer.clone()),
-                state: super::events::MeshDelivery::Secure,
+                state: super::super::events::MeshDelivery::Secure,
             });
         }
     }
@@ -238,7 +238,7 @@ impl BleRuntime {
         let mut payload = Vec::with_capacity(4 + bytes.len());
         payload.extend_from_slice(b"CSM1");
         payload.extend_from_slice(bytes);
-        let Some((sealed, prekey_id)) = super::prekeys::seal_offline(
+        let Some((sealed, prekey_id)) = super::super::prekeys::seal_offline(
             &self.state,
             &payload,
             &recipient_key,
@@ -301,7 +301,7 @@ impl BleRuntime {
             self.events.send(MeshEvent::Delivery {
                 message_id: uuid::Uuid::from_bytes(id).to_string().to_uppercase(),
                 peer: Some(recipient.clone()),
-                state: super::events::MeshDelivery::SignalRelayed,
+                state: super::super::events::MeshDelivery::SignalRelayed,
             });
         }
     }

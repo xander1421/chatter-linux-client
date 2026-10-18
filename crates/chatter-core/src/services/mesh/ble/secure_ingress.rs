@@ -148,7 +148,7 @@ impl BleRuntime {
             .with(|state| state.links.mark_noise_authenticated(link, claimed));
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
-            let signal_capable = hello.capabilities & super::chatter_hello::SIGNAL_MESH != 0
+            let signal_capable = hello.capabilities & super::super::chatter_hello::SIGNAL_MESH != 0
                 && hello.compatible()
                 && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32;
             match self
@@ -646,7 +646,7 @@ impl BleRuntime {
                     self.events.send(MeshEvent::Delivery {
                         message_id: wire_id,
                         peer: Some(claimed.clone()),
-                        state: super::events::MeshDelivery::Delivered,
+                        state: super::super::events::MeshDelivery::Delivered,
                     });
                 }
                 None
@@ -679,9 +679,12 @@ impl BleRuntime {
 
         // Is it ours? Only the seal can answer that — the recipient tag rotates
         // and is a hint, not proof.
-        if let Some((plaintext, sender_key)) =
-            super::prekeys::open_envelope(&self.state, &envelope, &self.identity, now_millis())
-        {
+        if let Some((plaintext, sender_key)) = super::super::prekeys::open_envelope(
+            &self.state,
+            &envelope,
+            &self.identity,
+            now_millis(),
+        ) {
             if let Some(carrier) = plaintext.strip_prefix(b"CSM1") {
                 let sender = PeerId::from_noise_key(&sender_key);
                 if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
