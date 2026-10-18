@@ -1,0 +1,89 @@
+// Virtual row markers; the caller decides where each marker belongs.
+import { Appearance } from "../theme/appearance.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Unread divider — everything below this line arrived while the user was away.
+export component UnreadDivider inherits HorizontalLayout {
+    height: 40px * Appearance.text-grow;
+    spacing: Spacing.md;
+    alignment: center;
+    padding-top: Spacing.sm;
+    padding-bottom: Spacing.sm;
+
+    Rectangle {
+        horizontal-stretch: 1;
+        height: 1px;
+        background: Colors.primary;
+        opacity: 0.5;
+    }
+
+    // A row, so no glass (glass_surface.slint:1): the chip is a
+    // plain fill in the material's tint, which over the flat list
+    // background is what the glass rendered anyway.
+    Rectangle {
+        border-radius: self.height / 2;
+        background: Materials.regular;
+        min-width: unread-label.preferred-width + Spacing.md * 2;
+        height: 24px * Appearance.text-grow;
+        unread-label := Text {
+            text: "Unread messages";
+            color: Colors.primary;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Rectangle {
+        horizontal-stretch: 1;
+        height: 1px;
+        background: Colors.primary;
+        opacity: 0.5;
+    }
+
+}
+
+// Date text comes from core; the list chooses where the label changes.
+export component DateSeparator inherits HorizontalLayout {
+    in property <string> label;
+    height: 40px * Appearance.text-grow;
+    spacing: Spacing.md;
+    alignment: center;
+    padding-top: Spacing.sm;
+    padding-bottom: Spacing.sm;
+
+    Rectangle {
+        horizontal-stretch: 1;
+        height: 1px;
+        background: Colors.divider;
+    }
+
+    // A row, so no glass (glass_surface.slint:1): the chip is a
+    // plain fill in the material's tint, which over the flat list
+    // background is what the glass rendered anyway.
+    Rectangle {
+        border-radius: self.height / 2;
+        background: Materials.regular;
+        min-width: date-label.preferred-width + Spacing.md * 2;
+        height: 24px * Appearance.text-grow;
+        date-label := Text {
+            text: root.label;
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Rectangle {
+        horizontal-stretch: 1;
+        height: 1px;
+        background: Colors.divider;
+    }
+
+}

@@ -5,15 +5,12 @@
 // features: scroll-to-bottom / "N new messages" pill, open on the unread
 // divider, auto-follow of new messages, older history on reaching the top.
 
-import { Colors } from "../theme/colors.slint";
-import { Appearance } from "../theme/appearance.slint";
-import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
-import { Typography } from "../theme/typography.slint";
-import { Icons } from "../theme/icons.slint";
-import { Skeleton } from "../components/skeleton.slint";
 import { MessageItem } from "message_item.slint";
+import { MessageScrollPill, MessageHistoryError } from "message_list_overlays.slint";
+import { UnreadDivider, DateSeparator } from "message_row_separators.slint";
+import { MessageListLoading, MessageListEmpty } from "message_list_states.slint";
 import { MessageAttachmentData, MessageItemData, ReactionEntry } from "types.slint";
 
 // Re-export types for parent components
@@ -338,118 +335,17 @@ export component MessageList inherits Rectangle {
     background: Materials.ambient;
 
     // Loading state: skeleton placeholders
-    if root.loading: VerticalLayout {
-        padding: Spacing.md;
-        padding-top: root.top-inset + Spacing.md;
-        padding-bottom: root.bottom-inset + Spacing.md;
-        spacing: Spacing.lg;
-
-        for _ in [1, 2, 3, 4, 5]: HorizontalLayout {
-            spacing: Spacing.sm;
-
-            // Avatar skeleton
-            Skeleton {
-                width: Spacing.avatar-sm;
-                height: Spacing.avatar-sm;
-                border-radius: Spacing.avatar-sm / 2;
-            }
-
-            // Content skeleton
-            VerticalLayout {
-                spacing: Spacing.xs;
-
-                // Name and timestamp
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-
-                    Skeleton {
-                        width: 80px;
-                        height: 14px;
-                        border-radius: 4px;
-                    }
-
-                    Skeleton {
-                        width: 40px;
-                        height: 12px;
-                        border-radius: 4px;
-                    }
-                }
-
-                // Message content (2 lines)
-                Skeleton {
-                    width: 200px;
-                    height: 14px;
-                    border-radius: 4px;
-                }
-
-                Skeleton {
-                    width: 150px;
-                    height: 14px;
-                    border-radius: 4px;
-                }
-            }
-        }
+    if root.loading: MessageListLoading {
+        top-inset: root.top-inset;
+        bottom-inset: root.bottom-inset;
     }
 
     // Empty state
-    if !root.loading && root.messages.length == 0: Rectangle {
+    if !root.loading && root.messages.length == 0: MessageListEmpty {
         y: root.top-inset;
         height: max(0px, root.height - root.top-inset - root.bottom-inset);
-        VerticalLayout {
-            alignment: center;
-            spacing: Spacing.md;
-
-            Text {
-                text: "\u{1F4AC}\u{FE0F}"; // Speech bubbles emoji (with emoji variant selector)
-                font-family: Typography.font-family-emoji;
-                font-size: Typography.huge;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "No messages yet";
-                color: Colors.text-secondary;
-                font-size: Typography.lg;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "Be the first to say something!";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-            }
-
-            // Encryption indicator in empty state
-            Rectangle {
-                height: Spacing.lg;
-            }
-
-            // What is true about this conversation's privacy, which is not the
-            // same sentence everywhere. A mesh room and a geohash cell are
-            // plaintext broadcasts with no recipient to be encrypted *to*;
-            // saying otherwise here, in green, under a lock, is the one error on
-            // this screen that could get somebody hurt.
-            HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                Image {
-                    source: root.public-broadcast ? Icons.globe : Icons.lock;
-                    width: 14px;
-                    height: 14px;
-                    colorize: root.public-broadcast ? Colors.warning : Colors.success;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: root.privacy-line;
-                    color: root.public-broadcast ? Colors.warning : Colors.success;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                }
-            }
-        }
+        public-broadcast: root.public-broadcast;
+        privacy-line: root.privacy-line;
     }
 
     // ── The list ─────────────────────────────────────────────────────────────
@@ -814,88 +710,15 @@ export component MessageList inherits Rectangle {
 
                 // Unread divider — everything below this line arrived while
                 // the user was away.
-                if idx == root.unread-index: HorizontalLayout {
-                    width: 100%;
-                    height: 40px * Appearance.text-grow;
-                    spacing: Spacing.md;
-                    alignment: center;
-                    padding-top: Spacing.sm;
-                    padding-bottom: Spacing.sm;
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.primary;
-                        opacity: 0.5;
-                    }
-
-                    // A row, so no glass (glass_surface.slint:1): the chip is a
-                    // plain fill in the material's tint, which over the flat list
-                    // background is what the glass rendered anyway.
-                    Rectangle {
-                        border-radius: self.height / 2;
-                        background: Materials.regular;
-                        min-width: unread-label.preferred-width + Spacing.md * 2;
-                        height: 24px * Appearance.text-grow;
-                        unread-label := Text {
-                            text: "Unread messages";
-                            color: Colors.primary;
-                            font-size: Typography.xs;
-                            font-weight: Typography.medium;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.primary;
-                        opacity: 0.5;
-                    }
-                }
+                if idx == root.unread-index: UnreadDivider { width: 100%; }
 
                 // Date separator: wherever core's day label changes from the
                 // row above. Derived here from the neighbour rather than stored
                 // per row, so no insert/prepend/delete path can leave it stale.
                 if item.date-separator-text != ""
-                    && (idx == 0 || root.messages[idx - 1].date-separator-text != item.date-separator-text): HorizontalLayout {
+                    && (idx == 0 || root.messages[idx - 1].date-separator-text != item.date-separator-text): DateSeparator {
                     width: 100%;
-                    height: 40px * Appearance.text-grow;
-                    spacing: Spacing.md;
-                    alignment: center;
-                    padding-top: Spacing.sm;
-                    padding-bottom: Spacing.sm;
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.divider;
-                    }
-
-                    // A row, so no glass (glass_surface.slint:1): the chip is a
-                    // plain fill in the material's tint, which over the flat list
-                    // background is what the glass rendered anyway.
-                    Rectangle {
-                        border-radius: self.height / 2;
-                        background: Materials.regular;
-                        min-width: date-label.preferred-width + Spacing.md * 2;
-                        height: 24px * Appearance.text-grow;
-                        date-label := Text {
-                            text: item.date-separator-text;
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            font-weight: Typography.medium;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1px;
-                        background: Colors.divider;
-                    }
+                    label: item.date-separator-text;
                 }
 
                 message-bubble := MessageItem {
@@ -1025,135 +848,38 @@ export component MessageList inherits Rectangle {
             }
         }
 
-        // Scroll-to-bottom floating button
-        // Appears when user has scrolled up from the bottom
-        // Scroll-to-bottom, which becomes a "N new messages" pill when the
-        // conversation opened on an unread boundary — the affordance that says
-        // how much is below you and takes you there in one tap.
-        GlassSurface {
-            private property <bool> hide-pill: root.is-at-bottom || list.unread-tail-in-view
+        // Scroll-to-bottom floating button; an unread count appears when
+        // the conversation opened on an unread boundary.
+        MessageScrollPill {
+            hide-pill: root.is-at-bottom || list.unread-tail-in-view
                 || (root.seen-opening-tail && root.unread-count == 0);
-            elevation: 3;
+            scrolling: root.scrolling;
+            unread-count: root.unread-count;
             x: root.width - self.width - 16px;
             y: root.height - root.bottom-inset - 60px;
-            width: pill-content.preferred-width + Spacing.lg * 2;
-            height: Spacing.button-height * Appearance.text-grow;
-            border-radius: self.height / 2;
-            material-level: 2;
-            backdrop-paused: root.scrolling;
-            accessible-role: button;
-            accessible-label: root.unread-count > 0
-                ? root.unread-count + " new messages, jump to newest"
-                : "Scroll to bottom";
-
-            opacity: self.hide-pill ? 0 : 1;
-            visible: !self.hide-pill || self.opacity > 0;
-            transform-scale-x: self.hide-pill ? 72% : (scroll-btn.pressed ? 93% : 100%);
-            transform-scale-y: self.hide-pill ? 72% : (scroll-btn.pressed ? 93% : 100%);
-            animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
-            animate transform-scale-x { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-
-            // Hover/press overlay, as on the FAB: the pill is already thick,
-            // so retinting it to thick on hover showed nothing.
-            Rectangle {
-                border-radius: parent.border-radius;
-                background: scroll-btn.pressed ? Materials.pressed : scroll-btn.has-hover ? Materials.hover : transparent;
-            }
-
-            pill-content := HorizontalLayout {
-                alignment: center;
-                spacing: Spacing.sm;
-
-                if root.unread-count > 0: Text {
-                    text: root.unread-count == 1
-                        ? "1 new message"
-                        : root.unread-count + " new messages";
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                }
-
-                // Down arrow: the bundled chevron turned, not a Unicode
-                // arrow the UI font may lack.
-                VerticalLayout {
-                    alignment: center;
-                    Image {
-                        source: Icons.chevron-right;
-                        width: Spacing.button-icon;
-                        height: Spacing.button-icon;
-                        transform-rotation: 90deg;
-                        colorize: Colors.text-primary;
-                    }
+            clicked => {
+                root.opening-on-unread = false;
+                if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
+                    // Scrolled up past the unread boundary: that is
+                    // where reading resumes.
+                    root.go-to-row(root.unread-index);
+                } else {
+                    // Consume the anchor: the user has chosen the newest
+                    // message, so no later relayout may drag them back up.
+                    root.unread-index = -1;
+                    root.unread-count = 0;
+                    root.is-at-bottom = true;
+                    root.go-to-end();
                 }
             }
-
-            scroll-btn := TouchArea {
-                enabled: !parent.hide-pill;
-                clicked => {
-                    root.opening-on-unread = false;
-                    if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
-                        // Scrolled up past the unread boundary: that is
-                        // where reading resumes.
-                        root.go-to-row(root.unread-index);
-                    } else {
-                        // Consume the anchor: the user has chosen the newest
-                        // message, so no later relayout may drag them back up.
-                        root.unread-index = -1;
-                        root.unread-count = 0;
-                        root.is-at-bottom = true;
-                        root.go-to-end();
-                    }
-                }
-            }
-
         }
     }
 
-    // Older history failed to load: a nonfatal notice over the top of the
-    // list, with the retry. Same chip as the unread divider's.
-    if root.load-failed && !root.loading && root.messages.length > 0: Rectangle {
+    // Older history failed to load; offer retry over the list.
+    if root.load-failed && !root.loading && root.messages.length > 0: MessageHistoryError {
         x: (parent.width - self.width) / 2;
         y: root.top-inset + Spacing.sm;
-        width: min(root.width - 2 * Spacing.md, history-error.preferred-width);
-        height: max(Spacing.touch-target-min, history-error.preferred-height);
-        border-radius: self.height / 2;
-        background: Materials.regular;
-        // Taps on the chip's own padding must not reach the rows under it.
-        TouchArea { }
-        history-error := HorizontalLayout {
-            padding-left: Spacing.lg;
-            padding-right: Spacing.xs;
-            spacing: Spacing.sm;
-            Text {
-                text: "Older messages didn't load";
-                color: Colors.text-primary;
-                font-size: Typography.xs;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            Rectangle {
-                width: max(Spacing.touch-target-min, retry-label.preferred-width + 2 * Spacing.md);
-                border-radius: self.height / 2;
-                background: retry-touch.pressed ? Materials.pressed
-                    : retry-touch.has-hover ? Materials.hover : transparent;
-                accessible-role: button;
-                accessible-label: "Retry loading older messages";
-                accessible-action-default => { root.retry-load-more(); }
-                retry-label := Text {
-                    text: "Retry";
-                    color: Colors.primary;
-                    font-size: Typography.xs;
-                    font-weight: Typography.semibold;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                retry-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.retry-load-more(); }
-                }
-            }
-        }
+        available-width: root.width;
+        retry => { root.retry-load-more(); }
     }
 }
