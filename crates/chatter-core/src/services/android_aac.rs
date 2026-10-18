@@ -167,10 +167,10 @@ pub fn encode(path: &Path, pcm: &[i16], sample_rate: u32, channels: u16) -> Resu
                 } else if index >= 0 {
                     let mut capacity = 0usize;
                     let buffer = AMediaCodec_getOutputBuffer(codec, index as usize, &mut capacity);
-                    if !muxer_started {
-                        return Err("AAC muxer has no output format".into());
-                    }
                     if info.size > 0 && info.flags & CODEC_CONFIG == 0 {
+                        if !muxer_started {
+                            return Err("AAC muxer has no output format".into());
+                        }
                         if buffer.is_null()
                             || info.offset < 0
                             || info.offset as usize + info.size as usize > capacity
