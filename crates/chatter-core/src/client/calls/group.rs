@@ -370,7 +370,7 @@ impl ChatterClient {
         let signaling = self.call_signaling().clone();
         let pool = self.services.grpc_pool.clone();
         tokio::spawn(async move {
-            use super::group_ring_lifecycle::{event_ends_ring, snapshot_ends_ring};
+            use crate::client::group_ring_lifecycle::{event_ends_ring, snapshot_ends_ring};
             use crate::proto::chat_v1::{CallEventType, call_event};
             use futures::StreamExt;
 
