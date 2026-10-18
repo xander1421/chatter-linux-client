@@ -12,7 +12,7 @@
 //!
 //! # Why the binding is security-critical
 //!
-//! A [`LinkId`] is a physical connection. A [`PeerId`] is a claimed identity. The
+//! A [`crate::link::LinkId`] is a physical connection. A [`chatter_mesh::ids::PeerId`] is a claimed identity. The
 //! mapping between them is the only thing that makes "this packet came from Bob"
 //! mean anything, and it is established from data an attacker in radio range can
 //! replay.
