@@ -158,7 +158,10 @@ fn record(
         "voice recording: encoded"
     );
     let waveform_start = std::time::Instant::now();
-    let waveform = waveform(&samples);
+    let waveform = waveform(
+        &samples,
+        recorder.sample_rate() as usize * recorder.channels() as usize,
+    );
     tracing::info!(
         elapsed_ms = waveform_start.elapsed().as_millis(),
         "voice recording: waveform ready"
@@ -175,8 +178,8 @@ fn record(
     }))
 }
 
-fn waveform(samples: &[i16]) -> Vec<u8> {
-    crate::media::waveform::waveform_from_pcm(samples)
+fn waveform(samples: &[i16], samples_per_second: usize) -> Vec<u8> {
+    crate::media::waveform::waveform_from_pcm(samples, samples_per_second)
 }
 
 #[cfg(test)]
@@ -200,19 +203,16 @@ mod tests {
     }
 
     #[test]
-    fn quiet_recordings_retain_shape() {
+    fn near_silent_recordings_stay_at_floor() {
         let samples: Vec<i16> = (0..32).map(|i| i * 2).collect();
-        let bars = super::waveform(&samples);
-        assert_eq!(bars[0], 13);
-        assert_eq!(bars[31], 255);
-        assert!(bars[8] < bars[16]);
+        assert_eq!(super::waveform(&samples, 8000), vec![13; 32]);
     }
 
     #[test]
     fn waveform_handles_silence_short_input_and_negative_full_scale() {
-        assert_eq!(super::waveform(&[]), vec![13; 32]);
-        assert_eq!(super::waveform(&[0; 64]), vec![13; 32]);
-        assert_eq!(super::waveform(&[i16::MIN; 64]), vec![255; 32]);
-        assert_eq!(super::waveform(&[i16::MIN])[0], 255);
+        assert_eq!(super::waveform(&[], 8000), vec![13; 32]);
+        assert_eq!(super::waveform(&[0; 64], 8000), vec![13; 32]);
+        assert_eq!(super::waveform(&[i16::MIN; 64], 8000), vec![255; 32]);
+        assert_eq!(super::waveform(&[i16::MIN], 8000)[0], 255);
     }
 }
