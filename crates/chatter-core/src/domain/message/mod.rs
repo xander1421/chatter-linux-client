@@ -20,6 +20,9 @@ pub use system::SystemMessage;
 pub use thread::{ordered_insert_position, InsertPosition, Thread};
 
 #[cfg(test)]
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
