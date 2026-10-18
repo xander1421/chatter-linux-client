@@ -1,0 +1,99 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { IconAction } from "../components/icon_action.slint";
+
+export component MessageActions inherits Rectangle {
+    in property <length> bubble-height;
+    in property <length> bubble-width;
+    in property <length> bubble-x;
+    in property <length> bubble-y;
+    in property <bool> can-thread;
+    in property <bool> is-call;
+    in property <bool> is-deleted;
+    in property <bool> is-hovered;
+    in property <bool> is-own;
+    in property <bool> is-system;
+    in property <string> message-id;
+    in property <length> row-width;
+    in property <length> row-x;
+    in property <string> sender-id;
+    in property <string> timestamp-ns;
+    callback reply-clicked(string, string);
+    callback react-clicked(string, string, length, length);
+    callback thread-clicked(string);
+    callback request-menu(length, length, length, length, length, length);
+
+    // Peer bubbles in a narrow pane: the bar would run off the
+    // right edge, so it tucks inside the bubble's end instead.
+    property <bool> overflows-right: !root.is-own
+        && root.bubble-x + root.bubble-width - 8px + action-btns.width
+            > root.row-x + root.row-width - Spacing.xs;
+    x: root.is-own ? -action-btns.width + 8px
+        : self.overflows-right ? root.bubble-width - action-btns.width - Spacing.sm
+        : root.bubble-width - 8px;
+    y: -Spacing.button-height / 2; // Float halfway above the top edge
+    width: action-btns.width;
+    height: action-btns.height;
+    visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
+
+    action-btns := Rectangle {
+        height: Spacing.button-height + Spacing.xxs * 2;
+        width: (root.can-thread ? 4 : 3) * Spacing.button-height + (root.can-thread ? 5 : 4) * Spacing.xxs;
+        background: Colors.surface-raised;
+        border-radius: Spacing.radius-md;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.raised-rim;
+
+        HorizontalLayout {
+            padding: Spacing.xxs;
+            spacing: Spacing.xxs;
+            alignment: center;
+
+            // Reply button
+            IconAction {
+                label: "Reply to message";
+                icon: Icons.reply;
+                clicked => {
+                        root.reply-clicked(root.sender-id, root.timestamp-ns);
+                }
+            }
+
+            // React button
+            react-btn := IconAction {
+                label: "Add reaction";
+                icon: Icons.smile;
+                clicked => {
+                        root.react-clicked(root.sender-id, root.timestamp-ns,
+                            react-btn.absolute-position.x,
+                            react-btn.absolute-position.y + react-btn.height);
+                }
+            }
+
+            // Reply-in-thread button — opens/starts a thread on
+            // this message. Previously the ONLY thread entry was
+            // the "N replies" badge (rendered `if reply-count > 0`),
+            // so a message with no replies could never START a thread.
+            if root.can-thread: thread-btn := IconAction {
+                label: "Reply in thread";
+                icon: Icons.message-circle;
+                clicked => {
+                        root.thread-clicked(root.message-id);
+                }
+            }
+
+            // More button
+            more-btn := IconAction {
+                label: "More message actions";
+                icon: Icons.more-horizontal;
+                clicked => {
+                        root.request-menu(more-btn.absolute-position.x,
+                            more-btn.absolute-position.y + more-btn.height,
+                            root.bubble-y, root.bubble-y + root.bubble-height,
+                            root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+        }
+    }
+}
