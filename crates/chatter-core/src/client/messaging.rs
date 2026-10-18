@@ -153,6 +153,21 @@ pub struct SelectionActions {
 impl ChatterClient {
     // ── Messages façade ──────────────────────────────────────────────────
 
+    /// Execute a selected-message delete using the captured account/session.
+    pub async fn delete_selected_messages(
+        self: &Arc<Self>,
+        conversation: ActiveConversation,
+        ids: &[String],
+        scope: crate::services::conversation::SelectedDeleteScope,
+        account: crate::domain::ids::UserId,
+        session_revision: u64,
+        completed: tokio::sync::mpsc::UnboundedSender<Vec<(crate::domain::ids::UserId, u64)>>,
+    ) -> crate::services::conversation::SelectedDeleteResult {
+        self.conversation(conversation)
+            .delete_selected(ids, scope, account, session_revision, completed)
+            .await
+    }
+
     pub fn get_messages_local(
         &self,
         channel_id: &crate::domain::ids::ChannelId,

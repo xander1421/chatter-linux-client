@@ -22,6 +22,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::services::conversation::{SelectedDeleteFailureReason, SelectedDeleteScope};
 
 use crate::MainWindow;
 
@@ -86,22 +87,11 @@ fn delete_selection(
     }
     let ordered_ids = selected_ids_in_order(w, &selected_ids.borrow());
     let conversation = ui_ctx.chat_state().active_conversation();
-    let Some(targets) = (ordered_ids.len() == selected_ids.borrow().len())
-        .then(|| ui_ctx.selected_message_targets(conversation, &ordered_ids)).flatten() else {
-        // A row is gone: the scope offered for it is stale too.
+    // Preserve a missing selected row as an unavailable set. Core resolves
+    // the complete selection against storage before making any changes.
+    if ordered_ids.is_empty() || ordered_ids.len() != selected_ids.borrow().len() {
         refresh_delete_everyone(w, ui_ctx, &selected_ids.borrow());
         w.set_toast_message("The selected messages are no longer available.".into());
-        w.set_toast_visible(true);
-        return;
-    };
-    let handle = ui_ctx.conversation(conversation);
-    if everyone
-        && !targets
-            .iter()
-            .all(|(author, ts)| handle.can_delete_for_everyone(author, *ts).unwrap_or(false))
-    {
-        refresh_delete_everyone(w, ui_ctx, &selected_ids.borrow());
-        w.set_toast_message("These messages can no longer be deleted for everyone.".into());
         w.set_toast_visible(true);
         return;
     }
@@ -124,16 +114,20 @@ fn delete_selection(
         let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
         let task_client = ui_ctx.clone();
         let task = tokio::spawn(async move {
-            super::delete::delete_selected_messages(
-                &handle,
-                &targets,
-                everyone,
-                &task_client,
-                account,
-                session_revision,
-                completed,
-            )
-            .await
+            task_client
+                .delete_selected_messages(
+                    conversation,
+                    &ordered_ids,
+                    if everyone {
+                        SelectedDeleteScope::ForEveryone
+                    } else {
+                        SelectedDeleteScope::ForMe
+                    },
+                    account,
+                    session_revision,
+                    completed,
+                )
+                .await
         });
         let mut expected_generation = selection_revision;
         let mut expected_ids = submitted_ids;
@@ -175,16 +169,25 @@ fn delete_selection(
         {
             return;
         }
-        let error = match result {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
-            Err(error) => Some(error.to_string()),
+        let failure = match result {
+            Ok(result) => result
+                .failed_ids
+                .into_iter()
+                .next()
+                .map(|failure| failure.reason),
+            Err(error) => Some(SelectedDeleteFailureReason::Operation(
+                chatter_core::services::conversation::ConversationError::Other(error.to_string()),
+            )),
         };
-        if let Some(error) = error {
+        if let Some(failure) = failure {
+            let error = failure.to_string();
             tracing::warn!(%error, everyone, "Selected-message deletion failed");
-            w.set_toast_message(
-                format!("Could not finish deleting selected messages: {error}").into(),
-            );
+            let message = match failure {
+                SelectedDeleteFailureReason::Unavailable
+                | SelectedDeleteFailureReason::NotEligible => error,
+                _ => format!("Could not finish deleting selected messages: {error}"),
+            };
+            w.set_toast_message(message.into());
             w.set_toast_visible(true);
             refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
         }
