@@ -1,0 +1,188 @@
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component ChannelAccessChoices inherits VerticalLayout {
+    in-out property <string> access-mode;
+    // ============================================================
+    // Access model — 3 options, stacked as full-width rows. Side by
+    // side at a fixed height their descriptions overflowed on a phone.
+    // ============================================================
+
+    spacing: Spacing.xs;
+
+    Text {
+        text: "Who can join?";
+        color: Colors.text-secondary;
+        font-size: Typography.sm;
+        font-weight: Typography.medium;
+    }
+
+    VerticalLayout {
+        spacing: Spacing.sm;
+
+        // Open
+        Rectangle {
+            border-radius: Spacing.radius-md;
+            border-width: root.access-mode == "open" ? Spacing.stroke : 0px;
+            border-color: Colors.primary;
+            background: root.access-mode == "open" ? Colors.inset : (open-touch.pressed ? Materials.pressed : open-touch.has-hover ? Colors.surface-hover : Colors.surface);
+            transform-scale-x: open-touch.pressed ? 0.985 : 1;
+            transform-scale-y: open-touch.pressed ? 0.96 : 1;
+            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
+                alignment: center;
+
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    Image {
+                        source: Icons.globe;
+                        width: 16px;
+                        height: 16px;
+                        colorize: root.access-mode == "open" ? Colors.primary : Colors.text-secondary;
+                    }
+                    Text {
+                        text: "Open";
+                        color: root.access-mode == "open" ? Colors.primary : Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: "Anyone finds and joins. New members see messages from when they join.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            open-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.access-mode = "open"; }
+            }
+        }
+
+        // Invite-only
+        Rectangle {
+            border-radius: Spacing.radius-md;
+            border-width: root.access-mode == "invite" ? Spacing.stroke : 0px;
+            border-color: Colors.primary;
+            background: root.access-mode == "invite" ? Colors.inset : (invite-touch.pressed ? Materials.pressed : invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
+            transform-scale-x: invite-touch.pressed ? 0.985 : 1;
+            transform-scale-y: invite-touch.pressed ? 0.96 : 1;
+            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
+                alignment: center;
+
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    Image {
+                        source: Icons.lock;
+                        width: 16px;
+                        height: 16px;
+                        colorize: root.access-mode == "invite" ? Colors.primary : Colors.text-secondary;
+                    }
+                    Text {
+                        text: "Invite-only";
+                        color: root.access-mode == "invite" ? Colors.primary : Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: "Hidden from discovery. Invite or password to join.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            invite-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.access-mode = "invite"; }
+            }
+        }
+
+        // Private group
+        Rectangle {
+            border-radius: Spacing.radius-md;
+            border-width: root.access-mode == "private-group" ? Spacing.stroke : 0px;
+            border-color: Colors.primary;
+            background: root.access-mode == "private-group" ? Colors.inset : (pg-touch.pressed ? Materials.pressed : pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
+            transform-scale-x: pg-touch.pressed ? 0.985 : 1;
+            transform-scale-y: pg-touch.pressed ? 0.96 : 1;
+            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.xxs;
+                alignment: center;
+
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    Image {
+                        source: Icons.shield;
+                        width: 16px;
+                        height: 16px;
+                        colorize: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-secondary;
+                    }
+                    Text {
+                        text: "Anon group";
+                        color: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: "End-to-end encrypted. Server can't see it exists.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            pg-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.access-mode = "private-group"; }
+            }
+        }
+    }
+
+    // Encryption badge (open = no badge; invite/private-group = encrypted badge)
+    if root.access-mode == "invite" || root.access-mode == "private-group": HorizontalLayout {
+        spacing: Spacing.xs;
+        alignment: start;
+        Image {
+            source: Icons.shield;
+            width: 12px;
+            height: 12px;
+            colorize: Colors.success;
+            y: 2px;
+        }
+        Text {
+            text: "End-to-end encrypted";
+            color: Colors.success;
+            font-size: Typography.xs;
+        }
+    }
+}

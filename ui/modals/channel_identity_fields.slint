@@ -1,0 +1,102 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Input } from "../components/input.slint";
+
+// Identity row: icon, name and description. The composed name drives the Create action.
+export component ChannelIdentityFields inherits HorizontalLayout {
+    in-out property <string> channel-name;
+    in-out property <string> channel-description;
+    in property <string> error-message;
+    in property <bool> is-private-group;
+    in property <image> icon-preview;
+    in property <bool> has-icon-preview;
+    out property <string> composed-name: name-input.composed-text;
+    property <int> description-focus-requests: 0;
+    callback pick-channel-icon();
+    callback release-focus();
+
+    spacing: Spacing.md;
+
+    // Icon upload (64px)
+    VerticalLayout {
+        horizontal-stretch: 0;
+        alignment: center;
+        spacing: Spacing.xs;
+
+        Rectangle {
+            width: 64px;
+            height: 64px;
+            border-radius: Spacing.radius-md;
+            background: Colors.inset;
+            clip: true;
+
+            if root.has-icon-preview: Image {
+                source: root.icon-preview;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+
+            if !root.has-icon-preview: Image {
+                source: Icons.image;
+                width: 24px;
+                height: 24px;
+                colorize: Colors.text-muted;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            icon-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.pick-channel-icon(); }
+            }
+        }
+
+        Text {
+            text: root.has-icon-preview ? "Change" : "Upload";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            horizontal-alignment: center;
+            width: 64px;
+        }
+    }
+
+    // Name + description stack
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: Spacing.sm;
+
+        // The IME's Done/Enter arrives as `accepted`. Without a
+        // handler it did nothing, and on a phone the keyboard then
+        // could not be dismissed over "Who can join?". Done moves
+        // to Description; Done there (or on a group's name, which
+        // has none) puts the keyboard away.
+        name-input := Input {
+            placeholder: root.is-private-group ? "Group name" : "Channel name";
+            text <=> root.channel-name;
+            error: root.error-message != "" && root.channel-name == "";
+            error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
+            accepted => {
+                if root.is-private-group {
+                    root.release-focus();
+                } else {
+                    root.description-focus-requests += 1;
+                }
+            }
+        }
+
+        // Inside an `if`, so the name field cannot call its
+        // focus() directly; it bumps this counter instead.
+        Input {
+            visible: !root.is-private-group;
+            height: root.is-private-group ? 0px : Spacing.button-height;
+            property <int> focus-requests: root.description-focus-requests;
+            changed focus-requests => { self.focus(); }
+            placeholder: "Description (optional)";
+            text <=> root.channel-description;
+            accepted => { root.release-focus(); }
+        }
+    }
+}
