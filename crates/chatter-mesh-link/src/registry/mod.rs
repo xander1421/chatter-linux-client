@@ -69,7 +69,7 @@ use chatter_mesh::tlv::capabilities::PeerCapabilities;
 #[cfg(test)]
 use peer::PIN_BLOB_VERSION;
 #[cfg(test)]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 mod tests;
