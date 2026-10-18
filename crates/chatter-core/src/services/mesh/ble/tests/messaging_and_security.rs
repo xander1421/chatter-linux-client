@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn announces_from_any_cause_are_floored_at_one_second() {
     let (mut runtime, radio, state) = runtime();

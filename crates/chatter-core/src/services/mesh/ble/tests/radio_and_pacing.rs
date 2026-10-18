@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn losing_the_peripheral_role_is_reported_rather_than_silent() {
     // The half-deaf state: this device still advertises, still scans, still

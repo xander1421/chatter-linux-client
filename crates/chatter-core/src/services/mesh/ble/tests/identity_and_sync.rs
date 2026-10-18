@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn a_peer_heard_only_by_relay_is_not_marked_connected() {
     // Found with three devices in one room: the second phone's announces
