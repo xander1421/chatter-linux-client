@@ -1,6 +1,7 @@
 //! Audio recorder.
 //!
-//! Voice message recording using cpal for audio input and hound for WAV encoding.
+//! Voice message capture using cpal. Desktop can save WAV; Android encodes
+//! the captured PCM with its native AAC codec.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -32,7 +33,7 @@ pub enum RecordingState {
 
 /// Audio recorder for voice messages.
 ///
-/// Uses cpal for microphone input and hound for WAV encoding.
+/// Uses cpal for microphone input and retains PCM for platform encoding.
 pub struct AudioRecorder {
     /// Input device.
     device: Device,
@@ -292,6 +293,16 @@ impl AudioRecorder {
             .map_err(|e| MediaError::RecordingError(format!("failed to finalize WAV: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Return interleaved PCM for waveform calculation and platform encoding.
+    pub fn pcm_i16(&self) -> Vec<i16> {
+        self.samples
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|&sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+            .collect()
     }
 
     /// Cancels the current recording and discards samples.

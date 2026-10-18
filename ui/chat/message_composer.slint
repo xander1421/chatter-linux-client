@@ -1,5 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
-import { VoiceRecording, LiveVoiceWaveform, RecordingPulse } from "voice_recording.slint";
+import { VoiceRecording, LiveVoiceWaveform } from "voice_recording.slint";
 import { HeaderButton } from "../components/header_button.slint";
 // Message composer component
 //
@@ -202,14 +202,6 @@ export component MessageComposer inherits GlassSurface {
         root.suspend-input();
         root.input-focused();
         VoiceRecording.start();
-    }
-    property <bool> voice-held: false;
-    property <length> voice-press-x;
-    property <length> voice-press-y;
-    voice-hold := Timer {
-        interval: 300ms;
-        running: false;
-        triggered => { root.voice-held = true; self.running = false; }
     }
     // Properties
     in property <string> placeholder: "Type a message...";
@@ -502,8 +494,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> row-padding: Spacing.chrome-inset;
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
-    property <length> recording-height: max(80px,
-        Spacing.touch-target-min + recording-hint.preferred-height + Spacing.xs + row-padding * 2);
+    property <length> recording-height: max(80px, Spacing.touch-target-min + row-padding * 2);
     height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
@@ -1366,8 +1357,8 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // Tap locks recording; hold releases to send, slide left cancels,
-            // slide up locks. Mesh has its own file transport, not this path.
+            // Tap starts recording. The recording bar owns Cancel and Send;
+            // lifting a finger never sends or discards the voice note.
             if !root.is-editing && MeshGlobal.active-id == "": Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
                 // Stay beside the field while the attachment droplet lands.
@@ -1381,7 +1372,7 @@ export component MessageComposer inherits GlassSurface {
                 accessible-role: button;
                 accessible-label: "Record voice message";
                 accessible-enabled: !root.disabled && !root.can-send;
-                accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); VoiceRecording.locked = true; } }
+                accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); } }
                 Image {
                     source: Icons.mic;
                     width: 20px;
@@ -1392,32 +1383,7 @@ export component MessageComposer inherits GlassSurface {
                 }
                 TouchArea {
                     enabled: !root.disabled && !root.can-send;
-                    pointer-event(event) => {
-                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                            root.voice-press-x = self.mouse-x + self.absolute-position.x;
-                            root.voice-press-y = self.mouse-y + self.absolute-position.y;
-                            root.voice-held = false;
-                            voice-hold.running = true;
-                            root.start-recording();
-                        }
-                        if event.kind == PointerEventKind.cancel {
-                            voice-hold.running = false;
-                            if !VoiceRecording.locked { VoiceRecording.cancel(); }
-                        }
-                        if event.kind == PointerEventKind.up {
-                            voice-hold.running = false;
-                            if VoiceRecording.active {
-                                if !root.voice-held || VoiceRecording.busy { VoiceRecording.locked = true; }
-                                else if !VoiceRecording.locked { VoiceRecording.finish(); }
-                            }
-                        }
-                    }
-                    moved => {
-                        if self.pressed && VoiceRecording.active && !VoiceRecording.locked {
-                            if self.mouse-x + self.absolute-position.x - root.voice-press-x < -70px { VoiceRecording.cancel(); }
-                            else if self.mouse-y + self.absolute-position.y - root.voice-press-y < -60px { VoiceRecording.locked = true; }
-                        }
-                    }
+                    clicked => { root.start-recording(); }
                 }
             }
 
@@ -1487,17 +1453,6 @@ export component MessageComposer inherits GlassSurface {
         recording-layout := VerticalLayout {
             height: parent.height;
             padding: root.row-padding;
-            spacing: Spacing.xs;
-            recording-hint := Text {
-                text: VoiceRecording.status != "" ? VoiceRecording.status
-                    : VoiceRecording.locked ? "Voice message"
-                    : root.mobile ? "Slide left to cancel · up to lock"
-                    : "Recording · cancel, lock or send below";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
             GlassSurface {
                 horizontal-stretch: 1;
                 height: Spacing.touch-target-min;
@@ -1518,27 +1473,19 @@ export component MessageComposer inherits GlassSurface {
                         destructive: true;
                         clicked => { VoiceRecording.cancel(); }
                     }
-                    HorizontalLayout {
-                        alignment: center;
+                    VerticalLayout {
                         horizontal-stretch: 1;
-                        spacing: Spacing.sm;
-                        RecordingPulse { }
+                        alignment: center;
+                        spacing: 0px;
                         Text {
                             text: VoiceRecording.elapsed;
                             color: Colors.text-primary;
                             font-size: Typography.sm;
+                            horizontal-alignment: center;
                         }
-                        LiveVoiceWaveform { }
-                    }
-                    HeaderButton {
-                        backdrop-paused: root.backdrop-paused;
-                        icon: Icons.lock;
-                        label: "Lock recording";
-                        touch: true;
-                        plain: true;
-                        active: VoiceRecording.locked;
-                        enabled: !VoiceRecording.busy;
-                        clicked => { VoiceRecording.locked = true; }
+                        LiveVoiceWaveform {
+                            height: 24px;
+                        }
                     }
                     HeaderButton {
                         backdrop-paused: root.backdrop-paused;

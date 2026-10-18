@@ -77,7 +77,6 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         w.invoke_release_text_focus();
         g.set_active(true);
         g.set_busy(true);
-        g.set_locked(false);
         g.set_elapsed("00:00".into());
         g.set_live_levels(ModelRc::new(VecModel::from(vec![0; 20])));
         g.set_pulse_bright(false);
@@ -181,7 +180,6 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                         format!("{:02}:{:02}", seconds / 60, seconds % 60).into(),
                                     ),
                                     RecordingEvent::Ready => {
-                                        g.set_locked(true);
                                         g.set_status("Recording ready (5 minute limit)".into());
                                     }
                                     RecordingEvent::Level(_) => {
@@ -269,7 +267,6 @@ async fn send_recording(
             }
             Err(error) => {
                 tracing::warn!(%error, "Voice upload failed; recording retained for retry");
-                g.set_locked(true);
                 g.set_status("Upload failed. Tap Send to retry.".into());
             }
         }

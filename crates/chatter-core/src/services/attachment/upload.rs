@@ -89,12 +89,12 @@ impl AttachmentService {
         &self,
         file_path: &Path,
     ) -> Result<CdnUploadResult, AttachmentError> {
-        self.upload_to_cdn_encrypted_with_media(file_path, None)
+        self.upload_to_cdn_encrypted_with_media(file_path, None, None)
             .await
     }
 
     /// Recorded voice notes already have these values from the capture worker.
-    /// Re-probing the WAV starts a decoder and scans the audio a second time.
+    /// Re-probing the audio starts a decoder and scans it a second time.
     pub async fn upload_recorded_voice_note(
         &self,
         file_path: &Path,
@@ -106,14 +106,23 @@ impl AttachmentService {
             duration_ms,
             ..MediaMetadata::default()
         };
-        self.upload_to_cdn_encrypted_with_media(file_path, Some(media))
-            .await
+        self.upload_to_cdn_encrypted_with_media(
+            file_path,
+            Some(media),
+            Some(if cfg!(target_os = "android") {
+                "audio/mp4"
+            } else {
+                "audio/wav"
+            }),
+        )
+        .await
     }
 
     async fn upload_to_cdn_encrypted_with_media(
         &self,
         file_path: &Path,
         known_media: Option<MediaMetadata>,
+        known_mime: Option<&str>,
     ) -> Result<CdnUploadResult, AttachmentError> {
         let started = std::time::Instant::now();
         let plaintext_size = tokio::fs::metadata(file_path)
@@ -166,7 +175,10 @@ impl AttachmentService {
             .unwrap_or("attachment")
             .to_string();
 
-        let mime_type = detect_mime_type(file_path).await;
+        let mime_type = match known_mime {
+            Some(mime) => mime.to_string(),
+            None => detect_mime_type(file_path).await,
+        };
 
         // No filename, object key or plaintext size in upload logs: the same
         // path uploads secret-chat files.

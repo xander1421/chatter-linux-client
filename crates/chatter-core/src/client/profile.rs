@@ -1278,7 +1278,10 @@ impl ChatterClient {
             .await
             .map_err(|e| e.to_string())?;
         if note.conversation.is_anon() {
-            tracing::info!(elapsed_ms = started.elapsed().as_millis(), "secret voice: encrypted upload complete");
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "secret voice: encrypted upload complete"
+            );
         }
         if !recording_context_is_current(self.chat_state(), note.conversation) {
             return Err("Conversation changed; recording discarded".into());
@@ -1287,7 +1290,12 @@ impl ChatterClient {
         pointer.voice_note = true;
         pointer.waveform = note.waveform.clone();
         pointer.duration_ms = note.duration_ms;
-        pointer.file_name = "Voice message.wav".into();
+        pointer.file_name = if cfg!(target_os = "android") {
+            "Voice message.m4a"
+        } else {
+            "Voice message.wav"
+        }
+        .into();
         // The sender renders from the already-uploaded local attachment row;
         // receivers render from the pointer. Keep the same metadata on both.
         let mut attachment = self
@@ -1303,14 +1311,22 @@ impl ChatterClient {
             .map_err(|e| e.to_string())?;
 
         if note.conversation.is_anon() {
-            tracing::info!(elapsed_ms = started.elapsed().as_millis(), "secret voice: pending attachment ready");
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "secret voice: pending attachment ready"
+            );
         }
         Ok(crate::state::chat_state::PendingAttachment::with_pointer(
             upload.attachment_id,
             std::path::PathBuf::new(),
             pointer.file_name.clone(),
             upload.plaintext_size,
-            "audio/wav".into(),
+            if cfg!(target_os = "android") {
+                "audio/mp4"
+            } else {
+                "audio/wav"
+            }
+            .into(),
             pointer,
         ))
     }
@@ -1321,9 +1337,11 @@ impl ChatterClient {
         url: &str,
     ) -> Result<Vec<u8>, crate::services::attachment::AttachmentError> {
         if !self.gif_picker_available() {
-            return Err(crate::services::attachment::AttachmentError::InvalidAttachment(
-                "GIFs are not available in a secret chat".into(),
-            ));
+            return Err(
+                crate::services::attachment::AttachmentError::InvalidAttachment(
+                    "GIFs are not available in a secret chat".into(),
+                ),
+            );
         }
         self.attachments().fetch_gif_media(url).await
     }
@@ -1774,7 +1792,10 @@ mod tests {
         );
         assert!(client.peer_last_seen(&peer).is_none());
         assert_eq!(client.peer_presence(&friend), PresenceStatus::Online);
-        assert_eq!(client.peer_last_seen(&friend).unwrap().0, PresenceStatus::Online);
+        assert_eq!(
+            client.peer_last_seen(&friend).unwrap().0,
+            PresenceStatus::Online
+        );
 
         repos.user_repo.delete_friendship(&me, &peer).unwrap();
         assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);
@@ -1866,18 +1887,30 @@ mod tests {
         let peer = UserId::from_uuid(uuid::Uuid::from_u128(11));
         let mut global = crate::domain::user::Profile::new(peer, "Global Name".into());
         global.avatar_bytes = Some(vec![9]);
-        client.messages().user_repo.ensure_user_exists(&peer).unwrap();
+        client
+            .messages()
+            .user_repo
+            .ensure_user_exists(&peer)
+            .unwrap();
         client.messages().user_repo.upsert_profile(&global).unwrap();
 
         let mut dm = AnonDm::new_initiated(peer);
-        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_conversation(&dm)
+            .unwrap();
         let (name, avatar) = client.anon_dm_peer_card(&dm.id).unwrap();
         assert_ne!(name, "Global Name");
         assert_eq!(avatar, None);
 
         dm.peer_display_name = Some("In-chat".into());
         dm.peer_avatar = Some(vec![1]);
-        client.anon_dms().anon_dm_repo().update_conversation(&dm).unwrap();
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .update_conversation(&dm)
+            .unwrap();
         assert_eq!(
             client.anon_dm_peer_card(&dm.id),
             Some(("In-chat".into(), Some(vec![1])))
