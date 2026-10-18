@@ -307,6 +307,9 @@ export component MainWindow inherits Window {
             root.cancel-composer-keyboard-handover();
             CallView.active-call-fullscreen = false;
             CallView.call-raised-pane = false;
+            // Back or an explicit tab switch chose a new route; ending the
+            // call must not restore the route saved before Accept.
+            CallView.call-route-saved = false;
             // Once a TextInput has had focus, popping the screen it lived on leaves
             // NOTHING focused — and `WindowInner::process_key_input` delivers only to
             // the focus item and its ancestors, so Back is dropped on the floor. The

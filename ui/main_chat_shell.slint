@@ -124,6 +124,9 @@ export component MainChatShell inherits Rectangle {
         // On phones the pane is added for the push and retained through
         // its reverse travel; offscreen content never takes layout width.
         if !root.compact-layout || SidebarPane.mobile-show-chat || root.chat-push-progress > 0: chat-panel-area := Rectangle {
+            // The dock and floating header are translucent. Paint the chat
+            // canvas across their whole page so list rows cannot show through.
+            background: Materials.ambient;
             x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
                 : SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
                 : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)

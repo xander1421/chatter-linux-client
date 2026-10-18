@@ -1,5 +1,4 @@
 import { CallView } from "app_call_view.slint";
-import { SidebarPane } from "app_sidebar_pane.slint";
 import { VoiceRecording } from "chat/voice_recording.slint";
 
 // Keep call UI state and audio session notifications synchronized.
@@ -14,14 +13,9 @@ export component AppCallLifecycle inherits Rectangle {
         // would hide them with nothing in their place.
         if !CallView.active-call-visible {
             CallView.active-call-fullscreen = false;
-            // Back to where the user was before the call (Signal): if answering
-            // raised the phone pane (`open_call_screen`), drop it again —
-            // whatever chat was left behind it is stale, not where they were.
-            // Every end path lands here.
-            if CallView.call-raised-pane {
-                CallView.call-raised-pane = false;
-                SidebarPane.mobile-show-chat = false;
-            }
+            // Every end path restores the route Accept covered, unless the
+            // user already restored it by minimizing the call.
+            CallView.restore-call-route();
         }
     }
     private property <bool> observed-call-is-video-enabled: CallView.call-is-video-enabled;

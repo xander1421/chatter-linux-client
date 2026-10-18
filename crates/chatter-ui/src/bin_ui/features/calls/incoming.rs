@@ -497,6 +497,8 @@ fn show_answering(w: &MainWindow) {
 /// the pane up with the call filling it. The return-to-call bar (app.slint)
 /// covers every later departure.
 fn open_call_screen(w: &MainWindow) {
+    let call_view = w.global::<crate::CallView>();
+    call_view.invoke_save_call_route();
     crate::bin_ui::features::back::reset_to_chats(&w);
     if w.get_compact_layout() {
         // Answered from the list: the call's end drops back to it (app.slint

@@ -45,6 +45,7 @@ export component AppBottomChrome inherits Rectangle {
             ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
             : Spacing.lg);
         clicked => {
+            CallView.save-call-route();
             SidebarPane.active-tab = "chats";
             SidebarPane.mobile-show-chat = true;
             if root.compact-layout {
