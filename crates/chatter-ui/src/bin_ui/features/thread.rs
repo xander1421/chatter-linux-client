@@ -7,7 +7,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
-use chatter_core::state::ChatState;
 
 use super::history_owner::HistoryOwner;
 use crate::bin_ui::converters::messages_to_display_batch;
@@ -21,11 +20,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
     let client = ui_ctx.clone();
     window.on_close_thread_clicked(move || {
-        let owner = HistoryOwner::capture(&client, chat_state.active_conversation());
-        let chat = chat_state.clone();
+        let owner = HistoryOwner::capture(&client, client.active_conversation());
+        let chat = client.clone();
         let weak = weak_window.clone();
         if let Some(w) = weak_window.upgrade() {
             // The text stays with its thread; root first, so the text
@@ -34,8 +32,8 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_thread_root_message_id(SharedString::default());
             w.set_thread_composer_text(SharedString::default());
         }
-        if let Some(thread) = chat_state.active_thread() {
-            chat_state.close_thread(thread.root_message_id);
+        if let Some(thread) = client.active_thread() {
+            client.close_thread(thread.root_message_id);
         }
         let _ = slint::invoke_from_event_loop(move || {
             if !owner.is_current() || chat.active_thread().is_some() {
@@ -51,7 +49,6 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
     let ui_ctx = ui_ctx.clone();
     window.on_send_thread_reply(move |text: SharedString| {
         let text = text.to_string();
@@ -59,9 +56,8 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         }
         let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
-        let Some(thread) = chat_state.active_thread() else {
+        let Some(thread) = ui_ctx.active_thread() else {
             return;
         };
         // The panel cleared its composer on tap: the persisted draft goes
@@ -131,8 +127,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
             if let Ok(msg) = sent {
-                chat_state
-                    .update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
+                ui_ctx.update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
                 // Show our own reply in the panel immediately — the send path
                 // stores it locally but emits no MessageReceived event, so
                 // without this it only appeared after re-opening the thread.
@@ -184,11 +179,9 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
 
 fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
     let ui_ctx = ui_ctx.clone();
     window.on_load_more_thread_replies(move || {
         let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
         // Cursor = the oldest reply on screen. Read on the UI thread: a Slint
         // Weak never upgrades inside tokio::spawn.
@@ -200,7 +193,7 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
         else {
             return;
         };
-        let Some(thread) = chat_state.active_thread() else {
+        let Some(thread) = ui_ctx.active_thread() else {
             return;
         };
         let root = thread.root_message_id;
@@ -391,7 +384,6 @@ pub fn thread_reply_display(
 
 pub fn load_thread_data(
     window: slint::Weak<MainWindow>,
-    _chat_state: ChatState,
     ui_ctx: Arc<ChatterClient>,
     root_message_id: MessageId,
 ) {

@@ -1,5 +1,35 @@
 use super::*;
 
+/// A read-only handle for checking whether work still belongs to a session.
+#[derive(Clone)]
+pub struct SessionGuard {
+    auth: AuthState,
+    revision: u64,
+}
+
+impl SessionGuard {
+    pub fn is_current(&self) -> bool {
+        self.auth.get().session_revision == self.revision
+    }
+}
+
+/// A read-only handle for checking the selected conversation and thread.
+#[derive(Clone)]
+pub struct ConversationGuard {
+    chat: ChatState,
+    conversation: crate::state::ActiveConversation,
+}
+
+impl ConversationGuard {
+    pub fn is_current(&self) -> bool {
+        self.chat.active_conversation() == self.conversation
+    }
+
+    pub fn shows_thread(&self, root: crate::domain::ids::MessageId) -> bool {
+        self.chat.active_thread().is_some_and(|thread| thread.root_message_id == root)
+    }
+}
+
 impl ChatterClient {
     // ── Auth façade ──────────────────────────────────────────────────────
 
@@ -223,6 +253,20 @@ impl ChatterClient {
     /// Read-only account state for UI ownership and session-revision checks.
     pub fn auth_snapshot(&self) -> crate::state::AuthStateData {
         self.services.auth_state.get()
+    }
+
+    pub fn session_guard(&self) -> SessionGuard {
+        SessionGuard {
+            auth: self.services.auth_state.clone(),
+            revision: self.auth_snapshot().session_revision,
+        }
+    }
+
+    pub fn conversation_guard(&self, conversation: crate::state::ActiveConversation) -> ConversationGuard {
+        ConversationGuard {
+            chat: self.services.chat_state.clone(),
+            conversation,
+        }
     }
 
     pub fn subscribe_auth_snapshots(

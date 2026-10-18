@@ -1,8 +1,8 @@
 //! Ownership of a history request includes its queued UI publication.
 use chatter_core::{
-    client::ChatterClient,
+    client::{ChatterClient, ConversationGuard, SessionGuard},
     domain::ids::MessageId,
-    state::{ActiveConversation, AuthState, ChatState},
+    state::ActiveConversation,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,27 +13,21 @@ static THREAD: AtomicU64 = AtomicU64::new(1);
 /// Account-wide hydration remains valid across conversation changes.
 #[derive(Clone)]
 pub(crate) struct SessionOwner {
-    auth: AuthState,
-    revision: u64,
+    session: SessionGuard,
 }
 impl SessionOwner {
     pub fn capture(client: &ChatterClient) -> Self {
-        Self {
-            auth: client.auth_state().clone(),
-            revision: client.auth_snapshot().session_revision,
-        }
+        Self { session: client.session_guard() }
     }
     pub fn is_current(&self) -> bool {
-        self.auth.get().session_revision == self.revision
+        self.session.is_current()
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct HistoryOwner {
-    auth: AuthState,
-    chat: ChatState,
-    revision: u64,
-    conversation: ActiveConversation,
+    session: SessionGuard,
+    selection: ConversationGuard,
     epoch: u64,
     mesh_epoch: Option<u64>,
     thread: Option<(MessageId, u64)>,
@@ -51,10 +45,8 @@ impl HistoryOwner {
     /// Older pages and internal loaders share the owning selection/reload epoch.
     pub fn capture(client: &ChatterClient, conversation: ActiveConversation) -> Self {
         Self {
-            auth: client.auth_state().clone(),
-            chat: client.chat_state().clone(),
-            revision: client.auth_snapshot().session_revision,
-            conversation,
+            session: client.session_guard(),
+            selection: client.conversation_guard(conversation),
             epoch: MAIN.load(Ordering::SeqCst),
             // Mesh scopes all use ActiveConversation::None. Their independent
             // selection epoch also fences captures and queued publications.
@@ -89,8 +81,8 @@ impl HistoryOwner {
         owner
     }
     pub fn is_current(&self) -> bool {
-        self.auth.get().session_revision == self.revision
-            && self.chat.active_conversation() == self.conversation
+        self.session.is_current()
+            && self.selection.is_current()
             && MAIN.load(Ordering::SeqCst) == self.epoch
             && self
                 .mesh_epoch
@@ -99,11 +91,7 @@ impl HistoryOwner {
                 .older
                 .is_none_or(|epoch| OLDER.load(Ordering::SeqCst) == epoch)
             && self.thread.is_none_or(|(root, epoch)| {
-                THREAD.load(Ordering::SeqCst) == epoch
-                    && self
-                        .chat
-                        .active_thread()
-                        .is_some_and(|t| t.root_message_id == root)
+                THREAD.load(Ordering::SeqCst) == epoch && self.selection.shows_thread(root)
             })
     }
 }

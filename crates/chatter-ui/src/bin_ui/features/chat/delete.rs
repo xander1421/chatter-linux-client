@@ -37,7 +37,7 @@ pub(super) fn notify_action_failed(
 ) {
     let client = client.clone();
     run_ui!(weak, |w| {
-        let auth = client.auth_state().get();
+        let auth = client.auth_snapshot();
         if auth.current_user_id != Some(owner) || auth.session_revision != session_revision {
             return;
         }
@@ -63,8 +63,8 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             "UI callback: delete-for-me triggered (Signal-style lookup)"
         );
 
-        let conversation = ui_ctx.chat_state().active_conversation();
-        let auth = ui_ctx.auth_state().get();
+        let conversation = ui_ctx.active_conversation();
+        let auth = ui_ctx.auth_snapshot();
         let Some(owner) = auth.current_user_id else {
             return;
         };
@@ -116,7 +116,7 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // to follow it here.
             crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
-                if ui_ctx_spawn.chat_state().active_conversation() != conversation {
+                if ui_ctx_spawn.active_conversation() != conversation {
                     return;
                 }
                 super::helpers::remove_message_from_ui(
@@ -146,8 +146,8 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             "UI callback: delete-for-everyone triggered (Signal-style lookup)"
         );
 
-        let conversation = ui_ctx.chat_state().active_conversation();
-        let auth = ui_ctx.auth_state().get();
+        let conversation = ui_ctx.active_conversation();
+        let auth = ui_ctx.auth_snapshot();
         let Some(owner) = auth.current_user_id else {
             return;
         };
@@ -196,7 +196,7 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             // to follow it here.
             crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
-                if ui_ctx_spawn.chat_state().active_conversation() != conversation { return; }
+                if ui_ctx_spawn.active_conversation() != conversation { return; }
                 super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
             });
         });
