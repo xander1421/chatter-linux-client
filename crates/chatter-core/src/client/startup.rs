@@ -304,8 +304,8 @@ impl ChatterClient {
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
         let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
-        let h_delete_batch_retry = crate::services::conversation::spawn_delete_batch_recovery(self);
-        let h_receipt_retry = crate::services::conversation::spawn_receipt_recovery(self);
+        let h_delete_batch_retry = crate::services::conversation::recovery::spawn_delete_batch_recovery(self);
+        let h_receipt_retry = crate::services::conversation::recovery::spawn_receipt_recovery(self);
         let h_channel_stream = self.ctx.start_channel_event_stream();
         // Live channel messages. This is the ONLY subscriber of the
         // server-managed channel message path: it re-subscribes on every
