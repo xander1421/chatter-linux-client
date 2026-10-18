@@ -30,6 +30,8 @@ thread_local! {
     // Only a user's tap dismisses an identity. Unrelated async rendering is
     // never inferred to be dismissal merely because the modal is hidden.
     static DISMISSED_INCOMING: std::cell::RefCell<std::collections::HashSet<(u64, String)>> = Default::default();
+    #[cfg(target_os = "android")]
+    static PERMISSION_PROMPTED: std::cell::RefCell<std::collections::HashSet<(u64, String)>> = Default::default();
 }
 
 fn dismiss_incoming(revision: u64, call: &str) {
@@ -86,15 +88,10 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         perms.push(permissions::CAMERA);
                     }
                     permissions::ensure(&perms).await;
-                    if !permissions::has(permissions::RECORD_AUDIO) {
+                    if let Some((message, name)) = denied_call_permission(is_video) {
                         if ui_ctx.call_session_is_current(revision) {
-                            fail_incoming_call(
-                                &weak,
-                                &ui_ctx,
-                                revision,
-                                &call_id_str,
-                                super::outgoing::MIC_DENIED,
-                            );
+                            fail_incoming_call(&weak, &ui_ctx, revision, &call_id_str, message);
+                            permissions::show_call_permission_denied(name);
                         }
                         tokio::spawn(async move {
                             let _ = ui_ctx
@@ -158,9 +155,25 @@ async fn accept(
                 &ui_ctx,
                 revision,
                 &call_id,
-                super::outgoing::CALL_FAILED,
+                if matches!(e, chatter_core::client::ClientError::CallEnded) {
+                    "Call ended"
+                } else {
+                    super::outgoing::CALL_FAILED
+                },
             );
         }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn denied_call_permission(is_video: bool) -> Option<(&'static str, &'static str)> {
+    use crate::platform::android::permissions;
+    if !permissions::has(permissions::RECORD_AUDIO) {
+        Some(("Microphone permission is needed for calls", "Microphone"))
+    } else if is_video && !permissions::has(permissions::CAMERA) {
+        Some(("Camera permission is needed for video calls", "Camera"))
+    } else {
+        None
     }
 }
 
@@ -505,8 +518,37 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                     reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
                 }
                 event = rx.recv() => match event {
-                    Ok(CallOrchestratorEvent::IncomingPresented { .. } | CallOrchestratorEvent::IncomingWithdrawn { .. }) => {
+                    Ok(CallOrchestratorEvent::IncomingPresented { .. }) => {
                         reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
+                    }
+                    Ok(CallOrchestratorEvent::IncomingWithdrawn { call, reason }) => {
+                        reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
+                        if matches!(reason, CallEndReason::NoAnswer | CallEndReason::RemoteHangup) {
+                            let was_answering = DISMISSED_INCOMING.with(|dismissed| {
+                                dismissed.borrow().contains(&(revision, call.as_str().to_owned()))
+                            });
+                            #[cfg(target_os = "android")]
+                            let was_prompted = PERMISSION_PROMPTED.with(|prompted| {
+                                prompted.borrow().contains(&(revision, call.as_str().to_owned()))
+                            });
+                            #[cfg(not(target_os = "android"))]
+                            let was_prompted = false;
+                            if was_answering || was_prompted {
+                                let weak = weak.clone();
+                                let ui_ctx = ui_ctx.clone();
+                                let id = call.as_str().to_owned();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if !ui_ctx.call_session_is_current(revision) { return; }
+                                    let Some(w) = weak.upgrade() else { return };
+                                    if w.get_active_call_data().call_id.as_str() == id {
+                                        w.set_active_call_visible(false);
+                                    }
+                                    w.set_toast_message(if was_answering { "Call ended" } else { "Missed call" }.into());
+                                    w.set_toast_variant("info".into());
+                                    w.set_toast_visible(true);
+                                });
+                            }
+                        }
                     }
                     Ok(event) => {
                         if ui_ctx.call_session_is_current(revision) && state.session_revision() == Some(revision) {
@@ -591,6 +633,68 @@ fn reconcile_incoming_modal(
                 w.set_incoming_call_data(data);
             }
             w.set_incoming_call_replaces_active(*replaces_active);
+            #[cfg(target_os = "android")]
+            prompt_incoming_permissions(&w, &ui_ctx, revision, call.as_str(), *is_video);
+        });
+    });
+}
+
+#[cfg(target_os = "android")]
+fn prompt_incoming_permissions(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    revision: u64,
+    call_id: &str,
+    is_video: bool,
+) {
+    use crate::platform::android::permissions;
+    if denied_call_permission(is_video).is_none() {
+        return;
+    }
+    let key = (revision, call_id.to_owned());
+    if !PERMISSION_PROMPTED.with(|prompted| prompted.borrow_mut().insert(key)) {
+        return;
+    }
+    let weak = w.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    let call_id = call_id.to_owned();
+    let _ = slint::spawn_local(async move {
+        let mut requested = vec![permissions::RECORD_AUDIO];
+        if is_video {
+            requested.push(permissions::CAMERA);
+        }
+        permissions::ensure(&requested).await;
+        let Some((message, name)) = denied_call_permission(is_video) else {
+            return;
+        };
+        if !ui_ctx.call_session_is_current(revision) {
+            return;
+        }
+        let Some(w) = weak.upgrade() else { return };
+        // Accept owns the same permission result when the user tapped while
+        // the dialog was open. It will decline and explain that decision.
+        if w.get_active_call_visible() && w.get_active_call_data().call_id.as_str() == call_id {
+            return;
+        }
+        let still_ringing = ui_ctx.incoming_call_presentation_state().is_some_and(|state| {
+            state.with_snapshot(|snapshot| snapshot.session_revision == Some(revision)
+                && snapshot.presentations.iter().any(|event| matches!(event,
+                    CallOrchestratorEvent::IncomingPresented { call, .. } if call.as_str() == call_id)))
+        });
+        if !still_ringing {
+            return;
+        }
+        dismiss_incoming(revision, &call_id);
+        w.set_incoming_call_visible(false);
+        w.set_incoming_call_replaces_active(false);
+        w.set_toast_message(message.into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+        permissions::show_call_permission_denied(name);
+        tokio::spawn(async move {
+            let _ = ui_ctx
+                .decline_presented_incoming_call_in_session(&call_id, revision)
+                .await;
         });
     });
 }

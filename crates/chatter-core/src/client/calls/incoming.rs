@@ -157,7 +157,10 @@ impl ChatterClient {
                 self.call_signaling().group_call_invites.clone(),
             )
             .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+            .map_err(|e| match e {
+                crate::error::CallError::NotInCall => ClientError::CallEnded,
+                other => ClientError::Inbox(other.to_string()),
+            })?;
         // The call has left the ringing set, so its ring notification goes —
         // whether the answer came from the in-app modal or the notification's
         // own Accept, and whether or not the connect below succeeds.
