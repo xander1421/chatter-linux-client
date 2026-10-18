@@ -9,7 +9,7 @@ use super::ChatState;
 /// Pinned messages bar state.
 ///
 /// Tracks the pinned messages for the current channel and navigation
-/// position through them (Telegram-style). Lives inside [`ChatStateData`]
+/// position through them (Telegram-style). Lives inside [`super::ChatStateData`]
 /// as `pinned`.
 #[derive(Clone, Debug, Default)]
 pub struct PinnedSubstate {

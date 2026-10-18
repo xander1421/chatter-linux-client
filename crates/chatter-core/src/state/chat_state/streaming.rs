@@ -22,7 +22,7 @@ pub struct ReactionSummary {
 
 /// Streaming state data for real-time updates (typing, reactions).
 ///
-/// Lives inside [`ChatStateData`] as `streaming`. The `TypingAggregator` and
+/// Lives inside [`super::ChatStateData`] as `streaming`. The `TypingAggregator` and
 /// `ReactionAggregator` in the network layer handle raw stream processing;
 /// services bridge from those aggregators into this substate.
 #[derive(Clone, Debug, Default)]
