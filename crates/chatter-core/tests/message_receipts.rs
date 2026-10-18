@@ -289,7 +289,9 @@ fn public_channel_receipt_waits_for_server_timestamp_binding() {
 
 #[test]
 fn phone_send_and_linked_tablet_receipts_converge_in_either_order() {
-    use chatter_core::proto::content_v1::{DataMessage, SyncSent, SyncSentReceiptTarget};
+    use chatter_core::proto::content_v1::{
+        DataMessage, SyncSent, SyncSentReceiptTarget, sync_sent::Destination,
+    };
     use prost::Message as _;
 
     for receipt_first in [false, true] {
@@ -315,7 +317,7 @@ fn phone_send_and_linked_tablet_receipts_converge_in_either_order() {
             )
             .unwrap();
         let sync = SyncSent {
-            destination_user_id: peer.to_string(),
+            destination: Some(Destination::DestinationUserId(peer.to_string())),
             timestamp: sent_at,
             message: Some(DataMessage {
                 body: "sent from phone".into(),

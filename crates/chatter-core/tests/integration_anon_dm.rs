@@ -251,6 +251,7 @@ async fn test_anon_dm_request_serialization() {
         profile_key: Some(vec![0u8; 32]), // Optional profile key
         encrypted_display_name: None,
         avatar: None,
+        disappearing_seconds: 0,
     };
 
     let content = Content {
