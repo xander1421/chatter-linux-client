@@ -19,6 +19,8 @@ pub struct RecordDetail {
     pub title: String,
     pub body: String,
     pub created_at_ns: u64,
+    /// Device a device-linked notification names; 0 for every other record.
+    pub device_id: u32,
 }
 
 #[derive(Clone, Default)]
@@ -98,7 +100,6 @@ fn device_linked_details(body: &str, metadata: &str) -> (String, u32) {
     });
     let body = match label {
         Some(label) => format!("{label} was linked to your account."),
-        None if body.starts_with("A Android ") => body.replacen("A Android ", "Android ", 1),
         None => body.to_owned(),
     };
     (body, device_id)
@@ -279,12 +280,12 @@ pub async fn detail(
                 .await?
                 .notification
                 .ok_or_else(|| NetworkError::InvalidRequest("Notification is unavailable".into()))?;
-            let body = if notification.r#type
+            let (body, device_id) = if notification.r#type
                 == crate::proto::chat_v1::NotificationType::DeviceLinked as i32
             {
-                device_linked_details(&notification.body, &notification.metadata).0
+                device_linked_details(&notification.body, &notification.metadata)
             } else {
-                notification.body
+                (notification.body, 0)
             };
             Ok(RecordDetail {
                 title: if notification.title.is_empty() {
@@ -294,6 +295,7 @@ pub async fn detail(
                 },
                 body,
                 created_at_ns: notification.created_at,
+                device_id,
             })
         }
         "calls" => {
@@ -328,6 +330,7 @@ pub async fn detail(
                 },
                 body,
                 created_at_ns: call.created_at,
+                device_id: 0,
             })
         }
         _ => Err(NetworkError::InvalidRequest("Unknown record detail".into())),

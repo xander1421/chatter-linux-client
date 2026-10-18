@@ -5882,7 +5882,17 @@ impl ChatterClient {
         kind: &str,
         id: &str,
     ) -> Result<crate::services::server_records::RecordDetail, crate::error::NetworkError> {
-        crate::services::server_records::detail(&self.services.grpc_pool, kind, id).await
+        let mut detail =
+            crate::services::server_records::detail(&self.services.grpc_pool, kind, id).await?;
+        // Same device label as the inbox row, which resolves it from the session list.
+        if detail.device_id != 0 {
+            if let Some(session) = self.list_sessions().await.ok().and_then(|sessions| {
+                sessions.into_iter().find(|session| session.device_id == detail.device_id)
+            }) {
+                detail.body = format!("{} was linked to your account.", session.device_info);
+            }
+        }
+        Ok(detail)
     }
 
     /// A channel header may offer to join the server's current group call.
