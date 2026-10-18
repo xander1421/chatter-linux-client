@@ -3090,7 +3090,7 @@ fn foldered_conversations_are_excluded_from_the_loose_lists() {
         "sidebar_channels must put pinned channels first — ordering is core's job"
     );
 
-    let messaging = include_str!("../../chatter-core/src/client/messaging.rs");
+    let messaging = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
     let dm_idx = messaging
         .find("fn finish_dm_sidebar")
         .expect("finish_dm_sidebar present");
@@ -3389,7 +3389,7 @@ fn foldered_private_groups_leave_the_loose_list() {
         "the loose private-group list must drop groups that live in a folder"
     );
 
-    let rows = include_str!("../../chatter-core/src/client/messaging.rs");
+    let rows = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
     let idx = rows
         .find("pub fn sidebar_rows")
         .expect("sidebar_rows present");
@@ -3503,7 +3503,7 @@ fn channel_and_group_rows_show_their_latest_activity() {
     // bucket is derived from the channel, never hardcoded `Channel` (an empty
     // bucket renders the row as a bare name). See
     // `integration_message_storage.rs` for the storage-level proof.
-    let core = include_str!("../../chatter-core/src/client/messaging.rs");
+    let core = include_str!("../../chatter-core/src/client/messaging/sidebar.rs");
     let idx = core.find("fn channel_row(").expect("channel_row present");
     assert!(
         core[idx..idx + 900].contains("&channel.conversation_type()"),
