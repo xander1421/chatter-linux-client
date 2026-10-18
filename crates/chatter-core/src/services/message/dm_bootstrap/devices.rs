@@ -12,7 +12,7 @@ impl MessageService {
     /// must not name the peer in an identified RPC, so it uses only what is
     /// cached — nothing cached is `NotReachablePrivately`, never a fetch and
     /// never a device-1 guess.
-    pub(super) async fn bootstrap_devices(
+    pub(in crate::services::message) async fn bootstrap_devices(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
@@ -43,7 +43,7 @@ impl MessageService {
 
     /// Devices of `peer_id` we hold a session with, less any the server has
     /// refused as retired (`is_retired_device`). No RPC.
-    pub(super) async fn live_session_devices(
+    pub(in crate::services::message) async fn live_session_devices(
         &self,
         peer_id: &UserId,
     ) -> Result<Vec<u32>, MessageError> {
@@ -67,7 +67,7 @@ impl MessageService {
     /// (`AllDevices`) and names one linked since; Shield must not refresh
     /// sessions with identified prekey fetches, so it sends to the devices it
     /// has (`NamedDevices`).
-    pub(super) fn bootstrap_delivery(&self) -> SealedDelivery {
+    pub(in crate::services::message) fn bootstrap_delivery(&self) -> SealedDelivery {
         if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             SealedDelivery::NamedDevices
         } else {

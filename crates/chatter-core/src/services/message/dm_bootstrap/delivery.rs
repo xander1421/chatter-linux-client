@@ -21,7 +21,7 @@ impl MessageService {
     /// The token comes from the pre-fetched batch only — requesting one here
     /// would tie the authenticated request to this anonymous send in time
     /// (NDSS'21 §VI-F). An empty batch stops the send.
-    pub(super) async fn send_bootstrap_payload(
+    pub(in crate::services::message) async fn send_bootstrap_payload(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
@@ -201,7 +201,7 @@ impl MessageService {
     /// Ask one peer device that has no half of the conversation yet to make
     /// one: the lower UUID re-announces its live mailbox and key to it (a
     /// bootstrap MESSAGE), the higher sends it a REQUEST. One token.
-    pub(super) async fn prompt_peer_device(
+    pub(in crate::services::message) async fn prompt_peer_device(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,

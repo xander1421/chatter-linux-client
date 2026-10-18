@@ -16,7 +16,7 @@ impl MessageService {
 
     /// Handle DM bootstrap when conversation is not ready.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn handle_dm_bootstrap(
+    pub(in crate::services::message) async fn handle_dm_bootstrap(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
@@ -28,7 +28,7 @@ impl MessageService {
         // Typing is stale by the time a mailbox is ready. A receipt is still
         // meaningful then, so it must take the same queued bootstrap path as
         // other content.
-        if super::dm::is_ephemeral_content(&content) {
+        if super::super::dm::is_ephemeral_content(&content) {
             tracing::debug!(
                 peer_id = %peer_id,
                 "Dropping typing indicator - bootstrap not complete"
