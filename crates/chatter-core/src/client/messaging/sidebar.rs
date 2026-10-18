@@ -454,7 +454,7 @@ impl ChatterClient {
         // pinned, so no activity order may bury it.
         #[cfg(feature = "jarvis")]
         {
-            let jarvis = super::jarvis_channel_id().to_string();
+            let jarvis = super::super::jarvis_channel_id().to_string();
             if let Some(i) = rows.iter().position(|r| r.id == jarvis) {
                 let row = rows.remove(i);
                 rows.insert(0, row);
