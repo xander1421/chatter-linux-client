@@ -1,0 +1,80 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { SharedContentItem, ProfileSharedIcons } from "profile_shared_types.slint";
+export component ProfileSharedList inherits VerticalLayout {
+    in property <[SharedContentItem]> shared-items;
+    in property <bool> mobile-mode;
+    in property <length> row-height;
+    callback open-shared-item(string, string, string, string);
+    alignment: start;
+    spacing: Spacing.none;
+
+    for item in root.shared-items: Rectangle {
+        height: root.row-height;
+        background: list-touch.has-hover ? Colors.surface-hover : transparent;
+        accessible-role: button;
+        accessible-label: item.title;
+
+        HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.md;
+
+            VerticalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: root.mobile-mode ? Spacing.row-avatar-touch : 40px;
+                    height: self.width;
+                    border-radius: Spacing.radius-md;
+                    background: Colors.inset;
+                    clip: true;
+
+                    if item.has-thumbnail: Image {
+                        width: 100%;
+                        height: 100%;
+                        source: item.thumbnail;
+                        image-fit: cover;
+                    }
+
+                    if !item.has-thumbnail: Image {
+                        source: ProfileSharedIcons.category-icon(item.category);
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: Spacing.xxs;
+
+                Text {
+                    text: item.title;
+                    color: Colors.text-primary;
+                    font-size: root.mobile-mode ? Typography.base : Typography.sm;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: item.subtitle;
+                    color: Colors.text-muted;
+                    font-size: root.mobile-mode ? Typography.sm : Typography.xs;
+                    overflow: elide;
+                }
+            }
+        }
+
+        list-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle);
+            }
+        }
+    }
+}

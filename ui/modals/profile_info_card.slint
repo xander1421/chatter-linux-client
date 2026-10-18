@@ -1,0 +1,189 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+export component ProfileInfoCard inherits HorizontalLayout {
+    in property <string> username;
+    in property <string> bio;
+    in property <bool> is-self;
+    in property <string> share-link;
+    in property <image> share-qr;
+    in property <string> share-status;
+    in-out property <bool> show-share-qr;
+    callback generate-share-link();
+    callback copy-share-link();
+    callback reset-share-link();
+    padding-left: Spacing.md;
+    padding-right: Spacing.md;
+
+    Rectangle {
+        height: info-card.preferred-height;
+        background: Colors.inset;
+        border-radius: Spacing.radius-lg;
+
+        info-card := VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            // Username, with the QR behind a glyph on the row
+            // rather than a permanently-open 150px image.
+            // No row when the handle is unknown here — for a
+            // peer, or for us on a device that never stored
+            // it (a link can't be made without it).
+            if root.username != "": HorizontalLayout {
+                spacing: Spacing.sm;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.xxs;
+
+                    Text {
+                        text: "@" + root.username;
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: "Username";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                }
+
+                if root.is-self: Rectangle {
+                    width: Spacing.button-height;
+                    height: Spacing.button-height;
+                    border-radius: Spacing.radius-sm;
+                    background: qr-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Show username QR code";
+
+                    // Drawn rather than an SVG asset: three
+                    // finder squares and a dot read as a QR at
+                    // this size and cost no new file.
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+
+                        for corner in [
+                            { cx: 0px, cy: 0px },
+                            { cx: 11px, cy: 0px },
+                            { cx: 0px, cy: 11px },
+                        ]: Rectangle {
+                            x: corner.cx;
+                            y: corner.cy;
+                            width: 7px;
+                            height: 7px;
+                            border-width: 2px;
+                            border-color: Colors.text-secondary;
+                            border-radius: 1px;
+                        }
+
+                        Rectangle {
+                            x: 12px;
+                            y: 12px;
+                            width: 4px;
+                            height: 4px;
+                            background: Colors.text-secondary;
+                        }
+                    }
+
+                    qr-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-share-qr = !root.show-share-qr;
+                            if root.share-link == "" {
+                                root.generate-share-link();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Expanded QR + link (self view, on demand)
+            if root.is-self && root.username != "" && root.show-share-qr: VerticalLayout {
+                spacing: Spacing.sm;
+
+                if root.share-link != "": HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 150px;
+                        height: 150px;
+                        background: white;
+                        border-radius: Spacing.radius-md;
+
+                        Image {
+                            width: 142px;
+                            height: 142px;
+                            x: 4px;
+                            y: 4px;
+                            source: root.share-qr;
+                        }
+                    }
+                }
+
+                if root.share-link != "": Text {
+                    text: root.share-link;
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    wrap: char-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Button {
+                        text: root.share-link == "" ? "Create link" : "Copy Link";
+                        variant: "secondary";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            if root.share-link == "" {
+                                root.generate-share-link();
+                            } else {
+                                root.copy-share-link();
+                            }
+                        }
+                    }
+
+                    if root.share-link != "": Button {
+                        text: "Reset Link";
+                        variant: "secondary";
+                        horizontal-stretch: 1;
+                        clicked => { root.reset-share-link(); }
+                    }
+                }
+
+                if root.share-status != "": Text {
+                    text: root.share-status;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Bio
+            if root.bio != "": VerticalLayout {
+                spacing: Spacing.xxs;
+
+                Text {
+                    text: root.bio;
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    wrap: word-wrap;
+                    max-height: Typography.base * 6;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: "About";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+            }
+        }
+        }
+}
