@@ -444,7 +444,13 @@ impl AttachmentService {
             }
         };
         let encrypted_size = encrypted.ciphertext.len() as u64;
-        let mut file_client = self.file_client().ok()?;
+        let mut file_client = match self.file_client() {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::warn!(error = %e, "Thumbnail sidecar client unavailable; sending without preview");
+                return None;
+            }
+        };
         let upload_response = match file_client.get_attachment_upload_url(encrypted_size).await {
             Ok(r) => r,
             Err(e) => {
@@ -944,10 +950,15 @@ impl AttachmentService {
                             meta.thumbnail = Some(video.thumbnail);
                             meta.thumbnail_width = Some(video.thumbnail_width);
                             meta.thumbnail_height = Some(video.thumbnail_height);
+                        } else {
+                            tracing::warn!("Android video metadata contained no thumbnail frame");
                         }
                         meta.width = Some(video.width);
                         meta.height = Some(video.height);
                         meta.duration_ms = video.duration_ms;
+                        tracing::info!(width = video.width, height = video.height,
+                            has_thumbnail = meta.thumbnail.is_some(),
+                            "Android video metadata extracted");
                     }
                     Ok(Err(e)) => tracing::warn!("Failed to analyze Android video: {e}"),
                     Err(e) => tracing::warn!("Android video metadata task panicked: {e}"),

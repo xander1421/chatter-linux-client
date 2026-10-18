@@ -50,8 +50,16 @@ class VideoThumbnail {
             val scale = 384.0 / maxOf(width, height)
             val w = maxOf(1, (width * minOf(1.0, scale)).toInt())
             val h = maxOf(1, (height * minOf(1.0, scale)).toInt())
+            // Some camera MP4s have no key frame at timestamp zero. Try the
+            // first decodable frame and then the midpoint before giving up.
             bitmap = try {
                 retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
+            } catch (_: Exception) { null }
+            if (bitmap == null) bitmap = try {
+                retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST, w, h)
+            } catch (_: Exception) { null }
+            if (bitmap == null && duration > 0) bitmap = try {
+                retriever.getScaledFrameAtTime(minOf(duration, 86_400_000L) * 500, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
             } catch (_: Exception) { null }
             val bytes = ByteArrayOutputStream()
             if (bitmap != null) {
@@ -93,7 +101,19 @@ class VideoThumbnail {
             val scale = 384.0 / maxOf(width, height)
             val w = maxOf(1, (width * minOf(1.0, scale)).toInt())
             val h = maxOf(1, (height * minOf(1.0, scale)).toInt())
-            bitmap = retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h) ?: return null
+            bitmap = try {
+                retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
+            } catch (_: Exception) { null }
+            if (bitmap == null) bitmap = try {
+                retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST, w, h)
+            } catch (_: Exception) { null }
+            if (bitmap == null) {
+                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                if (duration > 0) bitmap = try {
+                    retriever.getScaledFrameAtTime(minOf(duration, 86_400_000L) * 500, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
+                } catch (_: Exception) { null }
+            }
+            if (bitmap == null) return null
             if (bitmap.width !in 1..384 || bitmap.height !in 1..384) return null
             val output = object : ByteArrayOutputStream() {
                 override fun write(b: ByteArray, off: Int, len: Int) {

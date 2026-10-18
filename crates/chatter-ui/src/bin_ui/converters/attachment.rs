@@ -49,14 +49,17 @@ impl AttachmentDisplayData {
         #[cfg(target_os = "android")]
         if self.is_video && self.thumbnail_bytes.is_empty() {
             if let Ok(id) = self.id.parse() {
+                if client.get_attachment_metadata(&id).is_some_and(|att| att.needs_download()) {
+                    return;
+                }
                 match client.decrypt_and_extract_video_thumbnail(&id) {
                     Ok(result) => {
                         self.thumbnail_bytes = result.image_bytes;
                         self.width = result.width as i32;
                         self.height = result.height as i32;
                     }
-                    Err(_) => {
-                        tracing::debug!("Video preview unavailable; keeping play placeholder")
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Video preview extraction failed; keeping play placeholder")
                     }
                 }
             }
@@ -207,7 +210,9 @@ impl AttachmentDisplayData {
         } else if self.is_image || self.is_video {
             // Only log when a thumbnail was actually expected (image/video);
             // audio and generic files never have one, so suppress the noise.
-            tracing::info!("No thumbnail source available for {}", self.filename);
+            // Expected while a received attachment has not been downloaded and
+            // its sidecar preview is still unavailable. Keep this out of INFO.
+            tracing::debug!("No thumbnail source available for {}", self.filename);
             (false, Image::default(), self.width, self.height)
         } else {
             (false, Image::default(), self.width, self.height)
@@ -404,11 +409,13 @@ pub fn attachment_display_resolver(
                 .thumbnail
                 .as_ref()
                 .is_none_or(|b| b.is_empty())
+            && !attachment.needs_download()
             && remaining.get() > 0
         {
             remaining.set(remaining.get() - 1);
-            if let Ok(result) = client.decrypt_and_extract_video_thumbnail(id) {
-                attachment.metadata.thumbnail = Some(result.image_bytes);
+            match client.decrypt_and_extract_video_thumbnail(id) {
+                Ok(result) => attachment.metadata.thumbnail = Some(result.image_bytes),
+                Err(e) => tracing::warn!(error = %e, "History video preview extraction failed"),
             }
         }
         (client.auth_snapshot().session_revision == revision).then_some(attachment)
