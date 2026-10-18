@@ -13,6 +13,12 @@ pub struct RecordRow {
     pub secondary: String,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct RecordDetail {
+    pub title: String,
+    pub body: String,
+}
+
 #[derive(Clone, Default)]
 pub struct RecordPage {
     pub rows: Vec<RecordRow>,
@@ -242,6 +248,7 @@ pub async fn page(
                             id: c.id,
                             title: c.title,
                             body: format!("{status} · {when}"),
+                            primary: "Details".into(),
                             ..Default::default()
                         }
                     })
@@ -252,6 +259,76 @@ pub async fn page(
         _ => Err(NetworkError::InvalidRequest(
             "Unknown server record screen".into(),
         )),
+    }
+}
+
+/// Fetch the current server record before showing its details. The list may
+/// have changed since the user opened it.
+pub async fn detail(
+    pool: &GrpcClientPool,
+    kind: &str,
+    id: &str,
+) -> Result<RecordDetail, NetworkError> {
+    if id.is_empty() {
+        return Err(NetworkError::InvalidRequest("Missing record ID".into()));
+    }
+    match kind {
+        "notifications" => {
+            let notification = pool
+                .notification_client()
+                .get_notification(id)
+                .await?
+                .notification
+                .ok_or_else(|| NetworkError::InvalidRequest("Notification is unavailable".into()))?;
+            let when = chrono::DateTime::from_timestamp(
+                (notification.created_at / 1_000_000_000) as i64,
+                (notification.created_at % 1_000_000_000) as u32,
+            )
+            .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_default();
+            Ok(RecordDetail {
+                title: if notification.title.is_empty() {
+                    "Notification".into()
+                } else {
+                    notification.title
+                },
+                body: format!("{}\n{when}", notification.body),
+            })
+        }
+        "calls" => {
+            let call = pool.call_client().get_call_info(id).await?;
+            let status = match crate::proto::chat_v1::CallStatus::try_from(call.status) {
+                Ok(crate::proto::chat_v1::CallStatus::Active) => "In progress",
+                Ok(crate::proto::chat_v1::CallStatus::Ended) => "Ended",
+                _ => "Unknown status",
+            };
+            let participants = call
+                .participants
+                .iter()
+                .map(|p| {
+                    if p.display_name.is_empty() {
+                        p.user_id.as_str()
+                    } else {
+                        p.display_name.as_str()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let body = if participants.is_empty() {
+                format!("{status} · {} participants", call.current_participant_count)
+            } else {
+                format!("{status} · {} participants\n{participants}", call.current_participant_count)
+            };
+            Ok(RecordDetail {
+                title: if call.title.is_empty() {
+                    "Call".into()
+                } else {
+                    call.title
+                },
+                body,
+            })
+        }
+        _ => Err(NetworkError::InvalidRequest("Unknown record detail".into())),
     }
 }
 

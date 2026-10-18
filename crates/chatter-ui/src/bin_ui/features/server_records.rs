@@ -24,11 +24,50 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 g.set_channel(channel);
                 g.set_rows(ModelRc::default());
                 g.set_notifications(ModelRc::default());
+                g.set_detail_title("".into());
+                g.set_detail_body("".into());
+                g.set_detail_id("".into());
                 g.set_next("".into());
                 g.set_loading(false);
                 g.invoke_load(false);
             }
         });
+    let weak = window.as_weak();
+    let ctx = client.clone();
+    window.global::<ServerRecordsGlobal>().on_details(move |id| {
+        if let Some(w) = weak.upgrade() {
+            let g = w.global::<ServerRecordsGlobal>();
+            let kind = g.get_kind().to_string();
+            let channel = g.get_channel().to_string();
+            g.set_detail_id(id.clone());
+            let id = id.to_string();
+            let ctx = ctx.clone();
+            let weak = w.as_weak();
+            g.set_detail_title("Loading details…".into());
+            g.set_detail_body("".into());
+            tokio::spawn(async move {
+                let result = ctx.server_record_detail(&kind, &id).await;
+                run_ui!(weak, |w| {
+                    let g = w.global::<ServerRecordsGlobal>();
+                    if g.get_kind().as_str() != kind.as_str()
+                        || g.get_channel().as_str() != channel.as_str()
+                        || g.get_detail_id().as_str() != id.as_str() {
+                        return;
+                    }
+                    match result {
+                        Ok(detail) => {
+                            g.set_detail_title(detail.title.into());
+                            g.set_detail_body(detail.body.into());
+                        }
+                        Err(error) => {
+                            g.set_detail_title("Details unavailable".into());
+                            g.set_detail_body(error.to_string().into());
+                        }
+                    }
+                });
+            });
+        }
+    });
     let weak = window.as_weak();
     let ctx = client.clone();
     let seq = generation.clone();

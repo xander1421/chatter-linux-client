@@ -1116,6 +1116,9 @@ export component MainWindow inherits Window {
     /// if accepted — driven by the call orchestrator.
     in-out property <bool> incoming-call-replaces-active: false;
     in-out property <bool> active-call-visible: false;
+    in-out property <string> active-channel-call-id: "";
+    in-out property <bool> active-channel-call-video: false;
+    in-out property <int> active-channel-call-participants: 0;
     // True when the call dock has been expanded to fill the chat column.
     // Bound to ActiveCallView.fullscreen. Hides the ChatLayout sibling.
     in-out property <bool> active-call-fullscreen: false;
@@ -1224,6 +1227,7 @@ export component MainWindow inherits Window {
 
     // ========== Sidebar callbacks ==========
     callback channel-selected(string);
+    callback refresh-channel-call();
     callback dm-selected(string);
     callback private-group-selected(string);
     callback saved-messages-clicked();
@@ -2358,6 +2362,14 @@ export component MainWindow inherits Window {
                         composer-notice: root.composer-notice;
                         conversation-read-only: root.conversation-read-only;
                         header-can-call: root.header-can-call;
+                        active-channel-call-id: root.active-call-visible ? "" : root.active-channel-call-id;
+                        active-channel-call-video: root.active-channel-call-video;
+                        active-channel-call-participants: root.active-channel-call-participants;
+                        refresh-channel-call => { root.refresh-channel-call(); }
+                        join-channel-call => {
+                            if root.active-channel-call-video { root.start-video-call(); }
+                            else { root.start-voice-call(); }
+                        }
                         header-can-invite: root.header-can-invite;
                         header-can-open-settings: root.header-can-open-settings;
                         header-can-open-pinned-list: root.header-can-open-pinned-list;

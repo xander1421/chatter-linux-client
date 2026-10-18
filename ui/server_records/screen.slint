@@ -17,9 +17,13 @@ export global ServerRecordsGlobal {
     in-out property <string> next;
     in-out property <bool> loading;
     in-out property <string> error;
+    in-out property <string> detail-title;
+    in-out property <string> detail-body;
+    in-out property <string> detail-id;
     callback open(string, string);
     callback load(bool);
     callback act(string, string);
+    callback details(string);
 }
 
 export component ServerRecordsScreen inherits Rectangle {
@@ -60,6 +64,20 @@ export component ServerRecordsScreen inherits Rectangle {
             }
             if ServerRecordsGlobal.error != "": Text {
                 text: ServerRecordsGlobal.error; wrap: word-wrap; color: Colors.error;
+            }
+            if ServerRecordsGlobal.detail-title != "": Rectangle {
+                background: Colors.surface-section;
+                border-radius: Spacing.radius-lg;
+                height: detail-content.preferred-height;
+                detail-content := VerticalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.sm;
+                    HorizontalLayout {
+                        Text { text: ServerRecordsGlobal.detail-title; color: Colors.text-primary; font-weight: Typography.semibold; horizontal-stretch: 1; }
+                        Button { text: "Close"; variant: "ghost"; clicked => { ServerRecordsGlobal.detail-title = ""; ServerRecordsGlobal.detail-body = ""; ServerRecordsGlobal.detail-id = ""; } }
+                    }
+                    Text { text: ServerRecordsGlobal.detail-body; wrap: word-wrap; color: Colors.text-secondary; }
+                }
             }
             if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
             if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && (ServerRecordsGlobal.kind == "notifications" ? ServerRecordsGlobal.notifications.length == 0 : ServerRecordsGlobal.rows.length == 0): Text {
@@ -111,6 +129,14 @@ export component ServerRecordsScreen inherits Rectangle {
                                 border-radius: 4px; background: row.read ? transparent : Colors.primary;
                             }
                             Button {
+                                text: "Details"; variant: "ghost"; size: "small";
+                                disabled: ServerRecordsGlobal.loading;
+                                clicked => {
+                                    ServerRecordsGlobal.details(row.id);
+                                    if !row.read { ServerRecordsGlobal.act(row.id, "Mark read"); }
+                                }
+                            }
+                            Button {
                                 text: "×"; label: "Delete notification"; variant: "icon"; size: "small";
                                 min-width: 36px; max-width: 36px;
                                 disabled: ServerRecordsGlobal.loading;
@@ -145,7 +171,7 @@ export component ServerRecordsScreen inherits Rectangle {
                                 spacing: Spacing.sm;
                                 if row.primary != "": Button {
                                     text: row.primary; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
-                                    clicked => { ServerRecordsGlobal.act(row.id, row.primary); }
+                                    clicked => { if row.primary == "Details" { ServerRecordsGlobal.details(row.id); } else { ServerRecordsGlobal.act(row.id, row.primary); } }
                                 }
                                 if row.secondary != "": Button {
                                     text: row.secondary; variant: "ghost"; disabled: ServerRecordsGlobal.loading;
