@@ -130,27 +130,34 @@ fn record(
     }
     let file = tempfile::Builder::new()
         .prefix("voice-")
-        .suffix(".wav")
+        .suffix(if cfg!(target_os = "android") {
+            ".m4a"
+        } else {
+            ".wav"
+        })
         .tempfile_in(cache)
         .map_err(|e| e.to_string())?;
     let encode_start = std::time::Instant::now();
-    recorder.save(file.path()).map_err(|e| e.to_string())?;
-    tracing::info!(
-        elapsed_ms = encode_start.elapsed().as_millis(),
-        "voice recording: WAV encoded"
-    );
-    let waveform_start = std::time::Instant::now();
-    let mut reader = hound::WavReader::open(file.path()).map_err(|e| e.to_string())?;
-    let spec = reader.spec();
-    let samples = reader
-        .samples::<i16>()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+    let samples = recorder.pcm_i16();
     let duration_ms =
-        samples.len() as u64 * 1000 / (spec.sample_rate as u64 * spec.channels as u64);
+        samples.len() as u64 * 1000 / (recorder.sample_rate() as u64 * recorder.channels() as u64);
     if duration_ms < 300 {
         return Err("Recording is too short".into());
     }
+    #[cfg(target_os = "android")]
+    super::android_aac::encode(
+        file.path(),
+        &samples,
+        recorder.sample_rate(),
+        recorder.channels(),
+    )?;
+    #[cfg(not(target_os = "android"))]
+    recorder.save(file.path()).map_err(|e| e.to_string())?;
+    tracing::info!(
+        elapsed_ms = encode_start.elapsed().as_millis(),
+        "voice recording: encoded"
+    );
+    let waveform_start = std::time::Instant::now();
     let waveform = waveform(&samples);
     tracing::info!(
         elapsed_ms = waveform_start.elapsed().as_millis(),
