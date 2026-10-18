@@ -203,41 +203,6 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     });
 }
 
-/// Report only persisted deletions, including successes before a later failure.
-/// Delete-for-everyone remains one batch with no optimistic partial removal.
-/// Core owns server authorization, transport limitations, and local persistence.
-pub(super) async fn delete_selected_messages(
-    handle: &chatter_core::services::conversation::ConversationHandle,
-    targets: &[(UserId, u64)],
-    everyone: bool,
-    client: &ChatterClient,
-    account: UserId,
-    session_revision: u64,
-    completed: tokio::sync::mpsc::UnboundedSender<Vec<(UserId, u64)>>,
-) -> chatter_core::services::conversation::ConversationResult {
-    if everyone {
-        handle
-            .send_delete_batch_fenced(targets, account, session_revision)
-            .await?;
-        let _ = completed.send(targets.to_vec());
-        Ok(())
-    } else {
-        for (author, timestamp) in targets {
-            let auth = client.auth_state().get();
-            if auth.current_user_id != Some(account) || auth.session_revision != session_revision {
-                return Err(
-                    chatter_core::services::conversation::ConversationError::Other(
-                        "The login changed before deletion finished.".into(),
-                    ),
-                );
-            }
-            handle.delete_for_me(author, *timestamp).await?;
-            let _ = completed.send(vec![(*author, *timestamp)]);
-        }
-        Ok(())
-    }
-}
-
 pub(super) fn remove_selected_messages_from_ui(w: &MainWindow, targets: &[(UserId, u64)]) {
     for (author, timestamp) in targets {
         super::helpers::remove_message_from_ui(

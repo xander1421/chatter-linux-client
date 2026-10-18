@@ -42,6 +42,67 @@ pub enum ConversationError {
     Other(String),
 }
 
+/// Scope and outcome of a selected-message deletion. The input IDs are the
+/// stored message IDs in display order, rather than sender/timestamp pairs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SelectedDeleteScope {
+    ForMe,
+    ForEveryone,
+}
+
+#[derive(Debug)]
+pub enum SelectedDeleteFailureReason {
+    Unavailable,
+    NotEligible,
+    SessionChanged,
+    Operation(ConversationError),
+    NotAttempted,
+}
+
+impl std::fmt::Display for SelectedDeleteFailureReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => write!(f, "The selected messages are no longer available."),
+            Self::NotEligible => write!(f, "These messages can no longer be deleted for everyone."),
+            Self::SessionChanged => write!(f, "The login changed before deletion finished."),
+            Self::Operation(error) => write!(f, "{error}"),
+            Self::NotAttempted => write!(f, "Deletion stopped after an earlier failure."),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SelectedDeleteFailure {
+    pub id: String,
+    pub reason: SelectedDeleteFailureReason,
+}
+
+#[derive(Debug, Default)]
+pub struct SelectedDeleteResult {
+    pub deleted_ids: Vec<String>,
+    pub failed_ids: Vec<SelectedDeleteFailure>,
+    pub partial: bool,
+}
+
+impl SelectedDeleteResult {
+    fn fail_all(ids: &[String], reason: SelectedDeleteFailureReason) -> Self {
+        let mut reason = Some(reason);
+        let failed_ids = ids
+            .iter()
+            .map(|id| SelectedDeleteFailure {
+                id: id.clone(),
+                reason: reason
+                    .take()
+                    .unwrap_or(SelectedDeleteFailureReason::NotAttempted),
+            })
+            .collect();
+        Self {
+            failed_ids,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct PendingReceipt {
     conversation: ActiveConversation,
@@ -1168,6 +1229,86 @@ impl ConversationHandle {
     ) -> ConversationResult {
         self.send_delete_batch_in_session(targets, Some((account, revision)))
             .await
+    }
+
+    /// Delete a display-ordered selection under the login that submitted it.
+    /// Confirmed local deletions are emitted immediately so a presenter can
+    /// remove each row; for-everyone emits only after the whole batch succeeds.
+    pub async fn delete_selected(
+        &self,
+        ids: &[String],
+        scope: SelectedDeleteScope,
+        account: UserId,
+        revision: u64,
+        completed: tokio::sync::mpsc::UnboundedSender<Vec<(UserId, u64)>>,
+    ) -> SelectedDeleteResult {
+        if self.require_deletion_session(&account, revision).is_err() {
+            return SelectedDeleteResult::fail_all(
+                ids,
+                SelectedDeleteFailureReason::SessionChanged,
+            );
+        }
+        let Some(targets) = self.client.selected_message_targets(self.conversation, ids) else {
+            return SelectedDeleteResult::fail_all(ids, SelectedDeleteFailureReason::Unavailable);
+        };
+        if scope == SelectedDeleteScope::ForEveryone
+            && !targets
+                .iter()
+                .all(|(author, ts)| self.can_delete_for_everyone(author, *ts).unwrap_or(false))
+        {
+            return SelectedDeleteResult::fail_all(ids, SelectedDeleteFailureReason::NotEligible);
+        }
+        if scope == SelectedDeleteScope::ForEveryone {
+            return match self
+                .send_delete_batch_fenced(&targets, account, revision)
+                .await
+            {
+                Ok(()) => {
+                    let _ = completed.send(targets);
+                    SelectedDeleteResult {
+                        deleted_ids: ids.to_vec(),
+                        ..Default::default()
+                    }
+                }
+                Err(error) => SelectedDeleteResult::fail_all(
+                    ids,
+                    SelectedDeleteFailureReason::Operation(error),
+                ),
+            };
+        }
+
+        let mut result = SelectedDeleteResult::default();
+        for (index, ((author, timestamp), id)) in targets.iter().zip(ids).enumerate() {
+            let deletion = if self.require_deletion_session(&account, revision).is_err() {
+                Err(SelectedDeleteFailureReason::SessionChanged)
+            } else {
+                self.delete_for_me(author, *timestamp)
+                    .await
+                    .map_err(SelectedDeleteFailureReason::Operation)
+            };
+            if let Err(reason) = deletion {
+                result.failed_ids.push(SelectedDeleteFailure {
+                    id: id.clone(),
+                    reason,
+                });
+                result
+                    .failed_ids
+                    .extend(
+                        ids[index + 1..]
+                            .iter()
+                            .cloned()
+                            .map(|id| SelectedDeleteFailure {
+                                id,
+                                reason: SelectedDeleteFailureReason::NotAttempted,
+                            }),
+                    );
+                result.partial = !result.deleted_ids.is_empty();
+                break;
+            }
+            result.deleted_ids.push(id.clone());
+            let _ = completed.send(vec![(*author, *timestamp)]);
+        }
+        result
     }
 
     async fn send_delete_batch_in_session(
