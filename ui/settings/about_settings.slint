@@ -1,0 +1,78 @@
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { Icons } from "../theme/icons.slint";
+import { UpdateGlobal } from "../update/update_global.slint";
+
+export component AboutSettings inherits VerticalLayout {
+    in property <bool> mobile-platform;
+    callback open-licenses();
+
+
+    spacing: Spacing.md;
+    Text { text: "About Chatter"; color: Colors.text-primary;
+        font-size: Typography.xl; font-weight: Typography.semibold; }
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.info;
+                title: "Version";
+                detail: UpdateGlobal.installed-version + " · Build " + UpdateGlobal.build-code + " · Commit " + UpdateGlobal.build-commit;
+                clickable: false;
+                show-chevron: false;
+            }
+            Button {
+                touch: root.mobile-platform;
+                text: UpdateGlobal.state == "checking" ? "Checking…" : "Check for updates";
+                disabled: UpdateGlobal.state == "checking";
+                clicked => { UpdateGlobal.check(); }
+            }
+            if UpdateGlobal.state == "available": Text {
+                text: "Update available — " + UpdateGlobal.version;
+                color: Colors.text-primary; font-size: Typography.sm;
+            }
+            if UpdateGlobal.error != "": Text {
+                text: UpdateGlobal.error; color: Colors.error;
+                font-size: Typography.sm; wrap: word-wrap;
+            }
+            if UpdateGlobal.notice != "": Text {
+                text: UpdateGlobal.notice; color: Colors.text-secondary;
+                font-size: Typography.sm; wrap: word-wrap;
+            }
+        }
+    }
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.info;
+                title: "Open-source licenses";
+                detail: "View licenses for vendored components in the source repository.";
+                clicked => { root.open-licenses(); }
+            }
+            Text {
+                text: "Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.";
+                color: Colors.text-secondary;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

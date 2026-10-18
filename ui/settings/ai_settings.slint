@@ -1,0 +1,573 @@
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { LocalAIProviderData, CatalogModelData } from "settings_types.slint";
+
+export component AISettings inherits VerticalLayout {
+    in-out property <bool> ai-prefer-cloud;
+    in-out property <string> cloud-ai-api-key;
+    in property <string> cloud-ai-balance;
+    in property <bool> cloud-ai-configured;
+    in-out property <string> cloud-ai-mode;
+    in property <string> cloud-ai-status;
+    in property <string> local-ai-active-model;
+    in property <string> local-ai-active-provider;
+    in property <[CatalogModelData]> local-ai-catalog;
+    in property <bool> local-ai-detecting;
+    in-out property <bool> local-ai-enabled;
+    in property <string> local-ai-error;
+    in property <string> local-ai-hardware-summary;
+    in property <bool> local-ai-loading;
+    in-out property <string> local-ai-model-id;
+    in property <[string]> local-ai-models;
+    in property <[LocalAIProviderData]> local-ai-providers;
+    in property <string> local-ai-status;
+    in property <bool> mobile-platform;
+    callback ai-prefer-cloud-changed(bool);
+    callback cloud-ai-api-key-changed(string);
+    callback cloud-ai-mode-changed(string);
+    callback cloud-ai-refresh-quota();
+    callback local-ai-download(string);
+    callback local-ai-enabled-changed(bool);
+    callback local-ai-load-model(string);
+    callback local-ai-open-memory();
+    callback local-ai-refresh();
+    callback local-ai-select-model(string);
+    callback local-ai-select-provider(string);
+    callback local-ai-unload-model();
+
+
+    spacing: Spacing.lg;
+
+    // Section header
+    Text {
+        text: "AI Assistant";
+        color: Colors.text-primary;
+        font-size: Typography.xl;
+        font-weight: Typography.semibold;
+    }
+
+    if JarvisGlobal.enabled : Text {
+        init => { root.local-ai-refresh(); }
+        text: "Chat with Jarvis in the AI channel. Local models run on your device; cloud models send your prompts and conversation context to the selected provider.";
+        color: Colors.text-muted;
+        font-size: Typography.sm;
+        wrap: word-wrap;
+    }
+
+    // Enable Local AI toggle
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: "Enable Local AI";
+            checked <=> root.local-ai-enabled;
+            toggled(value) => {
+                root.local-ai-enabled = value;
+                root.local-ai-enabled-changed(value);
+            }
+
+            Text {
+                text: "Enable Local AI";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: "Run AI models on this device for privacy";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // ── Cloud AI ───────────────────────────────────
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            ToggleRow {
+                row-spacing: Spacing.md;
+                label-spacing: Spacing.sm;
+                accessible-text: "Use cloud AI";
+                checked <=> root.ai-prefer-cloud;
+                toggled(value) => {
+                    root.ai-prefer-cloud = value;
+                    root.ai-prefer-cloud-changed(value);
+                }
+
+                Text {
+                    text: "Use cloud AI";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
+                Text {
+                    text: "Send prompts to a cloud model for better answers. Only in channels — direct messages always stay on this device.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Who pays, and who sees the prompt.
+            if root.ai-prefer-cloud: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.divider;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "My API key";
+                        variant: root.cloud-ai-mode == "direct-anthropic" ? "primary" : "secondary";
+                        clicked => {
+                            root.cloud-ai-mode = "direct-anthropic";
+                            root.cloud-ai-mode-changed("direct-anthropic");
+                        }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Buy tokens";
+                        variant: root.cloud-ai-mode == "server-broker" ? "primary" : "secondary";
+                        clicked => {
+                            root.cloud-ai-mode = "server-broker";
+                            root.cloud-ai-mode-changed("server-broker");
+                        }
+                    }
+                }
+
+                // Bring-your-own-key: nobody but the
+                // provider sees the prompt.
+                if root.cloud-ai-mode == "direct-anthropic": VerticalLayout {
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "Your key is stored on this device only. Prompts go straight to the provider — our servers never see them.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+
+                    Input {
+                        placeholder: root.cloud-ai-configured ? "API key saved — enter a new one to replace it" : "Anthropic API key";
+                        password: true;
+                        text <=> root.cloud-ai-api-key;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            touch: root.mobile-platform;
+                            text: "Save key";
+                            variant: "secondary";
+                            clicked => {
+                                root.cloud-ai-api-key-changed(root.cloud-ai-api-key);
+                                root.cloud-ai-api-key = "";
+                            }
+                        }
+                    }
+                }
+
+                // Managed tokens: state the trade plainly.
+                if root.cloud-ai-mode == "server-broker": VerticalLayout {
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "No API key needed. Prompts are sent through our servers, which see them in order to meter usage.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+
+                    if root.cloud-ai-balance != "": Text {
+                        text: root.cloud-ai-balance;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            touch: root.mobile-platform;
+                            text: "Refresh balance";
+                            variant: "secondary";
+                            clicked => { root.cloud-ai-refresh-quota(); }
+                        }
+                    }
+                }
+
+                if root.cloud-ai-status != "": Text {
+                    text: root.cloud-ai-status;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+
+    // Memory browser entry
+    if root.local-ai-enabled: HorizontalLayout {
+        alignment: start;
+        Button {
+            touch: root.mobile-platform;
+            text: "View Memory";
+            variant: "secondary";
+            clicked => { root.local-ai-open-memory(); }
+        }
+    }
+
+    // Hardware summary
+    if root.local-ai-enabled && root.local-ai-hardware-summary != "": Text {
+        text: "Hardware: " + root.local-ai-hardware-summary;
+        color: Colors.text-muted;
+        font-size: Typography.xs;
+        wrap: word-wrap;
+    }
+
+    // Detected providers
+    if root.local-ai-enabled: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Detected Providers";
+                    color: Colors.text-primary;
+                    font-size: Typography.lg;
+                    font-weight: Typography.medium;
+                }
+                Button {
+                    touch: root.mobile-platform;
+                    text: root.local-ai-detecting ? "Scanning..." : "Rescan";
+                    variant: "ghost";
+                    disabled: root.local-ai-detecting;
+                    clicked => { root.local-ai-refresh(); }
+                }
+            }
+
+            if root.local-ai-providers.length == 0 && !root.local-ai-detecting: Text {
+                text: "No local AI providers found. Start Ollama (ollama.com), LM Studio, llama.cpp server, or vLLM and rescan.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            for provider in root.local-ai-providers: Rectangle {
+                height: 44px * Appearance.text-grow;
+                border-radius: Spacing.radius-md;
+                background: provider.is-active ? Colors.surface-hover : transparent;
+                provider-touch := TouchArea {
+                    clicked => { root.local-ai-select-provider(provider.kind); }
+                }
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.sm;
+                    // health dot: listed == reachable
+                    Rectangle {
+                        width: 8px; height: 8px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 4px;
+                        background: Colors.success;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: provider.display-name;
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                            font-weight: provider.is-active ? Typography.semibold : Typography.medium;
+                        }
+                        Text {
+                            text: provider.detail;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                        }
+                    }
+                    if provider.is-active: Text {
+                        text: "Active";
+                        color: Colors.primary;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    // Chat model of the active provider
+    if root.local-ai-enabled && root.local-ai-models.length > 0: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Chat Model";
+                color: Colors.text-primary;
+                font-size: Typography.lg;
+                font-weight: Typography.medium;
+            }
+
+            for model in root.local-ai-models: Rectangle {
+                height: Spacing.button-height;
+                border-radius: Spacing.radius-md;
+                background: model == root.local-ai-active-model ? Colors.surface-hover : transparent;
+                model-touch := TouchArea {
+                    clicked => { root.local-ai-select-model(model); }
+                }
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    Text {
+                        horizontal-stretch: 1;
+                        text: model;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
+                    if model == root.local-ai-active-model: Text {
+                        text: "✓";
+                        color: Colors.primary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    // Downloadable model catalog (hardware-fit tagged)
+    if root.local-ai-enabled && root.local-ai-catalog.length > 0: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Popular Models";
+                color: Colors.text-primary;
+                font-size: Typography.lg;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: "Downloads go through Ollama — no account needed. Suggestions are filtered by your hardware.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            for entry in root.local-ai-catalog: Rectangle {
+                height: entry.error != "" ? 64px : 48px;
+                border-radius: Spacing.radius-md;
+
+                VerticalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.xxs;
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            Text {
+                                text: entry.name;
+                                color: entry.fit == "big" ? Colors.text-muted : Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                            }
+                            Text {
+                                text: entry.detail + " · " + entry.fit-label;
+                                color: entry.fit == "gpu" ? Colors.success : (entry.fit == "cpu" ? Colors.warning : Colors.text-muted);
+                                font-size: Typography.xs;
+                            }
+                        }
+                        if entry.installed: Text {
+                            text: "Installed";
+                            color: Colors.success;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                        }
+                        if !entry.installed && entry.downloading: Text {
+                            text: floor(entry.progress * 100) + "%";
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                        }
+                        if !entry.installed && !entry.downloading: Button {
+                            touch: root.mobile-platform;
+                            text: entry.error != "" ? "Retry" : "Download";
+                            variant: "secondary";
+                            disabled: entry.fit == "big";
+                            clicked => { root.local-ai-download(entry.tag); }
+                        }
+                    }
+
+                    // Download progress bar
+                    if entry.downloading: Rectangle {
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Colors.surface-hover;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * entry.progress;
+                            height: parent.height;
+                            border-radius: 2px;
+                            background: Colors.primary;
+                        }
+                    }
+
+                    if entry.error != "": Text {
+                        text: entry.error;
+                        color: Colors.error;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+
+    // In-process (mistralrs) model configuration
+    if root.local-ai-enabled && root.local-ai-active-provider == "mistralrs": Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            Text {
+                text: "Model Configuration";
+                color: Colors.text-primary;
+                font-size: Typography.lg;
+                font-weight: Typography.medium;
+            }
+
+            // Status display
+            HorizontalLayout {
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "Status:";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                }
+
+                Text {
+                    text: root.local-ai-status != "" ? root.local-ai-status : "Not loaded";
+                    color: root.local-ai-status == "" ? Colors.text-muted :
+                           (root.local-ai-loading ? Colors.warning : Colors.success);
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
+            }
+
+            // Error display
+            if root.local-ai-error != "": Text {
+                text: root.local-ai-error;
+                color: Colors.error;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            // Model ID input
+            VerticalLayout {
+                spacing: Spacing.xs;
+
+                Text {
+                    text: "Model ID (HuggingFace)";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                }
+
+                Input {
+                    text <=> root.local-ai-model-id;
+                    placeholder: "mistralai/Mistral-7B-Instruct-v0.3";
+                    disabled: root.local-ai-loading;
+                }
+
+                Text {
+                    text: "Enter a HuggingFace model ID (e.g., mistralai/Mistral-7B-Instruct-v0.3)";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Load/Unload buttons
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Unload";
+                    variant: "ghost";
+                    disabled: root.local-ai-loading || root.local-ai-status == "";
+                    clicked => { root.local-ai-unload-model(); }
+                }
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: root.local-ai-loading ? "Loading..." : "Load Model";
+                    variant: "primary";
+                    loading: root.local-ai-loading;
+                    disabled: root.local-ai-model-id == "" || root.local-ai-loading;
+                    clicked => { root.local-ai-load-model(root.local-ai-model-id); }
+                }
+            }
+        }
+    }
+
+}
