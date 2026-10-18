@@ -167,5 +167,4 @@ mod session;
 
 pub use pow::login_start_paying_pow;
 pub(crate) use pow::prove_password;
-pub(crate) use recovery::change_password_with;
 pub use recovery::{RECOVERY_CODE_LEN, normalize_recovery_code};

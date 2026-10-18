@@ -140,7 +140,7 @@ impl AuthService {
 /// password plus the new password's RegistrationRequest, then KE3 plus the new
 /// RegistrationRecord. A wrong current password fails client-side, before the
 /// second round trip, with [`AuthError::InvalidCredentials`].
-pub(crate) async fn change_password_with(
+async fn change_password_with(
     auth_client: &mut AuthClient,
     current_password: &str,
     new_password: &str,
