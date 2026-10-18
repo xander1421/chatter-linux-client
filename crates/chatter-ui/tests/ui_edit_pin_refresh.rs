@@ -168,7 +168,7 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
     );
     assert_eq!(w.get_messages().row_data(1).unwrap().content, "Peer text");
     assert_eq!(w.get_pinned_message_preview(), "Edited plaintext");
-    assert_eq!(client.chat_state().get().pinned.pinned_message_ids, ids);
+    assert_eq!(client.chat_snapshot().pinned.pinned_message_ids, ids);
     for (i, id) in ids.iter().enumerate() {
         let pin = w.get_pinned_items().row_data(i).unwrap();
         assert_eq!(pin.message_id, id.to_string());

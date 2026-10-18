@@ -52,7 +52,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let call_id_str = call_id.to_string();
             let weak = weak.clone();
             let ui_ctx = ctx_for_accept.clone();
-            let revision = ui_ctx.auth_state().get().session_revision;
+            let revision = ui_ctx.auth_snapshot().session_revision;
             dismiss_incoming(revision, &call_id_str);
 
             let replaces_active = weak
@@ -115,7 +115,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |call_id| {
             let call_id_str = call_id.to_string();
             let ui_ctx = ctx_for_decline.clone();
-            let revision = ui_ctx.auth_state().get().session_revision;
+            let revision = ui_ctx.auth_snapshot().session_revision;
             dismiss_incoming(revision, &call_id_str);
 
             if let Some(w) = weak.upgrade() {
@@ -474,8 +474,8 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 
         let Some(state) = ui_ctx.incoming_call_presentation_state() else { return };
         let mut changes = state.subscribe_changes();
-        let mut auth_events = ui_ctx.auth_state().subscribe();
-        let mut revision = ui_ctx.auth_state().get().session_revision;
+        let mut auth_events = ui_ctx.subscribe_auth_snapshots();
+        let mut revision = ui_ctx.auth_snapshot().session_revision;
         changes.borrow_and_update();
         reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
         loop {
@@ -483,13 +483,13 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 biased;
                 auth = auth_events.recv() => {
                     if matches!(auth, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; }
-                    let next = ui_ctx.auth_state().get().session_revision;
+                    let next = ui_ctx.auth_snapshot().session_revision;
                     if next != revision {
                         revision = next;
                         rx = rx.resubscribe();
                         let reset_ctx = ui_ctx.clone(); let reset_weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
-                            if reset_ctx.auth_state().get().session_revision != next { return; }
+                            if reset_ctx.auth_snapshot().session_revision != next { return; }
                             if let Some(w) = reset_weak.upgrade() {
                                 super::super::auth::initial_data::hide_incoming_call(&w);
                                 w.set_incoming_call_replaces_active(false);
@@ -820,7 +820,7 @@ mod session_tests {
         let window = MainWindow::new().unwrap();
         let alice = UserId::new();
         client.auth_state().set_logged_in(alice, 1, "Alice".into());
-        let old = client.auth_state().get().session_revision;
+        let old = client.auth_snapshot().session_revision;
         let state = worker.incoming_presentation_state();
         state.begin_session(old);
         reconcile_incoming_modal(&window.as_weak(), &client, &state, old);
@@ -834,7 +834,7 @@ mod session_tests {
         client
             .auth_state()
             .set_logged_in(alice, 1, "Alice again".into());
-        let revision = client.auth_state().get().session_revision;
+        let revision = client.auth_snapshot().session_revision;
         state.begin_session(revision);
         let current = worker.for_presentation_session(revision);
         current.orch_present_incoming(

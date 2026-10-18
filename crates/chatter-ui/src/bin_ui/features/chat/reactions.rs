@@ -31,7 +31,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     target_sent_timestamp,
                     emoji,
                 } = intent;
-                let auth = client.auth_state().get();
+                let auth = client.auth_snapshot();
                 if !reaction_session_is_current(
                     owner,
                     session_revision,
@@ -63,7 +63,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     );
                     return;
                 }
-                let auth = client.auth_state().get();
+                let auth = client.auth_snapshot();
                 if !reaction_session_is_current(
                     owner,
                     session_revision,
@@ -75,7 +75,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 let client = client.clone();
                 let weak = weak_window.clone();
                 run_ui!(weak, |w| {
-                    let auth = client.auth_state().get();
+                    let auth = client.auth_snapshot();
                     if !reaction_session_is_current(
                         owner,
                         session_revision,
@@ -112,7 +112,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 Err(_) => return,
             };
 
-            let conversation = ui_ctx.chat_state().active_conversation();
+            let conversation = ui_ctx.active_conversation();
             if matches!(conversation, ActiveConversation::None) {
                 return;
             }
@@ -124,7 +124,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     return;
                 }
             };
-            let auth = ui_ctx.auth_state().get();
+            let auth = ui_ctx.auth_snapshot();
             let Some(owner) = auth.current_user_id else {
                 return;
             };

@@ -62,7 +62,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         w.set_forward_loading(true);
 
         tokio::spawn(async move {
-            let source = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+            let source = ui_ctx.conversation(ui_ctx.active_conversation());
             // One at a time, in order: the copies must arrive in the order the
             // originals were written. A failure does not stop the rest.
             let mut failed = 0usize;
@@ -84,7 +84,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // to — so a forward into the conversation on screen
                         // stayed invisible until the next load (§112k).
                         // Reopen it through the sidebar path to reload.
-                        if ui_ctx.chat_state().active_conversation() == target {
+                        if ui_ctx.active_conversation() == target {
                             crate::bin_ui::features::sidebar::select_conversation(&w, target);
                         }
                     }

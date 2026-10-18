@@ -136,7 +136,7 @@ fn run_action<F>(
         let result = action.await;
         let view = ui_ctx.channel_access_view(&channel_id).await;
         let header = ui_ctx.channel_membership_header(&channel_id);
-        let on_screen = ui_ctx.chat_state().get().active_channel_id == Some(channel_id);
+        let on_screen = ui_ctx.chat_snapshot().active_channel_id == Some(channel_id);
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
             let g = w.global::<MembershipGlobal>();

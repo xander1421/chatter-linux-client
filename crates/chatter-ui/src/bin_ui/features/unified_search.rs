@@ -204,7 +204,7 @@ fn wire_opened(
             requests
                 .lock()
                 .unwrap()
-                .invalidate(ui_ctx.auth_state().get().session_revision, "");
+                .invalidate(ui_ctx.auth_snapshot().session_revision, "");
             clear_search_rows(&w);
             let convs = conversation_items(&ui_ctx, w.get_unified_search_query().as_str());
             set_conversations(&w, convs);
@@ -286,7 +286,7 @@ fn wire_closed(
         requests
             .lock()
             .unwrap()
-            .invalidate(ui_ctx.auth_state().get().session_revision, "");
+            .invalidate(ui_ctx.auth_snapshot().session_revision, "");
         if let Some(w) = weak.upgrade() {
             let query = w.get_unified_search_query().trim().to_string();
             if !query.is_empty() {
@@ -331,7 +331,7 @@ fn wire_changed(
         let ticket = requests
             .lock()
             .unwrap()
-            .invalidate(ui_ctx.auth_state().get().session_revision, &query_str);
+            .invalidate(ui_ctx.auth_snapshot().session_revision, &query_str);
 
         // People: flag handle-shaped queries (enables the resolve-on-Enter
         // prompt) and invalidate any prior resolution for the new query.
@@ -404,7 +404,7 @@ fn wire_changed(
             if !requests
                 .lock()
                 .unwrap()
-                .pending(ticket, ui_ctx.auth_state().get().session_revision)
+                .pending(ticket, ui_ctx.auth_snapshot().session_revision)
             {
                 return;
             }
@@ -426,7 +426,7 @@ fn wire_changed(
                         .collect();
                     requests.lock().unwrap().complete_messages(
                         ticket,
-                        ui_ctx.auth_state().get().session_revision,
+                        ui_ctx.auth_snapshot().session_revision,
                         w.get_unified_search_open(),
                         ids,
                         || {
@@ -497,7 +497,7 @@ fn wire_resolve(
         let ticket = requests
             .lock()
             .unwrap()
-            .begin_person(ui_ctx.auth_state().get().session_revision, &query);
+            .begin_person(ui_ctx.auth_snapshot().session_revision, &query);
         {
             w.set_unified_search_person_status("".into());
             w.set_unified_search_person_id("".into());
@@ -555,7 +555,7 @@ fn wire_resolve(
                     };
                     requests.lock().unwrap().complete_person(
                         ticket,
-                        ui_ctx.auth_state().get().session_revision,
+                        ui_ctx.auth_snapshot().session_revision,
                         w.get_unified_search_open(),
                         row,
                         |row| {
@@ -588,7 +588,7 @@ fn wire_person_selected(
         let Some(w) = weak.upgrade() else { return };
         if !requests.lock().unwrap().person_selectable(
             uid.as_str(),
-            ui_ctx.auth_state().get().session_revision,
+            ui_ctx.auth_snapshot().session_revision,
             w.get_unified_search_open(),
         ) {
             return;
@@ -622,7 +622,7 @@ fn wire_conversation_selected(
         move |id: SharedString, conv_type: SharedString| {
             if let Some(w) = weak.upgrade() {
                 if !requests.lock().unwrap().session_current(
-                    ui_ctx.auth_state().get().session_revision,
+                    ui_ctx.auth_snapshot().session_revision,
                     w.get_unified_search_open(),
                 ) || !w
                     .get_unified_search_conversations()
@@ -668,7 +668,7 @@ fn wire_message_selected(
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_message_selected(move |message_id: SharedString| {
         let Some(w) = weak.upgrade() else { return };
-        let session = ui_ctx.auth_state().get().session_revision;
+        let session = ui_ctx.auth_snapshot().session_revision;
         if !requests.lock().unwrap().message_selectable(
             message_id.as_str(),
             session,
@@ -712,7 +712,7 @@ fn jump_once_open(
 ) {
     slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
         let Some(w) = weak.upgrade() else { return };
-        if ui_ctx.auth_state().get().session_revision != session {
+        if ui_ctx.auth_snapshot().session_revision != session {
             return;
         }
         if !w.get_loading_messages() {

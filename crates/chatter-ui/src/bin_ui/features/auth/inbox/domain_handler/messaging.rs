@@ -82,8 +82,7 @@ pub(super) fn handle_message_received(
     display_data.decode_attachment_thumbnails();
 
     let current_user_id = ui_ctx
-        .auth_state()
-        .get()
+        .auth_snapshot()
         .current_user_id
         .map(|id| id.to_string())
         .unwrap_or_else(|| {
@@ -429,7 +428,7 @@ pub(super) fn handle_reaction_update(
 ) {
     let weak = window.clone();
     let client = ui_ctx.clone();
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     let author = *sender_id;
     let expected_scope = scope.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -477,7 +476,7 @@ pub(super) fn handle_message_edit(
     if !ui_ctx.is_showing_conversation(conversation_id) {
         return;
     }
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
     let handle = ui_ctx.conversation(conversation);
     let Ok(active_kind) = handle.storage_kind() else {
@@ -534,7 +533,7 @@ pub(super) fn handle_message_delete(
     if !ui_ctx.is_showing_conversation(conversation_id) {
         return;
     }
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
     let ui_ctx = ui_ctx.clone();
     crate::run_ui!(window, |w| {
@@ -617,8 +616,7 @@ pub(super) fn update_active_channel_member_count(
     );
 
     let is_active = ui_ctx
-        .chat_state()
-        .get()
+        .chat_snapshot()
         .active_channel_id
         .map(|id| id == channel_id)
         .unwrap_or(false);

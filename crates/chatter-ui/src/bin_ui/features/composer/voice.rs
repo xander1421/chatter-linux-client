@@ -67,7 +67,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         if g.get_active() {
             return;
         }
-        let conversation = client.chat_state().active_conversation();
+        let conversation = client.active_conversation();
         if !recording_context_is_current(client.chat_state(), conversation) {
             return;
         }

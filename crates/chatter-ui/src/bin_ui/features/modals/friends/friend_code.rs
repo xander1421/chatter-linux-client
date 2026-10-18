@@ -303,7 +303,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
             .map(|w| {
                 (
                     w.get_friends_request_note().to_string(),
-                    ui_ctx.auth_state().get().display_name,
+                    ui_ctx.auth_snapshot().display_name,
                 )
             })
             .unwrap_or_default();

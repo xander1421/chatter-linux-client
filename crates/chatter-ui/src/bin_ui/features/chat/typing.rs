@@ -25,7 +25,7 @@ pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<ChatterClien
                 ui_ctx_activity.record_presence_activity().await;
             });
 
-            ui_ctx.typing_bump(ui_ctx.chat_state().active_conversation());
+            ui_ctx.typing_bump(ui_ctx.active_conversation());
         } else {
             ui_ctx.typing_clear();
         }

@@ -64,7 +64,7 @@ fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
     // deferred Slint visibility change handler.
     w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
     let generation = w.get_composer_gif_generation();
-    let session = ui_ctx.auth_state().get().session_revision;
+    let session = ui_ctx.auth_snapshot().session_revision;
     w.set_composer_gif_picker_loading(true);
     w.set_composer_gif_picker_failed(false);
     crate::bin_ui::gif_state::clear_picker_gifs();
@@ -185,7 +185,7 @@ pub fn begin_gif_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Option<Composer
 /// while this is the open conversation of the session it was picked in
 /// (`show_pending_bubble` checks both).
 fn show_gif_pending(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, send: &ComposerSend) {
-    let auth = ui_ctx.auth_state().get();
+    let auth = ui_ctx.auth_snapshot();
     let user_id = auth
         .current_user_id
         .map(|id| id.to_string())

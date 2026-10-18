@@ -130,7 +130,7 @@ pub fn save_attachment(
     use std::io::Write;
     use zeroize::Zeroize;
     let check = || {
-        if client.auth_state().get().session_revision == revision {
+        if client.auth_snapshot().session_revision == revision {
             Ok(())
         } else {
             Err("Session changed".to_string())

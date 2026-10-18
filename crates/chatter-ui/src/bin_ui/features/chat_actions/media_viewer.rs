@@ -79,7 +79,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         .unwrap_or(ActiveConversation::None);
     let session_revision = CLIENT
         .get()
-        .map(|client| client.auth_state().get().session_revision)
+        .map(|client| client.auth_snapshot().session_revision)
         .unwrap_or(0);
     let mut stored = GALLERY.lock().unwrap_or_else(|poison| poison.into_inner());
     if stored.0 != conversation
@@ -155,7 +155,7 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                 if !is_current(request)
                     || w.get_media_viewer_attachment_id().as_str() != selected
                     || client.active_conversation() != conversation
-                    || client.auth_state().get().session_revision != session_revision
+                    || client.auth_snapshot().session_revision != session_revision
                 {
                     return;
                 }
@@ -261,7 +261,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         let id = selected
             .parse::<AttachmentId>()
             .unwrap_or_else(|_| AttachmentId::from_cdn_key(selected.as_str()));
-        let revision = client.auth_state().get().session_revision;
+        let revision = client.auth_snapshot().session_revision;
         let request = current_request();
         let client = client.clone();
         let weak = weak.clone();
@@ -269,7 +269,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         std::thread::spawn(move || {
             let result = export(&client, &id, copy);
             let _ = weak.upgrade_in_event_loop(move |w| {
-                if client.auth_state().get().session_revision != revision || !is_current(request) {
+                if client.auth_snapshot().session_revision != revision || !is_current(request) {
                     return;
                 }
                 match result {
@@ -333,9 +333,9 @@ pub(crate) fn export(
     id: &AttachmentId,
     copy: bool,
 ) -> Result<String, String> {
-    let revision = client.auth_state().get().session_revision;
+    let revision = client.auth_snapshot().session_revision;
     let check = || {
-        if client.auth_state().get().session_revision == revision {
+        if client.auth_snapshot().session_revision == revision {
             Ok(())
         } else {
             Err("Session changed".to_string())

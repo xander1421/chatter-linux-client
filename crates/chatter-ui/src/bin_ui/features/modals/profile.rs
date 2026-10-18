@@ -419,7 +419,7 @@ fn request_shared_page(
     w.set_profile_shared_loading(true);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
-    let revision = ui_ctx.auth_state().get().session_revision;
+    let revision = ui_ctx.auth_snapshot().session_revision;
     tokio::spawn(async move {
         let page = ui_ctx
             .shared_content_page_scoped(
@@ -455,7 +455,7 @@ fn request_shared_page(
         let short = page.len() < SHARED_PAGE_SIZE as usize;
         let count = page.len();
         let _ = slint::invoke_from_event_loop(move || {
-            if ui_ctx.auth_state().get().session_revision != revision {
+            if ui_ctx.auth_snapshot().session_revision != revision {
                 return;
             }
             let Some(w) = weak.upgrade() else { return };

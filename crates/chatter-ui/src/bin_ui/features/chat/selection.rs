@@ -50,7 +50,7 @@ fn refresh_delete_everyone(
     selected_ids: &HashSet<String>,
 ) {
     let ids = selected_ids.iter().cloned().collect::<Vec<_>>();
-    let actions = ui_ctx.selection_actions(ui_ctx.chat_state().active_conversation(), &ids);
+    let actions = ui_ctx.selection_actions(ui_ctx.active_conversation(), &ids);
     let chrome = w.global::<crate::SelectionChrome>();
     chrome.set_can_delete_everyone(actions.can_delete_everyone);
     chrome.set_can_forward(actions.can_forward);
@@ -85,7 +85,7 @@ fn delete_selection(
         return;
     }
     let ordered_ids = selected_ids_in_order(w, &selected_ids.borrow());
-    let conversation = ui_ctx.chat_state().active_conversation();
+    let conversation = ui_ctx.active_conversation();
     let Some(targets) = (ordered_ids.len() == selected_ids.borrow().len())
         .then(|| ui_ctx.selected_message_targets(conversation, &ordered_ids)).flatten() else {
         // A row is gone: the scope offered for it is stale too.
@@ -108,7 +108,7 @@ fn delete_selection(
     let submitted_ids = selected_ids.borrow().clone();
     let selection_revision = generation.get();
     let generation = generation.clone();
-    let auth = ui_ctx.auth_state().get();
+    let auth = ui_ctx.auth_snapshot();
     let Some(account) = auth.current_user_id else {
         return;
     };
@@ -139,7 +139,7 @@ fn delete_selection(
         let mut expected_ids = submitted_ids;
         let mut selection_current = true;
         while let Some(completed_targets) = completions.recv().await {
-            let auth = ui_ctx.auth_state().get();
+            let auth = ui_ctx.auth_snapshot();
             if auth.current_user_id != Some(account) || auth.session_revision != session_revision {
                 selection_current = false;
                 continue;
@@ -148,7 +148,7 @@ fn delete_selection(
             // another target later fails or the user has left this selection.
             crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx);
             let Some(w) = weak.upgrade() else { continue };
-            selection_current &= ui_ctx.chat_state().active_conversation() == conversation
+            selection_current &= ui_ctx.active_conversation() == conversation
                 && generation.get() == expected_generation
                 && *selected_ids.borrow() == expected_ids;
             if !selection_current {
@@ -164,12 +164,12 @@ fn delete_selection(
         let result = task.await;
         pending_completion.set(false);
         let Some(w) = weak.upgrade() else { return };
-        let auth = ui_ctx.auth_state().get();
+        let auth = ui_ctx.auth_snapshot();
         if auth.current_user_id != Some(account) || auth.session_revision != session_revision {
             return;
         }
         if !selection_current
-            || ui_ctx.chat_state().active_conversation() != conversation
+            || ui_ctx.active_conversation() != conversation
             || generation.get() != expected_generation
             || *selected_ids.borrow() != expected_ids
         {
@@ -292,8 +292,8 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
             let targets = ui_ctx.selected_message_targets(
-                ui_ctx.chat_state().active_conversation(), &ordered_ids).unwrap_or_default();
-            let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+                ui_ctx.active_conversation(), &ordered_ids).unwrap_or_default();
+            let handle = ui_ctx.conversation(ui_ctx.active_conversation());
             std::thread::spawn(move || {
                 let texts: Vec<String> = targets
                     .iter()
@@ -318,7 +318,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
             let targets = ui_ctx.selected_message_targets(
-                ui_ctx.chat_state().active_conversation(), &ordered_ids).unwrap_or_default();
+                ui_ctx.active_conversation(), &ordered_ids).unwrap_or_default();
             let sources: Vec<String> = targets.iter()
                 .map(|(sender, ts)| format!("{sender}:{ts}")).collect();
             if sources.is_empty() {

@@ -75,7 +75,7 @@ pub fn wire_accept(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_identity_change_accept_clicked(move || {
         let Some(w) = weak.upgrade() else { return };
 
-        let ActiveConversation::ServerDm { peer_id } = ui_ctx.chat_state().active_conversation()
+        let ActiveConversation::ServerDm { peer_id } = ui_ctx.active_conversation()
         else {
             tracing::warn!("[IDENTITY] accept fired with no server DM open; ignoring");
             return;

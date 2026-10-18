@@ -20,7 +20,7 @@ struct Owner {
 }
 impl Owner {
     fn read(ctx: &ChatterClient) -> Self {
-        let auth = ctx.auth_state().get();
+        let auth = ctx.auth_snapshot();
         Self {
             session: auth.session_revision,
             user: auth.current_user_id,

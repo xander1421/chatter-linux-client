@@ -57,7 +57,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     crate::bin_ui::features::composer::sync_composer_draft(
         window,
         ui_ctx,
-        ui_ctx.chat_state().get().attachment_revision,
+        ui_ctx.chat_snapshot().attachment_revision,
     );
     apply_header(window, ui_ctx, &row);
     super::refresh_rows(window, ui_ctx);

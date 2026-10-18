@@ -40,7 +40,7 @@ pub async fn handle_jarvis_mention(
     };
 
     // Get current user ID
-    let author_id = ui_ctx.auth_state().get().current_user_id;
+    let author_id = ui_ctx.auth_snapshot().current_user_id;
 
     // Add user message to Jarvis state
     ui_ctx

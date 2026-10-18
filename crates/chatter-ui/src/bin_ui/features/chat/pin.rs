@@ -82,7 +82,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             Err(_) => return,
         };
 
-        let conversation = ui_ctx.chat_state().active_conversation();
+        let conversation = ui_ctx.active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }

@@ -30,7 +30,7 @@ pub async fn handle_call_key_answer(
     call_id: String,
     peer_id: UserId,
 ) {
-    let revision = ui_ctx.auth_state().get().session_revision;
+    let revision = ui_ctx.auth_snapshot().session_revision;
     let attempt = ui_ctx.call_completion_attempt(&call_id);
     tracing::info!(
         call_id = %call_id,
@@ -178,7 +178,7 @@ mod tests {
         client
             .auth_state()
             .set_logged_in(UserId::new(), 1, "Fixture".into());
-        let revision = client.auth_state().get().session_revision;
+        let revision = client.auth_snapshot().session_revision;
         let w = MainWindow::new().unwrap();
         let id = chatter_core::domain::ids::CallId::new();
         let expected = id.to_string();
@@ -240,7 +240,7 @@ mod tests {
             "keep"
         );
         assert_eq!(w.get_active_call_data().duration_seconds, 17);
-        let current = client.auth_state().get().session_revision;
+        let current = client.auth_snapshot().session_revision;
         assert!(w.get_active_call_visible());
         apply_dm_completion(&w.as_weak(), &client, current, &expected, None, setup());
         assert_eq!(w.get_active_call_data().verification_emoji_1.as_str(), "A");

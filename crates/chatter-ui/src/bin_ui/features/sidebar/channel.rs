@@ -45,10 +45,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         #[cfg(feature = "jarvis")]
         if crate::bin_ui::features::jarvis::is_jarvis_channel_str(&channel_id_str) {
             if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
-                ui_ctx.chat_state().set_active_channel(parsed);
-                ui_ctx.chat_state().set_active_conversation(
-                    chatter_core::state::ActiveConversation::Channel(parsed),
-                );
+                ui_ctx.select_channel(parsed);
             }
             if let Some(w) = weak.upgrade() {
                 w.invoke_refresh_screen_protection();
@@ -57,7 +54,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 crate::bin_ui::features::composer::sync_composer_draft(
                     &w,
                     &ui_ctx,
-                    ui_ctx.chat_state().get().attachment_revision,
+                    ui_ctx.chat_snapshot().attachment_revision,
                 );
             }
             let ui_ctx_for_sel = ui_ctx.clone();
@@ -86,11 +83,11 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             crate::bin_ui::features::composer::sync_composer_draft(
                 &w,
                 &ui_ctx,
-                ui_ctx.chat_state().get().attachment_revision,
+                ui_ctx.chat_snapshot().attachment_revision,
             );
         }
 
-        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.chat_state().active_conversation());
+        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.active_conversation());
         let channel_id_str_for_ui = channel_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
         crate::run_history_ui!(weak, owner, |w| {

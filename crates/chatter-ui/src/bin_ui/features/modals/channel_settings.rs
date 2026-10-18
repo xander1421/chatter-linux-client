@@ -65,7 +65,7 @@ fn begin_icon_request(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
             generation,
             modal_stack: w.get_modal_stack(),
             conversation: ctx.active_conversation(),
-            session_revision: ctx.auth_state().get().session_revision,
+            session_revision: ctx.auth_snapshot().session_revision,
             settings_id: w.get_channel_settings_id().to_string(),
         });
         generation
@@ -274,7 +274,7 @@ fn paint_if_current(
         let Some(w) = weak.upgrade() else { return };
         let current_id = w.get_channel_settings_id();
         if !settings_refresh_allowed(
-            ui_ctx.chat_state().active_conversation(),
+            ui_ctx.active_conversation(),
             opened,
             current_id.as_str(),
             &opened_id,
@@ -298,7 +298,7 @@ pub fn open_channel_settings(
 ) {
     let opened = ActiveConversation::Channel(channel_id);
     let channel_id_str = channel_id.to_string();
-    if settings_open_allowed(ui_ctx.chat_state().active_conversation(), opened) {
+    if settings_open_allowed(ui_ctx.active_conversation(), opened) {
         if let Some(w) = weak_window.upgrade() {
             let already =
                 w.get_channel_settings_id().as_str() == channel_id_str && settings_on_stack(&w);
@@ -311,7 +311,7 @@ pub fn open_channel_settings(
     }
 
     tokio::spawn(async move {
-        if !settings_open_allowed(ui_ctx.chat_state().active_conversation(), opened) {
+        if !settings_open_allowed(ui_ctx.active_conversation(), opened) {
             return;
         }
 
@@ -542,7 +542,7 @@ pub fn refresh_members_if_open(
                 let Some(w) = weak.upgrade() else { return };
                 let current_id = w.get_channel_settings_id();
                 if settings_refresh_allowed(
-                    ui_ctx.chat_state().active_conversation(),
+                    ui_ctx.active_conversation(),
                     ActiveConversation::AnonGroup(group_id),
                     current_id.as_str(),
                     &id,
@@ -622,7 +622,7 @@ fn begin_settings_save(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
             generation: epoch,
             modal_stack: w.get_modal_stack(),
             conversation: opened,
-            session_revision: ctx.auth_state().get().session_revision,
+            session_revision: ctx.auth_snapshot().session_revision,
             settings_id: w.get_channel_settings_id().to_string(),
         });
     });
@@ -689,7 +689,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(epoch) = begin_settings_save(&w, &ui_ctx) else {
             return;
         };
-        let session_revision = ui_ctx.auth_state().get().session_revision;
+        let session_revision = ui_ctx.auth_snapshot().session_revision;
         let staged_icon = weak.upgrade().and_then(|w| {
             ICON_STATE.with(|state| {
                 state.borrow().staged.as_ref().and_then(|(request, bytes)| {
@@ -1276,7 +1276,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak.upgrade() else { return };
         let channel_id = w.get_channel_settings_id().to_string();
         let settings_epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
-        let session_revision = ui_ctx.auth_state().get().session_revision;
+        let session_revision = ui_ctx.auth_snapshot().session_revision;
         tokio::spawn(async move {
             if channel_id.is_empty() {
                 return;
@@ -2163,7 +2163,7 @@ mod deletion_tests {
             w.as_weak(),
             client.clone(),
             deleted,
-            client.auth_state().get().session_revision,
+            client.auth_snapshot().session_revision,
             SETTINGS_EPOCH.with(|epoch| epoch.get()),
             Err(ChannelError::NotAuthorized),
         );
@@ -2188,7 +2188,7 @@ mod deletion_tests {
             w.as_weak(),
             client.clone(),
             deleted,
-            client.auth_state().get().session_revision,
+            client.auth_snapshot().session_revision,
             SETTINGS_EPOCH.with(|epoch| epoch.get()),
             Ok(()),
         );
@@ -2223,7 +2223,7 @@ mod deletion_tests {
             w.as_weak(),
             client.clone(),
             deleted,
-            client.auth_state().get().session_revision,
+            client.auth_snapshot().session_revision,
             SETTINGS_EPOCH.with(|epoch| epoch.get()),
             Ok(()),
         );
@@ -2294,7 +2294,7 @@ mod deletion_tests {
             w.as_weak(),
             client.clone(),
             deleted,
-            client.auth_state().get().session_revision,
+            client.auth_snapshot().session_revision,
             old_epoch,
             Ok(()),
         );
@@ -2308,7 +2308,7 @@ mod deletion_tests {
         // Session replacement retires an awaited delete and a queued removal.
         w.set_is_mobile_platform(true);
         w.set_channel_name("Replacement session".into());
-        let old_session = client.auth_state().get().session_revision;
+        let old_session = client.auth_snapshot().session_revision;
         crate::bin_ui::features::sidebar::conversation_removed(
             &w.as_weak(),
             &client,

@@ -63,7 +63,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             client.auth_state(),
             client.user_state(),
             Some(&client),
-            client.chat_state().active_conversation(),
+            client.active_conversation(),
         );
         super::back::push(&w, "user-profile");
     });

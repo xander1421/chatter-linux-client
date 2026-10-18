@@ -165,7 +165,7 @@ fn spawn_start(
     ui_ctx: Arc<ChatterClient>,
 ) {
     cancel_pending_start();
-    let revision = ui_ctx.auth_state().get().session_revision;
+    let revision = ui_ctx.auth_snapshot().session_revision;
     let attempt = chatter_core::client::calls::CallStartAttempt::default();
     let generation = START.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -201,7 +201,7 @@ fn spawn_start(
         if !current_start(generation) {
             return;
         }
-        if ui_ctx.auth_state().get().session_revision != revision {
+        if ui_ctx.auth_snapshot().session_revision != revision {
             attempt.cancel();
             fail_call(&weak, "Your session changed. Start the call again.");
             return;
@@ -256,7 +256,7 @@ async fn start_call_impl(
     // panic in the LiveKit/gRPC start path into a panic on the event loop and
     // took the whole app down — including the mesh, which had nothing to do with
     // the call. A failed call should close the call view, not the process.
-    let revision = ui_ctx.auth_state().get().session_revision;
+    let revision = ui_ctx.auth_snapshot().session_revision;
     let task_attempt = attempt.clone();
     let mut task = tokio::spawn(async move {
         ctx.start_call_attempt(conversation, call_type, task_attempt)
@@ -274,7 +274,7 @@ async fn start_call_impl(
     };
     if !current_start(generation)
         || attempt.is_cancelled()
-        || ui_ctx.auth_state().get().session_revision != revision
+        || ui_ctx.auth_snapshot().session_revision != revision
     {
         attempt.cancel();
         if let Ok(Ok(start)) = joined {
