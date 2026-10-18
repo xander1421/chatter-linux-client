@@ -5824,6 +5824,32 @@ impl ChatterClient {
     }
 
     // ── Escape hatches ──────────────────────────────────────────────────
+
+    pub async fn server_record_detail(
+        &self,
+        kind: &str,
+        id: &str,
+    ) -> Result<crate::services::server_records::RecordDetail, crate::error::NetworkError> {
+        crate::services::server_records::detail(&self.services.grpc_pool, kind, id).await
+    }
+
+    /// A channel header may offer to join the server's current group call.
+    pub async fn active_channel_call(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<(String, bool, i32)>, crate::error::NetworkError> {
+        let call = self
+            .services
+            .grpc_pool
+            .call_client()
+            .get_active_call_in_channel(channel_id)
+            .await?;
+        Ok(call.map(|call| (
+            call.id,
+            call.r#type == crate::proto::chat_v1::CallType::Video as i32,
+            call.current_participant_count,
+        )))
+    }
 }
 
 impl Drop for ChatterClient {

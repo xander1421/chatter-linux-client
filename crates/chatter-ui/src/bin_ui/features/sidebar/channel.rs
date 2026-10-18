@@ -16,6 +16,17 @@ use crate::bin_ui::features::history_owner::HistoryOwner;
 
 /// Wire channel selected callback.
 pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let refresh_client = ui_ctx.clone();
+    let refresh_window = window.as_weak();
+    window.on_refresh_channel_call(move || {
+        if let Some(w) = refresh_window.upgrade() {
+            if let chatter_core::state::ActiveConversation::Channel(id) =
+                refresh_client.active_conversation()
+            {
+                refresh_channel_call(w.as_weak(), refresh_client.clone(), id.to_string());
+            }
+        }
+    });
     let ui_ctx_clone = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -77,6 +88,10 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
             ui_ctx.select_channel(parsed);
+        }
+        if let Some(w) = weak.upgrade() {
+            w.set_active_channel_call_id("".into());
+            refresh_channel_call(weak.clone(), ui_ctx.clone(), channel_id_str.clone());
         }
         if let Some(w) = weak.upgrade() {
             w.invoke_refresh_screen_protection();
@@ -155,6 +170,41 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Some(open_started),
             )
             .await;
+        });
+    });
+}
+
+fn refresh_channel_call(
+    weak: slint::Weak<MainWindow>,
+    client: Arc<ChatterClient>,
+    channel: String,
+) {
+    if channel.is_empty() || channel == "00000000-0000-0000-0000-000000000000" {
+        return;
+    }
+    tokio::spawn(async move {
+        let lookup = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.active_channel_call(&channel),
+        )
+        .await;
+        run_ui!(weak, |w| {
+            if !matches!(
+                client.active_conversation(),
+                chatter_core::state::ActiveConversation::Channel(id) if id.to_string() == channel
+            ) {
+                return;
+            }
+            match lookup {
+                Ok(Ok(Some((id, video, participants)))) => {
+                    w.set_active_channel_call_id(id.into());
+                    w.set_active_channel_call_video(video);
+                    w.set_active_channel_call_participants(participants);
+                }
+                Ok(Ok(None)) => w.set_active_channel_call_id("".into()),
+                Ok(Err(error)) => tracing::debug!(%error, "active channel call lookup failed"),
+                Err(_) => tracing::debug!("active channel call lookup timed out"),
+            }
         });
     });
 }
