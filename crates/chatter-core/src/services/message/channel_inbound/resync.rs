@@ -1,6 +1,6 @@
 use super::*;
 
-fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageError> {
+pub(super) fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageError> {
     match outcome {
         Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => {
             Err(MessageError::ResyncPending)

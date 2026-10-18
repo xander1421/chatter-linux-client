@@ -36,7 +36,9 @@ mod resync;
 use edit::is_newer_edit;
 pub(crate) use persist::Persisted;
 pub(crate) use prepare::DecryptFailureGate;
+#[cfg(test)]
 use prepare::{RESEND_GIVE_UP_ATTEMPTS, record_decrypt_failure};
+#[cfg(test)]
 use resync::ensure_resync_ingested;
 
 /// Outcome of ingesting one server-delivered channel message.
