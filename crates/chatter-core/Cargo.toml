@@ -153,7 +153,6 @@ rodio = "0.22.2"
 cpal = "0.18.2"
 hound = "3.5"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-ab_glyph = "0.2"
 # smol removed — was unused
 
 # ============================================================================

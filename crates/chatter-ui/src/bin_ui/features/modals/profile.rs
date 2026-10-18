@@ -10,8 +10,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 
+use crate::bin_ui::converters::initials_from_name;
 use crate::{MainWindow, SharedContentItem, SharedTab};
-use chatter_core::ui::initials_from_name;
 
 mod avatar_edit;
 
@@ -191,7 +191,7 @@ pub fn open_user_profile_in_conversation(
         let initials = initials_from_name(&display_name);
 
         // Core's display presence (the local user directory, hidden for a
-        // blocked user) — the same source as `peer_last_seen_label`.
+        // blocked user) — the same source as `peer_last_seen`.
         let presence = ui_ctx.map_or("offline", |ctx| ctx.peer_presence(user_id).as_str());
 
         // From core's local profile, like the avatar below: `user_state` is not
@@ -296,7 +296,9 @@ pub fn open_user_profile_in_conversation(
             // length of one query reads as a bug.
             w.set_profile_shared_loading(true);
             if !scoped_member {
-                w.set_profile_last_seen(ctx.peer_last_seen_label(user_id).into());
+                w.set_profile_last_seen(ctx.peer_last_seen(user_id)
+                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                    .unwrap_or_default().into());
             }
             w.set_profile_is_muted(
                 ctx.is_conversation_muted(if scoped_member {
@@ -349,10 +351,13 @@ fn load_shared_tabs(
         let first = tabs.first().map(|t| t.id.clone());
         let rows: Vec<SharedTab> = tabs
             .into_iter()
-            .map(|t| SharedTab {
-                id: t.id.into(),
-                label: t.label.into(),
-                count: t.count,
+            .map(|t| {
+                let label = crate::bin_ui::converters::shared_tab_label(&t.id);
+                SharedTab {
+                    id: t.id.into(),
+                    label: label.into(),
+                    count: t.count,
+                }
             })
             .collect();
         let _ = slint::invoke_from_event_loop(move || {
@@ -438,7 +443,10 @@ fn request_shared_page(
                 // At most four missing videos per requested page, with no remote download.
                 for item in page
                     .iter_mut()
-                    .filter(|i| i.is_video && i.thumbnail.is_empty())
+                    .filter(|i| {
+                        crate::bin_ui::converters::shared_content_is_video(i)
+                            && i.thumbnail.is_empty()
+                    })
                     .take(4)
                 {
                     if let Ok(id) = item.attachment_id.parse() {
@@ -497,6 +505,8 @@ fn request_shared_page(
                 Vec::new()
             };
             rows.extend(page.iter().map(|item| {
+                let (title, subtitle, is_video) =
+                    crate::bin_ui::converters::shared_content_lines(item);
                 let thumbnail = crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
                     .unwrap_or_default();
                 let has_thumbnail = thumbnail.size().width > 0;
@@ -504,11 +514,11 @@ fn request_shared_page(
                     message_id: item.message_id.clone().into(),
                     attachment_id: item.attachment_id.clone().into(),
                     category: item.category.clone().into(),
-                    title: shared_content_display_title(&item.category, &item.title).into(),
-                    subtitle: item.subtitle.clone().into(),
+                    title: shared_content_display_title(&item.category, &title).into(),
+                    subtitle: subtitle.into(),
                     thumbnail,
                     has_thumbnail,
-                    is_video: item.is_video,
+                    is_video,
                 }
             }));
             w.set_profile_shared_items(ModelRc::new(VecModel::from(rows)));

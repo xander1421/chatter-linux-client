@@ -62,7 +62,7 @@ pub(super) fn retire() {
 }
 fn open(w: &MainWindow, owner: Owner) {
     retire();
-    let default_index = chatter_core::ui::random_preset_avatar_index();
+    let default_index = crate::bin_ui::converters::random_preset_avatar_index();
     w.set_edit_profile_display_name(w.get_profile_display_name());
     w.set_edit_profile_bio(w.get_profile_bio());
     w.set_edit_profile_avatar(w.get_user_avatar_source());
@@ -201,7 +201,7 @@ fn select_default(w: &MainWindow, owner: Owner, index: usize) {
         return;
     }
     let Some(bytes) =
-        chatter_core::ui::default_avatar_bytes(index, w.get_edit_profile_display_name().as_str())
+        crate::bin_ui::converters::default_avatar_bytes(index, w.get_edit_profile_display_name().as_str())
     else {
         return;
     };
@@ -263,7 +263,9 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
                     .unwrap_or_default()
                     .into(),
             );
-            w.set_user_initials(chatter_core::ui::initials_from_name(&profile.display_name).into());
+            w.set_user_initials(
+                crate::bin_ui::converters::initials_from_name(&profile.display_name).into(),
+            );
             w.set_profile_initials(w.get_user_initials());
             w.set_user_display_name(profile.display_name.into());
             crate::bin_ui::features::back::close(w, "edit-profile");
@@ -285,7 +287,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
         if let Some(w) = weak.upgrade() {
             let index = EDIT
                 .with(|s| s.borrow().default_index)
-                .unwrap_or_else(chatter_core::ui::random_preset_avatar_index);
+                .unwrap_or_else(crate::bin_ui::converters::random_preset_avatar_index);
             select_default(&w, Owner::read(&client), index);
         }
     });
@@ -342,7 +344,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
         };
         if !w.get_edit_profile_has_photo() {
             if let Some(index) = EDIT.with(|s| s.borrow().default_index) {
-                bytes = chatter_core::ui::default_avatar_bytes(index, name.as_str());
+                bytes = crate::bin_ui::converters::default_avatar_bytes(index, name.as_str());
             }
         }
         let (weak, client) = (weak.clone(), client.clone());

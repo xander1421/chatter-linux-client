@@ -7,8 +7,6 @@ use crate::domain::channel::Channel;
 use crate::domain::message::ConversationType;
 use crate::state::ActiveConversation;
 
-use crate::ui::chat_data::sidebar_time_at;
-
 /// Channel invitation text resolved from the current user's local contacts.
 pub struct ChannelInviteRow {
     pub channel_id: String,
@@ -119,28 +117,6 @@ mod sidebar_preview_tests {
             plain_sidebar_preview(&source),
             format!("{}{}{} done", emoji, emoji, emoji)
         );
-    }
-}
-
-#[cfg(test)]
-mod sidebar_time_tests {
-    #[test]
-    fn today_is_a_time_and_older_carries_the_date() {
-        let now = chrono::Local::now();
-        let today = super::sidebar_time_at(now.with_timezone(&chrono::Utc), now);
-        assert_eq!(today, now.format("%H:%M").to_string());
-        let at = |days: i64| {
-            let t = now - chrono::Duration::days(days);
-            (
-                t,
-                super::sidebar_time_at(t.with_timezone(&chrono::Utc), now),
-            )
-        };
-        assert_eq!(at(1).1, "Yesterday");
-        let (t, s) = at(3);
-        assert_eq!(s, t.format("%a").to_string());
-        let (t, s) = at(400);
-        assert_eq!(s, t.format("%b %-d, %Y").to_string());
     }
 }
 
@@ -711,8 +687,8 @@ impl ChatterClient {
         plain_sidebar_preview(&preview)
     }
 
-    /// Preview + local-time stamp of a conversation's latest activity: the
-    /// second line and the right-hand time of a sidebar row. Empty pair when
+    /// Preview + raw activity time of a conversation's latest message: the
+    /// second line and the time source of a sidebar row. Empty pair when
     /// nothing has happened yet, so a fresh row renders as name only.
     ///
     /// Every sidebar row kind — DM, channel, private group — goes through here,
@@ -721,19 +697,11 @@ impl ChatterClient {
     pub fn sidebar_activity(
         &self,
         latest: Option<&crate::domain::message::Message>,
-    ) -> (String, String) {
+    ) -> (String, Option<chrono::DateTime<chrono::Utc>>) {
         match latest {
-            Some(msg) => (
-                self.message_sidebar_preview(msg),
-                self.sidebar_time(msg.created_at),
-            ),
-            None => (String::new(), String::new()),
+            Some(msg) => (self.message_sidebar_preview(msg), Some(msg.created_at)),
+            None => (String::new(), None),
         }
-    }
-
-    /// The one sidebar time formatter — see `sidebar_time_at`.
-    pub fn sidebar_time(&self, at: chrono::DateTime<chrono::Utc>) -> String {
-        sidebar_time_at(at, chrono::Local::now())
     }
 
     /// The storage bucket a channel's messages and pins are filed under.
@@ -776,7 +744,6 @@ impl ChatterClient {
             .ok();
         let is_channel = conv.conversation_type == CT::Channel;
         let mut row = ChatRowSendData {
-            initials: crate::ui::chat_data::initials_from_name(&display_name),
             unread_count: conv.unread_count,
             is_pinned: conv.is_pinned,
             can_leave: match conv.conversation_type {
@@ -809,7 +776,7 @@ impl ChatterClient {
         if !matches!(conv.conversation_type, CT::ServerDm | CT::Channel) {
             return row;
         }
-        (row.last_message, row.timestamp) =
+        (row.last_message, row.timestamp_at) =
             self.sidebar_activity(self.latest_message(&id, &conv.conversation_type).as_ref());
         match conv.conversation_type {
             CT::ServerDm => {
@@ -841,7 +808,6 @@ impl ChatterClient {
     /// the UI never iterates channels to find DMs.
     pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::message::ConversationType;
-        use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::ChatRowSendData;
 
         // Each row carries its last activity, so the list is ordered newest
@@ -867,7 +833,7 @@ impl ChatterClient {
             // used to hand-roll the text-only case, so a DM whose last message
             // was a file rendered blank until the next live message arrived.
             let latest = self.latest_message(&conversation_id, &ConversationType::ServerDm);
-            let (last_message, timestamp) = self.sidebar_activity(latest.as_ref());
+            let (last_message, timestamp_at) = self.sidebar_activity(latest.as_ref());
 
             let unread_count = self
                 .messages()
@@ -877,11 +843,10 @@ impl ChatterClient {
 
             out.push(ChatRowSendData {
                 user_id: peer_id.to_string(),
-                initials: initials_from_name(&display_name),
                 avatar_bytes,
                 presence_status,
                 last_message,
-                timestamp,
+                timestamp_at,
                 unread_count,
                 last_activity: latest.map(|m| m.created_at),
                 ..ChatRowSendData::new(
@@ -925,7 +890,6 @@ impl ChatterClient {
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
         use crate::domain::message::ConversationType;
-        use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::ChatRowSendData;
 
         // Friend DMs show in both modes — one conversation per friend, whose
@@ -964,18 +928,14 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&peer_name),
                 avatar_bytes: dm.peer_avatar.clone(),
                 presence_status: "pending".to_string(),
                 last_message,
-                timestamp: self.sidebar_time(dm.created_at),
+                timestamp_at: Some(dm.created_at),
                 unread_count: 1,
                 last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                ..ChatRowSendData::new(
-                    ConversationType::AnonDm,
-                    dm.id.to_string(),
-                    format!("\u{1F4E9} {}", peer_name),
-                )
+                label: crate::ui::sidebar_data::ChatRowLabel::IncomingSecretRequest,
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), peer_name)
             });
         }
 
@@ -991,20 +951,16 @@ impl ChatterClient {
             let latest = self.get_latest_anon_dm_message(&dm.id);
             // The preview every other row uses: "You: " on our own messages
             // (RC108 O5), typed attachment labels.
-            let (last_message, timestamp) = match &latest {
-                Some(msg) => (
-                    self.message_sidebar_preview(msg),
-                    self.sidebar_time(msg.created_at),
-                ),
-                None => (String::new(), String::new()),
+            let (last_message, timestamp_at) = match &latest {
+                Some(msg) => (self.message_sidebar_preview(msg), Some(msg.created_at)),
+                None => (String::new(), None),
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&display_name),
                 avatar_bytes: dm.peer_avatar.clone(),
                 presence_status: "online".to_string(),
                 last_message,
-                timestamp,
+                timestamp_at,
                 unread_count: dm.unread_count,
                 last_activity: latest.map(|m| m.created_at),
                 ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
@@ -1021,34 +977,26 @@ impl ChatterClient {
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
             let latest = self.get_latest_anon_dm_message(&dm.id);
-            let (last_message, timestamp) = match &latest {
+            let (last_message, timestamp_at) = match &latest {
                 Some(msg) => {
                     let preview = msg
                         .as_text()
                         .filter(|t| !t.is_empty())
                         .map(|t| plain_sidebar_preview(&format!("You: {}", t)))
                         .unwrap_or_else(|| "Message request sent".to_string());
-                    (preview, self.sidebar_time(msg.created_at))
+                    (preview, Some(msg.created_at))
                 }
-                None => (
-                    "Waiting for response...".to_string(),
-                    self.sidebar_time(dm.created_at),
-                ),
+                None => ("Waiting for response...".to_string(), Some(dm.created_at)),
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&peer_name),
                 avatar_bytes: dm.peer_avatar.clone(),
                 presence_status: "offline".to_string(),
                 last_message,
-                timestamp,
+                timestamp_at,
                 last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                // Postbox marker distinguishes an outgoing pending request.
-                ..ChatRowSendData::new(
-                    ConversationType::AnonDm,
-                    dm.id.to_string(),
-                    format!("\u{1F4EE} {} (pending)", peer_name),
-                )
+                label: crate::ui::sidebar_data::ChatRowLabel::OutgoingSecretRequest,
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), peer_name)
             });
         }
 
@@ -1103,7 +1051,7 @@ impl ChatterClient {
         ChatRowSendData {
             avatar_bytes: channel.icon.clone().filter(|b| !b.is_empty()),
             last_message,
-            timestamp: self.sidebar_time(last_activity),
+            timestamp_at: Some(last_activity),
             unread_count: channel.unread_count,
             is_pinned: self.is_conversation_pinned(&id),
             private_channel: channel.channel_type == crate::domain::channel::ChannelType::Private,
@@ -1130,7 +1078,7 @@ impl ChatterClient {
         let last_activity = latest.map_or(group.created_at, |m| m.created_at);
         ChatRowSendData {
             last_message,
-            timestamp: self.sidebar_time(last_activity),
+            timestamp_at: Some(last_activity),
             unread_count: self.anon_group_unread_count(&group.id),
             member_count: self.get_anon_group_members(&group.id).len() as u32,
             is_pinned: self.is_conversation_pinned(&group.id.to_string()),
@@ -1355,7 +1303,6 @@ impl ChatterClient {
                         display_name: self.display_name(&friendship.addressee_id),
                         username: String::new(),
                         avatar_bytes: profile.avatar_bytes.clone(),
-                        avatar_decoded: None,
                         presence_status: self
                             .peer_presence(&friendship.addressee_id)
                             .as_str()
@@ -1397,7 +1344,6 @@ impl ChatterClient {
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
                     username: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
                     presence_status: "online".to_string(),
                     custom_status: String::new(),
                     is_anon: true,
@@ -1415,7 +1361,6 @@ impl ChatterClient {
                     display_name: self.display_name(&peer),
                     username: String::new(),
                     avatar_bytes,
-                    avatar_decoded: None,
                     presence_status: self.peer_presence(&peer).as_str().to_string(),
                     custom_status: String::new(),
                     is_anon: false,
@@ -1699,13 +1644,19 @@ impl ChatterClient {
     }
 
     /// Keep only invite choices that are selected and currently eligible.
-    pub fn eligible_channel_invite_targets<I>(
-        &self, rows: I,
-    ) -> Vec<crate::domain::ids::UserId>
-    where I: IntoIterator<Item = (String, bool, bool, bool)> {
-        rows.into_iter().filter_map(|(id, selected, already_member, banned)| {
-            if selected && !already_member && !banned { id.parse().ok() } else { None }
-        }).collect()
+    pub fn eligible_channel_invite_targets<I>(&self, rows: I) -> Vec<crate::domain::ids::UserId>
+    where
+        I: IntoIterator<Item = (String, bool, bool, bool)>,
+    {
+        rows.into_iter()
+            .filter_map(|(id, selected, already_member, banned)| {
+                if selected && !already_member && !banned {
+                    id.parse().ok()
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub async fn invite_user_to_channel(
@@ -1728,7 +1679,9 @@ impl ChatterClient {
         match client.list_pending_invites().await {
             Ok(mut resp) => {
                 resp.invites.sort_by(|a, b| {
-                    a.created_at.cmp(&b.created_at).then_with(|| a.channel_id.cmp(&b.channel_id))
+                    a.created_at
+                        .cmp(&b.created_at)
+                        .then_with(|| a.channel_id.cmp(&b.channel_id))
                 });
                 resp.invites
             }
@@ -2700,8 +2653,8 @@ mod new_channel_row_tests {
         let ids: Vec<_> = rows.iter().map(|r| r.id.clone()).collect();
         assert_eq!(ids, [new, old], "the new channel leads the list");
         assert!(
-            !rows[0].timestamp.is_empty(),
-            "the new channel shows its creation time"
+            rows[0].timestamp_at.is_some(),
+            "the new channel has its creation time"
         );
     }
 }
@@ -2833,7 +2786,7 @@ mod section_row_tests {
     }
 
     #[tokio::test]
-    async fn group_row_offers_leave_and_carries_badge_and_initials() {
+    async fn group_row_offers_leave_and_carries_badge_and_name() {
         let (client, _dir) = client();
         // A group we belong to (not its owner): Leave is offered.
         client
@@ -2860,10 +2813,6 @@ mod section_row_tests {
             "Book Club",
         ));
         assert_eq!(row.display_name, "Book Club");
-        assert_eq!(
-            row.initials,
-            crate::ui::chat_data::initials_from_name("Book Club")
-        );
         assert!(row.can_leave && !row.can_delete);
         assert!(row.is_pinned);
         assert_eq!(row.unread_count, 3);

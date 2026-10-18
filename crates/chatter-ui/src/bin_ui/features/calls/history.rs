@@ -579,20 +579,23 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
         .rows
         .into_iter()
         .zip(prepared.avatars)
-        .map(|(r, avatar)| CallHistoryRow {
-            avatar_source: avatar.map(slint::Image::from_rgba8).unwrap_or_default(),
-            id: r.id.into(),
-            conversation_id: r.conversation_id.into(),
-            conversation_type: r.conversation_type.into(),
-            name: r.name.into(),
-            initials: r.initials.into(),
-            timestamp: r.timestamp.into(),
-            detail: r.detail.into(),
-            is_missed: r.is_missed,
-            is_video: r.is_video,
-            is_incoming: r.is_incoming,
-            can_call_back: r.can_call_back,
-            selected: false,
+        .map(|(r, avatar)| {
+            let name = if r.name.is_empty() { "Unknown" } else { &r.name };
+            CallHistoryRow {
+                avatar_source: avatar.map(slint::Image::from_rgba8).unwrap_or_default(),
+                id: r.id.into(),
+                conversation_id: r.conversation_id.into(),
+                conversation_type: r.conversation_type.into(),
+                name: name.into(),
+                initials: crate::bin_ui::converters::initials_from_name(name).into(),
+                timestamp: r.started_at.map(crate::bin_ui::converters::sidebar_time).unwrap_or_default().into(),
+                detail: (if r.in_progress { "In progress".to_string() } else { crate::bin_ui::converters::call_detail(r.result, r.is_incoming, r.duration_secs) }).into(),
+                is_missed: r.is_missed,
+                is_video: r.is_video,
+                is_incoming: r.is_incoming,
+                can_call_back: r.can_call_back,
+                selected: false,
+            }
         })
         .collect();
     match how {

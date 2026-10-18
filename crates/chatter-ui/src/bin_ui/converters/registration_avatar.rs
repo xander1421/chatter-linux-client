@@ -119,3 +119,4 @@ pub fn registration_avatar(name: &str, color: [u8; 3]) -> Option<Vec<u8>> {
         .ok()?;
     Some(output.into_inner())
 }
+

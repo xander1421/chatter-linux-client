@@ -561,10 +561,7 @@ pub async fn handle_domain_event(
                 .get_channel_local(&channel_id)
                 .as_ref()
                 .map(crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel);
-            let mut rows = ui_ctx.sidebar_rows();
-            for row in &mut rows {
-                row.pre_decode_avatar();
-            }
+            let rows = ui_ctx.sidebar_rows();
             let weak = window.clone();
             let ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {

@@ -183,17 +183,14 @@ impl ChatterClient {
         self.users().get_user_local(user_id).ok().flatten()
     }
 
-    /// Resolve a call participant's view data (display name, initials, avatar
-    /// bytes) from local state, by LiveKit identity (a user_id string). The UI
-    /// only decodes `avatar_bytes` to an image and renders — identity/profile
-    /// resolution (decrypted name, the server-DM-profile-vs-anon-DM-row avatar
-    /// fallback, initials) stays in core, not the UI. A non-user_id identity
+    /// Resolve a call participant's name and avatar bytes from local state,
+    /// by LiveKit identity (a user_id string). A non-user_id identity
     /// (unlikely) falls back to showing the raw identity.
     pub fn resolve_call_participant(
         &self,
         identity: &str,
     ) -> crate::ui::chat_data::CallParticipantInfo {
-        use crate::ui::chat_data::{CallParticipantInfo, initials_from_name};
+        use crate::ui::chat_data::CallParticipantInfo;
         match identity.parse::<crate::domain::ids::UserId>() {
             Ok(uid) => {
                 let display_name = self.display_name(&uid);
@@ -202,13 +199,11 @@ impl ChatterClient {
                     .and_then(|p| p.avatar_bytes)
                     .or_else(|| self.anon_dm_peer_avatar(&uid));
                 CallParticipantInfo {
-                    initials: initials_from_name(&display_name),
                     display_name,
                     avatar_bytes,
                 }
             }
             Err(_) => CallParticipantInfo {
-                initials: initials_from_name(identity),
                 display_name: identity.to_string(),
                 avatar_bytes: None,
             },
@@ -1752,9 +1747,9 @@ mod tests {
             client.peer_display_presence(&peer, PresenceStatus::Away),
             PresenceStatus::Offline
         );
-        assert!(!client.peer_last_seen_label(&peer).contains("online"));
+        assert!(client.peer_last_seen(&peer).is_none());
         assert_eq!(client.peer_presence(&friend), PresenceStatus::Online);
-        assert_eq!(client.peer_last_seen_label(&friend), "online");
+        assert_eq!(client.peer_last_seen(&friend).unwrap().0, PresenceStatus::Online);
 
         repos.user_repo.delete_friendship(&me, &peer).unwrap();
         assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);

@@ -64,7 +64,7 @@ pub fn build_own_message_item(
         message_id: message_id.into(),
         sender_id: sender_id.into(),
         sender_name: sender_name.into(),
-        sender_initials: chatter_core::ui::initials_from_name(sender_name).into(),
+        sender_initials: crate::bin_ui::converters::initials_from_name(sender_name).into(),
         content,
         rich_content,
         timestamp: timestamp.into(),
@@ -102,7 +102,7 @@ pub fn build_own_message_item(
         show_sender: true,
         delivery_status: delivery_status.into(),
         // Just sent, so today's chip.
-        date_separator_text: chatter_core::ui::chat_data::day_label(chrono::Utc::now()).into(),
+        date_separator_text: crate::bin_ui::converters::day_label(chrono::Utc::now()).into(),
         ..Default::default()
     }
 }
@@ -163,11 +163,7 @@ pub(crate) fn recompute_channel_continuations(model: &slint::VecModel<crate::Mes
         })
         .collect();
     let flags = channel_continuation_flags(&grouping_rows);
-    for (index, (mut row, is_continuation)) in rows
-        .into_iter()
-        .zip(flags)
-        .enumerate()
-    {
+    for (index, (mut row, is_continuation)) in rows.into_iter().zip(flags).enumerate() {
         if row.is_continuation != is_continuation {
             row.is_continuation = is_continuation;
             model.set_row_data(index, row);

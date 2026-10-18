@@ -8,9 +8,9 @@ use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 
+use crate::bin_ui::converters::initials_from_name;
 use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
 use crate::{FriendData, FriendRequestData, MainWindow};
-use chatter_core::ui::initials_from_name;
 
 /// Rebuild the FriendsModal "Friends" tab list and push it into the UI.
 ///
@@ -73,14 +73,11 @@ async fn friends_list_empty(window_weak: &Weak<MainWindow>) -> bool {
 
 fn publish_friends(
     window_weak: Weak<MainWindow>,
-    mut friends_data: Vec<chatter_core::ui::sidebar_data::FriendDataSendData>,
+    friends_data: Vec<chatter_core::ui::sidebar_data::FriendDataSendData>,
     owner: super::super::history_owner::SessionOwner,
 ) {
     if !owner.is_current() {
         return;
-    }
-    for f in &mut friends_data {
-        f.pre_decode_avatar();
     }
     crate::run_history_ui!(window_weak, owner, |w| {
         let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
@@ -91,12 +88,9 @@ fn publish_friends(
 /// Restore the local conversation snapshot before the main view first paints.
 /// The later initial-data refresh reconciles any server changes in place.
 pub fn show_cached_chat_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let mut rows = ui_ctx.sidebar_rows();
+    let rows = ui_ctx.sidebar_rows();
     if rows.is_empty() {
         return;
-    }
-    for row in &mut rows {
-        row.pre_decode_avatar();
     }
     crate::bin_ui::features::sidebar::apply_chat_list(window, ui_ctx, rows);
     window.set_chat_rows_loading(false);
@@ -113,11 +107,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
     // The sidebar snapshot is local. Paint it before any channel/profile RPC
     // so returning users see their conversations on the first main-view frame.
-    let mut cached_rows = ui_ctx.sidebar_rows();
+    let cached_rows = ui_ctx.sidebar_rows();
     if !cached_rows.is_empty() {
-        for row in &mut cached_rows {
-            row.pre_decode_avatar();
-        }
         let cached_client = ui_ctx.clone();
         crate::run_history_ui!(window_weak, session_owner, |w| {
             crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);
@@ -194,7 +185,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // conversation, mode-exclusive, ordered by activity with pins first,
     // previews/markers/presence included. Same source as every later
     // rebuild (`sidebar::rebuild_chat_list`) — the UI never hand-rolls it.
-    let mut chat_rows = ui_ctx.sidebar_rows();
+    let chat_rows = ui_ctx.sidebar_rows();
 
     // Get user profile info
     let user_display_name = ui_ctx
@@ -261,8 +252,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     display_name: peer_name,
                     username: "Private".to_string(),
                     avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    sent_at: last_message,
+                    secondary_text: last_message,
                 });
             }
         }
@@ -273,13 +263,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loaded {} blocked users", blocked_users_slint.len());
 
     // Pre-decode avatars before entering UI thread to avoid blocking
-    for row in &mut chat_rows {
-        row.pre_decode_avatar();
-    }
-    let mut private_requests_ui = private_requests_ui;
-    for req in &mut private_requests_ui {
-        req.pre_decode_avatar();
-    }
 
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();

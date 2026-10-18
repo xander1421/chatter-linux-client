@@ -800,7 +800,7 @@ pub async fn app_init() -> Result<AppState, String> {
         use slint::ComponentHandle;
         window
             .global::<AvatarText>()
-            .on_initials(|name| chatter_core::ui::initials_from_name(&name).into());
+            .on_initials(|name| crate::bin_ui::converters::initials_from_name(&name).into());
     }
 
     mirror_anon_mode_build(&window);

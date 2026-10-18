@@ -1702,7 +1702,7 @@ impl ChatterClient {
                     .map(|entry| {
                         let mut row = crate::ui::CallHistoryRowData::from(entry);
                         if entry.ended_at.is_none() && entry.started_at >= history_live_since() {
-                            row.detail = "In progress".to_string();
+                            row.in_progress = true;
                             row.is_missed = false;
                             row.can_call_back = false;
                         }
@@ -1719,7 +1719,6 @@ impl ChatterClient {
         for row in &mut page.rows {
             row.avatar_bytes = self.call_peer_avatar(&row.conversation_type, &row.conversation_id);
             if let Some(name) = self.call_peer_name(&row.conversation_type, &row.conversation_id) {
-                row.initials = crate::ui::chat_data::initials_from_name(&name);
                 row.name = name;
             }
         }

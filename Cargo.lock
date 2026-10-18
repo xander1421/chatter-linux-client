@@ -1919,7 +1919,6 @@ dependencies = [
 name = "chatter-core"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
  "aes",
  "aes-gcm",
  "anyhow",
@@ -2144,6 +2143,7 @@ dependencies = [
 name = "chatter-ui"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "android-activity 0.6.1",
  "arboard",
  "chatter-core",

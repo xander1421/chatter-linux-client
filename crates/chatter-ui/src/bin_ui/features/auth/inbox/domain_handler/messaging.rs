@@ -98,8 +98,11 @@ pub(super) fn handle_message_received(
     // older message (a resend, an offline backlog) flipped the row's preview
     // and time backwards until the next rebuild put them right again.
     let latest = ui_ctx.latest_message(&conversation_id, &conv_type);
-    let (preview, timestamp_str) =
+    let (preview, timestamp_at) =
         ui_ctx.sidebar_activity(Some(latest.as_ref().unwrap_or(&message)));
+    let timestamp_str = timestamp_at
+        .map(crate::bin_ui::converters::sidebar_time)
+        .unwrap_or_default();
 
     // Core's one "is this message on screen" rule (mailbox DMs included).
     let is_active = ui_ctx.is_showing(&message);
@@ -275,7 +278,9 @@ pub(super) fn handle_message_received(
                     {
                         vec_model.insert(insert_pos, new_msg);
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
-                            crate::bin_ui::features::chat::recompute_channel_continuations(vec_model);
+                            crate::bin_ui::features::chat::recompute_channel_continuations(
+                                vec_model,
+                            );
                         }
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                     } else {

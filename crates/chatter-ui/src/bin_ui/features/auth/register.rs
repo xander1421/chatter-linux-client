@@ -42,13 +42,13 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     super::super::avatar_defaults::install(window);
     super::super::avatar_defaults::show_register_default(
         window,
-        chatter_core::ui::random_preset_avatar_index(),
+        crate::bin_ui::converters::random_preset_avatar_index(),
     );
 
     window.on_register_select_default_avatar({
         let weak = weak_window.clone();
         move |idx| {
-            if (0..chatter_core::ui::DEFAULT_AVATARS.len() as i32).contains(&idx) {
+            if (0..crate::bin_ui::converters::DEFAULT_AVATARS.len() as i32).contains(&idx) {
                 if let Ok(mut g) = selected_avatar().lock() {
                     *g = None;
                 }
@@ -218,7 +218,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let index = weak_window.upgrade()
                         .map(|w| w.get_register_selected_default_idx().max(0) as usize)
                         .unwrap_or(0);
-                    chatter_core::ui::default_avatar_bytes(index, &display_name).unwrap_or_default()
+                    crate::bin_ui::converters::default_avatar_bytes(index, &display_name).unwrap_or_default()
                 }
             };
 

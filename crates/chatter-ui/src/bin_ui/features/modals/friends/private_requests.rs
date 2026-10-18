@@ -250,17 +250,12 @@ async fn refresh_private_requests(
             display_name: peer_name,
             username: "Private".to_string(),
             avatar_bytes: dm.peer_avatar.clone(),
-            avatar_decoded: None,
-            sent_at: dm
+            secondary_text: dm
                 .created_at
                 .with_timezone(&chrono::Local)
                 .format("%b %d, %H:%M")
                 .to_string(),
         });
-    }
-
-    for req in &mut private_requests {
-        req.pre_decode_avatar();
     }
 
     let request_count = private_requests.len() as i32;

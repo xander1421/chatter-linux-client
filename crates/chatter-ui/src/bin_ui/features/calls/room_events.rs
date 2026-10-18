@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use crate::bin_ui::converters::initials_from_name;
 use crate::{CallParticipantData, MainWindow};
 use chatter_core::calls::{LiveKitRoomEvent, RoomState, tiles};
 use chatter_core::client::ChatterClient;
-use chatter_core::ui::initials_from_name;
 
 /// Core's tile order ([`chatter_core::calls::tiles::order_tiles`]).
 fn order_participants(
@@ -38,7 +38,7 @@ pub(super) fn reconcile_roster(
             .unwrap_or_default();
         tile.user_id = identity.clone().into();
         tile.display_name = info.display_name.clone().into();
-        tile.initials = info.initials.clone().into();
+        tile.initials = crate::bin_ui::converters::initials_from_name(&info.display_name).into();
         tile.avatar_source = info
             .avatar_bytes
             .as_deref()
@@ -174,7 +174,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let (name, initials) = remotes
                                 .iter()
                                 .find(|p| p.user_id.to_string() == identity)
-                                .map(|p| (p.display_name.to_string(), p.initials.to_string()))
+                                .map(|p| (p.display_name.to_string(), crate::bin_ui::converters::initials_from_name(&p.display_name)))
                                 .unwrap_or_else(|| {
                                     (identity.clone(), initials_from_name(&identity))
                                 });

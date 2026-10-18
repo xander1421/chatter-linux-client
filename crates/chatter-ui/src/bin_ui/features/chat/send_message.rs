@@ -111,7 +111,7 @@ pub(crate) fn show_pending_bubble(
             &user_id,
             &user_name,
             &text,
-            &chatter_core::ui::chat_data::format_timestamp(now),
+            &crate::bin_ui::converters::format_timestamp(now),
             now_ns,
             attachments.iter().map(|a| a.to_slint()).collect(),
             !reply_sender_name.is_empty(),
