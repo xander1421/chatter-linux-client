@@ -1,6 +1,7 @@
 use super::*;
-use crate::outbox::{DropReason, Sealer};
+use crate::outbox::{AckKind, DropReason, Sealer};
 use crate::storage::MemoryStorage;
+use crate::transport::PeerSnapshot;
 use crate::{MAX_COURIERS_PER_MESSAGE, MAX_SEND_ATTEMPTS, MESSAGE_TTL_SECS};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
