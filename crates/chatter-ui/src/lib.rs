@@ -311,9 +311,14 @@ fn trace_chat_list_geometry(visible_height: f32, content_height: f32, seeking: b
             frame.visible_height = visible_height;
             frame.content_height = content_height;
             if seeking && !frame.seek_logged {
-                tracing::info!(kind = frame.kind, stage = "tail_seek",
-                    visible_height, content_height,
-                    elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                tracing::info!(
+                    kind = frame.kind,
+                    stage = "tail_seek",
+                    visible_height,
+                    content_height,
+                    elapsed_ms = frame.started.elapsed().as_millis(),
+                    "conversation_open"
+                );
                 frame.seek_logged = true;
             }
         }
@@ -1179,7 +1184,7 @@ fn app_run(state: AppState) {
     let ui_ctx = state.ui_ctx;
     let (tx, rx) = std::sync::mpsc::channel();
     rt_handle().spawn(async move {
-        if ui_ctx.auth_state().is_logged_in() {
+        if ui_ctx.has_auth_identity() {
             tracing::info!("Sending offline presence before shutdown...");
             ui_ctx.shutdown_presence().await;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;

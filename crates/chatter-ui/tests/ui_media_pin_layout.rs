@@ -64,7 +64,7 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
     let b = chatter_core::state::ActiveConversation::Channel(
         chatter_core::domain::ids::ChannelId::new(),
     );
-    client.chat_state().set_active_conversation(a);
+    client.select_conversation(a);
     w.set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
         message_id: "collision".into(),
         ..Default::default()
@@ -80,7 +80,7 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
             );
         })
         .unwrap();
-    client.chat_state().set_active_conversation(b);
+    client.select_conversation(b);
     pump(&w, 412.0);
     assert_eq!(
         w.get_messages().row_count(),

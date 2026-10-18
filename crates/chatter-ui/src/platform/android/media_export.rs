@@ -191,12 +191,12 @@ pub fn prepare_document(name: &str, data: &[u8], mime: &str) -> Result<ExportSes
 /// Drop private plaintext/grants on every authentication generation change.
 /// Subscribe before launch; lagged events reconcile from the current snapshot.
 pub fn wire_session(client: &std::sync::Arc<chatter_core::client::ChatterClient>) {
-    let auth = client.auth_state().clone();
-    let mut events = auth.subscribe();
+    let auth = client.clone();
+    let mut events = auth.subscribe_auth_snapshots();
     client.runtime_handle().spawn(async move {
         let mut previous = None;
         loop {
-            let revision = auth.get().session_revision;
+            let revision = auth.auth_snapshot().session_revision;
             if previous != Some(revision) {
                 crate::bin_ui::features::chat_actions::media_viewer::invalidate();
                 let result = (|| -> Result<(), String> {

@@ -29,9 +29,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
     let own = UserId::new();
     let author = UserId::new();
     let second_reactor = UserId::new();
-    client
-        .auth_state()
-        .set_logged_in(own, 1, "reaction fixture".into());
+    client.testing_set_logged_in(own, 1, "reaction fixture".into());
     chatter_core::storage::repositories::settings_repo::SettingsRepository::new(
         client.messages().database(),
     )
@@ -96,7 +94,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             .messages()
             .record_reaction(&other_scope, &author, sent_at, &second_reactor, "👍", false)
             .unwrap();
-        client.chat_state().set_active_conversation(scope);
+        client.select_conversation(scope);
         let mut row = MessageItemData::default();
         row.sender_id = author.to_string().into();
         row.timestamp_ns = sent_at.to_string().into();
@@ -265,7 +263,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             "initial rendering clears own highlight without dropping another reactor"
         );
         let switched = ActiveConversation::Channel(ChannelId::new());
-        client.chat_state().set_active_conversation(switched);
+        client.select_conversation(switched);
         client
             .messages()
             .record_reaction(
@@ -293,7 +291,7 @@ fn reaction_snapshot_repairs_stale_counts_and_ignores_duplicates_and_switched_co
             1,
             "old completion must not touch a switched view"
         );
-        client.chat_state().set_active_conversation(scope);
+        client.select_conversation(scope);
         refresh_reaction_in_ui(&window, &client, scope, &author, sent_at);
         let row = window.get_messages().row_data(0).unwrap();
         assert!(!row.has_reactions);

@@ -2,16 +2,16 @@
 //!
 //! Handles selecting a DM conversation, loading messages, and presence.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 
-use crate::bin_ui::converters::messages_to_display_batch_deferred;
 use crate::MainWindow;
+use crate::bin_ui::converters::messages_to_display_batch_deferred;
 
 use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
@@ -53,7 +53,9 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 tracing::error!(error = %e, row_id = %row_id, "delete chat failed");
                 // A secret chat stays when its peer could not be told.
                 crate::run_ui!(weak, |w| {
-                    w.set_toast_message("Could not delete the chat. Check your connection and try again.".into());
+                    w.set_toast_message(
+                        "Could not delete the chat. Check your connection and try again.".into(),
+                    );
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 });
@@ -343,7 +345,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     (ids, preview)
                 };
                 if !owner.is_current() { return; }
-                super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
+                super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
                 // Load messages
                 let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
@@ -443,7 +445,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             if !owner.is_current() { return; }
             tracing::info!(kind = "dm", stage = "pins_loaded", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
-                super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
+                super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
             // Load messages
             let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {

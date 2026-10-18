@@ -316,7 +316,6 @@ pub fn apply_message_edit_in_conversation(
     }
     w.set_pinned_items(ModelRc::new(VecModel::from(pins)));
     if ui_ctx
-        .chat_state()
         .pinned_current_message_id()
         .is_some_and(|id| id.to_string() == pin_id)
     {

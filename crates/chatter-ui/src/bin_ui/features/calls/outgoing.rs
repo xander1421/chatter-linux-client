@@ -45,7 +45,7 @@ fn current_start(generation: u64) -> bool {
 /// Wire start call callbacks.
 pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let ctx_chat_state = ui_ctx.chat_state().clone();
+    let ctx_chat_state = ui_ctx.clone();
     let ctx_ui = ui_ctx.clone();
 
     window.on_start_voice_call({

@@ -196,12 +196,12 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
                 if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
                     if new_pinned_state {
-                        ui_ctx.chat_state().add_pinned_message(msg_id);
+                        ui_ctx.add_pinned_message(msg_id);
                     } else {
-                        ui_ctx.chat_state().remove_pinned_message(&msg_id);
+                        ui_ctx.remove_pinned_message(&msg_id);
                     }
                 }
-                let pinned_count = ui_ctx.chat_state().pinned_total_count();
+                let pinned_count = ui_ctx.pinned_total_count();
                 super::edit_messages(&w, |model| {
                     for i in 0..model.row_count() {
                         let Some(mut m) = model.row_data(i) else {

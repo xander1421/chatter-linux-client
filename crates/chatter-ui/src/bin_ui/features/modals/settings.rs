@@ -8,9 +8,7 @@ use chatter_core::client::{ChatterClient, ClientError, ImportSummary};
 
 use crate::MainWindow;
 
-fn message_restore_status(
-    result: Result<ImportSummary, ClientError>,
-) -> String {
+fn message_restore_status(result: Result<ImportSummary, ClientError>) -> String {
     match result {
         Ok(summary) => format!(
             "Restored {} rows ({} already present or kept locally)",
@@ -515,14 +513,18 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             #[cfg(target_os = "android")]
             {
                 use crate::platform::android::backup_document;
-                let staged = match tempfile::NamedTempFile::new_in(ui_ctx.directories().cache_dir()) {
+                let staged = match tempfile::NamedTempFile::new_in(ui_ctx.directories().cache_dir())
+                {
                     Ok(file) => file,
                     Err(e) => {
                         set_message_backup_status(&weak, format!("Export failed: {e}"));
                         return;
                     }
                 };
-                let stats = match ui_ctx.export_message_backup(staged.path(), &passphrase).await {
+                let stats = match ui_ctx
+                    .export_message_backup(staged.path(), &passphrase)
+                    .await
+                {
                     Ok(stats) => stats,
                     Err(e) => {
                         set_message_backup_status(&weak, format!("Export failed: {e}"));
@@ -596,9 +598,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 else {
                     return; // user cancelled
                 };
-                let status = message_restore_status(
-                    ui_ctx.import_message_backup(&path, &passphrase).await,
-                );
+                let status =
+                    message_restore_status(ui_ctx.import_message_backup(&path, &passphrase).await);
                 set_message_backup_status(&weak, status);
             }
         });
@@ -738,25 +739,17 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Edit profile
     let weak_window = window.as_weak();
-    let auth_state_edit = ui_ctx.auth_state().clone();
-    let user_state_edit = ui_ctx.user_state().clone();
+    let auth_state_edit = ui_ctx.clone();
     let ui_ctx_edit = ui_ctx.clone();
     window.on_settings_edit_profile(move || {
         let weak = weak_window.clone();
         let auth_state = auth_state_edit.clone();
-        let user_state = user_state_edit.clone();
         let ui_ctx = ui_ctx_edit.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                if let Some(user_id) = auth_state.get().current_user_id {
-                    crate::bin_ui::features::modals::open_user_profile(
-                        &w,
-                        &user_id,
-                        &auth_state,
-                        &user_state,
-                        Some(&ui_ctx),
-                    );
+                if let Some(user_id) = auth_state.auth_snapshot().current_user_id {
+                    crate::bin_ui::features::modals::open_user_profile(&w, &user_id, Some(&ui_ctx));
                     crate::bin_ui::features::back::push(&w, "user-profile");
                     // The button says Edit, so open the editor, over the
                     // profile it edits (REVIEW-R4 P2-24). open_user_profile

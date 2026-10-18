@@ -232,9 +232,9 @@ fn wire_session(
     requests: Arc<Mutex<SearchRequests>>,
 ) {
     let weak = window.as_weak();
-    let auth = ui_ctx.auth_state().clone();
-    let mut events = auth.subscribe();
-    let mut revision = auth.get().session_revision;
+    let auth = ui_ctx.clone();
+    let mut events = auth.subscribe_auth_snapshots();
+    let mut revision = auth.auth_snapshot().session_revision;
     tokio::spawn(async move {
         loop {
             if matches!(
@@ -243,7 +243,7 @@ fn wire_session(
             ) {
                 break;
             }
-            let next = auth.get().session_revision;
+            let next = auth.auth_snapshot().session_revision;
             if revision == next {
                 continue;
             }
@@ -254,7 +254,7 @@ fn wire_session(
             let weak = weak.clone();
             let auth = auth.clone();
             let _ = slint::invoke_from_event_loop(move || {
-                if auth.get().session_revision != next {
+                if auth.auth_snapshot().session_revision != next {
                     return;
                 }
                 if let Some(w) = weak.upgrade() {
@@ -598,13 +598,7 @@ fn wire_person_selected(
             Err(_) => return,
         };
         if let Some(w) = weak.upgrade() {
-            crate::bin_ui::features::modals::open_user_profile(
-                &w,
-                &user_id,
-                ui_ctx.auth_state(),
-                ui_ctx.user_state(),
-                Some(&ui_ctx),
-            );
+            crate::bin_ui::features::modals::open_user_profile(&w, &user_id, Some(&ui_ctx));
             crate::bin_ui::features::back::push(&w, "user-profile");
         }
     });

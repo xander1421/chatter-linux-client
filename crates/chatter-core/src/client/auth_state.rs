@@ -26,7 +26,9 @@ impl ConversationGuard {
     }
 
     pub fn shows_thread(&self, root: crate::domain::ids::MessageId) -> bool {
-        self.chat.active_thread().is_some_and(|thread| thread.root_message_id == root)
+        self.chat
+            .active_thread()
+            .is_some_and(|thread| thread.root_message_id == root)
     }
 }
 
@@ -141,10 +143,10 @@ impl ChatterClient {
     /// Local logout (best-effort server notify + clear local state).
     // ── State stores ────────────────────────────────────────────────────
 
-    pub fn auth_state(&self) -> &AuthState {
+    pub(crate) fn auth_state(&self) -> &AuthState {
         &self.services.auth_state
     }
-    pub fn chat_state(&self) -> &ChatState {
+    pub(crate) fn chat_state(&self) -> &ChatState {
         &self.services.chat_state
     }
 
@@ -235,7 +237,9 @@ impl ChatterClient {
     /// Select a conversation through the client so attachment trays and thread
     /// selection move together with the active conversation.
     pub fn select_conversation(&self, conversation: crate::state::ActiveConversation) {
-        self.services.chat_state.set_active_conversation(conversation);
+        self.services
+            .chat_state
+            .set_active_conversation(conversation);
     }
 
     /// Legacy channel selection keeps the channel-specific attachment tray
@@ -245,14 +249,59 @@ impl ChatterClient {
         self.select_conversation(crate::state::ActiveConversation::Channel(channel));
     }
 
+    /// Stage the channel tray before the UI dispatches its selection callback.
+    pub fn prepare_channel_selection(&self, channel: crate::domain::ids::ChannelId) {
+        self.services.chat_state.set_active_channel(channel);
+    }
+
     /// Read-only copy of chat state for presentation consumers.
     pub fn chat_snapshot(&self) -> crate::state::ChatStateData {
         self.services.chat_state.get()
     }
 
+    pub fn message_snapshot(&self) -> crate::state::MessageStateData {
+        self.services.message_state.get()
+    }
+
     /// Read-only account state for UI ownership and session-revision checks.
     pub fn auth_snapshot(&self) -> crate::state::AuthStateData {
         self.services.auth_state.get()
+    }
+
+    pub fn has_auth_identity(&self) -> bool {
+        self.services.auth_state.is_logged_in()
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn testing_set_logged_in(
+        &self,
+        user: crate::domain::ids::UserId,
+        device: u32,
+        name: String,
+    ) {
+        self.services.auth_state.set_logged_in(user, device, name);
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn testing_set_logged_out(&self) {
+        self.services.auth_state.set_logged_out();
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn testing_invalidate_session(&self) {
+        self.services.auth_state.invalidate_session();
+    }
+
+    pub fn user_snapshot(&self) -> crate::state::UserStateData {
+        self.services.user_state.get()
+    }
+
+    pub fn session_is_current(&self, revision: u64) -> bool {
+        self.services.auth_state.session_is_current(revision)
+    }
+
+    pub fn is_app_visible(&self) -> bool {
+        self.services.chat_state.is_app_visible()
     }
 
     pub fn session_guard(&self) -> SessionGuard {
@@ -262,7 +311,10 @@ impl ChatterClient {
         }
     }
 
-    pub fn conversation_guard(&self, conversation: crate::state::ActiveConversation) -> ConversationGuard {
+    pub fn conversation_guard(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> ConversationGuard {
         ConversationGuard {
             chat: self.services.chat_state.clone(),
             conversation,
@@ -301,10 +353,10 @@ impl ChatterClient {
     pub fn set_message_loading(&self, channel: crate::domain::ids::ChannelId, loading: bool) {
         self.services.message_state.set_loading(channel, loading);
     }
-    pub fn message_state(&self) -> &MessageState {
+    pub(crate) fn message_state(&self) -> &MessageState {
         &self.services.message_state
     }
-    pub fn user_state(&self) -> &UserState {
+    pub(crate) fn user_state(&self) -> &UserState {
         &self.services.user_state
     }
 
@@ -359,5 +411,4 @@ impl ChatterClient {
         let repo = SettingsRepository::new(self.services.database.clone());
         repo.set_string(keys::SEARCH_SHORTCUT, shortcut.as_str())
     }
-
 }

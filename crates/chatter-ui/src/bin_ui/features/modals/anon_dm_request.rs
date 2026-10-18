@@ -331,7 +331,7 @@ fn spawn_action_stream(
     weak_window: Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let chat_state = ui_ctx.chat_state().clone();
+    let chat_state = ui_ctx.clone();
     let mut event_rx = ui_ctx.subscribe_events();
 
     tokio::spawn(async move {

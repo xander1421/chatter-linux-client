@@ -167,16 +167,20 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     reply_thumbnail = att.thumbnail.clone();
                                     reply_has_thumbnail = true;
                                 }
-                                preview_attachments.push(chatter_core::client::preview::ActionPreviewAttachment {
-                                    is_image: att.is_image,
-                                    category: att.category.to_string(),
-                                    filename: att.filename.to_string(),
-                                });
+                                preview_attachments.push(
+                                    chatter_core::client::preview::ActionPreviewAttachment {
+                                        is_image: att.is_image,
+                                        category: att.category.to_string(),
+                                        filename: att.filename.to_string(),
+                                    },
+                                );
                             }
                         }
                     }
                     reply_preview = chatter_core::client::preview::message_action_preview(
-                        m.content.as_str(), &preview_attachments);
+                        m.content.as_str(),
+                        &preview_attachments,
+                    );
 
                     break;
                 }

@@ -80,9 +80,9 @@ fn forward_login_verifying(
     weak: slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let auth_state = ui_ctx.auth_state().clone();
+    let auth_state = ui_ctx.clone();
     tokio::spawn(async move {
-        let mut rx = auth_state.subscribe();
+        let mut rx = auth_state.subscribe_auth_snapshots();
         let mut last = None;
         let mut push = |v: bool| {
             if last != Some(v) {
@@ -95,12 +95,12 @@ fn forward_login_verifying(
                 });
             }
         };
-        push(auth_state.get().login_verifying);
+        push(auth_state.auth_snapshot().login_verifying);
         loop {
             match rx.recv().await {
                 Ok(s) => push(s.login_verifying),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    push(auth_state.get().login_verifying);
+                    push(auth_state.auth_snapshot().login_verifying);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
@@ -211,7 +211,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let view_client = ui_ctx.clone();
                     let view_revision = ui_ctx.auth_snapshot().session_revision;
                     let _ = slint::invoke_from_event_loop(move || {
-                        if !view_client.auth_state().session_is_current(view_revision) {
+                        if !view_client.session_is_current(view_revision) {
                             return;
                         }
                         if let Some(w) = weak_for_view.upgrade() {

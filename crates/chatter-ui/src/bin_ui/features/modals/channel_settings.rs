@@ -557,7 +557,10 @@ pub fn refresh_members_if_open(
 
 /// UI thread only (decodes avatars into `slint::Image`s). Fills the members
 /// pane and the General pane's count; leaves the name field (a draft) alone.
-pub fn apply_private_group_roster(w: &MainWindow, roster: chatter_core::client::PrivateGroupRoster) {
+pub fn apply_private_group_roster(
+    w: &MainWindow,
+    roster: chatter_core::client::PrivateGroupRoster,
+) {
     // A group has no server-side edit/archive/delete; Leave is core's call
     // (not the owner while others remain). Set every time: these properties
     // are shared with channel settings and would otherwise keep a channel's
@@ -567,38 +570,36 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: chatter_core::client::
     w.set_channel_settings_can_delete(false);
     w.set_channel_settings_can_leave(roster.can_leave);
     w.set_channel_settings_group_blocked(roster.blocked);
-    w.set_channel_settings_member_count(
-        roster.member_count
-    );
-    w.set_channel_settings_invited_count(
-        roster.invited_count
-    );
+    w.set_channel_settings_member_count(roster.member_count);
+    w.set_channel_settings_invited_count(roster.invited_count);
     w.set_channel_settings_is_owner(roster.is_owner);
     w.set_channel_settings_can_manage_members(roster.can_manage_members);
     let rows: Vec<ChannelMemberData> = roster
         .members
         .into_iter()
-        .map(
-            |member| ChannelMemberData {
-                user_id: member.user_id.into(),
-                display_name: member.display_name.into(),
-                role: member.role.into(),
-                avatar_source: member.avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default(),
-                can_make_owner: member.can_make_owner,
-                invited: member.invited,
-                can_block: member.can_block,
-                blocked: member.blocked,
-                username: "".into(),
-                joined_at: "".into(),
-                // Anon groups have no mute/ban RPCs.
-                muted: false,
-                can_ban: false,
-                can_mute: false,
-                // Anon-group membership is owner-authoritative,
-                // not the signed channel log.
-                unverified: false,
-            },
-        )
+        .map(|member| ChannelMemberData {
+            user_id: member.user_id.into(),
+            display_name: member.display_name.into(),
+            role: member.role.into(),
+            avatar_source: member
+                .avatar
+                .as_deref()
+                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                .unwrap_or_default(),
+            can_make_owner: member.can_make_owner,
+            invited: member.invited,
+            can_block: member.can_block,
+            blocked: member.blocked,
+            username: "".into(),
+            joined_at: "".into(),
+            // Anon groups have no mute/ban RPCs.
+            muted: false,
+            can_ban: false,
+            can_mute: false,
+            // Anon-group membership is owner-authoritative,
+            // not the signed channel log.
+            unverified: false,
+        })
         .collect();
     w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
 }
@@ -1832,9 +1833,7 @@ mod deletion_tests {
             .unwrap();
         let w = MainWindow::new().unwrap();
         let id = ChannelId::new();
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(id));
+        client.select_conversation(ActiveConversation::Channel(id));
         show_channel_settings_shell(&w, &id.to_string(), "private");
         w.set_channel_settings_can_edit(true);
         w.set_channel_settings_name_draft("Unsaved name".into());
@@ -1921,14 +1920,10 @@ mod deletion_tests {
         finish_icon_request(&w, &client, reopened, picked());
         assert!(!w.get_channel_settings_has_icon_preview());
         let switched = begin_icon_request(&w, &client).unwrap();
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
+        client.select_conversation(ActiveConversation::Channel(ChannelId::new()));
         finish_icon_request(&w, &client, switched, picked());
         assert!(!w.get_channel_settings_has_icon_preview());
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(id));
+        client.select_conversation(ActiveConversation::Channel(id));
         let read_error = begin_icon_request(&w, &client).unwrap();
         finish_icon_request(&w, &client, read_error, Err("fixture read failed".into()));
         assert!(
@@ -1937,9 +1932,7 @@ mod deletion_tests {
         );
         let old_session = begin_icon_request(&w, &client).unwrap();
         client.clear_composer_session();
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(id));
+        client.select_conversation(ActiveConversation::Channel(id));
         finish_icon_request(&w, &client, old_session, picked());
         assert!(!w.get_channel_settings_has_icon_preview());
         eprintln!("{FIXTURE_COMPLETED}");
@@ -1988,9 +1981,7 @@ mod deletion_tests {
         repo.insert(&channel).unwrap();
         repo.mark_former(&id, false).unwrap();
         let w = MainWindow::new().unwrap();
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(id));
+        client.select_conversation(ActiveConversation::Channel(id));
         show_channel_settings_shell(&w, &id.to_string(), "private");
         w.set_channel_settings_can_edit(true);
         w.set_channel_name("Old name".into());
@@ -2058,18 +2049,12 @@ mod deletion_tests {
         let current = begin_settings_save(&w, &client).unwrap();
         complete(older);
         assert_eq!(w.get_chat_rows().row_count(), 0);
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
+        client.select_conversation(ActiveConversation::Channel(ChannelId::new()));
         complete(current);
         assert_eq!(w.get_chat_rows().row_count(), 0);
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(id));
+        client.select_conversation(ActiveConversation::Channel(id));
         client.clear_composer_session();
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(id));
+        client.select_conversation(ActiveConversation::Channel(id));
         complete(current);
         assert_eq!(w.get_chat_rows().row_count(), 0);
         assert_eq!(w.get_channel_name().as_str(), "Replacement modal");
@@ -2129,9 +2114,7 @@ mod deletion_tests {
         w.set_channel_settings_id(deleted.to_string().into());
         crate::bin_ui::features::back::push(&w, "channel-settings");
         w.set_channel_name("Delete fixture".into());
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(deleted));
+        client.select_conversation(ActiveConversation::Channel(deleted));
         w.set_chat_rows(ModelRc::new(VecModel::from(
             client
                 .sidebar_rows()
@@ -2205,9 +2188,7 @@ mod deletion_tests {
         assert_eq!(w.get_active_tab().as_str(), "chats");
 
         // A late result for the deleted channel must preserve a newly opened chat.
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(other));
+        client.select_conversation(ActiveConversation::Channel(other));
         w.set_mobile_show_chat(true);
         w.set_active_tab("contacts".into());
         w.set_channel_name("Keep fixture".into());
@@ -2232,9 +2213,7 @@ mod deletion_tests {
         assert_eq!(w.get_active_tab().as_str(), "contacts");
         // Equal UUIDs across kinds must not remove a replacement group.
         let group = AnonGroupId::from_uuid(*other.as_uuid());
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::AnonGroup(group));
+        client.select_conversation(ActiveConversation::AnonGroup(group));
         crate::bin_ui::features::sidebar::conversation_removed(
             &w.as_weak(),
             &client,
@@ -2264,9 +2243,7 @@ mod deletion_tests {
         w.set_is_mobile_platform(false);
         w.set_active_tab("contacts".into());
         w.set_mobile_show_chat(true);
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(other));
+        client.select_conversation(ActiveConversation::Channel(other));
         crate::bin_ui::features::sidebar::conversation_removed(
             &w.as_weak(),
             &client,
@@ -2279,9 +2256,7 @@ mod deletion_tests {
         assert!(w.get_mobile_show_chat());
 
         // The same settings ID reopened after dispatch is a new screen.
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(other));
+        client.select_conversation(ActiveConversation::Channel(other));
         let old_epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
         show_channel_settings_shell(&w, &deleted.to_string(), "channel");
         finish_channel_delete(
@@ -2309,9 +2284,7 @@ mod deletion_tests {
             ActiveConversation::Channel(other),
         );
         client.clear_composer_session();
-        client
-            .chat_state()
-            .set_active_conversation(ActiveConversation::Channel(other));
+        client.select_conversation(ActiveConversation::Channel(other));
         finish_channel_delete(
             w.as_weak(),
             client.clone(),

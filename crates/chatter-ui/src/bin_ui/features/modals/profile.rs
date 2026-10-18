@@ -52,29 +52,14 @@ struct SharedPage {
 /// consistent data regardless of which entry point triggered the modal.
 /// Only fills the page: the caller decides whether it shows as the Profile
 /// tab or as a screen pushed over the current one (`back::push`).
-pub fn open_user_profile(
-    w: &MainWindow,
-    user_id: &UserId,
-    auth_state: &chatter_core::state::AuthState,
-    user_state: &chatter_core::state::UserState,
-    ui_ctx: Option<&Arc<ChatterClient>>,
-) {
-    open_user_profile_in_conversation(
-        w,
-        user_id,
-        auth_state,
-        user_state,
-        ui_ctx,
-        dm_conversation(user_id),
-    );
+pub fn open_user_profile(w: &MainWindow, user_id: &UserId, ui_ctx: Option<&Arc<ChatterClient>>) {
+    open_user_profile_in_conversation(w, user_id, ui_ctx, dm_conversation(user_id));
 }
 
 /// Open a sender profile while keeping shared content scoped to its source chat.
 pub fn open_user_profile_in_conversation(
     w: &MainWindow,
     user_id: &UserId,
-    auth_state: &chatter_core::state::AuthState,
-    user_state: &chatter_core::state::UserState,
     ui_ctx: Option<&Arc<ChatterClient>>,
     conversation: chatter_core::state::ActiveConversation,
 ) {
@@ -83,7 +68,9 @@ pub fn open_user_profile_in_conversation(
         chatter_core::state::ActiveConversation::AnonGroup(_)
     );
     w.set_profile_scoped_member(scoped_member);
-    let is_self = !scoped_member && auth_state.get().current_user_id.as_ref() == Some(user_id);
+    let auth = ui_ctx.map(|ctx| ctx.auth_snapshot()).unwrap_or_default();
+    let user_data = ui_ctx.map(|ctx| ctx.user_snapshot()).unwrap_or_default();
+    let is_self = !scoped_member && auth.current_user_id.as_ref() == Some(user_id);
 
     w.set_profile_user_id(user_id.to_string().into());
     w.set_profile_is_anonymous(conversation.is_anon());
@@ -122,8 +109,7 @@ pub fn open_user_profile_in_conversation(
         w.set_profile_is_verified(false);
         crate::bin_ui::features::chat::disappearing::hide_for_profile(w);
     } else if is_self {
-        let state = auth_state.get();
-        let display_name = state.display_name.clone().unwrap_or_default();
+        let display_name = auth.display_name.clone().unwrap_or_default();
         // The handle chosen at registration. Never the user id: that is not
         // something anyone can look you up by.
         let username = ui_ctx
@@ -145,8 +131,10 @@ pub fn open_user_profile_in_conversation(
         // `update_user_profile` had persisted it via `user_repo.upsert_profile`
         // (OPEN-ITEMS §112h). The display name never showed the bug because it
         // comes from auth_state instead.
-        let own_profile = user_state
-            .get_profile(user_id)
+        let own_profile = user_data
+            .profiles
+            .get(user_id)
+            .cloned()
             .or_else(|| ui_ctx.and_then(|c| c.get_profile_local(user_id)));
         match own_profile.and_then(|p| p.status_message) {
             Some(msg) => w.set_profile_bio(msg.text.into()),
@@ -168,7 +156,7 @@ pub fn open_user_profile_in_conversation(
         }
     } else {
         // Other-user path
-        let profile = user_state.get_profile(user_id);
+        let profile = user_data.profiles.get(user_id).cloned();
 
         // Core resolves names from the local user directory. The in-memory
         // UserState used here before is not populated for peers, so a friend's
@@ -202,7 +190,6 @@ pub fn open_user_profile_in_conversation(
             .map(|m| m.text)
             .unwrap_or_default();
 
-        let user_data = user_state.get();
         let is_friend = user_data.friends.contains(user_id)
             || ui_ctx.map(|ctx| ctx.is_friend(user_id)).unwrap_or(false);
         let is_blocked = ui_ctx
@@ -296,9 +283,14 @@ pub fn open_user_profile_in_conversation(
             // length of one query reads as a bug.
             w.set_profile_shared_loading(true);
             if !scoped_member {
-                w.set_profile_last_seen(ctx.peer_last_seen(user_id)
-                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
-                    .unwrap_or_default().into());
+                w.set_profile_last_seen(
+                    ctx.peer_last_seen(user_id)
+                        .map(|(presence, at)| {
+                            crate::bin_ui::converters::last_seen_label(presence, at)
+                        })
+                        .unwrap_or_default()
+                        .into(),
+                );
             }
             w.set_profile_is_muted(
                 ctx.is_conversation_muted(if scoped_member {

@@ -8,8 +8,9 @@
 
 use slint::{Model, VecModel};
 
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::state::ChatState;
+use std::sync::Arc;
 
 use crate::bin_ui::features::auth::inbox::typing::{clear_typing_for_peer, set_typing_with_timer};
 use crate::{MainWindow, MessageItemData};
@@ -22,7 +23,7 @@ pub enum EventSource {
 }
 
 /// Check if an event source matches the currently active conversation.
-fn is_active(chat_state: &ChatState, source: &EventSource) -> bool {
+fn is_active(chat_state: &ChatterClient, source: &EventSource) -> bool {
     let active = chat_state.active_conversation();
     match source {
         EventSource::Channel(channel_id) => active.is_for_channel(*channel_id),
@@ -65,7 +66,7 @@ pub fn handle_typing(
     }
     let key = typing_key(&source);
     let client = client.clone();
-    let chat_state = client.chat_state().clone();
+    let chat_state = client.clone();
     let weak = weak_window.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
@@ -88,7 +89,7 @@ pub fn handle_typing(
 /// Handle delivery/read receipt for any conversation type.
 pub fn handle_receipt(
     weak_window: &slint::Weak<MainWindow>,
-    chat_state: &ChatState,
+    chat_state: &Arc<ChatterClient>,
     source: EventSource,
     receipt_type: i32,
     message_timestamps: Vec<u64>,
@@ -142,7 +143,7 @@ pub fn handle_receipt(
 /// Handle pin/unpin for any conversation type.
 pub fn handle_pin(
     weak_window: &slint::Weak<MainWindow>,
-    chat_state: &ChatState,
+    chat_state: &Arc<ChatterClient>,
     source: EventSource,
     target_sent_timestamp: u64,
     is_pinned: bool,

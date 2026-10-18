@@ -20,7 +20,6 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         let weak = weak_window.clone();
         super::show_chat_pane(&weak);
         let ui_ctx = ui_ctx_clone.clone();
-        let auth_state = ui_ctx.auth_state().clone();
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
@@ -29,7 +28,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         crate::bin_ui::gif_state::clear_inline_gifs();
 
         // Saved Messages is the channel whose id is the user's own id.
-        let channel_id = match auth_state.get().current_user_id {
+        let channel_id = match ui_ctx.auth_snapshot().current_user_id {
             Some(id) => ChannelId::from(id),
             None => {
                 tracing::warn!("Cannot open saved messages: not logged in");
@@ -103,7 +102,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 }
 
 pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let auth_state = ui_ctx.auth_state().clone();
+    let auth_state = ui_ctx.clone();
     let ui_ctx_fp = ui_ctx.clone();
     let ui_ctx_ai = ui_ctx.clone();
 
@@ -143,7 +142,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let state = auth_state.get();
+                let state = auth_state.auth_snapshot();
                 w.set_settings_display_name(state.display_name.unwrap_or_default().into());
                 w.set_settings_username(ui_ctx_settings.full_username().unwrap_or_default().into());
 
@@ -241,28 +240,18 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 }
 
 pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let auth_state = ui_ctx.auth_state().clone();
-    let user_state = ui_ctx.user_state().clone();
     let ui_ctx_profile = ui_ctx.clone();
 
     let weak_window = window.as_weak();
 
     window.on_profile_clicked(move || {
         let weak = weak_window.clone();
-        let auth_state = auth_state.clone();
-        let user_state = user_state.clone();
         let ui_ctx = ui_ctx_profile.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                if let Some(user_id) = auth_state.get().current_user_id {
-                    crate::bin_ui::features::modals::open_user_profile(
-                        &w,
-                        &user_id,
-                        &auth_state,
-                        &user_state,
-                        Some(&ui_ctx),
-                    );
+                if let Some(user_id) = ui_ctx.auth_snapshot().current_user_id {
+                    crate::bin_ui::features::modals::open_user_profile(&w, &user_id, Some(&ui_ctx));
                 }
             }
         });

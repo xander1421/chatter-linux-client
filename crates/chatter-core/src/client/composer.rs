@@ -220,6 +220,57 @@ impl ComposerRecovery {
 }
 
 impl ChatterClient {
+    pub fn recording_context_is_current(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> bool {
+        crate::services::voice_recording::recording_context_is_current(
+            &self.services.chat_state,
+            conversation,
+        )
+    }
+
+    pub fn start_voice_recording(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> (
+        crate::services::voice_recording::RecordingSession,
+        tokio::sync::mpsc::UnboundedReceiver<crate::services::voice_recording::RecordingEvent>,
+    ) {
+        crate::services::voice_recording::RecordingSession::start(
+            self.services.chat_state.clone(),
+            conversation,
+            self.directories().cache_dir().to_path_buf(),
+        )
+    }
+
+    pub fn pending_attachments(&self) -> Vec<crate::state::PendingAttachment> {
+        self.services.chat_state.get_pending_attachments()
+    }
+
+    pub fn add_pending_attachment_for(
+        &self,
+        conversation: crate::state::ActiveConversation,
+        revision: u64,
+        attachment: crate::state::PendingAttachment,
+    ) {
+        self.services
+            .chat_state
+            .add_pending_attachment_for(conversation, revision, attachment);
+    }
+
+    pub fn add_pending_attachment(&self, attachment: crate::state::PendingAttachment) {
+        self.services.chat_state.add_pending_attachment(attachment);
+    }
+
+    pub fn clear_pending_attachments(&self) {
+        self.services.chat_state.clear_pending_attachments();
+    }
+
+    pub fn remove_pending_attachment(&self, id: crate::domain::ids::AttachmentId) {
+        self.services.chat_state.remove_pending_attachment(id);
+    }
+
     /// Freeze the composer into a send to the active conversation, taking the
     /// staged attachments with it. `Err` carries what to tell the user, and
     /// consumes nothing: no conversation open (a mesh room is none), Jarvis's
@@ -1464,9 +1515,11 @@ mod tests {
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
         open(&client, channel);
-        assert!(client
-            .swap_composer_draft("", ComposerDraft::default(), &channel.to_string())
-            .is_empty());
+        assert!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &channel.to_string())
+                .is_empty()
+        );
         assert!(client.take_parked_send(true).is_none());
     }
 
@@ -1552,13 +1605,15 @@ mod tests {
         let (a, b) = (ChannelId::new(), ChannelId::new());
         open(&client, b);
         client.chat_state().add_pending_attachment(staged("b.png"));
-        assert!(client
-            .chat_state()
-            .take_pending_attachments_for(
-                ActiveConversation::Channel(a),
-                client.chat_state().get().attachment_revision,
-            )
-            .is_none());
+        assert!(
+            client
+                .chat_state()
+                .take_pending_attachments_for(
+                    ActiveConversation::Channel(a),
+                    client.chat_state().get().attachment_revision,
+                )
+                .is_none()
+        );
         assert_eq!(
             client.chat_state().get_pending_attachments().len(),
             1,
@@ -1644,9 +1699,11 @@ mod tests {
         client
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
-        assert!(client
-            .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
-            .is_empty());
+        assert!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .is_empty()
+        );
 
         // Back as A, the drafts are still there; explicit sign-out removes them.
         client.auth_state().set_logged_out();
@@ -1712,9 +1769,11 @@ mod tests {
         client
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
-        assert!(client
-            .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
-            .is_empty());
+        assert!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -2066,9 +2125,11 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         assert_eq!(client.thread_draft(&root), "half a reply");
-        assert!(client
-            .thread_draft(&crate::domain::ids::MessageId::new())
-            .is_empty());
+        assert!(
+            client
+                .thread_draft(&crate::domain::ids::MessageId::new())
+                .is_empty()
+        );
         client.set_thread_draft(&root, "");
         drop(client);
 

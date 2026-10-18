@@ -2,7 +2,7 @@
 use crate::{MainWindow, VoiceRecording};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::voice_recording::{
-    RecordedVoiceNote, RecordingEvent, RecordingSession, recording_context_is_current,
+    RecordedVoiceNote, RecordingEvent, RecordingSession,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -70,7 +70,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             return;
         }
         let conversation = client.active_conversation();
-        if !recording_context_is_current(client.chat_state(), conversation) {
+        if !client.recording_context_is_current(conversation) {
             return;
         }
         let ticket = generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -108,7 +108,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 }
                 // The permission result can precede the activity's resume.
                 for _ in 0..40 {
-                    if client.chat_state().is_app_visible() {
+                    if client.is_app_visible() {
                         break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -117,11 +117,7 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             if generation.load(Ordering::SeqCst) != ticket {
                 return;
             }
-            let (recording, mut events) = RecordingSession::start(
-                client.chat_state().clone(),
-                conversation,
-                client.directories().cache_dir().to_path_buf(),
-            );
+            let (recording, mut events) = client.start_voice_recording(conversation);
             {
                 let mut slot = session.lock().unwrap();
                 if generation.load(Ordering::SeqCst) != ticket {
@@ -255,7 +251,7 @@ async fn send_recording(
         let Some(w) = weak.upgrade() else { return };
         let g = w.global::<VoiceRecording>();
         g.set_busy(false);
-        if !recording_context_is_current(client.chat_state(), note.conversation()) {
+        if !client.recording_context_is_current(note.conversation()) {
             g.invoke_cancel();
             return;
         }
@@ -263,7 +259,7 @@ async fn send_recording(
             Ok(pending) => {
                 ready.lock().unwrap().take();
                 g.set_active(false);
-                client.chat_state().add_pending_attachment(pending);
+                client.add_pending_attachment(pending);
                 w.invoke_send("".into());
             }
             Err(error) => {

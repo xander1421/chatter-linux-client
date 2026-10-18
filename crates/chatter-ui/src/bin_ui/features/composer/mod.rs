@@ -21,7 +21,7 @@ use crate::MainWindow;
 /// Wire composer callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     attachments::register_preview_client(ui_ctx);
-    attachments::wire_attachment_clicked(window, ui_ctx.chat_state().clone(), ui_ctx);
+    attachments::wire_attachment_clicked(window, ui_ctx);
     attachments::wire_remove_attachment(window, ui_ctx);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     attachments::wire_paste_image(window, ui_ctx);
@@ -31,7 +31,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     gif::wire_gif_clicked(window, ui_ctx);
     gif::wire_gif_selected(window, ui_ctx);
     gif::wire_gif_search(window, ui_ctx);
-    mentions::wire_mention_triggered(window, ui_ctx.clone(), ui_ctx.chat_state().clone());
+    mentions::wire_mention_triggered(window, ui_ctx.clone());
     mentions::wire_mention_selected(window);
     voice::wire(window, ui_ctx);
     wire_text_format(window);
@@ -342,7 +342,7 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     if let Some(reply) = entering_draft.reply {
         crate::bin_ui::features::chat::send_message::show_reply(w, reply);
     }
-    render_attachments(w, &ctx.chat_state().get_pending_attachments());
+    render_attachments(w, &ctx.pending_attachments());
     // A GIF send that failed while this conversation was not open.
     let empty = crate::bin_ui::features::chat::send_message::composer_is_empty(w);
     if let Some(mut send) = ctx.take_parked_send(empty) {

@@ -175,9 +175,7 @@ mod tests {
             .data_dir(dir.path().to_string_lossy())
             .build()
             .unwrap();
-        client
-            .auth_state()
-            .set_logged_in(UserId::new(), 1, "Fixture".into());
+        client.testing_set_logged_in(UserId::new(), 1, "Fixture".into());
         let revision = client.auth_snapshot().session_revision;
         let w = MainWindow::new().unwrap();
         let id = chatter_core::domain::ids::CallId::new();
@@ -230,10 +228,8 @@ mod tests {
             "keep"
         );
         assert_eq!(w.get_active_call_data().duration_seconds, 17);
-        client.auth_state().invalidate_session();
-        client
-            .auth_state()
-            .set_logged_in(UserId::new(), 1, "Replacement session".into());
+        client.testing_invalidate_session();
+        client.testing_set_logged_in(UserId::new(), 1, "Replacement session".into());
         apply_dm_completion(&w.as_weak(), &client, revision, &expected, None, setup());
         assert_eq!(
             w.get_active_call_data().verification_emoji_1.as_str(),

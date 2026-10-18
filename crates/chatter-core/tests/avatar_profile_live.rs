@@ -147,7 +147,7 @@ async fn proof(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, aid: UserId, bid:
             .is_none()
     );
     let avatar = normalized_avatar();
-    let revision = a.auth_state().get().session_revision;
+    let revision = a.auth_snapshot().session_revision;
     let name = "RC80 normalized live avatar";
     let saved = a
         .save_own_profile_in_session(
@@ -167,7 +167,7 @@ async fn proof(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, aid: UserId, bid:
     let local = a.get_profile_local(&aid).unwrap();
     assert_eq!(local.display_name, name);
     assert_eq!(local.avatar_bytes.as_deref(), Some(avatar.as_slice()));
-    assert_eq!(a.auth_state().get().display_name.as_deref(), Some(name));
+    assert_eq!(a.auth_snapshot().display_name.as_deref(), Some(name));
     eprintln!("avatar-live: actual scoped Save returned/persisted exact normalized image and name");
 
     // Cache-bust only this owned fixture's local AVATAR via the normal facade.
@@ -215,7 +215,7 @@ async fn proof(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, aid: UserId, bid:
         .await
         .is_err()
     );
-    assert_eq!(b.auth_state().get().current_user_id, Some(bid));
+    assert_eq!(b.auth_snapshot().current_user_id, Some(bid));
     assert_eq!(b.my_avatar(), b_avatar_before);
     assert_eq!(b.get_user_profile(&bid).await.unwrap(), b_before);
     assert!(
@@ -245,8 +245,8 @@ async fn proof(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, aid: UserId, bid:
         .await
         .unwrap_err();
     assert!(error.to_string().contains("encrypted wire budget"));
-    assert_eq!(a.auth_state().get().current_user_id, Some(aid));
-    assert_eq!(a.auth_state().get().session_revision, revision);
+    assert_eq!(a.auth_snapshot().current_user_id, Some(aid));
+    assert_eq!(a.auth_snapshot().session_revision, revision);
     assert_eq!(a.my_avatar().as_deref(), Some(avatar.as_slice()));
     assert_eq!(a.get_profile_local(&aid).unwrap().display_name, name);
     assert_eq!(

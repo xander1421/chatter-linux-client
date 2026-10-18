@@ -5,21 +5,15 @@ use std::sync::Arc;
 use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::state::ChatState;
 
 use crate::{MainWindow, MentionSuggestion};
 
-pub(crate) fn wire_mention_triggered(
-    window: &MainWindow,
-    ui_ctx: Arc<ChatterClient>,
-    chat_state: ChatState,
-) {
+pub(crate) fn wire_mention_triggered(window: &MainWindow, ui_ctx: Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_mention_triggered(move |query: SharedString| {
         let query_str = query.to_string();
         let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
 
         if query_str.is_empty() {
@@ -36,8 +30,7 @@ pub(crate) fn wire_mention_triggered(
         // Spawn async task to fetch channel members
         tokio::spawn(async move {
             // Fetch raw suggestion data (Send-safe)
-            let raw_suggestions =
-                fetch_mention_suggestions_raw(&query_str, &ui_ctx, &chat_state).await;
+            let raw_suggestions = fetch_mention_suggestions_raw(&query_str, &ui_ctx).await;
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -95,9 +88,8 @@ type RawMentionSuggestion = (String, String, String, bool);
 async fn fetch_mention_suggestions_raw(
     query: &str,
     ui_ctx: &ChatterClient,
-    chat_state: &ChatState,
 ) -> Vec<RawMentionSuggestion> {
-    let channel_id = match chat_state.get().active_channel_id.clone() {
+    let channel_id = match ui_ctx.chat_snapshot().active_channel_id {
         Some(id) => id,
         None => return Vec::new(),
     };

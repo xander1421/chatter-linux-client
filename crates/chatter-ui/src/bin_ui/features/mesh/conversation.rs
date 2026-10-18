@@ -40,7 +40,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     // The mesh carries no attachments, and the composer hides the attach
     // button here. Anything staged in another conversation is dropped rather
     // than left armed to vanish on the next send.
-    ui_ctx.chat_state().clear_pending_attachments();
+    ui_ctx.clear_pending_attachments();
     window.set_pending_attachments(ModelRc::new(
         VecModel::<crate::PendingAttachmentData>::from(Vec::new()),
     ));
