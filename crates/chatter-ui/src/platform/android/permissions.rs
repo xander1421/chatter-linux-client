@@ -22,6 +22,9 @@ use super::activity;
 /// One at a time: a newer request drops the older sender, which wakes that
 /// waiter too, and it then reads the grant state like any other.
 static WAITER: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
+// ActivityResult has one launcher. Serialize awaitable requests so an Accept
+// tap during the early incoming-call prompt waits for that same result.
+static REQUEST_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Common dangerous / special permissions we request.
 pub const CAMERA: &str = "android.permission.CAMERA";
@@ -56,6 +59,7 @@ pub fn request(permissions: &[&str]) {
 /// Request any of `permissions` not yet granted and wait for the user's answer.
 /// True when all of them are granted afterwards.
 pub async fn ensure(permissions: &[&str]) -> bool {
+    let _gate = REQUEST_GATE.lock().await;
     let pending: Vec<&str> = permissions.iter().copied().filter(|p| !has(p)).collect();
     if pending.is_empty() {
         return true;
@@ -63,11 +67,33 @@ pub async fn ensure(permissions: &[&str]) -> bool {
     let (tx, rx) = tokio::sync::oneshot::channel();
     *WAITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
     if let Err(e) = launch_request(&pending) {
+        WAITER.lock().unwrap_or_else(|e| e.into_inner()).take();
         tracing::error!("Android permissions: request failed: {e}");
         return false;
     }
     let _ = rx.await;
     pending.iter().all(|p| has(p))
+}
+
+/// Explain a denied call permission and offer the Android app-settings page.
+pub fn show_call_permission_denied(permission: &str) {
+    if let Err(e) = activity::with_jni_env(|env| {
+        let act = activity::activity()?;
+        let name = env.new_string(permission).map_err(|e| e.to_string())?;
+        let result = env.call_method(
+            act,
+            jni::jni_str!("showCallPermissionDenied"),
+            jni::jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&name)],
+        );
+        if result.is_err() {
+            activity::clear_exception(env);
+        }
+        result.map_err(|e| e.to_string())?;
+        Ok(())
+    }) {
+        tracing::error!("Android permissions: denied-call explanation failed: {e}");
+    }
 }
 
 fn check(permission: &str) -> Result<bool, String> {

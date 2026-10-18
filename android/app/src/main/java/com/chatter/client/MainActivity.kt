@@ -912,6 +912,21 @@ class MainActivity : GameActivity() {
         runOnUiThread { permissionRequest.launch(permissions) }
     }
 
+    /** Explain a refused call permission and give a direct path to app settings. */
+    @Suppress("unused")
+    fun showCallPermissionDenied(permission: String) {
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this)
+                .setMessage("$permission permission is needed for calls.")
+                .setNegativeButton("Close", null)
+                .setPositiveButton("Open app settings") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName")))
+                }
+                .show()
+        }
+    }
+
     /** Implemented in Rust (libchatter_ui.so). Delivers grant results. */
     private external fun nativeOnPermissionsResult(granted: Array<String>, denied: Array<String>)
 

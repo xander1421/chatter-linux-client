@@ -130,7 +130,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         use crate::platform::android::permissions;
                         if !permissions::ensure(&[permissions::CAMERA]).await {
                             tracing::info!("CAMERA permission refused — video stays off");
-                            camera_error(&weak, "Camera access was denied. Audio stays on.");
+                            camera_error(&weak, "Camera permission is needed for video calls");
+                            permissions::show_call_permission_denied("Camera");
                             return;
                         }
                     }

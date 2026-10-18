@@ -304,6 +304,8 @@ pub enum ClientError {
     NotConnected,
     #[error("inbox error: {0}")]
     Inbox(String),
+    #[error("Call ended")]
+    CallEnded,
     #[error("inbox already started")]
     AlreadyStarted,
     #[error("auth error: {0}")]
