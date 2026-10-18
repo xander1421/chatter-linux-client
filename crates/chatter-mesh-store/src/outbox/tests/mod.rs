@@ -1,3 +1,4 @@
+use super::codec::{decode, encode};
 use super::*;
 use crate::storage::MemoryStorage;
 use std::sync::atomic::{AtomicBool, Ordering};
