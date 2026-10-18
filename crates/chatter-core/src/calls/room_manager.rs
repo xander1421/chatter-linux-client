@@ -9,12 +9,12 @@ use livekit::e2ee::{
 };
 use livekit::options::TrackPublishOptions;
 use livekit::prelude::*;
-// Screen-share only (desktop): the publish path is cfg-gated off on mobile.
+// Desktop screen-share encoder tuning.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use livekit::options::{DegradationPreference, VideoCodec, VideoEncoderBackend, VideoEncoding};
 use livekit::webrtc::audio_source::RtcAudioSource;
 use livekit::webrtc::video_source::RtcVideoSource;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 use livekit::webrtc::video_source::{VideoResolution, native::NativeVideoSource};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -262,7 +262,7 @@ pub struct RoomManager {
     /// the slot — otherwise restart creates a second track while the
     /// first stays published with no frames, and remote viewers stay
     /// subscribed to the dead one.
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "ios"))]
     screen_share_track_sid: Arc<RwLock<Option<TrackSid>>>,
     /// E2EE key state (provider + epoch).
     e2ee: Arc<RwLock<E2eeState>>,
@@ -324,7 +324,7 @@ impl RoomManager {
             video_playback: Arc::new(RwLock::new(video_playback)),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(not(target_os = "ios"))]
             screen_share_track_sid: Arc::new(RwLock::new(None)),
             e2ee: Arc::new(RwLock::new(E2eeState {
                 provider: None,
@@ -650,6 +650,66 @@ impl RoomManager {
         Ok(())
     }
 
+    #[cfg(target_os = "android")]
+    pub async fn publish_screen_share(&self) -> Result<(), CallError> {
+        use super::android_screen;
+        let local_participant = {
+            let room = self.room.read();
+            room.as_ref()
+                .ok_or(CallError::NotInCall)?
+                .local_participant()
+        };
+        let preview =
+            self.shared_frames
+                .as_ref()
+                .map(|shared| super::video_capture::LocalPreview {
+                    shared: shared.clone(),
+                    local_id: super::screen_share_frame_id(
+                        &local_participant.identity().to_string(),
+                        true,
+                    ),
+                    screen_share: true,
+                });
+        let (token, ready) =
+            android_screen::begin(preview).map_err(CallError::TrackPublishFailed)?;
+        let dims = tokio::time::timeout(std::time::Duration::from_secs(120), ready).await;
+        let (width, height) = match dims {
+            Ok(Ok(Ok(dims))) => dims,
+            Ok(Ok(Err(error))) => {
+                android_screen::stop();
+                return Err(CallError::TrackPublishFailed(error));
+            }
+            _ => {
+                android_screen::stop();
+                return Err(CallError::TrackPublishFailed(
+                    "Screen share unavailable".into(),
+                ));
+            }
+        };
+        let source = NativeVideoSource::new(VideoResolution { width, height }, true);
+        if !android_screen::install_source(token, source.clone()) {
+            return Err(CallError::TrackPublishFailed("Screen share stopped".into()));
+        }
+        let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source));
+        let options = TrackPublishOptions {
+            source: TrackSource::Screenshare,
+            ..Default::default()
+        };
+        let publication = local_participant
+            .publish_track(LocalTrack::Video(track), options)
+            .await
+            .map_err(|error| {
+                android_screen::stop();
+                CallError::TrackPublishFailed(error.to_string())
+            })?;
+        *self.screen_share_track_sid.write() = Some(publication.sid());
+        if !android_screen::is_running() {
+            self.stop_screen_share().await;
+            return Err(CallError::TrackPublishFailed("Screen share stopped".into()));
+        }
+        Ok(())
+    }
+
     /// Stop microphone capture and unpublish track.
     pub fn stop_microphone(&self) {
         self.microphone_requested
@@ -698,12 +758,15 @@ impl RoomManager {
     /// frozen stream; restarting screen share creates a second track on
     /// top of the dead one and the receiver tile picks whichever
     /// subscription it had first.
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "ios"))]
     pub async fn stop_screen_share(&self) {
+        #[cfg(not(target_os = "android"))]
         {
             let mut capture = self.screen_capture.write();
             capture.stop();
         }
+        #[cfg(target_os = "android")]
+        super::android_screen::stop();
         let sid = self.screen_share_track_sid.write().take();
         let Some(sid) = sid else { return };
         let local_participant = {
@@ -767,10 +830,19 @@ impl RoomManager {
         {
             self.screen_capture.read().is_running()
         }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
+        #[cfg(target_os = "android")]
+        {
+            super::android_screen::is_running()
+        }
+        #[cfg(target_os = "ios")]
         {
             false
         }
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn screen_share_capture_failed(&self) -> bool {
+        self.screen_share_track_sid.read().is_some() && !super::android_screen::is_running()
     }
 
     /// Set playback volume for remote audio (0.0 to 1.0).
@@ -978,11 +1050,17 @@ impl RoomManager {
         let tls_root_ca_pem = match parsed.scheme() {
             "wss" | "https" => Some(
                 crate::config::TLS_ROOT_CA_PEM
-                    .ok_or_else(|| CallError::ConnectionFailed("missing pinned LiveKit TLS CA".into()))?
+                    .ok_or_else(|| {
+                        CallError::ConnectionFailed("missing pinned LiveKit TLS CA".into())
+                    })?
                     .to_owned(),
             ),
             "ws" | "http" if cfg!(any(test, feature = "dev-trust-root")) => None,
-            _ => return Err(CallError::ConnectionFailed("LiveKit signaling requires WSS".into())),
+            _ => {
+                return Err(CallError::ConnectionFailed(
+                    "LiveKit signaling requires WSS".into(),
+                ));
+            }
         };
         replace_timing_slot(&self.timing, timing.clone());
         timing.mark("room_connect_begin");
@@ -1189,7 +1267,10 @@ impl RoomManager {
                 }
                 // Invalidate grace before any awaited control delivery at either
                 // SDK recovery boundary. Connection generation stays unchanged.
-                if matches!(&event, livekit::RoomEvent::Reconnecting | livekit::RoomEvent::Reconnected) {
+                if matches!(
+                    &event,
+                    livekit::RoomEvent::Reconnecting | livekit::RoomEvent::Reconnected
+                ) {
                     membership_revision.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 // Avoid dumping arbitrary SDK event payloads and identities.
@@ -1299,6 +1380,11 @@ impl RoomManager {
             // sid so the next call doesn't inherit a stale handle.
             self.screen_share_track_sid.write().take();
         }
+        #[cfg(target_os = "android")]
+        {
+            super::android_screen::stop();
+            self.screen_share_track_sid.write().take();
+        }
 
         // Take the room handle
         let room = {
@@ -1350,7 +1436,8 @@ impl RoomManager {
 
     /// Grace checks must belong to one uninterrupted SDK membership phase.
     pub fn membership_revision(&self) -> u64 {
-        self.membership_revision.load(std::sync::atomic::Ordering::SeqCst)
+        self.membership_revision
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Get current participant count.

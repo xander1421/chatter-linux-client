@@ -678,8 +678,10 @@ enum CallCommand {
         source: ScreenSource,
         response: oneshot::Sender<Result<(), CallError>>,
     },
-    /// Stop screen share (desktop only).
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(target_os = "android")]
+    PublishAndroidScreenShare { response: oneshot::Sender<Result<(), CallError>> },
+    /// Stop screen share.
+    #[cfg(not(target_os = "ios"))]
     StopScreenShare,
     /// Check if screen sharing.
     IsScreenSharing { response: oneshot::Sender<bool> },
@@ -1766,8 +1768,16 @@ impl CallWorkerHandle {
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
-    /// Stop screen share (desktop only).
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(target_os = "android")]
+    pub async fn publish_screen_share(&self) -> Result<(), CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.try_send(CallCommand::PublishAndroidScreenShare { response: tx })
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
+    /// Stop screen share.
+    #[cfg(not(target_os = "ios"))]
     pub fn stop_screen_share(&self) {
         let _ = self.cmd_tx.try_send(CallCommand::StopScreenShare);
     }
@@ -2035,6 +2045,10 @@ fn run_call_worker(
                                     call: CallHandle::new(state.call.id.to_string()),
                                 });
                             }
+                        }
+                        #[cfg(target_os = "android")]
+                        if room_manager.screen_share_capture_failed() {
+                            room_manager.stop_screen_share().await;
                         }
                         continue;
                     }
@@ -2511,7 +2525,19 @@ fn run_call_worker(
                     });
                 }
 
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                #[cfg(target_os = "android")]
+                CallCommand::PublishAndroidScreenShare { response } => {
+                    if gate_defers(&active_call, |g| g.is_closed()) {
+                        let _ = response.send(Err(CallError::AwaitingKey));
+                        continue;
+                    }
+                    let rm = room_manager.clone();
+                    tokio::task::spawn_local(async move {
+                        let _ = response.send(rm.publish_screen_share().await);
+                    });
+                }
+
+                #[cfg(not(target_os = "ios"))]
                 CallCommand::StopScreenShare => {
                     room_manager.stop_screen_share().await;
                 }
