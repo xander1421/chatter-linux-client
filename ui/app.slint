@@ -1,4 +1,5 @@
 import { AppBottomChrome } from "app_bottom_chrome.slint";
+import { AppShortcuts } from "app_shortcuts.slint";
 import { AppTopOverlays } from "app_top_overlays.slint";
 import { AppSettingsHost } from "app_settings_host.slint";
 import { AppSecondaryModals } from "app_secondary_modals.slint";
@@ -52,9 +53,6 @@ import { ToastOverlay } from "components/toast_overlay.slint";
 
 // Import call UI
 import { ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
-
-// Jarvis AI: feature-gate global (the AI channel is the Jarvis surface)
-import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 
 // Import anon mode global + PIN modal
 import { ShieldWash } from "anon_mode/shield_wash.slint";
@@ -1710,59 +1708,23 @@ export component MainWindow inherits Window {
                 && (root.composer-emoji-picker-visible || root.composer-gif-picker-visible)) ? accept : reject;
         }
 
-        // ========== Global keyboard shortcuts ==========
-        FocusScope {
-            width: 0;
-            height: 0;
-            enabled: root.current-view == "main";
-
-            key-pressed(event) => {
-                // Ctrl+J: open the local AI channel
-                if (JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
-                    root.channel-selected("00000000-0000-0000-0000-000000000000");
-                    return accept;
-                }
-                // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
-                if (event.modifiers.control
-                    && ((event.text == "k" && root.search-shortcut-pref != "f")
-                     || (event.text == "f" && root.search-shortcut-pref != "k"))) {
-                    root.unified-search-selected-index = 0;
-                    root.unified-search-open = true;
-                    root.unified-search-opened();
-                    return accept;
-                }
-                // Ctrl+,: Open settings
-                if (event.modifiers.control && event.text == ",") {
-                    root.nav-push("settings");
-                    root.settings-clicked();
-                    return accept;
-                }
-                // Ctrl+/: Toggle keyboard shortcuts help
-                if (event.modifiers.control && event.text == "/") {
-                    if (root.active-modal == "keyboard-shortcuts") {
-                        root.nav-close("keyboard-shortcuts");
-                    } else {
-                        root.nav-push("keyboard-shortcuts");
-                    }
-                    return accept;
-                }
-                // Escape: close the top modal, else leave a non-Chats tab
-                if (event.text == Key.Escape) {
-                    if (root.calls-more-menu-visible || root.call-history-selecting || root.delete-confirm-count > 0) {
-                        root.back-pressed();
-                        return accept;
-                    }
-                    if (root.active-modal != "none") {
-                        root.nav-pop();
-                        return accept;
-                    }
-                    if (root.active-tab != "chats") {
-                        root.active-tab = "chats";
-                        return accept;
-                    }
-                }
-                reject
-            }
+        AppShortcuts {
+            current-view: root.current-view;
+            search-shortcut-pref: root.search-shortcut-pref;
+            unified-search-selected-index <=> root.unified-search-selected-index;
+            unified-search-open <=> root.unified-search-open;
+            active-modal: root.active-modal;
+            active-tab <=> root.active-tab;
+            calls-more-menu-visible: root.calls-more-menu-visible;
+            call-history-selecting: root.call-history-selecting;
+            delete-confirm-count: root.delete-confirm-count;
+            channel-selected(id) => { root.channel-selected(id); }
+            unified-search-opened() => { root.unified-search-opened(); }
+            nav-push(page) => { root.nav-push(page); }
+            nav-close(page) => { root.nav-close(page); }
+            nav-pop() => { root.nav-pop(); }
+            settings-clicked() => { root.settings-clicked(); }
+            back-pressed() => { root.back-pressed(); }
         }
 
         // ========== Main content layer ==========
