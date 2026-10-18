@@ -136,6 +136,9 @@ pub(super) fn handle_message_received(
         .collect();
 
     if !downloadable.is_empty() {
+        let own_sent = conv_type == chatter_core::domain::message::ConversationType::ServerDm
+            && sender_id.is_some()
+            && sender_id == ui_ctx.session_current_user_id();
         let ui_ctx_dl = ui_ctx.clone();
         let weak_dl = window.clone();
         let conv_id = conversation_id.to_string();
@@ -145,6 +148,7 @@ pub(super) fn handle_message_received(
                 ui_ctx_dl,
                 weak_dl,
                 conv_id,
+                own_sent,
             )
             .await;
         });

@@ -409,6 +409,7 @@ pub async fn handle_domain_event(
                         ui_ctx_dl,
                         weak,
                         conv_id,
+                        false,
                     )
                     .await;
                 });
