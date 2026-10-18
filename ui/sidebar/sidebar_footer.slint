@@ -1,0 +1,229 @@
+import { GlassSurface } from "../components/glass_surface.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { TooltipArea } from "../components/tooltip.slint";
+import { Avatar } from "../components/avatar.slint";
+import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
+import { MeshGlobal } from "../mesh/mesh_global.slint";
+
+export component SidebarFooter inherits GlassSurface {
+    in property <length> panel-width;
+    in property <length> panel-height;
+    in property <bool> collapsed;
+    in property <bool> touch;
+    in property <bool> rail-has-mesh;
+    in property <int> rail-button-count;
+    in property <length> rail-icon-size;
+    in property <length> rail-slot-size;
+    in property <length> rail-slot-radius;
+    in property <brush> rail-slot-bg;
+    in property <length> footer-icon-size;
+    in property <image> user-avatar-source;
+    in property <string> user-initials;
+    in property <string> user-presence-status;
+    in property <string> user-display-name;
+    in property <bool> server-unreachable;
+    callback profile-clicked();
+    callback settings-clicked();
+    callback toggle-collapsed();
+    callback anon-mode-clicked();
+    callback channel-selected(string);
+
+            // Bound backdrop and shadow painting to this chrome silhouette.
+            clip: true;
+            x: 0;
+            width: root.panel-width;
+            y: root.panel-height - self.height;
+            material-level: 2;
+            elevation: 3;
+
+            // Derived, not a magic number: this was hardcoded at 140px, which
+            // fit the three 32px buttons the rail used to have and silently
+            // clipped everything past them off the bottom of the screen once
+            // the cluster grew. 8px inter-item spacing + 8px padding-bottom,
+            // matching the layout below.
+            height: root.collapsed
+                ? root.rail-button-count * root.rail-icon-size
+                    + (root.rail-button-count - 1) * 8px + 16px
+                : 44px;
+
+            // Top edge only — the one side that separates this strip from the
+            // list. The four-sided border it replaces doubled up against the
+            // panel's own left/right edges and closed a box around the footer.
+
+
+            // Expanded view: Profile + Jarvis + Settings on same row
+            // No `alignment` — under any alignment other than stretch, Slint
+            // sizes every child to its PREFERRED width and ignores
+            // horizontal-stretch, so the display name pushed the icons past the
+            // right edge and the last one (collapse) was clipped away entirely.
+            // Stretching lets the name elide and keeps the buttons on screen.
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
+                // Profile moved to the bottom tab bar's rightmost tab on mobile,
+                // where it carries the user's avatar — a name-and-avatar strip
+                // wedged between the last conversation and the tab bar was
+                // neither a list row nor navigation, and read as leftover.
+                if !false: TouchArea {
+                    horizontal-stretch: 1;
+                    mouse-cursor: pointer;
+                    clicked => { root.profile-clicked(); }
+                    HorizontalLayout {
+                        spacing: Spacing.sm; alignment: start;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                                presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                            }
+                        }
+                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                }
+                // The gear opens the account menu (Settings is pushed from
+                // there, app.slint), like the avatar beside it. Not on mobile:
+                // the tab bar's Profile tab is the same menu.
+                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: sett-touch.has-hover ? Colors.surface-hover : transparent;
+                        Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        if root.server-unreachable: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: Colors.error;
+                            accessible-role: text;
+                            accessible-label: "Server unreachable";
+                        }
+                        sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
+                    }
+                }
+                // Collapse back to the rail. The expanded panel needs its own
+                // copy: the rail's cluster only exists while collapsed, so
+                // without this, expanding was a one-way trip.
+                //
+                // There is no rail on mobile to collapse into — the list either
+                // is the screen or the conversation is — so the control has
+                // nothing to do there.
+                if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Collapse sidebar";
+                        Image { source: Icons.chevron-left; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        collapse-touch := TouchArea { clicked => { root.toggle-collapsed(); } }
+                    }
+                }
+            }
+
+            // Collapsed view: Vertical stack of icons
+            if root.collapsed: VerticalLayout {
+                alignment: end; spacing: Spacing.sm; padding-bottom: Spacing.sm;
+                // Ungated, like the expanded header shield.
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
+                    tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                        background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
+                        Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
+                        // Tor status dot: green=connected, amber=CONNECTING ONLY,
+                        // red=error, muted=off. See the expanded shield above.
+                        Rectangle {
+                            visible: AnonMode.enabled && AnonMode.onion-built;
+                            width: 10px; height: 10px; border-radius: 5px;
+                            x: parent.width - self.width - 2px; y: 2px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: TorStatus.state == 2 ? Colors.success
+                                : TorStatus.state >= 3 ? Colors.error
+                                : TorStatus.state == 1 ? Colors.warning
+                                : Colors.text-muted;
+                        }
+                        TouchArea { clicked => { root.anon-mode-clicked(); } }
+                    } }
+                }
+                // Bottom cluster, in order: AI, Mesh, expand, Settings.
+                // The expand chevron lives here rather than in the panel header
+                // so the three things reached most often on a phone — the AI
+                // channel, the mesh room, and the full conversation list — sit
+                // together under the thumb.
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        // The local AI channel's fixed id is the nil UUID
+                        // (chatter-core client/jarvis.rs jarvis_channel_id).
+                        TouchArea { clicked => { root.channel-selected("00000000-0000-0000-0000-000000000000"); } }
+                    } }
+                }
+
+                if root.rail-has-mesh: TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            colorize: !MeshGlobal.radio-running ? Colors.warning
+                                : MeshGlobal.peer-count > 0 ? Colors.primary
+                                : Colors.text-secondary; }
+                        // First entry is the public room — the mesh list is
+                        // built with it at the head.
+                        TouchArea { clicked => { MeshGlobal.conversation-selected(MeshGlobal.conversations[0].id); } }
+                    } }
+                }
+
+                // A visible seam between "situational shortcuts" (Anon Mode,
+                // AI, Mesh — above) and "always there" navigation (expand,
+                // Settings, Profile — below). Six identical unlabeled slots
+                // in one unbroken stack read as one big undifferentiated
+                // block; a hairline plus extra breathing room lets the eye
+                // parse two small groups instead, without hiding anything.
+                Rectangle {
+                    height: 13px;
+                    Rectangle {
+                        y: parent.height / 2;
+                        width: root.rail-slot-size * 0.6;
+                        x: (parent.width - self.width) / 2;
+                        height: 1px;
+                        background: Colors.divider;
+                    }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        TouchArea { clicked => { root.toggle-collapsed(); } }
+                    } }
+                }
+
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                        Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        if root.server-unreachable: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: Colors.error;
+                            accessible-role: text;
+                            accessible-label: "Server unreachable";
+                        }
+                        TouchArea { clicked => { root.settings-clicked(); } }
+                    } }
+                }
+                TouchArea {
+                    height: root.rail-icon-size; clicked => { root.profile-clicked(); }
+                    HorizontalLayout { alignment: center;
+                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
+                        }
+                    }
+                }
+
+            }
+}
