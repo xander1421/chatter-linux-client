@@ -1,0 +1,119 @@
+import { Spacing } from "theme/spacing.slint";
+import { ReturnToCallBar, ActiveCallData } from "calls/mod.slint";
+import { ComposeFab } from "components/compose_fab.slint";
+import { AppBottomNavigation } from "components/app_bottom_navigation.slint";
+
+// Inset content chrome shared by the call state and compact navigation.
+export component AppBottomChrome inherits Rectangle {
+    in property <ActiveCallData> active-call-data;
+    in-out property <bool> active-call-fullscreen;
+    in property <bool> active-call-visible;
+    in property <string> active-modal;
+    in-out property <string> active-tab;
+    in property <bool> bottom-nav-visible;
+    in property <bool> call-is-muted;
+    in property <bool> call-is-video-enabled;
+    in property <[image]> call-remote-video-frames;
+    in property <bool> compact-layout;
+    in property <int> contacts-badge;
+    in property <length> fab-y;
+    in property <bool> fab-visible;
+    in-out property <string> friends-modal-tab;
+    in property <int> missed-call-count;
+    in-out property <bool> mobile-show-chat;
+    in property <length> return-to-call-height;
+    in property <length> safe-area-bottom;
+    in-out property <bool> sidebar-collapsed;
+    in-out property <bool> sidebar-user-collapsed;
+    in property <int> total-unread-count;
+    in property <image> user-avatar-source;
+    callback call-end();
+    callback calls-tab-clicked();
+    callback call-toggle-mute();
+    callback call-toggle-video();
+    callback create-clicked();
+    background: transparent;
+
+    // ========== Return-to-call bar ==========
+    // The call view is docked in the conversation pane, so anywhere else — the
+    // chat list, Contacts, any modal — nothing said a call was running. Declared
+    // after the modals so it sits above them; sits just above the bottom tab
+    // bar, whose spacer in the main column also reserves this bar's height.
+    // Positioned against `parent` (the inset content layer), like the tab bar:
+    // `root.height` counted both system insets a second time and dropped the
+    // bar under the tabs.
+    // Layered with the tab bar (z -1), under every pushed modal: a dialog's
+    // backdrop dims it and takes its taps, so it is live only when no dialog
+    // is open — the same rule Signal's in-call bar follows.
+    if root.active-call-visible && (root.active-tab != "chats" || root.active-modal != "none"
+        || (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {
+        z: 0;
+        call-data: root.active-call-data;
+        remote-video-frames: root.call-remote-video-frames;
+        is-muted: root.call-is-muted;
+        is-video-enabled: root.call-is-video-enabled;
+        height: root.return-to-call-height;
+        width: min(420px, parent.width - 2 * Spacing.lg);
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Spacing.sm - (root.bottom-nav-visible
+            ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+            : Spacing.lg);
+        clicked => {
+            root.active-tab = "chats";
+            root.mobile-show-chat = true;
+            if root.compact-layout {
+                root.active-call-fullscreen = true;
+            }
+        }
+        toggle-mute => { root.call-toggle-mute(); }
+        toggle-video => { root.call-toggle-video(); }
+        end-call => { root.call-end(); root.active-call-fullscreen = false; }
+    }
+
+    // Mobile bottom navigation. Restored as the full multi-tab bar it was
+    // designed to be — the previous removal was of a one-tab remnant,
+    // which is a different thing: a single tab is decoration, four tabs
+    // are navigation, and the destinations (Calls, Contacts, Settings)
+    // all existed already, just buried in the rail's bottom cluster
+    // where they cost an expand-collapse round trip to reach.
+    //
+    // Layered at z -1: above the chat column and the tab screens (Contacts,
+    // Settings, Calls — which carve a strip out of themselves for it), below
+    // every pushed modal, so a dialog's backdrop dims the bar and takes its
+    // taps instead of letting the user switch tabs out from under the dialog.
+    // A matching spacer up in the main column reserves its height.
+    // Hidden while the IME is up, where it would otherwise sit on the keyboard.
+    // Not inside a conversation: a chat is a pushed screen, and the tab bar
+    // belongs to the level you pushed FROM. Keeping it there costs a row of
+    // the message view and offers navigation that the back arrow already
+    // covers — Telegram drops it on the same transition.
+    // Only in the app proper: on login / register / recovery it offered
+    // Chats, Settings and Profile to someone who is not signed in.
+    // Compose FAB (Signal / Telegram): bottom-right of the Chats tab, inset
+    // from the dock's edge and clear above it. Above the list (-2) and the
+    // dock (-1), under every modal and overlay (0) — the incoming-call screen
+    // and toasts are not covered by fab-visible, so they must stay on top.
+    if root.fab-visible: ComposeFab {
+        z: 0.5;
+        x: parent.width - self.width - Spacing.xl;
+        y: root.fab-y;
+        create-clicked => { root.create-clicked(); }
+    }
+
+    if root.bottom-nav-visible: AppBottomNavigation {
+        z: 0;
+        width: parent.width;
+        y: parent.height - self.height;
+        selected-tab <=> root.active-tab;
+        mobile-show-chat <=> root.mobile-show-chat;
+        sidebar-user-collapsed <=> root.sidebar-user-collapsed;
+        sidebar-collapsed <=> root.sidebar-collapsed;
+        friends-modal-tab <=> root.friends-modal-tab;
+        user-avatar: root.user-avatar-source;
+        chats-badge: root.total-unread-count;
+        calls-badge: root.missed-call-count;
+        contacts-badge: root.contacts-badge;
+        safe-area-bottom: root.safe-area-bottom;
+        calls-tab-clicked => { root.calls-tab-clicked(); }
+    }
+}
