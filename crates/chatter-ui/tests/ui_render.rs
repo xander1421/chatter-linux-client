@@ -131,10 +131,12 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     w.set_current_view("main".into());
     // A selected conversation mounts ChatLayout; no selection deliberately
     // shows the welcome state without a composer. Exercise a real chat here.
-    w.set_channel_name("Render smoke".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Render smoke".into());
     // Default desktop shape: a real window, mouse input, sidebar expanded.
     w.set_is_mobile_platform(false);
-    w.set_sidebar_collapsed(false);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_sidebar_collapsed(false);
     pump(&w);
 
     let win = w.window().size().to_logical(w.window().scale_factor());
@@ -211,7 +213,8 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     // window under 600 dp; a wider touch window is the tablet two-pane.
     w.set_is_mobile_platform(true);
     w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
-    w.set_mobile_show_chat(false);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(false);
     pump(&w);
     // Mobile geometry is measured against the resized window, not the
     // desktop width retained above.
@@ -249,7 +252,8 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     // The mirror image, and the one the push-navigation change could break:
     // tapping a row must swap the panes, not leave the list on top of a chat
     // that never becomes visible.
-    w.set_mobile_show_chat(true);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
     pump(&w);
     let m_chat = find(&w, "ChatLayout");
     assert_visible(&m_chat, "ChatLayout", "mobile, conversation open");
@@ -289,7 +293,8 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
     // The composer itself does grow on the first character since 26ff21f2
     // (actions rise above a populated field). That change keeps the same
     // native input and its focus; ui_phone_layout.rs asserts that.
-    w.set_composer_text("a".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("a".into());
     pump(&w);
     assert!(
         testing::ElementHandle::find_by_accessible_label(&w, "Bold")

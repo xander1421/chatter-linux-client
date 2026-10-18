@@ -34,17 +34,23 @@ fn call_header_keeps_four_ordered_emojis_and_key_version_across_presentations() 
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_channel_name("Verification fixture".into());
-    w.set_active_call_visible(true);
-    w.set_call_is_video_enabled(false);
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Verification fixture".into());
+    w.global::<chatter_ui::CallView>()
+        .set_active_call_visible(true);
+    w.global::<chatter_ui::CallView>()
+        .set_call_is_video_enabled(false);
     let emojis = ["🐱", "🌳", "🚀", "🍋"];
     for incoming in [false, true] {
         for theme in ["light", "dark"] {
             w.global::<Appearance>().set_theme(theme.into());
             for expanded in [false, true] {
-                w.set_active_call_fullscreen(expanded);
-                w.set_active_tab("chats".into());
+                w.global::<chatter_ui::CallView>()
+                    .set_active_call_fullscreen(expanded);
+                w.global::<chatter_ui::SidebarPane>()
+                    .set_active_tab("chats".into());
                 // Match the incoming connected / outgoing pending presentations.
                 let data = ActiveCallData {
                     call_id: "verification-fixture".into(),
@@ -59,7 +65,8 @@ fn call_header_keeps_four_ordered_emojis_and_key_version_across_presentations() 
                     verification_key_version: "4294967295".into(),
                     ..Default::default()
                 };
-                w.set_active_call_data(data.clone());
+                w.global::<chatter_ui::CallView>()
+                    .set_active_call_data(data.clone());
                 pump(&w);
                 let mut previous_right: Option<f32> = None;
                 let mut baseline: Option<f32> = None;
@@ -103,7 +110,8 @@ fn call_header_keeps_four_ordered_emojis_and_key_version_across_presentations() 
                 pending.verification_emoji_3 = "".into();
                 pending.verification_emoji_4 = "".into();
                 pending.verification_key_version = "".into();
-                w.set_active_call_data(pending);
+                w.global::<chatter_ui::CallView>()
+                    .set_active_call_data(pending);
                 pump(&w);
                 for (index, emoji) in emojis.iter().enumerate() {
                     assert!(

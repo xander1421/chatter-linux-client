@@ -1,6 +1,7 @@
 //! RC73: exercise real pointer hit testing, including the floating list that
 //! extends behind the Calls header. Run with --features ui-test-debug.
 use chatter_ui::{CallHistoryRow, MainWindow};
+pub use chatter_ui::{CallView, ChatPane, ModalHostState, SearchPane, SidebarPane};
 use i_slint_backend_testing as testing;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -86,46 +87,61 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
     let w = MainWindow::new().unwrap();
     back::wire(&w);
     back::push(&w, "edit-profile");
-    w.set_edit_profile_loading(true);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_edit_profile_loading(true);
     w.invoke_back_pressed();
-    assert_eq!(w.get_modal_stack().row_count(), 0);
-    assert!(!w.get_edit_profile_loading());
+    assert_eq!(
+        w.global::<chatter_ui::ModalHostState>()
+            .get_modal_stack()
+            .row_count(),
+        0
+    );
+    assert!(
+        !w.global::<chatter_ui::ModalHostState>()
+            .get_edit_profile_loading()
+    );
     bin_ui::features::modals::profile::RETIRED.with(|count| assert_eq!(count.get(), 1));
     w.set_current_view("main".into());
     w.set_connection_status("connected".into());
-    w.set_call_history_rows(ModelRc::new(VecModel::from(
-        (0..24)
-            .map(|i| CallHistoryRow {
-                id: format!("call-{i}").into(),
-                conversation_id: "fixture".into(),
-                conversation_type: "server_dm".into(),
-                name: format!("Caller {i}").into(),
-                detail: "Incoming · 0:16".into(),
-                timestamp: "08:29".into(),
-                can_call_back: true,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    )));
+    w.global::<chatter_ui::CallView>()
+        .set_call_history_rows(ModelRc::new(VecModel::from(
+            (0..24)
+                .map(|i| CallHistoryRow {
+                    id: format!("call-{i}").into(),
+                    conversation_id: "fixture".into(),
+                    conversation_type: "server_dm".into(),
+                    name: format!("Caller {i}").into(),
+                    detail: "Incoming · 0:16".into(),
+                    timestamp: "08:29".into(),
+                    can_call_back: true,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        )));
     let cleared = std::rc::Rc::new(std::cell::Cell::new(false));
     let observed = cleared.clone();
-    w.on_call_history_clear(move || observed.set(true));
+    w.global::<chatter_ui::CallView>()
+        .on_call_history_clear(move || observed.set(true));
 
     let row_actions = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = row_actions.clone();
-    w.on_call_history_open(move |_, _| observed.set(observed.get() + 1));
+    w.global::<chatter_ui::CallView>()
+        .on_call_history_open(move |_, _| observed.set(observed.get() + 1));
     let observed = row_actions.clone();
-    w.on_call_history_redial(move |_, _, _| observed.set(observed.get() + 1));
+    w.global::<chatter_ui::CallView>()
+        .on_call_history_redial(move |_, _, _| observed.set(observed.get() + 1));
 
     for (mobile, width, height) in [
         (true, 360.0, 640.0),
         (true, 412.0, 891.0),
         (false, 1400.0, 900.0),
     ] {
-        w.set_active_tab("chats".into());
+        w.global::<chatter_ui::SidebarPane>()
+            .set_active_tab("chats".into());
         settle(&w, width, height);
         w.set_is_mobile_platform(mobile);
-        w.set_active_tab("calls".into());
+        w.global::<chatter_ui::SidebarPane>()
+            .set_active_tab("calls".into());
         settle(&w, width, height);
         if !mobile {
             let card = labelled(&w, "Calls dialog").expect("Calls desktop card");
@@ -148,7 +164,9 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         click(&w, &more);
         settle(&w, width, height);
         assert_eq!(
-            w.get_active_tab().as_str(),
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
             "calls",
             "header event reached an underlying conversation row"
         );
@@ -164,12 +182,23 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         assert!(mp.x >= 0.0 && mp.y + ms.height <= height);
         // RC77/S9: the real header owns a local menu but Android Back is
         // coordinated at MainWindow. Exercise the actual callback/key route.
-        assert!(w.get_calls_more_menu_visible());
+        assert!(
+            w.global::<chatter_ui::CallView>()
+                .get_calls_more_menu_visible()
+        );
         key(&w, slint::platform::Key::Back);
         settle(&w, width, height);
-        assert!(!w.get_calls_more_menu_visible());
+        assert!(
+            !w.global::<chatter_ui::CallView>()
+                .get_calls_more_menu_visible()
+        );
         assert!(labelled(&w, "Clear call history").is_none());
-        assert_eq!(w.get_active_tab().as_str(), "calls");
+        assert_eq!(
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            "calls"
+        );
         assert_eq!(row_actions.get(), 0, "Back leaked to a call row");
         assert!(!cleared.get());
         click(&w, &more);
@@ -177,21 +206,43 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         key(&w, slint::platform::Key::Escape);
         settle(&w, width, height);
         assert!(labelled(&w, "Clear call history").is_none());
-        assert_eq!(w.get_active_tab().as_str(), "calls");
+        assert_eq!(
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            "calls"
+        );
 
         // Preserve selection before menu, then menu before tab navigation.
         click(&w, &more);
         settle(&w, width, height);
-        w.set_selection_mode(true);
+        w.global::<chatter_ui::ChatPane>().set_selection_mode(true);
         w.invoke_back_pressed();
-        assert!(!w.get_selection_mode());
-        assert!(w.get_calls_more_menu_visible());
+        assert!(!w.global::<chatter_ui::ChatPane>().get_selection_mode());
+        assert!(
+            w.global::<chatter_ui::CallView>()
+                .get_calls_more_menu_visible()
+        );
         w.invoke_back_pressed();
-        assert!(!w.get_calls_more_menu_visible());
-        assert_eq!(w.get_active_tab().as_str(), "calls");
+        assert!(
+            !w.global::<chatter_ui::CallView>()
+                .get_calls_more_menu_visible()
+        );
+        assert_eq!(
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            "calls"
+        );
         w.invoke_back_pressed();
-        assert_eq!(w.get_active_tab().as_str(), "chats");
-        w.set_active_tab("calls".into());
+        assert_eq!(
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            "chats"
+        );
+        w.global::<chatter_ui::SidebarPane>()
+            .set_active_tab("calls".into());
         settle(&w, width, height);
         let more = labelled(&w, "More options").unwrap();
         click(&w, &more);
@@ -205,7 +256,12 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         );
         settle(&w, width, height);
         assert!(labelled(&w, "Clear call history").is_none());
-        assert_eq!(w.get_active_tab().as_str(), "calls");
+        assert_eq!(
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            "calls"
+        );
         click(&w, &more);
         settle(&w, width, height);
         assert!(labelled(&w, "Clear call history").is_some());
@@ -227,8 +283,11 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             !cleared.get(),
             "opening overflow/confirmation must not clear history"
         );
-        let prompt = labelled(&w, "Delete every call in this list from this device? This cannot be undone.")
-            .expect("confirmation prompt");
+        let prompt = labelled(
+            &w,
+            "Delete every call in this list from this device? This cannot be undone.",
+        )
+        .expect("confirmation prompt");
         let screen = testing::ElementHandle::find_by_element_type_name(&w, "CallHistoryScreen")
             .next()
             .unwrap();
@@ -238,7 +297,8 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             // virtualized kind): its first type name is ListView, so the
             // Flickable is found down the base chain.
             if (e.type_name().as_deref() == Some("Flickable")
-                || e.bases().is_some_and(|mut bases| bases.any(|t| t == "Flickable")))
+                || e.bases()
+                    .is_some_and(|mut bases| bases.any(|t| t == "Flickable")))
                 && e.size().height > 0.0
             {
                 list_bounds = Some((e.absolute_position(), e.size()));
@@ -286,10 +346,23 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         settle(&w, width, height);
         back::push(&w, "keyboard-shortcuts");
         settle(&w, width, height);
-        assert!(!w.get_calls_more_menu_visible());
+        assert!(
+            !w.global::<chatter_ui::CallView>()
+                .get_calls_more_menu_visible()
+        );
         w.invoke_back_pressed();
-        assert_eq!(w.get_modal_stack().row_count(), 0);
-        assert_eq!(w.get_active_tab().as_str(), "calls");
+        assert_eq!(
+            w.global::<chatter_ui::ModalHostState>()
+                .get_modal_stack()
+                .row_count(),
+            0
+        );
+        assert_eq!(
+            w.global::<chatter_ui::SidebarPane>()
+                .get_active_tab()
+                .as_str(),
+            "calls"
+        );
 
         // Mounted local state must also reset when the owner changes view or
         // conversation; reopening Calls must not inherit stale overflow.
@@ -297,20 +370,34 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             let more = labelled(&w, "More options").unwrap();
             click(&w, &more);
             settle(&w, width, height);
-            assert!(w.get_calls_more_menu_visible());
+            assert!(
+                w.global::<chatter_ui::CallView>()
+                    .get_calls_more_menu_visible()
+            );
             match change {
-                0 => w.set_channel_id(format!("fixture-{width}-{change}").into()),
-                1 => w.set_conversation_kind(chatter_ui::ConversationKind::Channel),
+                0 => w
+                    .global::<chatter_ui::ChatPane>()
+                    .set_channel_id(format!("fixture-{width}-{change}").into()),
+                1 => w
+                    .global::<chatter_ui::ChatPane>()
+                    .set_conversation_kind(chatter_ui::ConversationKind::Channel),
                 2 => w.set_current_view("loading".into()),
-                _ => w.set_active_tab("chats".into()),
+                _ => w
+                    .global::<chatter_ui::SidebarPane>()
+                    .set_active_tab("chats".into()),
             }
             settle(&w, width, height);
-            assert!(!w.get_calls_more_menu_visible());
+            assert!(
+                !w.global::<chatter_ui::CallView>()
+                    .get_calls_more_menu_visible()
+            );
             w.set_current_view("main".into());
-            w.set_active_tab("calls".into());
+            w.global::<chatter_ui::SidebarPane>()
+                .set_active_tab("calls".into());
             settle(&w, width, height);
             assert!(labelled(&w, "Clear call history").is_none());
-            w.set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
+            w.global::<chatter_ui::ChatPane>()
+                .set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
         }
         let more = labelled(&w, "More options").unwrap();
 
@@ -322,10 +409,20 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             click_position(&w, slint::LogicalPosition::new(8.0, 8.0));
             settle(&w, width, height);
             assert!(labelled(&w, "Clear call history").is_none());
-            assert_eq!(w.get_active_tab().as_str(), "calls");
+            assert_eq!(
+                w.global::<chatter_ui::SidebarPane>()
+                    .get_active_tab()
+                    .as_str(),
+                "calls"
+            );
             click_position(&w, slint::LogicalPosition::new(8.0, 8.0));
             settle(&w, width, height);
-            assert_eq!(w.get_active_tab().as_str(), "chats");
+            assert_eq!(
+                w.global::<chatter_ui::SidebarPane>()
+                    .get_active_tab()
+                    .as_str(),
+                "chats"
+            );
         }
     }
 }

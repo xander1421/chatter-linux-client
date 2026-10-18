@@ -40,13 +40,34 @@ fn visible_type(w: &MainWindow, name: &str) -> bool {
         .any(|e| e.size().height > 0.0 && e.size().width > 0.0)
 }
 fn draft(w: &MainWindow) {
-    assert_eq!(w.get_composer_text().as_str(), "staged 😀 draft");
-    assert_eq!(w.get_pending_attachments().row_count(), 1);
     assert_eq!(
-        w.get_pending_attachments().row_data(0).unwrap().id.as_str(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "staged 😀 draft"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_pending_attachments()
+            .row_count(),
+        1
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_pending_attachments()
+            .row_data(0)
+            .unwrap()
+            .id
+            .as_str(),
         "staged-saf"
     );
-    assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible()
+            && !w
+                .global::<chatter_ui::ChatPane>()
+                .get_composer_gif_picker_visible()
+    );
 }
 
 #[test]
@@ -55,12 +76,17 @@ fn authoritative_return_repairs_phone_geometry_without_erasing_staged_draft() {
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
-    w.set_active_tab("chats".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_active_tab("chats".into());
     w.set_is_mobile_platform(true);
-    w.set_conversation_kind(ConversationKind::ServerDm);
-    w.set_channel_name("Fixture".into());
-    w.set_mobile_show_chat(true);
-    w.set_composer_text("staged 😀 draft".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(ConversationKind::ServerDm);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Fixture".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("staged 😀 draft".into());
     w.show().unwrap();
     let fence = inset_dispatch::InsetDispatchFence::new();
     let mut sequence = 0;
@@ -80,22 +106,24 @@ fn authoritative_return_repairs_phone_geometry_without_erasing_staged_draft() {
         w.invoke_prepare_attachment_picker();
         w.window()
             .dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(false));
-        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
-            PendingAttachmentData {
-                id: "staged-saf".into(),
-                filename: "staged.pdf".into(),
-                category: "file".into(),
-                is_ready: true,
-                ..Default::default()
-            },
-        ])));
+        w.global::<chatter_ui::ChatPane>()
+            .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
+                PendingAttachmentData {
+                    id: "staged-saf".into(),
+                    filename: "staged.pdf".into(),
+                    category: "file".into(),
+                    is_ready: true,
+                    ..Default::default()
+                },
+            ])));
         // The interrupted hide leaves a positive property; no final zero is injected here.
         publish(&w, size, 176.0, 24.0);
         settle(&w);
         assert!((composer_bottom(&w) - (bare_bottom - 176.0)).abs() < 1.0);
         let old_frame = next(&mut sequence);
         fence.receive(old_frame);
-        w.set_mobile_show_chat(false); // immediate Back to Chats before completion
+        w.global::<chatter_ui::SidebarPane>()
+            .set_mobile_show_chat(false); // immediate Back to Chats before completion
         w.invoke_finish_attachment_picker(false);
         settle(&w);
         assert!(!visible_type(&w, "MobileBottomNav"));
@@ -112,7 +140,8 @@ fn authoritative_return_repairs_phone_geometry_without_erasing_staged_draft() {
             testing::ElementHandle::find_by_accessible_label(&w, "Create")
                 .any(|e| e.size().height > 0.0)
         );
-        w.set_mobile_show_chat(true);
+        w.global::<chatter_ui::SidebarPane>()
+            .set_mobile_show_chat(true);
         settle(&w);
         assert!(
             (composer_bottom(&w) - bare_bottom).abs() < 1.0,
@@ -147,9 +176,11 @@ fn authoritative_return_repairs_phone_geometry_without_erasing_staged_draft() {
         assert!((composer_bottom(&w) - (bare_bottom - 220.0)).abs() < 1.0);
         draft(&w);
         publish(&w, size, 0.0, 24.0);
-        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
-            PendingAttachmentData,
-        >::new())));
+        w.global::<chatter_ui::ChatPane>()
+            .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                PendingAttachmentData,
+            >::new(
+            ))));
         settle(&w);
     }
     // All four IME edges and physical scaling use the production conversion.

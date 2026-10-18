@@ -82,7 +82,7 @@ fn row(i: usize) -> MessageItemData {
 }
 
 fn edit(w: &MainWindow, f: impl FnOnce(&VecModel<MessageItemData>)) {
-    let model = w.get_messages();
+    let model = w.global::<chatter_ui::ChatPane>().get_messages();
     f(model
         .as_any()
         .downcast_ref::<VecModel<MessageItemData>>()
@@ -93,28 +93,37 @@ fn edit(w: &MainWindow, f: impl FnOnce(&VecModel<MessageItemData>)) {
 /// anchor + page + loading lowered in one UI closure. `unread_index` < 0 opens
 /// on the newest message.
 fn open(w: &MainWindow, rows: std::ops::Range<usize>, unread_index: i32) {
-    w.set_loading_messages(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_loading_messages(true);
     pump(w);
-    w.set_unread_index(unread_index);
-    w.set_unread_count(if unread_index < 0 { 0 } else { 1 });
-    w.set_is_at_bottom(unread_index < 0);
-    w.set_messages(ModelRc::new(VecModel::from(
-        rows.map(row).collect::<Vec<_>>(),
-    )));
-    w.set_loading_messages(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_unread_index(unread_index);
+    w.global::<chatter_ui::ChatPane>()
+        .set_unread_count(if unread_index < 0 { 0 } else { 1 });
+    w.global::<chatter_ui::ChatPane>()
+        .set_is_at_bottom(unread_index < 0);
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(
+            rows.map(row).collect::<Vec<_>>(),
+        )));
+    w.global::<chatter_ui::ChatPane>()
+        .set_loading_messages(false);
     lay_out(w);
 }
 
 /// What `header::jump_to_message` does to the list.
 fn jump(w: &MainWindow, index: i32) {
-    w.set_scroll_to_message_index(index);
+    w.global::<chatter_ui::ChatPane>()
+        .set_scroll_to_message_index(index);
     lay_out(w);
-    w.set_scroll_to_message_index(-1);
+    w.global::<chatter_ui::ChatPane>()
+        .set_scroll_to_message_index(-1);
     lay_out(w);
 }
 
 fn pos(w: &MainWindow) -> f32 {
-    w.get_message_scroll_position()
+    w.global::<chatter_ui::ChatPane>()
+        .get_message_scroll_position()
 }
 
 /// Row at the top edge, given the height of one.
@@ -130,7 +139,8 @@ fn message_list_navigation() {
     // The chat panel exists only for an open conversation (app.slint gates
     // ChatLayout on a non-empty channel name); without one, no list is ever
     // created and nothing here is tested.
-    w.set_channel_name("dev".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("dev".into());
     w.show().unwrap();
     pump(&w);
 
@@ -175,13 +185,16 @@ fn scrolling_does_not_read_row_zero(w: &MainWindow) {
         rows: VecModel::from((0..300).map(row).collect::<Vec<_>>()),
         reads: Cell::new(0),
     });
-    w.set_loading_messages(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_loading_messages(true);
     pump(w);
-    w.set_unread_index(-1);
-    w.set_unread_count(0);
-    w.set_is_at_bottom(true);
-    w.set_messages(ModelRc::from(model.clone()));
-    w.set_loading_messages(false);
+    w.global::<chatter_ui::ChatPane>().set_unread_index(-1);
+    w.global::<chatter_ui::ChatPane>().set_unread_count(0);
+    w.global::<chatter_ui::ChatPane>().set_is_at_bottom(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::from(model.clone()));
+    w.global::<chatter_ui::ChatPane>()
+        .set_loading_messages(false);
     lay_out(w);
     assert!(
         model.reads.get() > 0,
@@ -216,13 +229,13 @@ fn pill_only_when_unread_is_below_the_viewport(w: &MainWindow) {
     // Three short bubbles, the last unread: everything is on screen.
     open(w, 0..3, 2);
     assert!(
-        w.get_is_at_bottom(),
+        w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "short conversation opened on an unread boundary still reports it is \
          scrolled away from the bottom — the \"1 new message\" pill floats over \
          the message it points at"
     );
     assert_eq!(
-        w.get_unread_count(),
+        w.global::<chatter_ui::ChatPane>().get_unread_count(),
         0,
         "caught up, so the pill has no count"
     );
@@ -231,7 +244,7 @@ fn pill_only_when_unread_is_below_the_viewport(w: &MainWindow) {
     // have unread messages below the viewport.
     open(w, 0..200, 5);
     assert!(
-        !w.get_is_at_bottom(),
+        !w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "long conversation anchored near the top claims to be at the bottom"
     );
 }
@@ -244,7 +257,7 @@ fn pill_only_when_unread_is_below_the_viewport(w: &MainWindow) {
 fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
     open(w, 0..200, -1);
     assert!(
-        w.get_is_at_bottom(),
+        w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "a conversation with nothing unread opens on the newest message"
     );
     let end = pos(w);
@@ -259,7 +272,7 @@ fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
          {at_100}, row 50 at {at_50}"
     );
     assert!(
-        !w.get_is_at_bottom(),
+        !w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "a jump into history is not the bottom"
     );
     let row_height = (at_100 - at_50) / 50.0;
@@ -292,22 +305,27 @@ fn jumps_land_on_their_row(w: &MainWindow) -> f32 {
 
     // A search result: the conversation opens and the jump is recorded in the
     // same turn, before the list exists.
-    w.set_loading_messages(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_loading_messages(true);
     pump(w);
-    w.set_unread_index(-1);
-    w.set_is_at_bottom(true);
-    w.set_messages(ModelRc::new(VecModel::from(
-        (0..200).map(row).collect::<Vec<_>>(),
-    )));
-    w.set_loading_messages(false);
-    w.set_scroll_to_message_index(120);
+    w.global::<chatter_ui::ChatPane>().set_unread_index(-1);
+    w.global::<chatter_ui::ChatPane>().set_is_at_bottom(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(
+            (0..200).map(row).collect::<Vec<_>>(),
+        )));
+    w.global::<chatter_ui::ChatPane>()
+        .set_loading_messages(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_scroll_to_message_index(120);
     lay_out(w);
     assert!(
         (top_row(w, row_height) - 120.0).abs() <= 1.0,
         "a conversation opened for a search result is on row {}, not the result",
         top_row(w, row_height)
     );
-    w.set_scroll_to_message_index(-1);
+    w.global::<chatter_ui::ChatPane>()
+        .set_scroll_to_message_index(-1);
     row_height
 }
 
@@ -320,7 +338,7 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     edit(w, |m| m.push(row(200)));
     lay_out(w);
     assert!(
-        w.get_is_at_bottom(),
+        w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "a message arriving at the bottom took the list off it"
     );
     assert!(
@@ -334,7 +352,7 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     edit(w, |m| (201..216).for_each(|i| m.push(row(i))));
     lay_out(w);
     assert!(
-        w.get_is_at_bottom() && pos(w) > before + 300.0,
+        w.global::<chatter_ui::ChatPane>().get_is_at_bottom() && pos(w) > before + 300.0,
         "a burst was not followed"
     );
 
@@ -342,14 +360,14 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     wheel(w, 600.0);
     wheel(w, 600.0);
     assert!(
-        !w.get_is_at_bottom(),
+        !w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "scrolled two screens up and still \"at the bottom\""
     );
     let before = pos(w);
     edit(w, |m| m.push(row(216)));
     lay_out(w);
     assert!(
-        !w.get_is_at_bottom(),
+        !w.global::<chatter_ui::ChatPane>().get_is_at_bottom(),
         "a message arriving claimed the bottom for a reader in history"
     );
     assert!(
@@ -359,11 +377,11 @@ fn new_messages_are_followed_only_from_the_bottom(w: &MainWindow) {
     );
 
     // Their own message does take them there (`append_message_to_ui`).
-    w.set_is_at_bottom(true);
+    w.global::<chatter_ui::ChatPane>().set_is_at_bottom(true);
     edit(w, |m| m.push(row(217)));
     lay_out(w);
     assert!(
-        w.get_is_at_bottom() && pos(w) > before + 600.0,
+        w.global::<chatter_ui::ChatPane>().get_is_at_bottom() && pos(w) > before + 600.0,
         "own send did not scroll to the newest message"
     );
 }
@@ -379,13 +397,18 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
     let requests = Rc::new(Cell::new(0));
     let weak = w.as_weak();
     let counted = requests.clone();
-    w.on_load_more(move || {
+    w.global::<chatter_ui::ChatPane>().on_load_more(move || {
         counted.set(counted.get() + 1);
         let weak = weak.clone();
         let delay = std::time::Duration::from_millis(20 * (counted.get() % 2));
         slint::Timer::single_shot(delay, move || {
             let w = weak.unwrap();
-            let oldest: usize = w.get_messages().row_data(0).unwrap().message_id[1..]
+            let oldest: usize = w
+                .global::<chatter_ui::ChatPane>()
+                .get_messages()
+                .row_data(0)
+                .unwrap()
+                .message_id[1..]
                 .parse()
                 .unwrap();
             edit(&w, |m| {
@@ -404,7 +427,12 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
     );
 
     for _ in 0..300 {
-        let (rows, before) = (w.get_messages().row_count(), pos(w));
+        let (rows, before) = (
+            w.global::<chatter_ui::ChatPane>()
+                .get_messages()
+                .row_count(),
+            pos(w),
+        );
         if rows == 200 && before < 1.0 {
             break;
         }
@@ -412,13 +440,24 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
         // A page lands while the loop is pumped, which is after that turn's
         // layout pass: lay out again until one has seen every row.
         loop {
-            let seen = w.get_messages().row_count();
+            let seen = w
+                .global::<chatter_ui::ChatPane>()
+                .get_messages()
+                .row_count();
             lay_out(w);
-            if w.get_messages().row_count() == seen {
+            if w.global::<chatter_ui::ChatPane>()
+                .get_messages()
+                .row_count()
+                == seen
+            {
                 break;
             }
         }
-        let added = w.get_messages().row_count() - rows;
+        let added = w
+            .global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_count()
+            - rows;
         if added > 0 {
             // What was on screen stays there: the position moves by the
             // scroll and by exactly the rows inserted above.
@@ -430,7 +469,9 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
         }
     }
     assert_eq!(
-        w.get_messages().row_count(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_count(),
         200,
         "history stopped loading after {} requests",
         requests.get()
@@ -440,7 +481,14 @@ fn older_history_loads_to_the_beginning(w: &MainWindow, row_height: f32) {
         "the beginning of history is not reachable: stopped at {}",
         pos(w)
     );
-    assert_eq!(w.get_messages().row_data(0).unwrap().message_id, "m0");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_data(0)
+            .unwrap()
+            .message_id,
+        "m0"
+    );
     assert!(
         requests.get() <= 5,
         "{} requests for 3 pages: the list asks more than once per approach to the top",

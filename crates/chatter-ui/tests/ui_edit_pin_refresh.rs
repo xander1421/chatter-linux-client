@@ -43,16 +43,23 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         .unwrap();
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
-    w.set_channel_name("Owned edit fixture".into());
-    w.set_conversation_kind(chatter_ui::ConversationKind::Channel);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Owned edit fixture".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(chatter_ui::ConversationKind::Channel);
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_composer_text("Edited plaintext".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("Edited plaintext".into());
     for width in [360.0, 412.0] {
         for (editing, replying) in [(false, false), (true, false), (false, true), (false, false)] {
-            w.set_composer_is_editing(editing);
-            w.set_composer_is_replying(replying);
-            w.set_composer_reply_preview("Reply accessory material".into());
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_is_editing(editing);
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_is_replying(replying);
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_reply_preview("Reply accessory material".into());
             pump(&w, width);
             let right = testing::ElementHandle::find_by_element_id(
                 &w,
@@ -123,33 +130,36 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
     let ids = [MessageId::new(), MessageId::new()];
     client.set_pinned_messages(ids.to_vec());
     let selected = client.pinned_current_message_id().unwrap();
-    w.set_pinned_message_preview("Old plaintext".into());
-    w.set_pinned_items(ModelRc::new(VecModel::from(
-        ids.iter()
-            .map(|id| PinnedItem {
-                message_id: id.to_string().into(),
-                preview: "Old plaintext".into(),
+    w.global::<chatter_ui::ChatPane>()
+        .set_pinned_message_preview("Old plaintext".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_pinned_items(ModelRc::new(VecModel::from(
+            ids.iter()
+                .map(|id| PinnedItem {
+                    message_id: id.to_string().into(),
+                    preview: "Old plaintext".into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        )));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::from(vec![
+            MessageItemData {
+                message_id: selected.to_string().into(),
+                sender_id: "owner".into(),
+                timestamp_ns: "42".into(),
+                content: "Old plaintext".into(),
+                is_pinned: true,
                 ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    )));
-    w.set_messages(ModelRc::new(VecModel::from(vec![
-        MessageItemData {
-            message_id: selected.to_string().into(),
-            sender_id: "owner".into(),
-            timestamp_ns: "42".into(),
-            content: "Old plaintext".into(),
-            is_pinned: true,
-            ..Default::default()
-        },
-        MessageItemData {
-            message_id: "other-author".into(),
-            sender_id: "peer".into(),
-            timestamp_ns: "42".into(),
-            content: "Peer text".into(),
-            ..Default::default()
-        },
-    ])));
+            },
+            MessageItemData {
+                message_id: "other-author".into(),
+                sender_id: "peer".into(),
+                timestamp_ns: "42".into(),
+                content: "Peer text".into(),
+                ..Default::default()
+            },
+        ])));
     let apply = |author, id: &str, text: &str| {
         chatter_ui::bin_ui::features::chat::apply_message_edit_in_conversation(
             &w,
@@ -163,14 +173,33 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
     };
     apply("owner", "edit-event-id", "Edited plaintext");
     assert_eq!(
-        w.get_messages().row_data(0).unwrap().content,
+        w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_data(0)
+            .unwrap()
+            .content,
         "Edited plaintext"
     );
-    assert_eq!(w.get_messages().row_data(1).unwrap().content, "Peer text");
-    assert_eq!(w.get_pinned_message_preview(), "Edited plaintext");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_messages()
+            .row_data(1)
+            .unwrap()
+            .content,
+        "Peer text"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_pinned_message_preview(),
+        "Edited plaintext"
+    );
     assert_eq!(client.chat_snapshot().pinned.pinned_message_ids, ids);
     for (i, id) in ids.iter().enumerate() {
-        let pin = w.get_pinned_items().row_data(i).unwrap();
+        let pin = w
+            .global::<chatter_ui::ChatPane>()
+            .get_pinned_items()
+            .row_data(i)
+            .unwrap();
         assert_eq!(pin.message_id, id.to_string());
         assert_eq!(
             pin.preview,
@@ -182,14 +211,24 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         );
     }
     // An edit outside loaded history still refreshes the selected pin/list.
-    w.set_messages(ModelRc::new(VecModel::<MessageItemData>::default()));
+    w.global::<chatter_ui::ChatPane>()
+        .set_messages(ModelRc::new(VecModel::<MessageItemData>::default()));
     apply("owner", &selected.to_string(), "Unloaded edit");
-    assert_eq!(w.get_pinned_message_preview(), "Unloaded edit");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_pinned_message_preview(),
+        "Unloaded edit"
+    );
     let other = *ids.iter().find(|id| **id != selected).unwrap();
     apply("owner", &other.to_string(), "Other pin edit");
-    assert_eq!(w.get_pinned_message_preview(), "Unloaded edit");
     assert_eq!(
-        w.get_pinned_items()
+        w.global::<chatter_ui::ChatPane>()
+            .get_pinned_message_preview(),
+        "Unloaded edit"
+    );
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_pinned_items()
             .iter()
             .find(|p| p.message_id == other.to_string())
             .unwrap()
@@ -213,9 +252,14 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         .unwrap();
     client.select_conversation(ActiveConversation::Channel(ChannelId::new()));
     pump(&w, 360.0);
-    assert_eq!(w.get_pinned_message_preview(), "Unloaded edit");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_pinned_message_preview(),
+        "Unloaded edit"
+    );
     assert!(
-        w.get_pinned_items()
+        w.global::<chatter_ui::ChatPane>()
+            .get_pinned_items()
             .iter()
             .all(|p| p.preview != "Stale queued edit")
     );

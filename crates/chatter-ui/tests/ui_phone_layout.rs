@@ -59,12 +59,14 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
 
     // ── Link-device page, status two lines long, long paste-link shown ──
     w.set_current_view("link-device".into());
-    w.set_link_device_active(true);
-    w.set_link_device_url(
+    w.global::<chatter_ui::AuthFlow>()
+        .set_link_device_active(true);
+    w.global::<chatter_ui::AuthFlow>().set_link_device_url(
         "chatter://link?uuid=0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0&pub_key=BdW1u0nIzfQ8x0yJ7m3Kq2Vt9pL4sR6aE1cF5gH8jK0mN2oP4qR6sT8uV0wX2yZ4&server=https%3A%2F%2Fchat.example.org%3A50051".into(),
     );
     let status = "Verification code: 482913\nCheck your other device shows the same code, then approve there.";
-    w.set_link_device_status(status.into());
+    w.global::<chatter_ui::AuthFlow>()
+        .set_link_device_status(status.into());
     pump(&w);
 
     let copy = one(&w, "Copy link");
@@ -87,7 +89,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
 
     // ── Settings, compact (phone) ──
     w.set_current_view("main".into());
-    w.set_settings_open(true);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_settings_open(true);
     pump(&w);
 
     let screen = testing::ElementHandle::find_by_element_type_name(&w, "SettingsScreen")
@@ -107,7 +110,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     );
 
     // ── Channel call history, two records, then many ──
-    w.set_settings_open(false);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_settings_open(false);
     let g = w.global::<ServerRecordsGlobal>();
     g.set_kind("calls".into());
     g.set_channel("c1".into());
@@ -124,9 +128,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         slint::ModelRc::new(slint::VecModel::from(v))
     };
     g.set_rows(rows(2));
-    w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(vec![
-        slint::SharedString::from("server-records"),
-    ])));
+    w.global::<chatter_ui::ModalHostState>()
+        .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(vec![
+            slint::SharedString::from("server-records"),
+        ])));
     pump(&w);
 
     // Label queries did not find rows scrolled/laid out past the visible list
@@ -208,8 +213,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(spacing
-        .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
+    assert!(
+        spacing
+            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
+    );
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
@@ -227,12 +234,16 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
          are the reply chip's cancel (649b152a) and the attachment tray's remove \
          and add-more boxes (ae492dbb)"
     );
-    w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
-        slint::SharedString,
-    >::new())));
-    w.set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
-    w.set_channel_name("Bob".into());
-    w.set_mobile_show_chat(true);
+    w.global::<chatter_ui::ModalHostState>()
+        .set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
+            slint::SharedString,
+        >::new())));
+    w.global::<chatter_ui::ChatPane>()
+        .set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Bob".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
     pump(&w);
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
@@ -260,7 +271,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
 
     // Empty committed body + >six-line preedit with selection at start.
     chatter_ui::bin_ui::features::composer::wire_text_format(&w);
-    w.set_composer_text("".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
     let field = one(&w, "Message input");
     click_at(
@@ -284,13 +296,20 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert!(fy_now >= sy_now - 0.5 && fy_now + fh_now <= sy_now + sh_now + 0.5);
     assert_action_geometry(&w, true);
     assert!(composer_native_item(&w) == original_input);
-    assert!(original_input
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        original_input
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     pump_size(&w, PHONE_W, 460.0);
-    assert_eq!(w.get_composer_text().as_str(), "a");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "a"
+    );
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, true);
     assert_composer_caps(&w, false, 0.0);
@@ -299,7 +318,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     slint::platform::update_timers_and_animations();
     assert_action_geometry(&w, false);
     pump_size(&w, PHONE_W, 460.0);
-    assert!(w.get_composer_text().is_empty());
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, false);
 
@@ -315,19 +338,28 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         mesh.set_active_kind(kind.into());
         pump_size(&w, PHONE_W, 460.0);
         assert_action_geometry(&w, false);
-        w.set_composer_text("mesh draft".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_text("mesh draft".into());
         pump_size(&w, PHONE_W, 460.0);
         assert_action_geometry(&w, true);
-        assert_eq!(w.get_composer_text().as_str(), "mesh draft");
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_text()
+                .as_str(),
+            "mesh draft"
+        );
         assert!(composer_native_item(&w) == original_input);
-        w.set_composer_text("".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_text("".into());
     }
     mesh.set_active_id("".into());
     mesh.set_active_kind("".into());
-    w.set_composer_is_editing(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_editing(true);
     pump_size(&w, PHONE_W, 460.0);
     assert_action_geometry(&w, false);
-    w.set_composer_is_editing(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_editing(false);
     pump_size(&w, PHONE_W, 460.0);
     assert_action_geometry(&w, false);
 
@@ -335,18 +367,33 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // closes it/refocuses the same input; no network or emoji loader is needed.
     click_element(&w, "Emoji & GIF picker");
     pump_size(&w, PHONE_W, PHONE_H);
-    assert!(w.get_composer_emoji_picker_visible());
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible()
+    );
     assert_action_geometry(&w, false);
     click_element(&w, "Show keyboard");
     pump_size(&w, PHONE_W, 460.0);
-    assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible()
+            && !w
+                .global::<chatter_ui::ChatPane>()
+                .get_composer_gif_picker_visible()
+    );
     assert!(composer_native_item(&w) == original_input);
-    assert!(original_input
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
-    assert!(w.get_composer_text().is_empty());
+    assert!(
+        original_input
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
     // This geometry fixture has no native IME arrival. End its outstanding
     // reservation before shrinking into the next independent raised-row case;
     // otherwise the 340px drawer reserve clips the next tap in a 460px window.
@@ -354,7 +401,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     w.invoke_cancel_composer_keyboard_handover();
     i_slint_core::properties::ChangeTracker::run_change_handlers();
 
-    w.set_composer_text("toggle draft".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("toggle draft".into());
     pump_size(&w, PHONE_W, 460.0);
     let native = original_input
         .downcast::<i_slint_core::items::TextInput>()
@@ -368,20 +416,32 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     );
     click_element(&w, "Emoji & GIF picker");
     pump_size(&w, PHONE_W, PHONE_H);
-    assert!(w.get_composer_emoji_picker_visible());
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible()
+    );
     assert_action_geometry(&w, true);
     click_element(&w, "Show keyboard");
     pump_size(&w, PHONE_W, 460.0);
-    assert!(!w.get_composer_emoji_picker_visible());
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible()
+    );
     assert_action_geometry(&w, true);
-    assert_eq!(w.get_composer_text().as_str(), "toggle draft");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "toggle draft"
+    );
     assert!(composer_native_item(&w) == original_input);
     assert_eq!(native.cursor_position_byte_offset(), 6);
     assert_eq!(native.anchor_position_byte_offset(), 6);
     assert!(native.has_focus());
     w.invoke_cancel_composer_keyboard_handover();
     i_slint_core::properties::ChangeTracker::run_change_handlers();
-    w.set_composer_text("".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
 
     // Read actual items at every requested width: typing, attachment-only,
@@ -389,16 +449,19 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let removed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let removed_callback = removed.clone();
     let weak = w.as_weak();
-    w.on_remove_attachment(move |id| {
-        removed_callback.borrow_mut().push(id.clone());
-        let w = weak.unwrap();
-        let remaining = w
-            .get_pending_attachments()
-            .iter()
-            .filter(|attachment| attachment.id != id)
-            .collect::<Vec<_>>();
-        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(remaining)));
-    });
+    w.global::<chatter_ui::ChatPane>()
+        .on_remove_attachment(move |id| {
+            removed_callback.borrow_mut().push(id.clone());
+            let w = weak.unwrap();
+            let remaining = w
+                .global::<chatter_ui::ChatPane>()
+                .get_pending_attachments()
+                .iter()
+                .filter(|attachment| attachment.id != id)
+                .collect::<Vec<_>>();
+            w.global::<chatter_ui::ChatPane>()
+                .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(remaining)));
+        });
     for (mobile, width, height) in [
         (true, 320.0, PHONE_H),
         (true, PHONE_W, PHONE_H),
@@ -406,41 +469,47 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         (false, 1280.0, 900.0),
     ] {
         w.set_is_mobile_platform(mobile);
-        w.set_pending_attachments(slint::ModelRc::default());
+        w.global::<chatter_ui::ChatPane>()
+            .set_pending_attachments(slint::ModelRc::default());
         for draft in ["typing".to_owned(), "readable multiline words ".repeat(40)] {
-            w.set_composer_text(draft.into());
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_text(draft.into());
             pump_size(&w, width, height);
             assert_action_geometry(&w, true);
             assert!(composer_native_item(&w) == original_input);
         }
-        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
-            chatter_ui::PendingAttachmentData {
-                id: "geometry-only".into(),
-                filename: "unsent.txt".into(),
-                category: "document".into(),
-                is_ready: true,
-                ..Default::default()
-            },
-        ])));
+        w.global::<chatter_ui::ChatPane>()
+            .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
+                chatter_ui::PendingAttachmentData {
+                    id: "geometry-only".into(),
+                    filename: "unsent.txt".into(),
+                    category: "document".into(),
+                    is_ready: true,
+                    ..Default::default()
+                },
+            ])));
         for caption in ["", "caption"] {
-            w.set_composer_text(caption.into());
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_text(caption.into());
             pump_size(&w, width, height);
             assert_action_geometry(&w, true);
             assert_attachment_strip_geometry(&w);
             assert!(composer_native_item(&w) == original_input);
         }
-        w.set_composer_text("".into());
-        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(
-            (0..10)
-                .map(|i| chatter_ui::PendingAttachmentData {
-                    id: format!("overflow-{i}").into(),
-                    filename: format!("long-preview-{i}.txt").into(),
-                    category: "document".into(),
-                    is_ready: i != 1,
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>(),
-        )));
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_text("".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(
+                (0..10)
+                    .map(|i| chatter_ui::PendingAttachmentData {
+                        id: format!("overflow-{i}").into(),
+                        filename: format!("long-preview-{i}.txt").into(),
+                        category: "document".into(),
+                        is_ready: i != 1,
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>(),
+            )));
         pump_size(&w, width, height);
         assert_attachment_strip_geometry(&w);
         let first_remove = one(&w, "Remove attachment");
@@ -473,16 +542,23 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             count + 1,
             "preview remove pointer missed at {width}"
         );
-        assert_eq!(w.get_pending_attachments().row_count(), 9);
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_pending_attachments()
+                .row_count(),
+            9
+        );
         assert_action_geometry(&w, true);
         assert_attachment_strip_geometry(&w);
         assert!(composer_native_item(&w) == original_input);
     }
     w.set_is_mobile_platform(true);
-    w.set_composer_text("".into());
-    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
-        chatter_ui::PendingAttachmentData,
-    >::new())));
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
+            chatter_ui::PendingAttachmentData,
+        >::new())));
     pump_size(&w, PHONE_W, 460.0);
     assert_action_geometry(&w, false);
     let field = one(&w, "Message input");
@@ -495,7 +571,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     composition_selection(&w, &preedit_only, Some(0..0));
     pump_size(&w, PHONE_W, 460.0);
     assert_native_caret_visible(&w);
-    assert!(w.get_composer_text().is_empty());
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .is_empty()
+    );
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, true);
     assert_composer_caps(&w, false, 0.0);
@@ -509,7 +589,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         "{}\nEND",
         "wrapped words preserve the entire draft ".repeat(28)
     );
-    w.set_composer_text(draft.clone().into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text(draft.clone().into());
     pump_size(&w, PHONE_W, 460.0);
     let field = one(&w, "Message input");
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
@@ -540,7 +621,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert_tail_visible(&raw, &one(&w, "Message input"));
     assert_native_caret_visible(&w);
     key(&w, "!".into());
-    assert_eq!(w.get_composer_text().as_str(), format!("{draft}!"));
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        format!("{draft}!")
+    );
     key(&w, "\n".into());
     key(&w, "tail".into());
     pump_size(&w, PHONE_W, 460.0);
@@ -557,7 +643,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         "caret movement did not scroll back"
     );
     key(&w, "START ".into());
-    assert!(w.get_composer_text().as_str().starts_with("START "));
+    assert!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str()
+            .starts_with("START ")
+    );
     for _ in 0..100 {
         key(&w, slint::platform::Key::DownArrow.into());
     }
@@ -570,7 +661,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
     let input = input.as_pin_ref();
     let window = item.window_adapter().unwrap();
-    let unchanged = w.get_composer_text();
+    let unchanged = w.global::<chatter_ui::ChatPane>().get_composer_text();
     assert!(unchanged.ends_with("tail"));
     // Drag between shaped positions within the known final word, rather than
     // arbitrary points that may both be after a short or empty wrapped line.
@@ -623,7 +714,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         "long press drag did not select text"
     );
     assert_eq!(
-        w.get_composer_text(),
+        w.global::<chatter_ui::ChatPane>().get_composer_text(),
         unchanged,
         "selection drag changed the draft"
     );
@@ -659,18 +750,20 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, 360.0, 380.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
     assert_native_caret_visible(&w);
-    let expected = w.get_composer_text();
-    w.set_composer_emoji_picker_visible(true);
+    let expected = w.global::<chatter_ui::ChatPane>().get_composer_text();
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_picker_visible(true);
     pump_size(&w, PHONE_W, PHONE_H);
     assert_native_caret_visible(&w);
     assert_composer_caps(&w, true, 0.0);
     assert_action_geometry(&w, true);
-    w.set_composer_emoji_picker_visible(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_picker_visible(false);
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
     assert_native_caret_visible(&w);
     assert_eq!(
-        w.get_composer_text(),
+        w.global::<chatter_ui::ChatPane>().get_composer_text(),
         expected,
         "resize/picker changed draft body"
     );
@@ -704,11 +797,18 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
     assert_native_caret_visible(&w);
-    assert_eq!(w.get_composer_text(), expected);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>().get_composer_text(),
+        expected
+    );
     composition_selection(&w, &composing, Some(0..0));
     pump_size(&w, PHONE_W, 460.0);
     assert_native_caret_visible(&w);
-    assert_eq!(w.get_composer_text(), expected, "scroll committed preedit");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>().get_composer_text(),
+        expected,
+        "scroll committed preedit"
+    );
     composition_selection(
         &w,
         &composing,
@@ -724,13 +824,18 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         raw.absolute_position().y > end_y + 40.0,
         "same-preedit end to start did not scroll"
     );
-    assert_eq!(w.get_composer_text(), expected);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>().get_composer_text(),
+        expected
+    );
     composition(&w, &composing, true);
     pump_size(&w, PHONE_W, 460.0);
     // Slint normalizes committed key-event text to NFC; preedit stays verbatim.
     let committed_composing = composing.replace("e\u{301}", "é");
     assert_eq!(
-        w.get_composer_text().as_str(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
         format!("{expected}{committed_composing}")
     );
 
@@ -742,7 +847,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         "{}alphaBETAlongword\n漢字 e\u{301} 👩‍👩‍👧‍👦\nEND",
         "rows before wrap\n".repeat(12)
     );
-    w.set_composer_text(body.clone().into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text(body.clone().into());
     pump_size(&w, 360.0, 380.0);
     let item = composer_native_item(&w);
     let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
@@ -754,7 +860,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     composition_selection(&w, middle, Some(middle.len() as i32..middle.len() as i32));
     pump_size(&w, 360.0, 380.0);
     assert_native_caret_visible(&w);
-    assert_eq!(w.get_composer_text().as_str(), body);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        body
+    );
     assert!(input.has_focus());
     assert_eq!(input.preedit_text().as_str(), middle);
     assert_eq!(input.cursor_position_byte_offset(), insertion);
@@ -818,7 +929,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             composition_selection(&w, &preedit, Some(endpoint..endpoint));
             pump_size(&w, PHONE_W, 460.0);
             assert_native_caret_visible(&w);
-            assert_eq!(w.get_composer_text().as_str(), body);
+            assert_eq!(
+                w.global::<chatter_ui::ChatPane>()
+                    .get_composer_text()
+                    .as_str(),
+                body
+            );
             assert_eq!(input.cursor_position_byte_offset(), insertion);
             assert_eq!(input.anchor_position_byte_offset(), insertion);
             assert_eq!(input.preedit_text().as_str(), preedit);
@@ -826,40 +942,64 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     }
     composition_selection(&w, "", None);
     input.set_selection_offsets(&window, &item, body.len() as i32, body.len() as i32);
-    w.set_composer_is_replying(true);
-    w.set_composer_reply_preview("Accessory cap proof".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_reply_preview("Accessory cap proof".into());
     pump_size(&w, PHONE_W, 460.0);
     assert_composer_caps(&w, false, 48.0);
     assert_native_caret_visible(&w);
-    w.set_composer_emoji_picker_visible(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_picker_visible(true);
     pump_size(&w, PHONE_W, PHONE_H);
     assert_composer_caps(&w, true, 48.0);
     assert_action_geometry(&w, true);
     assert_native_caret_visible(&w);
-    assert_eq!(w.get_composer_text().as_str(), body);
-    w.set_composer_emoji_picker_visible(false);
-    w.set_composer_gif_picker_visible(true);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        body
+    );
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_picker_visible(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_visible(true);
     pump_size(&w, PHONE_W, PHONE_H);
     assert_action_geometry(&w, true);
     assert_composer_caps(&w, true, 48.0);
     assert_native_caret_visible(&w);
-    assert_eq!(w.get_composer_text().as_str(), body);
-    w.set_composer_gif_picker_visible(false);
-    w.set_composer_is_replying(false);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        body
+    );
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_visible(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_replying(false);
     // Editing reserves its accessory and removes Attach without narrowing the
     // raised field. Native selection, text and identity survive this resize.
-    w.set_composer_is_editing(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_editing(true);
     pump_size(&w, PHONE_W, 460.0);
     assert_composer_caps(&w, false, 48.0);
     assert_action_geometry(&w, true);
     assert_native_caret_visible(&w);
     assert!(composer_native_item(&w) == item);
-    assert_eq!(w.get_composer_text().as_str(), body);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        body
+    );
     assert!(
         !testing::ElementHandle::find_by_accessible_label(&w, "Attach file")
             .any(|e| e.size().height > 0.0)
     );
-    w.set_composer_is_editing(false);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_is_editing(false);
 
     // The recording panel still owns the shell and its controls; ordinary
     // input is disabled without replacing it or consuming the draft.
@@ -876,7 +1016,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert!(one(&w, "Cancel voice message").size().height >= 48.0);
     assert!(one(&w, "Send voice message").size().height >= 48.0);
     assert!(!input.enabled());
-    assert_eq!(w.get_composer_text().as_str(), body);
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        body
+    );
     // Observe the real button -> global cancel callback without starting a
     // microphone or constructing the authenticated service bridge.
     let cancelled = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -899,11 +1044,13 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // Desktop pointer events must still reach raw TextInput through the
     // noninteractive viewport; arrows edit where the caret actually moved.
     w.set_is_mobile_platform(false);
-    w.set_composer_text("".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("".into());
     pump_size(&w, 1000.0, 800.0);
     assert_action_geometry(&w, false);
     // Focus a different native input first, proving pointer focus restoration.
-    w.set_composer_emoji_picker_visible(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_picker_visible(true);
     pump_size(&w, 1000.0, 800.0);
     let search = testing::ElementHandle::find_by_element_id(&w, "ChatLayout::drawer-search")
         .find(|e| e.size().height > 0.0)
@@ -913,35 +1060,46 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         search.absolute_position().x + 10.0,
         search.absolute_position().y + 10.0,
     );
-    assert!(!composer_native_item(&w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        !composer_native_item(&w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     let field = one(&w, "Message input");
     click_at(
         &w,
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
-    assert!(composer_native_item(&w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        composer_native_item(&w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     let desktop_input = composer_native_item(&w);
     key(&w, "a".into());
     assert_action_geometry(&w, true);
     key(&w, "b".into());
     key(&w, "c".into());
-    assert_eq!(w.get_composer_text().as_str(), "abc");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "abc"
+    );
     pump_size(&w, 1000.0, 800.0);
     assert!(composer_native_item(&w) == desktop_input);
     assert_action_geometry(&w, true);
     key(&w, slint::platform::Key::LeftArrow.into());
     key(&w, "X".into());
     assert_eq!(
-        w.get_composer_text().as_str(),
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
         "abXc",
         "desktop pointer/caret regression"
     );
@@ -949,11 +1107,21 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     for _ in 0..4 {
         key(&w, slint::platform::Key::Backspace.into());
     }
-    assert_eq!(w.get_composer_text().as_str(), "");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        ""
+    );
     assert_action_geometry(&w, false);
     assert!(composer_native_item(&w) == desktop_input);
     key(&w, "z".into());
-    assert_eq!(w.get_composer_text().as_str(), "z");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "z"
+    );
     assert_action_geometry(&w, true);
     attachment_and_keyboard_handover_boundaries(&w);
 }
@@ -964,8 +1132,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
 fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     use slint::platform::WindowEvent;
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_composer_text("ab😀cd".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("ab😀cd".into());
     pump_size(w, PHONE_W, PHONE_H);
     let item = composer_native_item(w);
     let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
@@ -975,11 +1145,12 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     let observed = callbacks.clone();
     let weak = w.as_weak();
     // Same production preparation invoked at the actual host callback boundary.
-    w.on_attachment_clicked(move || {
-        observed.set(observed.get() + 1);
-        weak.upgrade().unwrap().invoke_prepare_attachment_picker();
-        i_slint_core::properties::ChangeTracker::run_change_handlers();
-    });
+    w.global::<chatter_ui::ChatPane>()
+        .on_attachment_clicked(move || {
+            observed.set(observed.get() + 1);
+            weak.upgrade().unwrap().invoke_prepare_attachment_picker();
+            i_slint_core::properties::ChangeTracker::run_change_handlers();
+        });
     for (action, selected) in [
         ("Attach file", false),
         ("Attach file", true),
@@ -999,27 +1170,38 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         let before = callbacks.get();
         click_element(w, action);
         assert_eq!(callbacks.get(), before + 1);
-        assert_eq!(w.get_composer_text().as_str(), "ab😀cd");
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_text()
+                .as_str(),
+            "ab😀cd"
+        );
         assert!(!input.has_focus());
         w.window()
             .dispatch_event(WindowEvent::WindowActiveChanged(false));
         if selected {
-            w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
-                chatter_ui::PendingAttachmentData {
-                    id: "retained-photo".into(),
-                    filename: "unsent-photo.jpg".into(),
-                    category: "image".into(),
-                    is_ready: true,
-                    ..Default::default()
-                },
-            ])));
+            w.global::<chatter_ui::ChatPane>()
+                .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
+                    chatter_ui::PendingAttachmentData {
+                        id: "retained-photo".into(),
+                        filename: "unsent-photo.jpg".into(),
+                        category: "image".into(),
+                        is_ready: true,
+                        ..Default::default()
+                    },
+                ])));
         }
         w.window()
             .dispatch_event(WindowEvent::WindowActiveChanged(true));
         w.invoke_finish_attachment_picker(true);
         pump_size(w, PHONE_W, PHONE_H);
         assert!(composer_native_item(w) == item);
-        assert_eq!(w.get_composer_text().as_str(), "ab😀cd");
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_text()
+                .as_str(),
+            "ab😀cd"
+        );
         assert_eq!(
             (
                 input.anchor_position_byte_offset(),
@@ -1029,9 +1211,19 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         );
         assert!(input.has_focus());
         if selected || action == "Add attachment" {
-            assert_eq!(w.get_pending_attachments().row_count(), 1);
             assert_eq!(
-                w.get_pending_attachments().row_data(0).unwrap().id.as_str(),
+                w.global::<chatter_ui::ChatPane>()
+                    .get_pending_attachments()
+                    .row_count(),
+                1
+            );
+            assert_eq!(
+                w.global::<chatter_ui::ChatPane>()
+                    .get_pending_attachments()
+                    .row_data(0)
+                    .unwrap()
+                    .id
+                    .as_str(),
                 "retained-photo"
             );
         }
@@ -1043,7 +1235,12 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         .dispatch_event(WindowEvent::WindowActiveChanged(false));
     w.window()
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
-    assert_eq!(w.get_composer_text().as_str(), "ab😀cd");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "ab😀cd"
+    );
     assert_eq!(
         (
             input.anchor_position_byte_offset(),
@@ -1055,18 +1252,29 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     input.set_selection_offsets(&adapter, &item, 2, 2);
     composition(w, "é", false);
     click_element(w, "Attach file");
-    assert_eq!(w.get_composer_text().as_str(), "abé😀cd");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "abé😀cd"
+    );
     w.invoke_finish_attachment_picker(true);
     pump_size(w, PHONE_W, PHONE_H);
     assert_eq!(input.cursor_position_byte_offset(), 4);
     assert_eq!(input.preedit_text().as_str(), "");
     // A return for a departed conversation must not seize the new input.
     click_element(w, "Attach file");
-    w.set_composer_text("another conversation".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_text("another conversation".into());
     w.invoke_finish_attachment_picker(false);
     pump_size(w, PHONE_W, PHONE_H);
     assert!(!input.has_focus());
-    assert_eq!(w.get_composer_text().as_str(), "another conversation");
+    assert_eq!(
+        w.global::<chatter_ui::ChatPane>()
+            .get_composer_text()
+            .as_str(),
+        "another conversation"
+    );
 
     let window_item = i_slint_core::window::WindowInner::from_pub(w.window())
         .window_item_rc()
@@ -1086,24 +1294,27 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         let field = one(w, "Message input");
         field.absolute_position().y + field.size().height
     };
-    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
-        chatter_ui::PendingAttachmentData,
-    >::new())));
-    w.set_composer_emoji_list(slint::ModelRc::new(slint::VecModel::from(vec![
-        chatter_ui::EmojiData {
-            emoji: "😀".into(),
-            name: "fixture emoji".into(),
-            category: 0,
-        },
-    ])));
-    w.set_composer_gif_picker_results(slint::ModelRc::new(slint::VecModel::from(vec![
-        chatter_ui::GifData {
-            id: "fixture-gif".into(),
-            width: 100,
-            height: 100,
-            ..Default::default()
-        },
-    ])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
+            chatter_ui::PendingAttachmentData,
+        >::new())));
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_emoji_list(slint::ModelRc::new(slint::VecModel::from(vec![
+            chatter_ui::EmojiData {
+                emoji: "😀".into(),
+                name: "fixture emoji".into(),
+                category: 0,
+            },
+        ])));
+    w.global::<chatter_ui::ChatPane>()
+        .set_composer_gif_picker_results(slint::ModelRc::new(slint::VecModel::from(vec![
+            chatter_ui::GifData {
+                id: "fixture-gif".into(),
+                width: 100,
+                height: 100,
+                ..Default::default()
+            },
+        ])));
     let drawer_element = |id: &str| {
         testing::ElementHandle::find_by_element_id(w, id)
             // Results may be bounded to zero on the explicit short-pane case;
@@ -1137,11 +1348,16 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         (320.0, 640.0, 360.0), // short remaining pane: both tabs may hit the cap
     ] {
         keyboard(0.0);
-        w.set_composer_text("".into());
-        w.set_composer_emoji_picker_visible(true);
-        w.set_composer_gif_picker_visible(false);
-        w.set_composer_emoji_search("".into());
-        w.set_composer_gif_picker_search("".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_text("".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_emoji_picker_visible(true);
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_gif_picker_visible(false);
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_emoji_search("".into());
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_gif_picker_search("".into());
         pump_size(w, width, height);
         let baseline = rect(&drawer_element("ChatLayout::picker-drawer"));
         click_element(w, "Search emoji and GIFs");
@@ -1161,9 +1377,11 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             pump_size(w, width, height);
             assert_eq!(
                 if tab == "Emoji" {
-                    w.get_composer_emoji_search()
+                    w.global::<chatter_ui::ChatPane>()
+                        .get_composer_emoji_search()
                 } else {
-                    w.get_composer_gif_picker_search()
+                    w.global::<chatter_ui::ChatPane>()
+                        .get_composer_gif_picker_search()
                 }
                 .as_str(),
                 typed,
@@ -1200,8 +1418,10 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
                 rh >= if height - ime >= 380.0 { 48.0 } else { 0.0 },
                 "search leaves no useful results at {width}x{height}: {rh}"
             );
-            assert!(ry + rh <= ty + 0.5 && ty + th <= dy + dh + 0.5,
-                "drawer containment {width}x{height}/IME{ime}/{tab}: drawer {dy},{dh}; results {ry},{rh}; tab {ty},{th}; composer {cy}; header {hy},{hh}");
+            assert!(
+                ry + rh <= ty + 0.5 && ty + th <= dy + dh + 0.5,
+                "drawer containment {width}x{height}/IME{ime}/{tab}: drawer {dy},{dh}; results {ry},{rh}; tab {ty},{th}; composer {cy}; header {hy},{hh}"
+            );
             let grid = testing::ElementHandle::find_by_element_id(
                 w,
                 if tab == "Emoji" {
@@ -1211,7 +1431,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
                 },
             )
             .next()
-            .unwrap_or_else(|| panic!("actual {tab} grid missing at {width}x{height}/IME{ime}: emoji={}, gif={}, loading={}, results={}; drawer={dy},{dh}; results-rect={ry},{rh}; tab={ty},{th}", w.get_composer_emoji_picker_visible(), w.get_composer_gif_picker_visible(), w.get_composer_gif_picker_loading(), w.get_composer_gif_picker_results().row_count()));
+            .unwrap_or_else(|| panic!("actual {tab} grid missing at {width}x{height}/IME{ime}: emoji={}, gif={}, loading={}, results={}; drawer={dy},{dh}; results-rect={ry},{rh}; tab={ty},{th}", w.global::<chatter_ui::ChatPane>().get_composer_emoji_picker_visible(), w.global::<chatter_ui::ChatPane>().get_composer_gif_picker_visible(), w.global::<chatter_ui::ChatPane>().get_composer_gif_picker_loading(), w.global::<chatter_ui::ChatPane>().get_composer_gif_picker_results().row_count()));
             let (_, gy, _, gh) = rect(&grid);
             assert!(
                 gh >= if height - ime >= 380.0 { 32.0 } else { 0.0 }
@@ -1226,7 +1446,9 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         let native = native.as_pin_ref();
         let caret = native.cursor_position_byte_offset();
         let anchor = native.anchor_position_byte_offset();
-        let gif_results = w.get_composer_gif_picker_results();
+        let gif_results = w
+            .global::<chatter_ui::ChatPane>()
+            .get_composer_gif_picker_results();
         let first_gif = gif_results.row_data(0).expect("fixture GIF result");
         keyboard(0.0);
         pump_size(w, width, height);
@@ -1243,14 +1465,33 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             ),
             (caret, anchor)
         );
-        assert_eq!(w.get_composer_emoji_search().as_str(), "e");
-        assert_eq!(w.get_composer_gif_picker_search().as_str(), "g");
-        assert!(w.get_composer_gif_picker_visible() && !w.get_composer_emoji_picker_visible());
         assert_eq!(
-            w.get_composer_gif_picker_results().row_count(),
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_emoji_search()
+                .as_str(),
+            "e"
+        );
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_gif_picker_search()
+                .as_str(),
+            "g"
+        );
+        assert!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_gif_picker_visible()
+                && !w
+                    .global::<chatter_ui::ChatPane>()
+                    .get_composer_emoji_picker_visible()
+        );
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_gif_picker_results()
+                .row_count(),
             gif_results.row_count()
         );
         let retained_gif = w
+            .global::<chatter_ui::ChatPane>()
             .get_composer_gif_picker_results()
             .row_data(0)
             .expect("retained GIF result");
@@ -1263,14 +1504,22 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         pump_size(w, width, height);
         assert!(rect(&drawer_element("ChatLayout::picker-drawer")).1 < closed.1 - 1.0);
         key(w, "x".into());
-        assert_eq!(w.get_composer_gif_picker_search().as_str(), "gx");
+        assert_eq!(
+            w.global::<chatter_ui::ChatPane>()
+                .get_composer_gif_picker_search()
+                .as_str(),
+            "gx"
+        );
         keyboard(0.0);
-        w.set_composer_emoji_picker_visible(false);
-        w.set_composer_gif_picker_visible(false);
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_emoji_picker_visible(false);
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_gif_picker_visible(false);
         pump_size(w, width, height);
         // Destroy/reopen with a live inset: stale search focus must not expand.
         keyboard(ime);
-        w.set_composer_emoji_picker_visible(true);
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_emoji_picker_visible(true);
         pump_size(w, width, height);
         let reopened = testing::ElementHandle::find_by_element_id(w, "ChatLayout::picker-drawer")
             .next()
@@ -1280,29 +1529,41 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             unfocused_height <= (baseline.3 - ime).max(0.0) + 0.5,
             "destroy/reopen retained stale search-focus expansion"
         );
-        w.set_composer_emoji_picker_visible(false);
+        w.global::<chatter_ui::ChatPane>()
+            .set_composer_emoji_picker_visible(false);
         keyboard(0.0);
         pump_size(w, width, height);
         if width == PHONE_W {
             // The production chat-navigation handler closes both tabs and
             // destroys the drawer. Reopening must require fresh search focus.
-            w.set_composer_gif_picker_visible(true);
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_gif_picker_visible(true);
             pump_size(w, width, height);
             click_element(w, "Search emoji and GIFs");
             keyboard(ime);
             pump_size(w, width, height);
-            w.set_mobile_show_chat(false);
+            w.global::<chatter_ui::SidebarPane>()
+                .set_mobile_show_chat(false);
             pump_size(w, width, height);
-            assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
-            w.set_mobile_show_chat(true);
-            w.set_composer_emoji_picker_visible(true);
+            assert!(
+                !w.global::<chatter_ui::ChatPane>()
+                    .get_composer_emoji_picker_visible()
+                    && !w
+                        .global::<chatter_ui::ChatPane>()
+                        .get_composer_gif_picker_visible()
+            );
+            w.global::<chatter_ui::SidebarPane>()
+                .set_mobile_show_chat(true);
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_emoji_picker_visible(true);
             pump_size(w, width, height);
             let reopened =
                 testing::ElementHandle::find_by_element_id(w, "ChatLayout::picker-drawer")
                     .next()
                     .expect("drawer after chat navigation");
             assert!(reopened.size().height <= (baseline.3 - ime).max(0.0) + 0.5);
-            w.set_composer_emoji_picker_visible(false);
+            w.global::<chatter_ui::ChatPane>()
+                .set_composer_emoji_picker_visible(false);
             keyboard(0.0);
             pump_size(w, width, height);
         }
@@ -1321,7 +1582,10 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     let drawer_bottom = field_bottom();
     click_element(w, "Show keyboard");
     i_slint_core::properties::ChangeTracker::run_change_handlers();
-    assert!(!w.get_composer_emoji_picker_visible());
+    assert!(
+        !w.global::<chatter_ui::ChatPane>()
+            .get_composer_emoji_picker_visible()
+    );
     assert!(
         (field_bottom() - drawer_bottom).abs() < 1.0,
         "drawer-to-keyboard exposed a full-height frame before IME insets"
@@ -1391,7 +1655,8 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     click_element(w, "Show keyboard");
     i_slint_core::properties::ChangeTracker::run_change_handlers();
     let reserved = field_bottom();
-    w.set_channel_id("picker-handover-next".into());
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_id("picker-handover-next".into());
     i_slint_core::properties::ChangeTracker::run_change_handlers();
     assert!(field_bottom() > reserved + 250.0);
     click_element(w, "Emoji & GIF picker");
@@ -1493,7 +1758,10 @@ fn composer_native_item(w: &MainWindow) -> i_slint_core::item_tree::ItemRc {
             let native_position = item.map_to_window(Default::default());
             // ElementHandle includes the item's positioned origin;
             // map_to_window(default) excludes its own x/y offset.
-            if input.as_pin_ref().text().as_str() == w.get_composer_text().as_str()
+            if input.as_pin_ref().text().as_str()
+                == w.global::<chatter_ui::ChatPane>()
+                    .get_composer_text()
+                    .as_str()
                 && item.geometry().size.height > 0.0
                 && (native_position.x - raw_position.x).abs() < 0.1
                 && raw_position.y >= native_position.y - 0.1
@@ -1577,7 +1845,10 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
         };
     let toolbar = if input.text() != ""
         || input.preedit_text() != ""
-        || w.get_pending_attachments().row_count() > 0
+        || w.global::<chatter_ui::ChatPane>()
+            .get_pending_attachments()
+            .row_count()
+            > 0
     {
         60.0
     } else {
@@ -1607,19 +1878,28 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
         .unwrap();
     let (sx, sy, sw, sh) = rect(&shell);
     let (fx, fy, fw, fh) = rect(&one(w, "Message input"));
-    let emoji_label =
-        if w.get_composer_emoji_picker_visible() || w.get_composer_gif_picker_visible() {
-            "Show keyboard"
-        } else {
-            "Emoji & GIF picker"
-        };
+    let emoji_label = if w
+        .global::<chatter_ui::ChatPane>()
+        .get_composer_emoji_picker_visible()
+        || w.global::<chatter_ui::ChatPane>()
+            .get_composer_gif_picker_visible()
+    {
+        "Show keyboard"
+    } else {
+        "Emoji & GIF picker"
+    };
     let (ex, ey, ew, eh) = rect(&one(w, emoji_label));
     let mesh = w.global::<chatter_ui::MeshGlobal>();
-    let attachment_visible = !w.get_composer_is_editing()
+    let attachment_visible = !w.global::<chatter_ui::ChatPane>().get_composer_is_editing()
         && (mesh.get_active_id().is_empty() || mesh.get_active_kind() != "dm");
-    let send_visible = raised || w.get_pending_attachments().row_count() > 0;
-    let mic_visible =
-        !send_visible && !w.get_composer_is_editing() && mesh.get_active_id().is_empty();
+    let send_visible = raised
+        || w.global::<chatter_ui::ChatPane>()
+            .get_pending_attachments()
+            .row_count()
+            > 0;
+    let mic_visible = !send_visible
+        && !w.global::<chatter_ui::ChatPane>().get_composer_is_editing()
+        && mesh.get_active_id().is_empty();
     let terminal_label = if send_visible {
         Some("Send message")
     } else if mic_visible {
@@ -1726,9 +2006,11 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             "unexpected action {label}"
         );
     }
-    assert!(composer_native_item(w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .is_some());
+    assert!(
+        composer_native_item(w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .is_some()
+    );
 }
 
 fn click_element(w: &MainWindow, label: &str) {

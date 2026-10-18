@@ -28,11 +28,15 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_channel_name("Call fixture".into());
+    w.global::<chatter_ui::SidebarPane>()
+        .set_mobile_show_chat(true);
+    w.global::<chatter_ui::ChatPane>()
+        .set_channel_name("Call fixture".into());
     for kind in [ConversationKind::Channel, ConversationKind::ServerDm] {
-        w.set_conversation_kind(kind);
-        w.set_is_dm(kind == ConversationKind::ServerDm);
+        w.global::<chatter_ui::ChatPane>()
+            .set_conversation_kind(kind);
+        w.global::<chatter_ui::ChatPane>()
+            .set_is_dm(kind == ConversationKind::ServerDm);
         for (own, continuation, show_sender) in [
             (false, false, true),
             (true, false, true),
@@ -63,7 +67,8 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
                     call_duration: duration.into(),
                     ..Default::default()
                 };
-                w.set_messages(ModelRc::new(VecModel::from(vec![row])));
+                w.global::<chatter_ui::ChatPane>()
+                    .set_messages(ModelRc::new(VecModel::from(vec![row])));
                 pump(&w);
                 let clock = visible(&w, "17:42").into_iter().next().expect("call clock");
                 let label = match status {
