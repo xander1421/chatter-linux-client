@@ -50,4 +50,4 @@ use control::{dispatch_secret_chat_bootstrap, persist_exact_saved_delete_before_
 use ecies::process_ecies_init_message;
 use identified::process_identified_sender_message;
 use sealed::process_sealed_sender_message;
-use sender_key::{process_decrypted_data_message, process_sender_key_message};
+use sender_key::process_sender_key_message;

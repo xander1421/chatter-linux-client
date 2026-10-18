@@ -240,7 +240,7 @@ pub(super) async fn process_sender_key_message(
 }
 
 /// Process a decrypted DataMessage.
-pub(super) fn process_decrypted_data_message(
+fn process_decrypted_data_message(
     msg: &DeviceMessage,
     plaintext: &[u8],
     sender_id: &UserId,
