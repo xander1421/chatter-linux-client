@@ -162,9 +162,7 @@ impl ChatterClient {
         // header can render it before the peer sends their own profile.
         let name = self.display_name(&peer);
         let name = (name != self.fallback_display_name(&peer)).then_some(name);
-        let avatar = self
-            .get_profile_local(&peer)
-            .and_then(|profile| profile.avatar_bytes);
+        let avatar = self.user_avatar(&peer);
         if dm.peer_display_name.is_none() && name.is_some()
             || dm.peer_avatar.is_none() && avatar.is_some()
         {

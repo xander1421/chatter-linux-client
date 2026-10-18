@@ -250,7 +250,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     user_id: dm.id.to_string(),
                     display_name: peer_name,
                     username: "Private".to_string(),
-                    avatar_bytes: dm.peer_avatar.clone().or_else(|| ui_ctx.user_avatar(&dm.peer_id)),
+                    avatar_bytes: ui_ctx.anon_dm_avatar(&dm),
                     secondary_text: last_message,
                 });
             }

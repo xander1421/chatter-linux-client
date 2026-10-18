@@ -104,11 +104,12 @@ fn spawn_request_stream(
                     // Only raw pixels are Send, so decode to RGBA bytes here
                     // The pointer fetch can finish before this event reaches the UI.
                     // In that case the stored profile already has the avatar.
-                    let avatar_bytes = sender_avatar.or_else(|| {
+                    let shared_avatar = sender_avatar.or_else(|| {
                         ui_ctx
                             .get_anon_dm_conversation(&conversation_id)
                             .and_then(|dm| dm.peer_avatar)
                     });
+                    let avatar_bytes = ui_ctx.anon_dm_avatar_for_peer(&sender_id, shared_avatar);
                     let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
                         avatar_bytes.as_ref().and_then(|bytes| {
                             if bytes.is_empty() {
@@ -255,8 +256,9 @@ fn spawn_request_stream(
                     let request_client = ui_ctx.clone();
 
                     // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
+                    let avatar_bytes = ui_ctx.anon_dm_avatar_for_peer(&sender_id, sender_avatar);
                     let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
-                        sender_avatar.as_ref().and_then(|bytes| {
+                        avatar_bytes.as_ref().and_then(|bytes| {
                             image::load_from_memory(bytes).ok().map(|img| {
                                 let rgba = img.to_rgba8();
                                 let (w, h) = rgba.dimensions();

@@ -768,8 +768,8 @@ impl ChatterClient {
 
     /// A secret DM's peer as the chat itself presents them: the name and
     /// avatar they sent inside it (encrypted in the request/profile update,
-    /// cached on the row), never the global account profile. `None` when the
-    /// chat is unknown.
+    /// cached on the row). An accepted friend's account avatar fills the gap
+    /// until that private avatar arrives. `None` when the chat is unknown.
     pub fn anon_dm_peer_card(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
@@ -779,11 +779,31 @@ impl ChatterClient {
             .get_conversation(conversation_id)
             .ok()
             .flatten()?;
+        let avatar = self.anon_dm_avatar(&dm);
         let name = dm
             .peer_display_name
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-        Some((name, dm.peer_avatar))
+        Some((name, avatar))
+    }
+
+    /// Prefer the avatar shared inside this secret chat. For an accepted
+    /// friend, use their locally decrypted friend profile until their secret
+    /// chat avatar arrives. Unknown private peers never borrow account data.
+    pub fn anon_dm_avatar(&self, dm: &crate::domain::anon_dm::AnonDm) -> Option<Vec<u8>> {
+        self.anon_dm_avatar_for_peer(&dm.peer_id, dm.peer_avatar.clone())
+    }
+
+    /// Resolve an incoming secret-chat event before its conversation row is
+    /// necessarily committed, with the same rule as stored request rows.
+    pub fn anon_dm_avatar_for_peer(
+        &self,
+        peer: &crate::domain::ids::UserId,
+        shared_avatar: Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        shared_avatar
+            .filter(|bytes| !bytes.is_empty())
+            .or_else(|| self.is_friend(peer).then(|| self.user_avatar(peer)).flatten())
     }
 
     /// Decrypted avatar bytes for an anonymous DM peer (the user directory has
