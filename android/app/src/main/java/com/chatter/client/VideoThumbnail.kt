@@ -107,6 +107,12 @@ class VideoThumbnail {
             if (bitmap == null) bitmap = try {
                 retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST, w, h)
             } catch (_: Exception) { null }
+            if (bitmap == null) {
+                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                if (duration > 0) bitmap = try {
+                    retriever.getScaledFrameAtTime(minOf(duration, 86_400_000L) * 500, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
+                } catch (_: Exception) { null }
+            }
             if (bitmap == null) return null
             if (bitmap.width !in 1..384 || bitmap.height !in 1..384) return null
             val output = object : ByteArrayOutputStream() {
