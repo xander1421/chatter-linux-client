@@ -290,6 +290,7 @@ mod tests {
             }
         }
         let (started, ready) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let stopped = Arc::new(AtomicBool::new(false));
         register_platform_camera(Box::new(Camera(started, stopped.clone())));
         let shared = SharedVideoFrames::new();
@@ -312,13 +313,17 @@ mod tests {
             false,
         );
         let worker = std::thread::spawn(move || {
-            run_capture(sink, run_flag, 4, 2, 30, "front", Some(preview))
+            run_capture(sink, run_flag, 4, 2, 30, "front", Some(preview), ready_tx)
         });
         assert!(ready.recv_timeout(Duration::from_secs(5)).unwrap());
         let mut data = vec![16, 235, 16, 235, 235, 16, 235, 16];
         data.extend([128; 4]);
         // This is the same entry point the production JNI camera callback uses.
         push_frame_i420(&data, 4, 2, 90, 1000);
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(5), ready_rx))
+            .expect("first frame must signal readiness promptly")
+            .expect("capture must keep readiness sender alive");
         let first = shared
             .get_frame("synthetic-local-camera")
             .expect("JNI frame must reach Slint's shared store");

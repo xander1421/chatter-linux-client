@@ -516,6 +516,7 @@ mod tests {
                     profile_key: key.clone(),
                     encrypted_display_name: name.clone(),
                     avatar: avatar.clone(),
+                    disappearing_seconds: 0,
                 })),
             ),
             (
