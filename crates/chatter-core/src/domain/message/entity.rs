@@ -1,4 +1,4 @@
-use super::{ConversationType, MessageContent, ReactionCount};
+use super::{CallMessageType, ConversationType, MessageContent, ReactionCount};
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
