@@ -1,10 +1,10 @@
+import { AppTopOverlays } from "app_top_overlays.slint";
 import { AppSettingsHost } from "app_settings_host.slint";
 import { AppSecondaryModals } from "app_secondary_modals.slint";
 import { AppTabScreens } from "app_tab_screens.slint";
 import { AppModalHost } from "app_modal_host.slint";
 import { Materials } from "theme/materials.slint";
 import { Appearance } from "theme/appearance.slint";
-import { MessageInfo, MessageInfoModal } from "modals/message_info.slint";
 // Chatter window: the root component Rust binds as `MainWindow`.
 // View routing, the modal overlay system, and Android Back handling.
 
@@ -22,15 +22,11 @@ import { AvatarOption } from "components/avatar_picker.slint";
 // Import main layout components
 import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
-import { MeshGlobal } from "mesh/mesh_global.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
-import { ReactionPicker } from "chat/reaction_picker.slint";
-import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
-import { SelectionBar, SelectionChrome } from "chat/selection_bar.slint";
-import { DeleteConfirm } from "chat/delete_confirm.slint";
+import { SelectionBar } from "chat/selection_bar.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { GifData } from "components/gif_picker.slint";
-import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
+import { MentionSuggestion } from "components/mention_autocomplete.slint";
 
 // Import modals
 import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
@@ -50,15 +46,13 @@ export { PinnedItem }
 import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
 
 // Import components
-import { ImageViewer, EmojiData } from "components/mod.slint";
-import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
-import { VideoPlayer } from "components/mod.slint";
+import { EmojiData } from "components/mod.slint";
 import { ComposeFab } from "components/compose_fab.slint";
 import { ToastOverlay } from "components/toast_overlay.slint";
 import { AppBottomNavigation } from "components/app_bottom_navigation.slint";
 
 // Import call UI
-import { IncomingCallModal, ActiveCallView, ReturnToCallBar, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+import { ActiveCallView, ReturnToCallBar, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
 
 // Jarvis AI: feature-gate global (the AI channel is the Jarvis surface)
 import { JarvisGlobal } from "jarvis/jarvis_global.slint";
@@ -2649,332 +2643,146 @@ export component MainWindow inherits Window {
             toggle-anon-mode() => { root.toggle-anon-mode(); }
         }
 
-        // ========== Call overlays (rendered above modals) ==========
-        // Incoming call modal
-        if root.incoming-presented: IncomingCallModal {
-            show: root.incoming-shown;
-            call-data: root.incoming-call-data;
-            replaces-active: root.incoming-call-replaces-active;
-
-            accept-call => {
-                root.accept-incoming-call(root.incoming-call-data.call-id);
-            }
-            decline-call => {
-                root.decline-incoming-call(root.incoming-call-data.call-id);
-            }
-        }
-
-        // (Active call view is now docked above ChatLayout — see chat column block.)
-
-        // Device picker modal (for audio devices and screen sources)
-        if root.device-picker-presented: DevicePicker {
-            show: root.device-picker-visible;
-            title: root.device-picker-type == "audio" ? "Select Microphone" :
-                   root.device-picker-type == "audio_output" ? "Select Speaker" : "Select Screen to Share";
-            picker-type: root.device-picker-type;
+        AppTopOverlays {
+            width: parent.width;
+            height: parent.height;
+            active-modal: root.active-modal;
             audio-devices: root.audio-devices;
-            selected-audio-id: root.selected-audio-device-id;
+            audio-elapsed: root.audio-elapsed;
             audio-output-devices: root.audio-output-devices;
-            selected-audio-output-id: root.selected-audio-output-id;
+            audio-progress: root.audio-progress;
+            code-preview-filename: root.code-preview-filename;
+            code-preview-language: root.code-preview-language;
+            code-preview-line-count: root.code-preview-line-count;
+            code-preview-plain-text: root.code-preview-plain-text;
+            code-preview-visible <=> root.code-preview-visible;
+            context-menu-anchor-bottom: root.context-menu-anchor-bottom;
+            context-menu-anchor-left: root.context-menu-anchor-left;
+            context-menu-anchor-right: root.context-menu-anchor-right;
+            context-menu-anchor-top: root.context-menu-anchor-top;
+            context-menu-content-top: root.context-menu-content-top;
+            context-menu-message-id: root.context-menu-message-id;
+            context-menu-preview-from-thread: root.context-menu-preview-from-thread;
+            context-menu-preview-message: root.context-menu-preview-message;
+            context-menu-preview-mobile: root.context-menu-preview-mobile;
+            context-menu-preview-row-width: root.context-menu-preview-row-width;
+            context-menu-preview-row-x: root.context-menu-preview-row-x;
+            context-menu-preview-row-y: root.context-menu-preview-row-y;
+            context-menu-sender-id: root.context-menu-sender-id;
+            context-menu-timestamp-ns: root.context-menu-timestamp-ns;
+            context-menu-visible <=> root.context-menu-visible;
+            context-menu-x: root.context-menu-x;
+            context-menu-y: root.context-menu-y;
+            conversation-kind: root.conversation-kind;
+            current-playing-attachment-id: root.current-playing-attachment-id;
+            delete-choice-everyone <=> root.delete-choice-everyone;
+            delete-choice-me <=> root.delete-choice-me;
+            delete-choosing <=> root.delete-choosing;
+            delete-confirm-count <=> root.delete-confirm-count;
+            delete-confirm-everyone <=> root.delete-confirm-everyone;
+            delete-confirm-sender <=> root.delete-confirm-sender;
+            delete-confirm-timestamp <=> root.delete-confirm-timestamp;
+            device-picker-presented: root.device-picker-presented;
+            device-picker-type: root.device-picker-type;
+            device-picker-visible <=> root.device-picker-visible;
+            exiting-modal: root.exiting-modal;
+            image-viewer-filename: root.image-viewer-filename;
+            image-viewer-size: root.image-viewer-size;
+            image-viewer-source: root.image-viewer-source;
+            image-viewer-visible <=> root.image-viewer-visible;
+            incoming-call-data: root.incoming-call-data;
+            incoming-call-replaces-active: root.incoming-call-replaces-active;
+            incoming-presented: root.incoming-presented;
+            incoming-shown: root.incoming-shown;
+            is-dm: root.is-dm;
+            is-media-playing: root.is-media-playing;
+            is-mobile-platform: root.is-mobile-platform;
+            media-viewer-has-next: root.media-viewer-has-next;
+            media-viewer-has-previous: root.media-viewer-has-previous;
+            media-viewer-next-thumbnail: root.media-viewer-next-thumbnail;
+            media-viewer-position: root.media-viewer-position;
+            media-viewer-previous-thumbnail: root.media-viewer-previous-thumbnail;
+            mention-autocomplete-visible <=> root.mention-autocomplete-visible;
+            mention-selected-index: root.mention-selected-index;
+            mention-suggestions: root.mention-suggestions;
+            pdf-preview-current-page: root.pdf-preview-current-page;
+            pdf-preview-error: root.pdf-preview-error;
+            pdf-preview-external-only: root.pdf-preview-external-only;
+            pdf-preview-filename: root.pdf-preview-filename;
+            pdf-preview-image: root.pdf-preview-image;
+            pdf-preview-page-count: root.pdf-preview-page-count;
+            pdf-preview-visible <=> root.pdf-preview-visible;
+            presented-modal: root.presented-modal;
+            reaction-picker-anchor-x <=> root.reaction-picker-anchor-x;
+            reaction-picker-anchor-y <=> root.reaction-picker-anchor-y;
+            reaction-picker-emojis: root.reaction-picker-emojis;
+            reaction-picker-message-id <=> root.reaction-picker-message-id;
+            reaction-picker-search-query <=> root.reaction-picker-search-query;
+            reaction-picker-selected-category <=> root.reaction-picker-selected-category;
+            reaction-picker-sender-id <=> root.reaction-picker-sender-id;
+            reaction-picker-timestamp-ns <=> root.reaction-picker-timestamp-ns;
+            reaction-picker-visible <=> root.reaction-picker-visible;
+            reply-focus-serial <=> root.reply-focus-serial;
+            safe-area-top: root.safe-area-top;
             screen-sources: root.screen-sources;
-            selected-screen-id: root.selected-screen-source-id;
-
-            audio-selected(id) => {
-                root.selected-audio-device-id = id;
-                root.device-picker-visible = false;
-                root.audio-device-selected(id);
-            }
-            audio-output-selected(id) => {
-                root.selected-audio-output-id = id;
-                root.device-picker-visible = false;
-                root.audio-output-selected(id);
-            }
-            screen-selected(id) => {
-                root.selected-screen-source-id = id;
-                root.device-picker-visible = false;
-                root.screen-source-selected(id);
-            }
-            closed => {
-                root.device-picker-visible = false;
-            }
-        }
-
-        // Image viewer overlay (rendered above modals)
-        if root.image-viewer-visible: ImageViewer {
-            show: true;
-            touch: root.is-mobile-platform;
-            source: root.image-viewer-source;
-            filename: root.image-viewer-filename;
-            size-display: root.image-viewer-size;
-            thumbnail-x: root.viewer-origin-x;
-            thumbnail-y: root.viewer-origin-y;
-            thumbnail-width: root.viewer-origin-width;
-            thumbnail-height: root.viewer-origin-height;
-            position-label: root.media-viewer-position;
-            has-previous: root.media-viewer-has-previous;
-            has-next: root.media-viewer-has-next;
-            previous-thumbnail: root.media-viewer-previous-thumbnail;
-            next-thumbnail: root.media-viewer-next-thumbnail;
-            previous => { root.media-viewer-navigate(-1); }
-            next => { root.media-viewer-navigate(1); }
-            download => { root.media-viewer-export(false); }
-            copy-image => { root.media-viewer-export(true); }
-            open-downloads => { root.media-viewer-open-downloads(); }
-
-
-            close => {
-                root.image-viewer-visible = false;
-                root.close-image-viewer();
-                back-scope.focus();
-            }
-        }
-
-        // Video player overlay (rendered above modals)
-        if root.video-player-visible: VideoPlayer {
-            show: true;
-            frame: root.video-player-frame;
-            filename: root.video-player-filename;
-            position-label: root.media-viewer-position;
-            has-previous: root.media-viewer-has-previous;
-            has-next: root.media-viewer-has-next;
-            previous => { root.media-viewer-navigate(-1); }
-            next => { root.media-viewer-navigate(1); }
-            download => { root.media-viewer-export(false); }
-            open-downloads => { root.media-viewer-open-downloads(); }
-
-            progress: root.video-player-progress;
-            elapsed: root.video-player-elapsed;
-            duration: root.video-player-duration;
-            is-playing: root.video-player-is-playing;
-            volume: root.video-player-volume;
-
-            close => {
-                root.video-player-visible = false;
-                root.close-video-player();
-            }
-            toggle-play-pause => {
-                root.video-player-toggle-play-pause();
-            }
-            seek(pos) => {
-                root.video-player-seek(pos);
-            }
-            set-volume(vol) => {
-                root.video-player-volume = vol;
-                root.video-player-set-volume(vol);
-            }
-        }
-
-        // File previews stay above the modal stack.
-        if root.code-preview-visible: CodePreviewOverlay {
-            width: 100%;
-            height: 100%;
-            file-name: root.code-preview-filename;
-            language: root.code-preview-language;
-            line-count: root.code-preview-line-count;
-            plain-text: root.code-preview-plain-text;
-            close => { root.code-preview-visible = false; root.close-code-preview(); }
-            copy => { root.copy-code(); }
-            open-external => { root.open-code-external(); }
-        }
-
-        if root.pdf-preview-visible: PdfPreviewOverlay {
-            width: 100%;
-            height: 100%;
-            file-name: root.pdf-preview-filename;
-            page-count: root.pdf-preview-page-count;
-            current-page: root.pdf-preview-current-page;
-            error-message: root.pdf-preview-error;
-            external-only: root.pdf-preview-external-only;
-            page-image: root.pdf-preview-image;
-            close => { root.pdf-preview-visible = false; root.close-pdf-preview(); }
-            open-external => { root.open-pdf-external(); }
-            page-prev => { root.pdf-page-prev(); }
-            page-next => { root.pdf-page-next(); }
-        }
-
-        // Reaction picker overlay
-        ReactionPicker {
-            show: root.reaction-picker-visible;
-            touch: root.is-mobile-platform;
-            message-id: root.reaction-picker-message-id;
-            sender-id: root.reaction-picker-sender-id;
-            timestamp-ns: root.reaction-picker-timestamp-ns;
-            emoji-list: root.reaction-picker-emojis;
-            selected-category <=> root.reaction-picker-selected-category;
-            search-query <=> root.reaction-picker-search-query;
-            // Anchor near button. Flip above if no space below. Clamp horizontally.
-            position-x: max(8px, min(root.reaction-picker-anchor-x, root.width - 288px));
-            position-y: root.reaction-picker-anchor-y + 360px > root.height
-                ? max(8px, root.reaction-picker-anchor-y - 360px)
-                : root.reaction-picker-anchor-y + 4px;
-
-            reaction-selected(sender-id, timestamp-ns, msg-id, emoji) => {
-                root.reaction-picker-visible = false;
-                root.reaction-selected(sender-id, timestamp-ns, msg-id, emoji);
-            }
-
-            category-changed(category) => {
-                root.reaction-picker-category-changed(category);
-            }
-
-            search-changed(query) => {
-                root.reaction-picker-search-changed(query);
-            }
-
-            close => {
-                root.reaction-picker-visible = false;
-            }
-        }
-
-        // Mention autocomplete overlay (positioned above composer cursor)
-        MentionAutocomplete {
-            show: root.mention-autocomplete-visible;
-            suggestions: root.mention-suggestions;
-            selected-index: root.mention-selected-index;
-            max-popup-width: min(240px, root.width - 32px);
-            // Position above the composer
-            x: root.sidebar-hidden ? 16px : (root.sidebar-collapsed ? 80px : 280px);
-            y: root.height - 80px - (Math.min(root.mention-suggestions.length, 8) * 40px + 16px);
-
-            suggestion-selected(id, display) => {
-                root.mention-autocomplete-visible = false;
-                root.mention-suggestion-selected(id, display);
-            }
-
-            close => {
-                root.mention-autocomplete-visible = false;
-            }
-        }
-
-        if root.is-presented("message-info"): MessageInfoModal {
-            show: root.active-modal == "message-info";
-            close => { root.nav-close("message-info"); }
-        }
-
-        MessageContextMenu {
-            show: root.context-menu-visible;
-            sender-id: root.context-menu-sender-id;
-            timestamp-ns: root.context-menu-timestamp-ns;
-            message-id: root.context-menu-message-id;
-            position-x: root.context-menu-x;
-            // This overlay lives in the same inset content rectangle as the
-            // composer. Its height already excludes the IME and system bars.
-            position-y: root.context-menu-y - root.safe-area-top;
-            content-top: root.context-menu-content-top - root.safe-area-top;
-            anchor-top: root.context-menu-anchor-top > 0px
-                ? root.context-menu-anchor-top - root.safe-area-top : 0px;
-            anchor-bottom: root.context-menu-anchor-bottom > 0px
-                ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
-            anchor-left: root.context-menu-anchor-left;
-            anchor-right: root.context-menu-anchor-right;
-            preview-message: root.context-menu-preview-message;
-            preview-row-x: root.context-menu-preview-row-x;
-            preview-row-y: root.context-menu-preview-row-y - root.safe-area-top;
-            preview-row-width: root.context-menu-preview-row-width;
-            preview-mobile: root.context-menu-preview-mobile;
-            preview-from-thread: root.context-menu-preview-from-thread;
-            preview-is-dm: root.is-dm;
-            preview-is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
-            preview-is-mesh: MeshGlobal.active-id != "";
-            preview-playing-attachment-id: root.current-playing-attachment-id;
-            preview-media-playing: root.is-media-playing;
-            preview-audio-progress: root.audio-progress;
-            preview-audio-elapsed: root.audio-elapsed;
-            retry-clicked(id) => { root.message-clicked(id); }
-            info-clicked(id) => { MessageInfo.open(id); }
-            can-thread: root.conversation-kind == ConversationKind.channel;
-
-            close => {
-                root.context-menu-visible = false;
-            }
-            quick-react(sender-id, timestamp-ns, emoji) => {
-                root.context-menu-visible = false;
-                root.reaction-selected(sender-id, timestamp-ns, root.context-menu-message-id, emoji);
-            }
-            more-reactions-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.reaction-picker-sender-id = sender-id;
-                root.reaction-picker-timestamp-ns = timestamp-ns;
-                root.reaction-picker-message-id = root.context-menu-message-id;
-                root.reaction-picker-anchor-x = root.context-menu-x;
-                root.reaction-picker-anchor-y = root.context-menu-y;
-                root.reaction-picker-visible = true;
-                root.react-clicked(sender-id, timestamp-ns, root.context-menu-x, root.context-menu-y);
-            }
-            thread-clicked(id) => {
-                root.context-menu-visible = false;
-                root.thread-clicked(id);
-            }
-            select-clicked(id) => {
-                root.context-menu-visible = false;
-                root.selection-mode = true;
-                root.message-selection-toggled(id);
-            }
-            reply-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.reply-message(sender-id, timestamp-ns);
-                root.reply-focus-serial += 1;
-            }
-            edit-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.edit-message(sender-id, timestamp-ns);
-            }
-            delete-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.delete-choosing = true;
-                root.delete-choice-everyone = MessageMenuActions.delete-for-everyone;
-                root.delete-choice-me = MessageMenuActions.delete-for-me;
-                root.delete-confirm-sender = sender-id;
-                root.delete-confirm-timestamp = timestamp-ns;
-                root.delete-confirm-everyone = false;
-                root.delete-confirm-count = 1;
-            }
-            pin-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.pin-message(sender-id, timestamp-ns);
-            }
-            forward-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.forward-message-action(sender-id, timestamp-ns);
-            }
-            copy-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.copy-message(sender-id, timestamp-ns);
-            }
-            download-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.download-message(sender-id, timestamp-ns);
-            }
-        }
-
-        // A single delete names its message; a multi-select leaves the sender
-        // empty and deletes the selection with its confirmed scope.
-        if root.delete-confirm-count > 0: DeleteConfirm {
-            count: root.delete-confirm-count;
-            is-dm: root.conversation-kind == ConversationKind.server-dm || root.conversation-kind == ConversationKind.anon-dm;
-            for-everyone: root.delete-confirm-everyone;
-            choosing: root.delete-choosing;
-            can-delete-everyone: root.delete-choice-everyone;
-            can-delete-me: root.delete-choice-me;
-            scope-chosen(everyone) => {
-                root.delete-confirm-everyone = everyone;
-                root.delete-choosing = false;
-            }
-            cancelled => { root.delete-confirm-count = 0; }
-            confirmed => {
-                root.delete-confirm-count = 0;
-                if root.delete-confirm-everyone {
-                    if root.delete-confirm-sender == "" {
-                        SelectionChrome.delete-everyone();
-                    } else {
-                        root.delete-everyone-message(root.delete-confirm-sender, root.delete-confirm-timestamp);
-                    }
-                } else if root.delete-confirm-sender != "" {
-                    root.delete-message(root.delete-confirm-sender, root.delete-confirm-timestamp);
-                } else {
-                    root.selection-delete-clicked();
-                }
-            }
+            selected-audio-device-id <=> root.selected-audio-device-id;
+            selected-audio-output-id <=> root.selected-audio-output-id;
+            selected-screen-source-id <=> root.selected-screen-source-id;
+            selection-mode <=> root.selection-mode;
+            sidebar-collapsed: root.sidebar-collapsed;
+            sidebar-hidden: root.sidebar-hidden;
+            video-player-duration: root.video-player-duration;
+            video-player-elapsed: root.video-player-elapsed;
+            video-player-filename: root.video-player-filename;
+            video-player-frame: root.video-player-frame;
+            video-player-is-playing: root.video-player-is-playing;
+            video-player-progress: root.video-player-progress;
+            video-player-visible <=> root.video-player-visible;
+            video-player-volume <=> root.video-player-volume;
+            viewer-origin-height: root.viewer-origin-height;
+            viewer-origin-width: root.viewer-origin-width;
+            viewer-origin-x: root.viewer-origin-x;
+            viewer-origin-y: root.viewer-origin-y;
+            window-height: root.height;
+            accept-incoming-call(arg0) => { root.accept-incoming-call(arg0); }
+            audio-device-selected(arg0) => { root.audio-device-selected(arg0); }
+            audio-output-selected(arg0) => { root.audio-output-selected(arg0); }
+            close-code-preview() => { root.close-code-preview(); }
+            close-image-viewer() => { root.close-image-viewer(); }
+            close-pdf-preview() => { root.close-pdf-preview(); }
+            close-video-player() => { root.close-video-player(); }
+            copy-code() => { root.copy-code(); }
+            copy-message(arg0, arg1) => { root.copy-message(arg0, arg1); }
+            decline-incoming-call(arg0) => { root.decline-incoming-call(arg0); }
+            delete-everyone-message(arg0, arg1) => { root.delete-everyone-message(arg0, arg1); }
+            delete-message(arg0, arg1) => { root.delete-message(arg0, arg1); }
+            download-message(arg0, arg1) => { root.download-message(arg0, arg1); }
+            edit-message(arg0, arg1) => { root.edit-message(arg0, arg1); }
+            forward-message-action(arg0, arg1) => { root.forward-message-action(arg0, arg1); }
+            media-viewer-export(arg0) => { root.media-viewer-export(arg0); }
+            media-viewer-navigate(arg0) => { root.media-viewer-navigate(arg0); }
+            media-viewer-open-downloads() => { root.media-viewer-open-downloads(); }
+            mention-suggestion-selected(arg0, arg1) => { root.mention-suggestion-selected(arg0, arg1); }
+            message-clicked(arg0) => { root.message-clicked(arg0); }
+            message-selection-toggled(arg0) => { root.message-selection-toggled(arg0); }
+            nav-close(arg0) => { root.nav-close(arg0); }
+            open-code-external() => { root.open-code-external(); }
+            open-pdf-external() => { root.open-pdf-external(); }
+            pdf-page-next() => { root.pdf-page-next(); }
+            pdf-page-prev() => { root.pdf-page-prev(); }
+            pin-message(arg0, arg1) => { root.pin-message(arg0, arg1); }
+            react-clicked(arg0, arg1, arg2, arg3) => { root.react-clicked(arg0, arg1, arg2, arg3); }
+            reaction-picker-category-changed(arg0) => { root.reaction-picker-category-changed(arg0); }
+            reaction-picker-search-changed(arg0) => { root.reaction-picker-search-changed(arg0); }
+            reaction-selected(arg0, arg1, arg2, arg3) => { root.reaction-selected(arg0, arg1, arg2, arg3); }
+            reply-message(arg0, arg1) => { root.reply-message(arg0, arg1); }
+            screen-source-selected(arg0) => { root.screen-source-selected(arg0); }
+            selection-delete-clicked() => { root.selection-delete-clicked(); }
+            thread-clicked(arg0) => { root.thread-clicked(arg0); }
+            video-player-seek(arg0) => { root.video-player-seek(arg0); }
+            video-player-set-volume(arg0) => { root.video-player-set-volume(arg0); }
+            video-player-toggle-play-pause() => { root.video-player-toggle-play-pause(); }
+            focus-back-scope => { back-scope.focus(); }
         }
 
         // ========== Return-to-call bar ==========
