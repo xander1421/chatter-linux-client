@@ -331,7 +331,7 @@ impl CallWorkerHandle {
         &self,
         call: CallHandle,
         replaces_active: bool,
-        invites: Arc<super::call_signaling::GroupCallInvites>,
+        invites: Arc<crate::services::call_signaling::GroupCallInvites>,
     ) -> Result<PendingIncomingSnapshot, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx

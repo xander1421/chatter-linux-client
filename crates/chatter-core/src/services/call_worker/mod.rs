@@ -903,7 +903,10 @@ use state::*;
 use lifecycle::*;
 pub(crate) use ratchet::{reconnect_wall_epoch, install_reconnect_catch_up};
 pub use bridge::RING_TIMEOUT;
-pub(crate) use bridge::{incoming_ring_budget, offer_is_stale, offer_is_stale_now};
+pub(crate) use bridge::{incoming_ring_budget, offer_is_stale_now};
+use bridge::{peer_left_ends_call, PEER_LEFT_GRACE};
+#[cfg(test)]
+use bridge::offer_is_stale;
 use ratchet::*;
 pub use bridge::spawn_call_orchestrator_bridge;
 
