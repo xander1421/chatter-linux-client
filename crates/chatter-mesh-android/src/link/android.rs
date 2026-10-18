@@ -8,7 +8,7 @@ use super::*;
 /// belongs to the process, so constructing a second `AndroidLink` takes the
 /// callbacks over from the first.
 pub struct AndroidLink {
-    inner: Arc<Shared>,
+    pub(super) inner: Arc<Shared>,
 }
 
 impl AndroidLink {
