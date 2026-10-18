@@ -18,7 +18,9 @@ mod shared;
 
 pub use open::{open_user_profile, open_user_profile_in_conversation};
 use share_link::{set_share_link_props, wire_share_link};
-use shared::{SHARED_PAGE, dm_conversation, load_shared_tabs, shared_sender, wire_shared_content};
+use shared::{
+    SHARED_PAGE, SharedPage, dm_conversation, load_shared_tabs, shared_sender, wire_shared_content,
+};
 
 pub(crate) fn retire_avatar_edit() {
     avatar_edit::retire();
