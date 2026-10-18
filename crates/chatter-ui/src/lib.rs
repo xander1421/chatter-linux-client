@@ -504,6 +504,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // Register CameraX as chatter-core's video capture backend so calls can
     // publish camera video (chatter-core drives capture, this feeds it frames).
     crate::platform::android::camera::init();
+    crate::platform::android::screen::init();
 
     crate::platform::android::activity::clear_launch_cover_after_first_frame(
         slint::ComponentHandle::window(&app_state.window),

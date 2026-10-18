@@ -11,6 +11,7 @@ pub mod backup_document;
 pub mod audio_route;
 pub mod call_actions;
 pub mod camera;
+pub mod screen;
 pub mod clipboard;
 pub mod file_picker;
 pub mod haptics;

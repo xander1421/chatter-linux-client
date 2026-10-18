@@ -95,8 +95,8 @@ export component CallControls inherits GlassSurface {
             clicked => { toggle-video(); }
         }
 
-        // Screen share toggle — desktop only; phones cannot share a screen.
-        if !root.speaker-toggle: IconAction {
+        // Screen share toggle (system consent is requested on Android).
+        IconAction {
             size: button-size;
             icon: Icons.monitor;
             label: root.is-screen-sharing ? "Stop sharing screen" : "Share screen";

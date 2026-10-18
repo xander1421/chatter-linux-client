@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.media.projection.MediaProjectionManager
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Selection
@@ -53,6 +54,51 @@ import java.util.concurrent.Executors
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
+    private var pendingScreenShareToken = 0L
+    private external fun nativeOnScreenShareDenied(token: Long)
+    private val screenShareConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val token = pendingScreenShareToken
+        pendingScreenShareToken = 0L
+        if (token == 0L) return@registerForActivityResult
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            try {
+                ScreenShareService.start(this, token, result.resultCode, result.data!!)
+            } catch (error: Exception) {
+                Log.e("ScreenShare", "Foreground service start failed", error)
+                nativeOnScreenShareDenied(token)
+            }
+        } else {
+            nativeOnScreenShareDenied(token)
+        }
+    }
+
+    @Suppress("unused")
+    fun startScreenShare(token: Long) {
+        runOnUiThread {
+            if (pendingScreenShareToken != 0L) nativeOnScreenShareDenied(pendingScreenShareToken)
+            pendingScreenShareToken = token
+            try {
+                val manager = getSystemService(MediaProjectionManager::class.java)
+                screenShareConsent.launch(manager.createScreenCaptureIntent())
+            } catch (error: Exception) {
+                pendingScreenShareToken = 0L
+                Log.e("ScreenShare", "Consent request failed", error)
+                nativeOnScreenShareDenied(token)
+            }
+        }
+    }
+
+    @Suppress("unused")
+    fun stopScreenShare(token: Long) {
+        runOnUiThread {
+            if (pendingScreenShareToken == token) {
+                pendingScreenShareToken = 0L
+                nativeOnScreenShareDenied(token)
+            }
+            ScreenShareService.stop(this)
+        }
+    }
+
     private var secureScreenRequested = false
     private var activityResumed = false
     private var torNetworkCallback: ConnectivityManager.NetworkCallback? = null

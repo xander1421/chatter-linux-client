@@ -19,7 +19,6 @@ use super::timers::{stop_call_timer, stop_video_frame_timer};
 /// flags are driven by `LiveKitRoomEvent::TrackSubscribed` in `room_events.rs`;
 /// the local user never receives that event for their own publish, so we
 /// flip it here.
-#[cfg(not(target_os = "android"))]
 fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str, sharing: bool) {
     // The local screen gets its OWN tile (mirroring the remote path in
     // room_events) — NOT flipping the "You" camera tile. Sharing the camera's
@@ -163,7 +162,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
-    // Toggle screen share (desktop only)
+    // Toggle screen share.
     window.on_call_toggle_screen_share({
         let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
@@ -214,7 +213,38 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             })
             .unwrap();
             #[cfg(target_os = "android")]
-            tracing::warn!("Screen sharing not available on Android");
+            slint::spawn_local(async move {
+                let new_state = !_ui_ctx.call_is_screen_sharing().await;
+                if new_state {
+                    if !_ui_ctx.call_is_connected().await {
+                        camera_error(&_weak, "Screen share unavailable until the call connects.");
+                        return;
+                    }
+                    if let Err(error) = _ui_ctx.call_publish_screen_share().await {
+                        tracing::warn!("Android screen share unavailable: {error}");
+                        camera_error(&_weak, "Screen share unavailable");
+                        return;
+                    }
+                    let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());
+                    if let Some(window) = _weak.upgrade() {
+                        window.set_call_is_screen_sharing(true);
+                        if let Some(id) = local_id {
+                            set_local_participant_screen_sharing(&window, &id, true);
+                        }
+                    }
+                    watch_android_screen(_weak, _ui_ctx);
+                } else {
+                    _ui_ctx.call_stop_screen_share();
+                    let local_id = _ui_ctx.session_current_user_id().map(|id| id.to_string());
+                    if let Some(window) = _weak.upgrade() {
+                        window.set_call_is_screen_sharing(false);
+                        if let Some(id) = local_id {
+                            set_local_participant_screen_sharing(&window, &id, false);
+                        }
+                    }
+                }
+            })
+            .unwrap();
         }
     });
 
@@ -320,6 +350,32 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             })
             .unwrap();
         }
+    });
+}
+
+#[cfg(target_os = "android")]
+fn watch_android_screen(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    slint::Timer::single_shot(std::time::Duration::from_millis(500), move || {
+        let Some(window) = weak.upgrade() else { return };
+        if !window.get_call_is_screen_sharing() {
+            return;
+        }
+        let weak_next = weak.clone();
+        slint::spawn_local(async move {
+            if !ui_ctx.call_is_screen_sharing().await {
+                ui_ctx.call_stop_screen_share();
+                let local_id = ui_ctx.session_current_user_id().map(|id| id.to_string());
+                if let Some(window) = weak_next.upgrade() {
+                    window.set_call_is_screen_sharing(false);
+                    if let Some(id) = local_id {
+                        set_local_participant_screen_sharing(&window, &id, false);
+                    }
+                }
+            } else {
+                watch_android_screen(weak_next, ui_ctx);
+            }
+        })
+        .unwrap();
     });
 }
 
