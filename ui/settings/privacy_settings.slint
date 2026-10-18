@@ -1,0 +1,467 @@
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+
+export component PrivacySettings inherits VerticalLayout {
+    in property <bool> mobile-platform;
+    in property <string> profile-visibility;
+    in property <bool> profile-visibility-busy;
+    in property <string> profile-visibility-error;
+    in property <string> profile-visibility-pending;
+    in-out property <string> profile-visibility-pin;
+    in-out property <bool> read-receipts-enabled;
+    in-out property <string> search-shortcut;
+    in-out property <bool> shield-switch;
+    in-out property <bool> typing-indicators-enabled;
+    in-out property <bool> username-discoverable;
+    callback profile-visibility-cancelled();
+    callback profile-visibility-confirmed(string, string);
+    callback profile-visibility-selected(string);
+    callback read-receipts-changed(bool);
+    callback search-shortcut-changed(string);
+    callback shield-toggled();
+    callback typing-indicators-changed(bool);
+    callback username-discoverable-changed(bool);
+
+
+    spacing: Spacing.lg;
+
+    // Section header
+    Text {
+        text: "Privacy";
+        color: Colors.text-primary;
+        font-size: Typography.xl;
+        font-weight: Typography.semibold;
+    }
+
+    Text {
+        text: "Control what information you share with others";
+        color: Colors.text-muted;
+        font-size: Typography.sm;
+    }
+
+    // Who can see my photo and name. Enforced by who
+    // receives our profile key (core profile_visibility);
+    // restricting rotates the key, so it may ask for the PIN.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Who can see my photo and name";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+
+            Text {
+                text: "Everyone else sees your initials. Narrowing this gives your profile a new key, so people who could see it before can't.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            for opt in [
+                { key: "everyone", label: "Everyone" },
+                { key: "contacts", label: "My contacts" },
+                { key: "nobody", label: "Nobody" },
+            ]: Rectangle {
+                property <bool> selected: (root.profile-visibility-pending != "" ? root.profile-visibility-pending : root.profile-visibility) == opt.key;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: visibility-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: opt.label;
+                accessible-action-default => {
+                    if !root.profile-visibility-busy { root.profile-visibility-selected(opt.key); }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    // Radio indicator
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: opt.label;
+                        vertical-alignment: center;
+                        color: selected ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: selected ? Typography.medium : Typography.normal;
+                    }
+                }
+
+                visibility-touch := TouchArea {
+                    enabled: !root.profile-visibility-busy;
+                    mouse-cursor: pointer;
+                    clicked => { root.profile-visibility-selected(opt.key); }
+                }
+            }
+
+            if root.profile-visibility-pending != "": VerticalLayout {
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "Enter your PIN to change this";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+
+                Input {
+                    placeholder: "PIN";
+                    password: true;
+                    text <=> root.profile-visibility-pin;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "secondary";
+                        disabled: root.profile-visibility-busy;
+                        clicked => { root.profile-visibility-cancelled(); }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Confirm";
+                        loading: root.profile-visibility-busy;
+                        disabled: root.profile-visibility-busy || root.profile-visibility-pin == "";
+                        clicked => {
+                            root.profile-visibility-confirmed(root.profile-visibility-pending, root.profile-visibility-pin);
+                        }
+                    }
+                }
+            }
+
+            if root.profile-visibility-error != "": Text {
+                text: root.profile-visibility-error;
+                color: Colors.error;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Shield setting. The switch shows AnonMode, never
+    // its own guess: turning ON only asks for the PIN
+    // and may be cancelled, so a tap snaps the switch
+    // back to the truth and `changed shield-on` below
+    // moves it once the mode actually flips.
+    // Offered without Tor too (see the chat-list
+    // header shield); only the Tor promise is gated.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: "Shield";
+            checked <=> root.shield-switch;
+            toggled(value) => {
+                root.shield-switch = AnonMode.enabled;
+                root.shield-toggled();
+            }
+
+            Text {
+                text: "Shield";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: AnonMode.onion-built
+                    ? "Show only anonymous conversations and route traffic over Tor. Turning it on asks for your PIN"
+                    : "Show only anonymous conversations. Turning it on asks for your PIN";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Who can find me by my username. The server
+    // enforces it; the choice shows the persisted value.
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "Who can find me by my username";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: root.username-discoverable
+                    ? "Anyone who types your exact username can find you"
+                    : "Only people with your friend code or username link can find you";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            for opt in [
+                { discoverable: true, label: "Everyone" },
+                { discoverable: false, label: "Nobody" },
+            ]: Rectangle {
+                property <bool> selected: root.username-discoverable == opt.discoverable;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: username-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: opt.label;
+                accessible-action-default => {
+                    if !selected {
+                        root.username-discoverable = opt.discoverable;
+                        root.username-discoverable-changed(opt.discoverable);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.md;
+                    alignment: start;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 9px;
+                            border-width: Spacing.stroke;
+                            border-color: selected ? Colors.primary : Colors.text-muted;
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: selected ? Colors.primary : transparent;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: opt.label;
+                        vertical-alignment: center;
+                        color: selected ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: selected ? Typography.medium : Typography.normal;
+                    }
+                }
+
+                username-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if !selected {
+                            root.username-discoverable = opt.discoverable;
+                            root.username-discoverable-changed(opt.discoverable);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Read Receipts setting
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: "Read Receipts";
+            checked <=> root.read-receipts-enabled;
+            toggled(value) => {
+                root.read-receipts-enabled = value;
+                root.read-receipts-changed(value);
+            }
+
+            Text {
+                text: "Read Receipts";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: "Let others know when you've read their messages";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Typing Indicators setting
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        ToggleRow {
+            row-padding: Spacing.md;
+            row-spacing: Spacing.md;
+            label-spacing: Spacing.sm;
+            accessible-text: "Typing Indicators";
+            checked <=> root.typing-indicators-enabled;
+            toggled(value) => {
+                root.typing-indicators-enabled = value;
+                root.typing-indicators-changed(value);
+            }
+
+            Text {
+                text: "Typing Indicators";
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
+            }
+            Text {
+                text: "Show when you're typing a message";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Search shortcut setting (3-way segmented selector).
+    // Keyboard shortcuts mean nothing on a phone.
+    if !root.mobile-platform: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        HorizontalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "Search shortcut";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
+
+                Text {
+                    text: "Which keys open search";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.xs;
+                vertical-stretch: 0;
+                alignment: center;
+
+                for opt[idx] in [
+                    { key: "k", label: "Ctrl+K" },
+                    { key: "f", label: "Ctrl+F" },
+                    { key: "both", label: "Both" },
+                ]: Rectangle {
+                    property <bool> selected: root.search-shortcut == opt.key;
+                    height: Spacing.button-height;
+                    min-width: 56px;
+                    border-radius: Spacing.radius-md;
+                    background: selected ? Colors.action-fill : Colors.surface-hover;
+                    border-width: 0px;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        Text {
+                            text: opt.label;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            color: selected ? Colors.on-action : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: selected ? Typography.semibold : Typography.medium;
+                        }
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.search-shortcut = opt.key;
+                            root.search-shortcut-changed(opt.key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

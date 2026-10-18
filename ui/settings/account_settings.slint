@@ -1,0 +1,797 @@
+import { Colors } from "../theme/colors.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component AccountSettings inherits VerticalLayout {
+    in property <image> avatar;
+    in property <string> backup-retry-error;
+    in property <bool> backup-retry-loading;
+    in-out property <string> backup-retry-pin;
+    in property <string> backup-status;
+    in-out property <string> change-pin-confirm;
+    in-out property <string> change-pin-current;
+    in property <string> change-pin-error;
+    in property <bool> change-pin-loading;
+    in-out property <string> change-pin-new;
+    in property <string> change-pin-success;
+    in property <bool> compact-mode;
+    in-out property <string> confirm-password;
+    in-out property <string> current-password;
+    in property <string> delete-error;
+    in property <bool> delete-loading;
+    in-out property <string> delete-password;
+    in property <string> display-name;
+    in-out property <string> message-backup-passphrase;
+    in-out property <string> message-backup-pin;
+    in property <string> message-backup-status;
+    in property <bool> mobile-platform;
+    in-out property <string> new-password;
+    in property <bool> password-changing;
+    in property <string> password-error;
+    in property <string> recovery-regen-error;
+    in property <bool> recovery-regen-loading;
+    in-out property <string> recovery-regen-password;
+    in property <string> username;
+    callback change-password(string, string);
+    callback change-pin(string, string);
+    callback delete-account-clicked();
+    callback delete-account-confirmed(string);
+    callback edit-profile-clicked();
+    callback export-message-backup(string);
+    callback import-message-backup(string);
+    callback logout-clicked();
+    callback regenerate-recovery-codes(string);
+    callback restore-message-backup(string);
+    callback retry-backup(string);
+    callback server-message-backup(string);
+    in-out property <bool> show-password-form;
+    in-out property <bool> show-pin-form;
+    in-out property <bool> show-backup-retry;
+    in-out property <bool> show-delete-confirm;
+    in-out property <bool> show-recovery-regen;
+    in-out property <bool> show-logout-confirm;
+
+
+    spacing: Spacing.sm;
+
+    // Section header
+    Text {
+        text: "Account";
+        color: Colors.text-primary;
+        font-size: Typography.xl;
+        font-weight: Typography.semibold;
+    }
+
+    // Profile info row
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                // Avatar
+                Avatar {
+                    size: 64px;
+                    source: root.avatar;
+                    name: root.display-name;
+                }
+
+                // Name and username
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: root.display-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.medium;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.username != "" ? "@" + root.username : "";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        overflow: elide;
+                    }
+                }
+
+                // Edit button — beside the name on wide screens
+                if !root.compact-mode: Button {
+                    touch: root.mobile-platform;
+                    text: "Edit Profile";
+                    variant: "secondary";
+                    icon: Icons.edit;
+                    clicked => { root.edit-profile-clicked(); }
+                }
+            }
+
+            // Compact: full-width button stacked below
+            if root.compact-mode: Button {
+                text: "Edit Profile";
+                variant: "secondary";
+                touch: true;
+                icon: Icons.edit;
+                clicked => { root.edit-profile-clicked(); }
+            }
+        }
+    }
+
+    // Security subsection
+    Rectangle { height: Spacing.lg; }
+
+    Text {
+        text: "Security";
+        color: Colors.text-primary;
+        font-size: Typography.lg;
+        font-weight: Typography.semibold;
+    }
+
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        VerticalLayout {
+            spacing: Spacing.none;
+    // Change Password group
+    Rectangle {
+        background: transparent;
+        border-radius: Spacing.none;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.lock;
+                title: "Password";
+                detail: "Choose a strong, unique password for your account.";
+                clickable: false;
+                show-chevron: false;
+                action-label: show-password-form ? "" : "Change";
+                clicked => { show-password-form = true; }
+            }
+
+            // Inline password form
+            if show-password-form: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.divider;
+                }
+
+                Input {
+                    placeholder: "Current password";
+                    password: true;
+                    text <=> root.current-password;
+                }
+
+                // Stacked: side by side on a phone the
+                // placeholders clipped ("Confirm new pa…").
+                VerticalLayout {
+                    spacing: Spacing.md;
+
+                    Input {
+                        placeholder: "New password";
+                        password: true;
+                        text <=> root.new-password;
+                        horizontal-stretch: 1;
+                    }
+
+                    Input {
+                        placeholder: "Confirm new password";
+                        password: true;
+                        text <=> root.confirm-password;
+                        error: root.password-error != "";
+                        error-message: root.password-error;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => {
+                            show-password-form = false;
+                            root.current-password = "";
+                            root.new-password = "";
+                            root.confirm-password = "";
+                        }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Save";
+                        variant: "primary";
+                        loading: root.password-changing;
+                        disabled: root.current-password == "" ||
+                                 root.new-password == "" ||
+                                 root.confirm-password == "";
+                        clicked => {
+                            root.change-password(root.current-password, root.new-password);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { height: 1px; background: Colors.divider; }
+
+    // Recovery Codes group
+    Rectangle {
+        background: transparent;
+        border-radius: Spacing.none;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.shield;
+                title: "Recovery Codes";
+                detail: "Lost or used up your codes? Get a new set.";
+                clickable: false;
+                show-chevron: false;
+                action-label: show-recovery-regen ? "" : "Regenerate";
+                clicked => { show-recovery-regen = true; }
+            }
+
+            // Inline confirm: nothing is replaced until the password is in.
+            if show-recovery-regen: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.divider;
+                }
+
+                Text {
+                    text: "Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+
+                Input {
+                    placeholder: "Password";
+                    password: true;
+                    text <=> root.recovery-regen-password;
+                    error: root.recovery-regen-error != "";
+                    error-message: root.recovery-regen-error;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => {
+                            show-recovery-regen = false;
+                            root.recovery-regen-password = "";
+                        }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Regenerate";
+                        variant: "primary";
+                        loading: root.recovery-regen-loading;
+                        disabled: root.recovery-regen-password == "";
+                        clicked => {
+                            root.regenerate-recovery-codes(root.recovery-regen-password);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { height: 1px; background: Colors.divider; }
+
+    // Change PIN group
+    Rectangle {
+        background: transparent;
+        border-radius: Spacing.none;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.lock;
+                title: "Backup PIN";
+                detail: "Your PIN secures your encrypted key backup.";
+                clickable: false;
+                show-chevron: false;
+                action-label: show-pin-form ? "" : "Change";
+                clicked => { show-pin-form = true; }
+            }
+
+            // Inline PIN form
+            if show-pin-form: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.divider;
+                }
+
+                Input {
+                    placeholder: "Current PIN";
+                    password: true;
+                    text <=> root.change-pin-current;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.md;
+
+                    Input {
+                        placeholder: "New PIN (8+ characters)";
+                        password: true;
+                        text <=> root.change-pin-new;
+                        horizontal-stretch: 1;
+                    }
+
+                    Input {
+                        placeholder: "Confirm new PIN";
+                        password: true;
+                        text <=> root.change-pin-confirm;
+                        error: root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm;
+                        error-message: "PINs do not match";
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                if root.change-pin-error != "": Text {
+                    text: root.change-pin-error;
+                    color: Colors.error;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+
+                if root.change-pin-success != "": Text {
+                    text: root.change-pin-success;
+                    color: Colors.success;
+                    font-size: Typography.xs;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => {
+                            show-pin-form = false;
+                            root.change-pin-current = "";
+                            root.change-pin-new = "";
+                            root.change-pin-confirm = "";
+                        }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Save";
+                        variant: "primary";
+                        loading: root.change-pin-loading;
+                        disabled: root.change-pin-current == "" ||
+                                 root.change-pin-new == "" ||
+                                 root.change-pin-confirm == "";
+                        clicked => {
+                            root.change-pin(root.change-pin-current, root.change-pin-new);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle { height: 1px; background: Colors.divider; }
+
+    // Key Backup group
+    Rectangle {
+        background: transparent;
+        border-radius: Spacing.none;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.download;
+                title: "Key Backup";
+                detail: "Status: " + (root.backup-status == "backed_up" ? "Backed up" : root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown");
+                detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
+                clickable: false;
+                show-chevron: false;
+                action-label: !show-backup-retry && root.backup-status != "backed_up" ? "Retry" : "";
+                clicked => { show-backup-retry = true; }
+            }
+
+            // Inline retry form
+            if show-backup-retry && root.backup-status != "backed_up": VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.divider;
+                }
+
+                Input {
+                    placeholder: "Enter your PIN to retry backup";
+                    password: true;
+                    text <=> root.backup-retry-pin;
+                }
+
+                if root.backup-retry-error != "": Text {
+                    text: root.backup-retry-error;
+                    color: Colors.error;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => {
+                            show-backup-retry = false;
+                            root.backup-retry-pin = "";
+                        }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Retry";
+                        variant: "primary";
+                        loading: root.backup-retry-loading;
+                        disabled: root.backup-retry-pin == "";
+                        clicked => {
+                            root.retry-backup(root.backup-retry-pin);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+        }
+    }
+
+    // Message Backup group (encrypted history export/restore)
+    Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        preferred-height: backup-content.preferred-height;
+
+        backup-content := VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.sm;
+
+            SettingsRow {
+                touch: root.mobile-platform;
+                icon: Icons.download;
+                title: "Message Backup";
+                detail: "Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.";
+                min-height: root.compact-mode ? 112px : Spacing.button-height;
+                clickable: false;
+                show-chevron: false;
+            }
+
+            Input {
+                placeholder: "Backup passphrase (for file backup)";
+                password: true;
+                text <=> root.message-backup-passphrase;
+            }
+
+            if root.message-backup-passphrase == "": Text {
+                text: "Enter a backup passphrase to enable file export and restore.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Export to File…";
+                    variant: "secondary";
+                    disabled: root.message-backup-passphrase == "";
+                    clicked => {
+                        root.export-message-backup(root.message-backup-passphrase);
+                    }
+                }
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Restore from File…";
+                    variant: "secondary";
+                    disabled: root.message-backup-passphrase == "";
+                    clicked => {
+                        root.import-message-backup(root.message-backup-passphrase);
+                    }
+                }
+            }
+
+            Input {
+                placeholder: "PIN (for server backup)";
+                password: true;
+                text <=> root.message-backup-pin;
+            }
+
+            if root.message-backup-pin == "": Text {
+                text: "Enter your PIN to enable server backup and restore.";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: start;
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Back Up to Server";
+                    variant: "secondary";
+                    horizontal-stretch: 1;
+                    disabled: root.message-backup-pin == "";
+                    clicked => {
+                        root.server-message-backup(root.message-backup-pin);
+                    }
+                }
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Restore from Server";
+                    variant: "secondary";
+                    horizontal-stretch: 1;
+                    disabled: root.message-backup-pin == "";
+                    clicked => {
+                        root.restore-message-backup(root.message-backup-pin);
+                    }
+                }
+            }
+
+            if root.message-backup-status != "": Text {
+                text: root.message-backup-status;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Danger Zone
+    Rectangle { height: Spacing.md; }
+
+    Text {
+        text: "Danger Zone";
+        color: Colors.error;
+        font-size: Typography.lg;
+        font-weight: Typography.semibold;
+    }
+
+    Rectangle {
+        background: Colors.error.with-alpha(0.05);
+        border-radius: Spacing.radius-lg;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            // Logout row
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Session on this device";
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                    }
+
+                    Text {
+                        text: "Sign out of your account on this device.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                }
+
+                if !show-logout-confirm && !root.compact-mode: Button {
+                    touch: root.mobile-platform;
+                    text: "Log Out";
+                    variant: "destructive";
+                    clicked => { show-logout-confirm = true; }
+                }
+            }
+
+            // Compact: full-width button stacked below
+            if !show-logout-confirm && root.compact-mode: Button {
+                touch: root.mobile-platform;
+                text: "Log Out";
+                variant: "destructive";
+                clicked => { show-logout-confirm = true; }
+            }
+
+            if show-logout-confirm: HorizontalLayout {
+                alignment: end;
+                spacing: Spacing.sm;
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { show-logout-confirm = false; }
+                }
+
+                Button {
+                    touch: root.mobile-platform;
+                    text: "Log Out of This Device";
+                    variant: "destructive";
+                    clicked => {
+                        show-logout-confirm = false;
+                        root.logout-clicked();
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Colors.error.with-alpha(0.2);
+            }
+
+            // Delete account row
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.xs;
+
+                    Text {
+                        // Not plain "Account" — that is the
+                        // section header a few rows up.
+                        text: "This account";
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                    }
+
+                    Text {
+                        text: "Permanently delete your account and all associated data. This action cannot be undone.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // First click reveals a confirmation step
+                // (with password) — never deletes directly.
+                if !show-delete-confirm && !root.compact-mode: Button {
+                    touch: root.mobile-platform;
+                    text: "Delete Account";
+                    variant: "destructive";
+                    clicked => {
+                        root.delete-account-clicked();
+                        show-delete-confirm = true;
+                    }
+                }
+            }
+
+            // Compact: full-width button stacked below
+            if !show-delete-confirm && root.compact-mode: Button {
+                touch: root.mobile-platform;
+                text: "Delete Account";
+                variant: "destructive";
+                clicked => {
+                    root.delete-account-clicked();
+                    show-delete-confirm = true;
+                }
+            }
+
+            // Inline delete confirmation (explicit confirm gate)
+            if show-delete-confirm: VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.error.with-alpha(0.2);
+                }
+
+                Text {
+                    text: "This permanently deletes your account and all associated data. This cannot be undone. Enter your password to confirm.";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+
+                Input {
+                    placeholder: "Password";
+                    password: true;
+                    text <=> root.delete-password;
+                    error: root.delete-error != "";
+                    error-message: root.delete-error;
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: end;
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => {
+                            show-delete-confirm = false;
+                            root.delete-password = "";
+                        }
+                    }
+
+                    Button {
+                        touch: root.mobile-platform;
+                        text: "Delete Forever";
+                        variant: "destructive";
+                        loading: root.delete-loading;
+                        disabled: root.delete-password == "";
+                        clicked => {
+                            root.delete-account-confirmed(root.delete-password);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
