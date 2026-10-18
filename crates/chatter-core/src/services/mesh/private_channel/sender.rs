@@ -177,7 +177,7 @@ impl PrivateChannel {
         Some(distribution)
     }
 
-    fn removal_hash(&self) -> Vec<u8> {
+    pub(super) fn removal_hash(&self) -> Vec<u8> {
         self.departed
             .iter()
             .filter_map(|notice| notice.preimage())

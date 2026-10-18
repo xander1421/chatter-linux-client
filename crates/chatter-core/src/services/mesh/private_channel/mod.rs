@@ -200,3 +200,5 @@ mod message;
 mod protocol;
 mod sender;
 mod store;
+
+pub use store::PrivateChannelStore;

@@ -509,7 +509,16 @@ fn settings_delete_account_is_wired_behind_confirmation() {
         .invoke_settings_delete_account();
 
     // ---- L2: static — confirmed handler reaches the wrapper; gated by confirm -
-    let settings_src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    let settings_src = concat!(
+        include_str!("../src/bin_ui/features/modals/settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/account.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/ai.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/appearance.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/message_backup.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/notifications.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/privacy.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/recovery.rs"),
+    );
     assert!(
         settings_src.contains("on_settings_delete_account_confirmed"),
         "settings.rs must register the confirmed-delete handler"
@@ -594,7 +603,16 @@ fn channel_settings_mute_toggle_reaches_core() {
 // ============================================================================
 #[test]
 fn edit_profile_avatar_change_persists_picked_bytes_on_save() {
-    let profile = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let profile = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
+    );
     assert!(profile.contains("avatar_edit::wire(window, ui_ctx)"));
     let src = include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs");
     let pick = src.find("window.on_edit_profile_change_avatar").unwrap();
@@ -1680,7 +1698,16 @@ fn profile_share_username_link_is_wired() {
     );
 
     // ---- L2: static — handlers reach core; Slint fires the callbacks --------
-    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let profile_src = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
+    );
     assert!(
         profile_src.contains("on_profile_generate_share_link")
             && profile_src.contains("on_profile_reset_share_link")
@@ -1758,7 +1785,16 @@ fn profile_shared_content_drawer_is_wired() {
         .invoke_profile_toggle_mute();
 
     // L2: static — handlers reach core; Slint fires the callbacks.
-    let profile_src = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let profile_src = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
+    );
     for needle in [
         "on_profile_shared_tab_selected",
         "on_profile_shared_load_more",
@@ -1844,7 +1880,16 @@ fn settings_message_backup_wires_reach_core() {
         .invoke_settings_restore_message_backup("Va1idPin!x9".into());
 
     // L2 static (Rust): every handler reaches the core façade.
-    let src = include_str!("../src/bin_ui/features/modals/settings.rs");
+    let src = concat!(
+        include_str!("../src/bin_ui/features/modals/settings/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/account.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/ai.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/appearance.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/message_backup.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/notifications.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/privacy.rs"),
+        include_str!("../src/bin_ui/features/modals/settings/recovery.rs"),
+    );
     for (handler, core_call) in [
         (
             "on_settings_export_message_backup",

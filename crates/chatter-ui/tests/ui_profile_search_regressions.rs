@@ -189,7 +189,16 @@ fn selected_second_url_and_search_clear_use_production_callbacks() {
     assert!(app.contains(
         "ModalHostState.profile-open-shared-item(message-id, attachment-id, category, selected-url)"
     ));
-    let profile = include_str!("../src/bin_ui/features/modals/profile.rs");
+    let profile = concat!(
+        include_str!("../src/bin_ui/features/modals/profile/mod.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/avatar_edit.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/navigation.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/open.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/relationship.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/safety.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/share_link.rs"),
+        include_str!("../src/bin_ui/features/modals/profile/shared.rs"),
+    );
     assert!(
         profile.contains("w.global::<crate::ChatPane>()")
             && profile.contains(".invoke_open_message_link(url.into())")
