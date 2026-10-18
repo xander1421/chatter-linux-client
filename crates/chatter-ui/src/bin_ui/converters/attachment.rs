@@ -409,14 +409,13 @@ pub fn attachment_display_resolver(
                 .thumbnail
                 .as_ref()
                 .is_none_or(|b| b.is_empty())
+            && !attachment.needs_download()
             && remaining.get() > 0
         {
             remaining.set(remaining.get() - 1);
-            if !attachment.needs_download() {
-                match client.decrypt_and_extract_video_thumbnail(id) {
-                    Ok(result) => attachment.metadata.thumbnail = Some(result.image_bytes),
-                    Err(e) => tracing::warn!(error = %e, "History video preview extraction failed"),
-                }
+            match client.decrypt_and_extract_video_thumbnail(id) {
+                Ok(result) => attachment.metadata.thumbnail = Some(result.image_bytes),
+                Err(e) => tracing::warn!(error = %e, "History video preview extraction failed"),
             }
         }
         (client.auth_snapshot().session_revision == revision).then_some(attachment)
