@@ -414,10 +414,6 @@ impl UserSync {
         Ok((server_blocked.len(), changed))
     }
 
-    /// Get the last sync timestamp.
-    pub fn last_synced_at(&self) -> Option<i64> {
-        self.settings_repo.get::<i64>(SYNC_KEY).ok().flatten()
-    }
 }
 
 #[cfg(test)]

@@ -74,22 +74,6 @@ impl MessageSync {
         }
     }
 
-    /// Sync messages for a specific channel since the last sync.
-    ///
-    /// Uses `reference_time` to fetch only messages newer than our last sync.
-    /// Messages are inserted with `INSERT OR IGNORE` to avoid duplicates.
-    pub async fn sync_channel(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<MessageSyncResult, SyncError> {
-        let mut result = MessageSyncResult {
-            channel_id: channel_id.to_string(),
-            ..Default::default()
-        };
-        self.sync_channel_into(channel_id, &mut result).await?;
-        Ok(result)
-    }
-
     // Keep progress separate from completion so callers can report already
     // persisted rows even when an ingestion or later fetch fails.
     async fn sync_channel_into(
@@ -207,11 +191,6 @@ impl MessageSync {
         full_result
     }
 
-    /// Get the last sync timestamp for a channel.
-    pub fn last_synced_at(&self, channel_id: &ChannelId) -> Option<u64> {
-        let key = format!("sync:messages:{}:last_at_ns", channel_id);
-        self.settings_repo.get::<u64>(&key).ok().flatten()
-    }
 }
 
 /// Whether this message must be fetched again, so the channel's checkpoint

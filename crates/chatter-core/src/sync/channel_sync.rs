@@ -278,6 +278,4 @@ pub enum SyncError {
     Network(String),
     #[error("storage error: {0}")]
     Storage(String),
-    #[error("conversion error: {0}")]
-    Conversion(String),
 }

@@ -3,7 +3,7 @@
 //! Provides video playback with audio sync for viewing video attachments
 //! within the application. Renders frames to Slint Image widget.
 //!
-//! Uses GStreamer on Linux, VideoToolbox on macOS/iOS, MediaCodec on Android.
+//! Uses GStreamer on desktop; Android playback uses the UI's platform player.
 //! Audio is handled by GStreamer's autoaudiosink (outputs to PulseAudio/PipeWire).
 
 use std::path::Path;

@@ -1,8 +1,8 @@
 //! Media handling layer.
 //!
 //! Image, audio, video processing and playback.
-//! GStreamer provides desktop decoding and audio playback. Android uses the
-//! NDK MediaCodec video decoder; Android video audio output is still pending.
+//! GStreamer provides desktop decoding and audio playback. Android playback
+//! and thumbnail extraction are handled by the UI's platform media code.
 
 pub mod audio_player;
 pub mod audio_recorder;
