@@ -17,8 +17,6 @@
 //! This prevents MITM attacks during message delivery by ensuring only
 //! certificates signed by the trusted server are accepted.
 
-use std::time::Duration;
-
 // Re-export useful libsignal types for consumers of this module.
 pub use libsignal_protocol::{
     ContentHint, SealedSenderDecryptionResult, SenderCertificate, ServerCertificate,
