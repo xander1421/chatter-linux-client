@@ -264,7 +264,9 @@ impl MessageService {
 
     /// Our live device ids, from the `own_devices` cache (refetched when
     /// over a minute old). `None` when the list cannot be fetched.
-    pub(in crate::services::message) async fn own_device_ids(&self) -> Option<std::collections::HashSet<u32>> {
+    pub(in crate::services::message) async fn own_device_ids(
+        &self,
+    ) -> Option<std::collections::HashSet<u32>> {
         const MAX_AGE: u64 = 60 * 1_000_000_000;
         let mut cache = self.own_devices.lock().await;
         let now = TimestampNanos::now().as_u64();
