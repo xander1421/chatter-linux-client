@@ -1,8 +1,8 @@
 //! Media handling layer.
 //!
 //! Image, audio, video processing and playback.
-//! GStreamer provides desktop decoding and audio playback. Android uses its
-//! platform media service for attachment previews.
+//! GStreamer provides desktop decoding and audio playback. Android playback
+//! and thumbnail extraction use the platform media service through the UI.
 
 pub mod audio_player;
 pub mod audio_recorder;

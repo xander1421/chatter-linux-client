@@ -1502,19 +1502,6 @@ impl UnifiedMessageRepository {
         Ok(applied)
     }
 
-    /// Called only for an exact envelope whose upstream acknowledgement succeeded.
-    pub(crate) fn acknowledge_reaction_artifact(
-        &self,
-        key: &crate::storage::receive_artifact::ReceiveKey,
-        digest: &[u8],
-    ) -> Result<(), StorageError> {
-        let mut conn = self.db.connection()?;
-        let tx = conn.transaction()?;
-        crate::storage::receive_artifact::mark_acknowledged(&tx, key, digest)?;
-        tx.commit()?;
-        Ok(())
-    }
-
     pub(crate) fn acknowledge_receive_artifact(
         &self,
         key: &crate::storage::receive_artifact::ReceiveKey,

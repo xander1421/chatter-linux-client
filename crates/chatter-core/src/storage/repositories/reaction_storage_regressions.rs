@@ -198,9 +198,9 @@ fn reaction_storage_permutations_converge_direct_held_artifacts_reopen_and_ack()
                 assert!(repo.replay_held_reactions().unwrap().is_empty());
                 for a in artifacts {
                     assert!(repo.apply_reaction_artifact(&a).unwrap().is_none());
-                    repo.acknowledge_reaction_artifact(&a.key, &a.digest)
+                    repo.acknowledge_receive_artifact(&a.key, &a.digest)
                         .unwrap();
-                    repo.acknowledge_reaction_artifact(&a.key, &a.digest)
+                    repo.acknowledge_receive_artifact(&a.key, &a.digest)
                         .unwrap();
                     assert!(repo.apply_reaction_artifact(&a).unwrap().is_none());
                     assert!(
