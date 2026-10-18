@@ -9,7 +9,7 @@ use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::messages_to_display_batch_deferred;
-use crate::{run_ui, MainWindow};
+use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
@@ -33,7 +33,12 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_channel_selected(move |channel_id: SharedString| {
         let open_started = std::time::Instant::now();
         crate::trace_chat_open_started(open_started, "channel");
-        tracing::info!(kind = "channel", stage = "tap", elapsed_ms = 0, "conversation_open");
+        tracing::info!(
+            kind = "channel",
+            stage = "tap",
+            elapsed_ms = 0,
+            "conversation_open"
+        );
         if let Ok(id) = channel_id.parse::<ChannelId>() {
             super::super::header::cancel_pending_jump_for(
                 chatter_core::state::ActiveConversation::Channel(id),
@@ -42,7 +47,12 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let channel_id_str = channel_id.to_string();
         let weak = weak_window.clone();
         super::show_chat_pane(&weak);
-        tracing::info!(kind = "channel", stage = "slide_requested", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+        tracing::info!(
+            kind = "channel",
+            stage = "slide_requested",
+            elapsed_ms = open_started.elapsed().as_millis(),
+            "conversation_open"
+        );
         let ui_ctx = ui_ctx_clone.clone();
 
         // Stop any playing audio when switching channels
@@ -149,7 +159,12 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // call that returns it is the call that clears `is_read`. The
             // receipts go out for the page `load_channel_into_ui` loads.
             let anchor = handle.mark_read_local().unwrap_or_default();
-            tracing::info!(kind = "channel", stage = "read_marked", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+            tracing::info!(
+                kind = "channel",
+                stage = "read_marked",
+                elapsed_ms = open_started.elapsed().as_millis(),
+                "conversation_open"
+            );
             // Reading a foldered channel has to clear its folder badge too.
             let ui_ctx_badges = ui_ctx.clone();
             crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
@@ -292,7 +307,12 @@ pub(crate) async fn load_channel_into_ui_owned(
         return Vec::new();
     }
     if let Some(started) = open_started {
-        tracing::info!(kind = "channel", stage = "pins_loaded", elapsed_ms = started.elapsed().as_millis(), "conversation_open");
+        tracing::info!(
+            kind = "channel",
+            stage = "pins_loaded",
+            elapsed_ms = started.elapsed().as_millis(),
+            "conversation_open"
+        );
     }
     // 1. Get channel metadata
     let channel = match ui_ctx.get_channel_local(&channel_id) {
@@ -322,7 +342,7 @@ pub(crate) async fn load_channel_into_ui_owned(
     if !owner.is_current() {
         return Vec::new();
     }
-    super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
+    super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
@@ -341,7 +361,13 @@ pub(crate) async fn load_channel_into_ui_owned(
         }
     };
     if let Some(started) = open_started {
-        tracing::info!(kind = "channel", stage = "page_loaded", rows = messages.len(), elapsed_ms = started.elapsed().as_millis(), "conversation_open");
+        tracing::info!(
+            kind = "channel",
+            stage = "page_loaded",
+            rows = messages.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "conversation_open"
+        );
     }
 
     if !owner.is_current() {
@@ -368,7 +394,13 @@ pub(crate) async fn load_channel_into_ui_owned(
         &ui_ctx.thread_reply_counts(&channel_id, &conv_type),
     );
     if let Some(started) = open_started {
-        tracing::info!(kind = "channel", stage = "display_built", rows = display_messages.len(), elapsed_ms = started.elapsed().as_millis(), "conversation_open");
+        tracing::info!(
+            kind = "channel",
+            stage = "display_built",
+            rows = display_messages.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "conversation_open"
+        );
     }
 
     if !owner.is_current() {
@@ -389,7 +421,12 @@ pub(crate) async fn load_channel_into_ui_owned(
     crate::run_history_ui!(weak, owner, |w| {
         super::apply_unread_anchor(&w, anchor, &anchor_page);
         metadata.apply(&w);
-        crate::bin_ui::converters::set_conversation_kind(&w, &ui_ctx_gifs, &conversation_type, private_channel);
+        crate::bin_ui::converters::set_conversation_kind(
+            &w,
+            &ui_ctx_gifs,
+            &conversation_type,
+            private_channel,
+        );
         w.set_is_dm(false);
         w.set_member_count(member_count);
 
@@ -404,12 +441,20 @@ pub(crate) async fn load_channel_into_ui_owned(
         }
         w.set_messages(ModelRc::new(model));
         if let Some(started) = open_started {
-            tracing::info!(kind = "channel", stage = "model_replaced", rows = display_messages.len(), elapsed_ms = started.elapsed().as_millis(), "conversation_open");
+            tracing::info!(
+                kind = "channel",
+                stage = "model_replaced",
+                rows = display_messages.len(),
+                elapsed_ms = started.elapsed().as_millis(),
+                "conversation_open"
+            );
         }
         if open_started.is_some() {
             crate::trace_chat_open_model(display_messages.len(), 0);
             let fill_weak = w.as_weak();
-            crate::trace_chat_open_after_content(move || super::fill_open_media(fill_weak, owner, display_messages, current_user_id));
+            crate::trace_chat_open_after_content(move || {
+                super::fill_open_media(fill_weak, owner, display_messages, current_user_id)
+            });
         } else {
             // Non-sidebar reloads have no open-frame trace to defer against.
             super::fill_open_media(w.as_weak(), owner, display_messages, current_user_id);

@@ -819,21 +819,17 @@ mod session_tests {
         assert!(client.call_service().set(worker.clone()).is_ok());
         let window = MainWindow::new().unwrap();
         let alice = UserId::new();
-        client.auth_state().set_logged_in(alice, 1, "Alice".into());
+        client.testing_set_logged_in(alice, 1, "Alice".into());
         let old = client.auth_snapshot().session_revision;
         let state = worker.incoming_presentation_state();
         state.begin_session(old);
         reconcile_incoming_modal(&window.as_weak(), &client, &state, old);
-        client.auth_state().invalidate_session();
+        client.testing_invalidate_session();
         runtime
             .block_on(worker.reset_presentation_session(old))
             .unwrap();
-        client
-            .auth_state()
-            .set_logged_in(UserId::new(), 1, "Bob".into());
-        client
-            .auth_state()
-            .set_logged_in(alice, 1, "Alice again".into());
+        client.testing_set_logged_in(UserId::new(), 1, "Bob".into());
+        client.testing_set_logged_in(alice, 1, "Alice again".into());
         let revision = client.auth_snapshot().session_revision;
         state.begin_session(revision);
         let current = worker.for_presentation_session(revision);

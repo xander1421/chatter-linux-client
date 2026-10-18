@@ -1,8 +1,8 @@
 //! Ownership of a history request includes its queued UI publication.
 use chatter_core::{
-    client::ChatterClient,
+    client::{ChatterClient, ConversationGuard, SessionGuard},
     domain::ids::MessageId,
-    state::{ActiveConversation, AuthState, ChatState},
+    state::ActiveConversation,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -13,27 +13,23 @@ static THREAD: AtomicU64 = AtomicU64::new(1);
 /// Account-wide hydration remains valid across conversation changes.
 #[derive(Clone)]
 pub(crate) struct SessionOwner {
-    auth: AuthState,
-    revision: u64,
+    session: SessionGuard,
 }
 impl SessionOwner {
     pub fn capture(client: &ChatterClient) -> Self {
         Self {
-            auth: client.auth_state().clone(),
-            revision: client.auth_snapshot().session_revision,
+            session: client.session_guard(),
         }
     }
     pub fn is_current(&self) -> bool {
-        self.auth.get().session_revision == self.revision
+        self.session.is_current()
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct HistoryOwner {
-    auth: AuthState,
-    chat: ChatState,
-    revision: u64,
-    conversation: ActiveConversation,
+    session: SessionGuard,
+    selection: ConversationGuard,
     epoch: u64,
     mesh_epoch: Option<u64>,
     thread: Option<(MessageId, u64)>,
@@ -51,10 +47,8 @@ impl HistoryOwner {
     /// Older pages and internal loaders share the owning selection/reload epoch.
     pub fn capture(client: &ChatterClient, conversation: ActiveConversation) -> Self {
         Self {
-            auth: client.auth_state().clone(),
-            chat: client.chat_state().clone(),
-            revision: client.auth_snapshot().session_revision,
-            conversation,
+            session: client.session_guard(),
+            selection: client.conversation_guard(conversation),
             epoch: MAIN.load(Ordering::SeqCst),
             // Mesh scopes all use ActiveConversation::None. Their independent
             // selection epoch also fences captures and queued publications.
@@ -89,8 +83,8 @@ impl HistoryOwner {
         owner
     }
     pub fn is_current(&self) -> bool {
-        self.auth.get().session_revision == self.revision
-            && self.chat.active_conversation() == self.conversation
+        self.session.is_current()
+            && self.selection.is_current()
             && MAIN.load(Ordering::SeqCst) == self.epoch
             && self
                 .mesh_epoch
@@ -99,11 +93,7 @@ impl HistoryOwner {
                 .older
                 .is_none_or(|epoch| OLDER.load(Ordering::SeqCst) == epoch)
             && self.thread.is_none_or(|(root, epoch)| {
-                THREAD.load(Ordering::SeqCst) == epoch
-                    && self
-                        .chat
-                        .active_thread()
-                        .is_some_and(|t| t.root_message_id == root)
+                THREAD.load(Ordering::SeqCst) == epoch && self.selection.shows_thread(root)
             })
     }
 }
@@ -155,11 +145,9 @@ mod tests {
         }
     }
     fn current_model(w: &MainWindow, client: &ChatterClient) {
-        client
-            .chat_state()
-            .set_pinned_messages(vec!["00000000-0000-0000-0000-000000000002"
-                .parse()
-                .unwrap()]);
+        client.set_pinned_messages(vec![
+            "00000000-0000-0000-0000-000000000002".parse().unwrap(),
+        ]);
         w.set_channel_name("newer view".into());
         w.set_pending_attachments(ModelRc::new(VecModel::from(vec![
             crate::PendingAttachmentData {
@@ -184,7 +172,7 @@ mod tests {
             "newer-pending"
         );
         assert_eq!(
-            client.chat_state().pinned_current_message_id(),
+            client.pinned_current_message_id(),
             Some("00000000-0000-0000-0000-000000000002".parse().unwrap())
         );
         assert_eq!(w.get_channel_name(), "newer view");
@@ -203,11 +191,11 @@ mod tests {
         w: &MainWindow,
         owner: &HistoryOwner,
         display: crate::bin_ui::converters::AttachmentDisplayData,
-        client: &ChatterClient,
+        client: &std::sync::Arc<ChatterClient>,
     ) {
         super::super::sidebar::apply_pinned_ui_owned(
             &w.as_weak(),
-            client.chat_state(),
+            client,
             vec!["00000000-0000-0000-0000-000000000001".parse().unwrap()],
             "old pin".into(),
             owner,
@@ -225,7 +213,7 @@ mod tests {
             w.set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
                 message_id: "old-row".into(),
                 attachments: ModelRc::new(VecModel::<MessageAttachmentData>::from(vec![
-                    display.to_slint()
+                    display.to_slint(),
                 ])),
                 ..Default::default()
             }])));
@@ -262,9 +250,10 @@ mod tests {
         let _runtime = runtime.enter();
         let fixture = tempfile::tempdir().unwrap();
         // Off the real keyring: the marker must exist before the client opens.
-        let db_path = chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
-            .unwrap()
-            .database_path();
+        let db_path =
+            chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
+                .unwrap()
+                .database_path();
         std::fs::write(
             db_path
                 .parent()
@@ -279,7 +268,7 @@ mod tests {
             .unwrap();
         let channel = chatter_core::domain::ids::ChannelId::new();
         let conversation = ActiveConversation::Channel(channel);
-        client.chat_state().set_active_conversation(conversation);
+        client.select_conversation(conversation);
         HistoryOwner::begin(&client, conversation);
         let first = HistoryOwner::admit_older(&client, conversation).unwrap();
         assert!(HistoryOwner::admit_older(&client, conversation).is_none());
@@ -287,32 +276,35 @@ mod tests {
             first.is_current(),
             "admitted page survives rejected duplicate"
         );
-        client.message_state().set_loading(channel, false);
+        client.set_message_loading(channel, false);
         let second = HistoryOwner::admit_older(&client, conversation).unwrap();
-        client.message_state().set_loading(channel, false);
+        client.set_message_loading(channel, false);
         assert!(!first.is_current());
         assert!(second.is_current());
         HistoryOwner::begin(&client, conversation);
         assert!(!second.is_current());
         let root = MessageId::new();
-        client.chat_state().open_thread(channel, root);
+        client.open_thread(channel, root);
         let old = HistoryOwner::thread(&client, root, true);
         assert!(old.is_current());
-        client.chat_state().close_thread(root);
+        client.close_thread(root);
         assert!(!old.is_current());
-        client.chat_state().open_thread(channel, root);
+        client.open_thread(channel, root);
         let current = HistoryOwner::thread(&client, root, true);
         assert!(!old.is_current());
         assert!(current.is_current());
-        client.auth_state().invalidate_session();
+        client.testing_invalidate_session();
         assert!(!current.is_current());
     }
     #[test]
-    fn history_thumbnail_publication_preserves_new_view_draft_and_model_after_delay_switch_logout_and_reload(
-    ) {
+    fn history_thumbnail_publication_preserves_new_view_draft_and_model_after_delay_switch_logout_and_reload()
+     {
         const MARKER: &str = "CHATTER_HISTORY_THUMBNAIL_CHILD";
         if std::env::var_os(MARKER).is_none() {
-            let test = format!("{}::history_thumbnail_publication_preserves_new_view_draft_and_model_after_delay_switch_logout_and_reload", module_path!().split_once("::").unwrap().1);
+            let test = format!(
+                "{}::history_thumbnail_publication_preserves_new_view_draft_and_model_after_delay_switch_logout_and_reload",
+                module_path!().split_once("::").unwrap().1
+            );
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &test, "--nocapture", "--test-threads=1"])
                 .env(MARKER, "1")
@@ -325,7 +317,9 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-            assert!(String::from_utf8_lossy(&output.stderr).contains("HISTORY_THUMBNAIL_COMPLETED"));
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("HISTORY_THUMBNAIL_COMPLETED")
+            );
             return;
         }
         i_slint_backend_testing::init_integration_test_with_system_time();
@@ -334,9 +328,10 @@ mod tests {
         let w = MainWindow::new().unwrap();
         let fixture = tempfile::tempdir().unwrap();
         // Off the real keyring: the marker must exist before the client opens.
-        let db_path = chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
-            .unwrap()
-            .database_path();
+        let db_path =
+            chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
+                .unwrap()
+                .database_path();
         std::fs::write(
             db_path
                 .parent()
@@ -353,16 +348,16 @@ mod tests {
         let b = ActiveConversation::Channel(chatter_core::domain::ids::ChannelId::new());
         // Delayed conversion completes only after switch or logout: reject before queueing.
         for logout in [false, true] {
-            client.chat_state().set_active_conversation(a);
+            client.select_conversation(a);
             let owner = HistoryOwner::begin(&client, a);
             let (started_tx, started_rx) = std::sync::mpsc::channel();
             let (resume_tx, resume_rx) = std::sync::mpsc::channel();
             let work = std::thread::spawn(move || derive(started_tx, resume_rx));
             started_rx.recv().unwrap();
             if logout {
-                client.auth_state().invalidate_session();
+                client.testing_invalidate_session();
             } else {
-                client.chat_state().set_active_conversation(b);
+                client.select_conversation(b);
                 HistoryOwner::begin(&client, b);
             }
             current_model(&w, &client);
@@ -373,7 +368,7 @@ mod tests {
         }
         // Fully decoded bytes have already queued a callback: recheck at publication.
         for case in 0..5 {
-            client.chat_state().set_active_conversation(a);
+            client.select_conversation(a);
             let owner = HistoryOwner::begin(&client, a);
             let (started_tx, _started_rx) = std::sync::mpsc::channel();
             let (resume_tx, resume_rx) = std::sync::mpsc::channel();
@@ -381,21 +376,21 @@ mod tests {
             queue(&w, &owner, derive(started_tx, resume_rx), &client);
             match case {
                 0 => {
-                    client.chat_state().set_active_conversation(b);
+                    client.select_conversation(b);
                     HistoryOwner::begin(&client, b);
                 }
                 1 => {
-                    client.auth_state().invalidate_session();
+                    client.testing_invalidate_session();
                 }
                 2 => {
-                    client.auth_state().invalidate_session();
-                    client.chat_state().set_active_conversation(a);
+                    client.testing_invalidate_session();
+                    client.select_conversation(a);
                     HistoryOwner::begin(&client, a);
                 }
                 3 => {
-                    client.chat_state().set_active_conversation(b);
+                    client.select_conversation(b);
                     HistoryOwner::begin(&client, b);
-                    client.chat_state().set_active_conversation(a);
+                    client.select_conversation(a);
                     HistoryOwner::begin(&client, a);
                 }
                 _ => {
@@ -407,7 +402,7 @@ mod tests {
             assert_preserved(&w, &client);
         }
         // Current-owner control really publishes its decoded frame.
-        client.chat_state().set_active_conversation(a);
+        client.select_conversation(a);
         let owner = HistoryOwner::begin(&client, a);
         let (started_tx, _started_rx) = std::sync::mpsc::channel();
         let (resume_tx, resume_rx) = std::sync::mpsc::channel();
@@ -433,10 +428,10 @@ mod tests {
             crate::run_history_ui!(w.as_weak(), session, |w| {
                 w.set_user_display_name("captured account".into());
             });
-            client.chat_state().set_active_conversation(b);
+            client.select_conversation(b);
             HistoryOwner::begin(&client, b);
             if stale {
-                client.auth_state().invalidate_session();
+                client.testing_invalidate_session();
             }
             w.set_user_display_name("newer account".into());
             pump(&w);

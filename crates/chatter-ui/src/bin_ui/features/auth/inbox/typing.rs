@@ -6,9 +6,10 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
-use chatter_core::state::ChatState;
 use slint::{ComponentHandle, Timer, TimerMode};
+use std::sync::Arc;
 
 use super::super::initial_data::update_sidebar_typing;
 use crate::MainWindow;
@@ -47,12 +48,12 @@ pub const TYPING_TIMEOUT_MS: u64 = 15_000;
 pub fn set_typing_with_timer(
     window: &MainWindow,
     key: &str,
-    chat_state: &ChatState,
+    client: &Arc<ChatterClient>,
     channel_id: ChannelId,
     text: &str,
 ) {
     tracing::info!(key = %key, "TYPING_SET: Setting typing indicator");
-    if chat_state.active_conversation().is_for_channel(channel_id) {
+    if client.active_conversation().is_for_channel(channel_id) {
         window.set_typing_indicator(text.into());
     }
     update_sidebar_typing(window, key, true);
@@ -64,7 +65,7 @@ pub fn set_typing_with_timer(
 
     let weak_window = window.as_weak();
     let key_owned = key.to_string();
-    let chat_state = chat_state.clone();
+    let client = client.clone();
     let on_fire = move || {
         let was_cancelled =
             CANCELLED_TIMERS.with(|cancelled| cancelled.borrow_mut().remove(&key_owned));
@@ -72,8 +73,8 @@ pub fn set_typing_with_timer(
             tracing::debug!(key = %key_owned, "TYPING_TIMER: fired but was cancelled - skipping clear");
         } else if let Some(w) = weak_window.upgrade() {
             tracing::debug!(key = %key_owned, "TYPING_TIMER: 15s timeout FIRED - clearing indicator");
-            chat_state.clear_typing(&channel_id);
-            if chat_state.active_conversation().is_for_channel(channel_id) {
+            client.clear_typing(&channel_id);
+            if client.active_conversation().is_for_channel(channel_id) {
                 w.set_typing_indicator("".into());
             }
             update_sidebar_typing(&w, &key_owned, false);

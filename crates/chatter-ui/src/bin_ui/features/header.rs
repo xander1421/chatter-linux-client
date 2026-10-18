@@ -45,9 +45,10 @@ pub(crate) fn finish_pending_jump(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
     let target = PENDING_JUMP.with(|pending| {
         let mut pending = pending.borrow_mut();
-        if pending.as_ref().is_some_and(|(conversation, _)| {
-            *conversation == ui_ctx.active_conversation()
-        }) {
+        if pending
+            .as_ref()
+            .is_some_and(|(conversation, _)| *conversation == ui_ctx.active_conversation())
+        {
             pending.take()
         } else {
             None
@@ -215,43 +216,37 @@ pub(crate) fn refresh_visible_media(
 
 fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Previous pinned message
-    let chat_state_prev_nav = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
     let ui_ctx_prev = ui_ctx.clone();
-    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_prev_clicked(move || {
-        chat_state_prev_nav.pinned_navigate_prev();
+        ui_ctx_prev.pinned_navigate_prev();
         update_pinned_ui_from_loaded_messages(
             weak_window.clone(),
-            chat_state_prev_nav.clone(),
             ui_ctx_prev.clone(),
-            chat_state.active_conversation(),
+            ui_ctx_prev.active_conversation(),
         );
     });
 
     // Next pinned message
-    let chat_state_next_nav = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
     let ui_ctx_next = ui_ctx.clone();
-    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_next_clicked(move || {
-        chat_state_next_nav.pinned_navigate_next();
+        ui_ctx_next.pinned_navigate_next();
         update_pinned_ui_from_loaded_messages(
             weak_window.clone(),
-            chat_state_next_nav.clone(),
             ui_ctx_next.clone(),
-            chat_state.active_conversation(),
+            ui_ctx_next.active_conversation(),
         );
     });
 
     // Dismiss pinned bar
-    let chat_state_dismiss = ui_ctx.chat_state().clone();
+    let ui_ctx_dismiss = ui_ctx.clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_dismiss_clicked(move || {
-        chat_state_dismiss.pinned_dismiss();
+        ui_ctx_dismiss.pinned_dismiss();
         if let Some(w) = weak_window.upgrade() {
             w.set_has_pinned_messages(false);
         }
@@ -326,13 +321,12 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     // Go to pinned message (scroll to it in chat)
-    let chat_state_goto = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
     let ui_ctx_goto = ui_ctx.clone();
 
     window.on_pinned_go_to_message(move || {
         if let (Some(message_id), Some(w)) = (
-            chat_state_goto.pinned_current_message_id(),
+            ui_ctx_goto.pinned_current_message_id(),
             weak_window.upgrade(),
         ) {
             jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
@@ -399,7 +393,6 @@ fn pinned_video_thumbnail(
 pub(crate) fn refresh_pinned_ui(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     update_pinned_ui_from_loaded_messages(
         w.as_weak(),
-        ui_ctx.chat_state().clone(),
         ui_ctx.clone(),
         ui_ctx.active_conversation(),
     );
@@ -409,14 +402,13 @@ pub(crate) fn refresh_pinned_ui(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// falling back to PinService (regular channels) or AnonGroupService (private groups).
 fn update_pinned_ui_from_loaded_messages(
     weak_window: slint::Weak<MainWindow>,
-    chat_state: chatter_core::state::ChatState,
     ui_ctx: Arc<ChatterClient>,
     conversation: ActiveConversation,
 ) {
-    let state = chat_state.get();
+    let state = ui_ctx.chat_snapshot();
     let current_index = state.pinned.current_index as i32;
     let total_count = state.pinned.pinned_message_ids.len() as i32;
-    let current_msg_id = chat_state.pinned_current_message_id();
+    let current_msg_id = ui_ctx.pinned_current_message_id();
 
     // First try to get preview from currently loaded UI messages (works for all types)
     let msg_id_str = current_msg_id.map(|id| id.to_string()).unwrap_or_default();
@@ -483,7 +475,7 @@ fn update_pinned_ui_from_loaded_messages(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
                 if ui_ctx.active_conversation() != conversation
-                    || ui_ctx.chat_state().pinned_current_message_id() != current_msg_id
+                    || ui_ctx.pinned_current_message_id() != current_msg_id
                     || ui_ctx.auth_snapshot().session_revision != revision
                 {
                     return;
@@ -503,21 +495,17 @@ fn update_pinned_ui_from_loaded_messages(
 
 fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
     let ui_ctx = ui_ctx.clone();
 
     window.on_chat_settings_clicked(move || {
-        let conversation = chat_state.active_conversation();
+        let conversation = ui_ctx.active_conversation();
 
         if let ActiveConversation::AnonGroup(group_id) = conversation {
             // Private group settings - move DB queries to background thread
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
             let opened = ActiveConversation::AnonGroup(group_id);
-            if !super::modals::settings_open_allowed(
-                ui_ctx.active_conversation(),
-                opened,
-            ) {
+            if !super::modals::settings_open_allowed(ui_ctx.active_conversation(), opened) {
                 return;
             }
             let group_id_str = group_id.to_string();
@@ -607,17 +595,9 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         if let ActiveConversation::ServerDm { peer_id } = conversation {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
-            let auth_state = ui_ctx.auth_state().clone();
-            let user_state = ui_ctx.user_state().clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    super::modals::open_user_profile(
-                        &w,
-                        &peer_id,
-                        &auth_state,
-                        &user_state,
-                        Some(&ui_ctx),
-                    );
+                    super::modals::open_user_profile(&w, &peer_id, Some(&ui_ctx));
                     crate::bin_ui::features::back::push(&w, "user-profile");
                 }
             });
@@ -639,11 +619,10 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
 fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
     let ui_ctx = ui_ctx.clone();
 
     window.on_invite_member(move || {
-        let conversation = chat_state.active_conversation();
+        let conversation = ui_ctx.active_conversation();
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
 

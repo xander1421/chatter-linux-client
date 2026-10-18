@@ -119,10 +119,10 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         }
     }
     let conversation = ActiveConversation::Channel(ChannelId::new());
-    client.chat_state().set_active_conversation(conversation);
+    client.select_conversation(conversation);
     let ids = [MessageId::new(), MessageId::new()];
-    client.chat_state().set_pinned_messages(ids.to_vec());
-    let selected = client.chat_state().pinned_current_message_id().unwrap();
+    client.set_pinned_messages(ids.to_vec());
+    let selected = client.pinned_current_message_id().unwrap();
     w.set_pinned_message_preview("Old plaintext".into());
     w.set_pinned_items(ModelRc::new(VecModel::from(
         ids.iter()
@@ -196,10 +196,7 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
             .preview,
         "Other pin edit"
     );
-    assert_eq!(
-        client.chat_state().pinned_current_message_id(),
-        Some(selected)
-    );
+    assert_eq!(client.pinned_current_message_id(), Some(selected));
     let queued_client = client.clone();
     w.as_weak()
         .upgrade_in_event_loop(move |w| {
@@ -214,13 +211,12 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
             );
         })
         .unwrap();
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
+    client.select_conversation(ActiveConversation::Channel(ChannelId::new()));
     pump(&w, 360.0);
     assert_eq!(w.get_pinned_message_preview(), "Unloaded edit");
-    assert!(w
-        .get_pinned_items()
-        .iter()
-        .all(|p| p.preview != "Stale queued edit"));
+    assert!(
+        w.get_pinned_items()
+            .iter()
+            .all(|p| p.preview != "Stale queued edit")
+    );
 }

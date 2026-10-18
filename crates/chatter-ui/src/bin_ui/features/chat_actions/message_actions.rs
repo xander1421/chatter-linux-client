@@ -167,16 +167,20 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     reply_thumbnail = att.thumbnail.clone();
                                     reply_has_thumbnail = true;
                                 }
-                                preview_attachments.push(chatter_core::client::preview::ActionPreviewAttachment {
-                                    is_image: att.is_image,
-                                    category: att.category.to_string(),
-                                    filename: att.filename.to_string(),
-                                });
+                                preview_attachments.push(
+                                    chatter_core::client::preview::ActionPreviewAttachment {
+                                        is_image: att.is_image,
+                                        category: att.category.to_string(),
+                                        filename: att.filename.to_string(),
+                                    },
+                                );
                             }
                         }
                     }
                     reply_preview = chatter_core::client::preview::message_action_preview(
-                        m.content.as_str(), &preview_attachments);
+                        m.content.as_str(),
+                        &preview_attachments,
+                    );
 
                     break;
                 }
@@ -247,13 +251,11 @@ pub fn wire_cancel_reply(window: &MainWindow) {
 /// Wire thread click callback.
 pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
     let ui_ctx = ui_ctx.clone();
 
     window.on_thread_clicked(move |message_id: SharedString| {
         let message_id_str = message_id.to_string();
         let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
 
         let msg_id: MessageId = match message_id_str.parse() {
@@ -267,7 +269,7 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Threads are a channel feature (Signal has none in 1:1 chats). The
         // thread send path is the channel send; anywhere else a reply was
         // accepted by the panel and then lost.
-        let channel_id = match chat_state.active_conversation() {
+        let channel_id = match ui_ctx.active_conversation() {
             chatter_core::state::ActiveConversation::Channel(id) => id,
             _ => {
                 tracing::warn!("Cannot open thread: active conversation is not a channel");
@@ -276,10 +278,10 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
 
         // Update state
-        chat_state.open_thread(channel_id, msg_id);
+        ui_ctx.open_thread(channel_id, msg_id);
 
         // Load thread data and update UI
-        crate::bin_ui::features::thread::load_thread_data(weak, chat_state, ui_ctx, msg_id);
+        crate::bin_ui::features::thread::load_thread_data(weak, ui_ctx, msg_id);
     });
 }
 

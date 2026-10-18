@@ -2,11 +2,11 @@
 //!
 //! Uses ChannelService for all channel operations - no direct network calls.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
@@ -161,7 +161,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Join channel callback
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    let chat_state = ui_ctx.chat_state().clone();
+    let chat_state = ui_ctx.clone();
 
     window.on_join_channel(move |channel_id_str: SharedString| {
         let weak = weak_window.clone();
@@ -211,7 +211,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 );
                                 return;
                             }
-                            chat_state.set_active_channel(channel_id);
+                            chat_state.prepare_channel_selection(channel_id);
                             // Close modal and clear form
                             w.set_join_channel_search_query("".into());
                             w.set_join_channel_selected_id("".into());

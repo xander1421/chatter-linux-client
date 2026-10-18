@@ -73,12 +73,12 @@ async fn test_appcontext_three_tier_initialization() {
 
             // Tier 3: State stores are initialized
             assert!(
-                !client.auth_state().is_logged_in(),
+                !client.has_auth_identity(),
                 "Should not be logged in on fresh init"
             );
-            let _ = client.chat_state();
-            let _ = client.message_state();
-            let _ = client.user_state();
+            let _ = client.chat_snapshot();
+            let _ = client.message_snapshot();
+            let _ = client.user_snapshot();
             let _ = client.offline_snapshot();
             #[cfg(feature = "jarvis")]
             let _ = client.jarvis_state();
@@ -110,11 +110,11 @@ async fn test_chatter_client_builder() {
 
     match result {
         Ok(client) => {
-            // Client exposes all state stores
-            assert!(!client.auth_state().is_logged_in());
-            let _ = client.chat_state();
-            let _ = client.message_state();
-            let _ = client.user_state();
+            // Client exposes read-only state snapshots
+            assert!(!client.has_auth_identity());
+            let _ = client.chat_snapshot();
+            let _ = client.message_snapshot();
+            let _ = client.user_snapshot();
             let _ = client.offline_snapshot();
             #[cfg(feature = "jarvis")]
             let _ = client.jarvis_state();
@@ -213,10 +213,10 @@ async fn test_fresh_init_not_logged_in() {
     match result {
         Ok(client) => {
             // Not logged in on fresh init
-            assert!(!client.auth_state().is_logged_in());
+            assert!(!client.has_auth_identity());
 
             // Auth state data should be empty
-            let auth_data = client.auth_state().get();
+            let auth_data = client.auth_snapshot();
             assert!(auth_data.current_user_id.is_none());
             assert!(auth_data.device_id.is_none());
             assert!(!auth_data.is_logging_in);

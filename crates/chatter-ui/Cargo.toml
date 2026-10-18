@@ -134,6 +134,7 @@ jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"
 
 [dev-dependencies]
+chatter-core = { path = "../chatter-core", default-features = false, features = ["testing"] }
 # Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
 # Pinned to =1.17.1 to match the `slint` crate exactly — the testing backend
 # links i-slint-core, which must be the SAME version as the generated MainWindow's

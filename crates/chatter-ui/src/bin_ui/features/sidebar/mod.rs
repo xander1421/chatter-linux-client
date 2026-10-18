@@ -72,19 +72,34 @@ pub(crate) fn fill_open_media(
         for row in &mut rows {
             row.decode_attachment_thumbnails();
         }
-        let image_count = rows.iter().flat_map(|m| &m.attachments)
-            .filter(|a| a.thumbnail_pixels.is_some()).count();
-        tracing::info!(stage = "images_decoded", images = image_count,
-            queued_ms, decode_ms = decode_started.elapsed().as_millis(), "conversation_open");
+        let image_count = rows
+            .iter()
+            .flat_map(|m| &m.attachments)
+            .filter(|a| a.thumbnail_pixels.is_some())
+            .count();
+        tracing::info!(
+            stage = "images_decoded",
+            images = image_count,
+            queued_ms,
+            decode_ms = decode_started.elapsed().as_millis(),
+            "conversation_open"
+        );
         crate::run_history_ui!(weak, owner, |w| {
             use slint::Model;
             let model = w.get_messages();
             for display in &rows {
-                if !display.attachments.iter().any(|a| a.thumbnail_pixels.is_some()) {
+                if !display
+                    .attachments
+                    .iter()
+                    .any(|a| a.thumbnail_pixels.is_some())
+                {
                     continue;
                 }
-                let Some(index) = (0..model.row_count()).find(|&i| model.row_data(i)
-                    .is_some_and(|row| row.message_id.as_str() == display.message_id)) else {
+                let Some(index) = (0..model.row_count()).find(|&i| {
+                    model
+                        .row_data(i)
+                        .is_some_and(|row| row.message_id.as_str() == display.message_id)
+                }) else {
                     continue;
                 };
                 if let Some(mut row) = model.row_data(index) {
@@ -319,22 +334,22 @@ pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterCl
 /// Pins belong to the same history request as the model/header they accompany.
 pub(crate) fn apply_pinned_ui_owned(
     weak: &slint::Weak<MainWindow>,
-    chat: &chatter_core::state::ChatState,
+    client: &Arc<ChatterClient>,
     ids: Vec<chatter_core::domain::ids::MessageId>,
     preview: String,
     owner: &crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
-    let chat = chat.clone();
+    let client = client.clone();
     crate::run_history_ui!(weak, owner, |w| {
         if ids.is_empty() {
-            chat.clear_pinned();
+            client.clear_pinned();
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());
             w.set_pinned_total_count(0);
         } else {
             let count = ids.len() as i32;
-            chat.set_pinned_messages(ids);
-            w.set_has_pinned_messages(chat.pinned_should_show());
+            client.set_pinned_messages(ids);
+            w.set_has_pinned_messages(client.pinned_should_show());
             w.set_pinned_message_preview(preview.into());
             w.set_pinned_current_index(1);
             w.set_pinned_total_count(count);

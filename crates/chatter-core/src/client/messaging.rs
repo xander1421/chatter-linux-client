@@ -127,6 +127,10 @@ pub struct SelectionActions {
 }
 
 impl ChatterClient {
+    pub fn clear_typing(&self, channel: &crate::domain::ids::ChannelId) {
+        self.services.chat_state.clear_typing(channel);
+    }
+
     /// Remove rows already displayed before inserting an older history page.
     pub fn unseen_history_rows<T>(
         &self,
@@ -246,15 +250,23 @@ impl ChatterClient {
         conversation: ActiveConversation,
         ids: &[String],
     ) -> Option<Vec<(crate::domain::ids::UserId, u64)>> {
-        if ids.is_empty() || conversation.channel_id().is_none() { return None; }
+        if ids.is_empty() || conversation.channel_id().is_none() {
+            return None;
+        }
         let mut seen = std::collections::HashSet::new();
-        ids.iter().map(|id| {
-            if !seen.insert(id) { return None; }
-            let id = id.parse().ok()?;
-            let message = self.get_message_local(&id)?;
-            if Some(message.conversation_id) != conversation.channel_id() { return None; }
-            Some((message.sender_id?, message.sent_at))
-        }).collect()
+        ids.iter()
+            .map(|id| {
+                if !seen.insert(id) {
+                    return None;
+                }
+                let id = id.parse().ok()?;
+                let message = self.get_message_local(&id)?;
+                if Some(message.conversation_id) != conversation.channel_id() {
+                    return None;
+                }
+                Some((message.sender_id?, message.sent_at))
+            })
+            .collect()
     }
 
     pub fn selection_actions(
@@ -265,9 +277,11 @@ impl ChatterClient {
         let handle = self.conversation(conversation);
         let targets = self.selected_message_targets(conversation, ids);
         SelectionActions {
-            can_delete_everyone: targets.as_ref().is_some_and(|targets|
-                targets.iter().all(|(author, ts)|
-                    handle.can_delete_for_everyone(author, *ts).unwrap_or(false))),
+            can_delete_everyone: targets.as_ref().is_some_and(|targets| {
+                targets.iter().all(|(author, ts)| {
+                    handle.can_delete_for_everyone(author, *ts).unwrap_or(false)
+                })
+            }),
             can_forward: handle.can_forward_from(),
         }
     }

@@ -76,9 +76,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
     chatter_core::storage::repositories::channel_repo::ChannelRepository::new(db)
         .insert(&row)
         .unwrap();
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::Channel(stored));
+    client.select_conversation(ActiveConversation::Channel(stored));
     w.invoke_chat_settings_clicked();
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
     pump_until(&w, || !w.get_channel_settings_loading());
@@ -95,9 +93,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
     back::close(&w, "channel-settings");
 
     let channel = ChannelId::new();
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::Channel(channel));
+    client.select_conversation(ActiveConversation::Channel(channel));
     w.invoke_chat_settings_clicked();
     assert_eq!(
         w.get_active_modal().as_str(),
@@ -119,9 +115,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
 
     back::close(&w, "channel-settings");
     let group = AnonGroupId::new();
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::AnonGroup(group));
+    client.select_conversation(ActiveConversation::AnonGroup(group));
     w.invoke_chat_settings_clicked();
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
     pump_until(&w, || !w.get_channel_settings_loading());
@@ -141,9 +135,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
 
     // A dismissed screen must stay dismissed when its queued error arrives.
     back::close(&w, "channel-settings");
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::Channel(channel));
+    client.select_conversation(ActiveConversation::Channel(channel));
     w.invoke_chat_settings_clicked();
     back::close(&w, "channel-settings");
     w.set_channel_settings_error("dismissed sentinel".into());
@@ -156,9 +148,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
 
     // Nor may an old channel paint overwrite the new conversation's screen.
     w.invoke_chat_settings_clicked();
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::AnonGroup(group));
+    client.select_conversation(ActiveConversation::AnonGroup(group));
     w.invoke_chat_settings_clicked();
     pump_until(&w, || !w.get_channel_settings_loading());
     assert_eq!(w.get_channel_settings_id().as_str(), group.to_string());
@@ -169,9 +159,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
 
     back::close(&w, "channel-settings");
     let other = ChannelId::new();
-    client
-        .chat_state()
-        .set_active_conversation(ActiveConversation::Channel(other));
+    client.select_conversation(ActiveConversation::Channel(other));
     modals::open_channel_settings(w.as_weak(), client.clone(), channel);
     pump(&w);
     assert_ne!(

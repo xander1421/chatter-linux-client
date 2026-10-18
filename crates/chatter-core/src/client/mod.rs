@@ -557,6 +557,8 @@ mod ai_settings;
 mod account_settings;
 mod sidebar;
 mod auth_state;
+pub use auth_state::{ConversationGuard, SessionGuard};
+mod thread;
 mod shield;
 mod infrastructure;
 mod startup;

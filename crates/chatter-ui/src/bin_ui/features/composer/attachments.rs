@@ -4,9 +4,11 @@ use std::path::PathBuf;
 
 use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, VecModel, Weak};
 
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::AttachmentId;
+use chatter_core::state::ActiveConversation;
 use chatter_core::state::chat_state::PendingAttachment;
-use chatter_core::state::{ActiveConversation, ChatState};
+use std::sync::Arc;
 
 use crate::bin_ui::converters::pending_attachment_to_slint;
 use crate::{MainWindow, PendingAttachmentData};
@@ -29,7 +31,7 @@ pub(crate) fn register_preview_client(
 pub(crate) async fn process_and_add_file(
     file_path: PathBuf,
     staged_size: Option<u64>,
-    chat_state: &ChatState,
+    chat_state: &Arc<ChatterClient>,
     conversation: ActiveConversation,
     revision: u64,
     weak: &Weak<MainWindow>,
@@ -77,13 +79,13 @@ pub(crate) async fn process_and_add_file(
 }
 
 /// Update the UI with current pending attachments.
-pub(crate) fn update_attachments_ui(chat_state: &ChatState, weak: &Weak<MainWindow>) {
+pub(crate) fn update_attachments_ui(chat_state: &Arc<ChatterClient>, weak: &Weak<MainWindow>) {
     let chat_state = chat_state.clone();
     let weak_update = weak.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_update.upgrade() {
-            render_attachments(&w, &chat_state.get_pending_attachments());
+            render_attachments(&w, &chat_state.pending_attachments());
         }
     });
 }
@@ -107,7 +109,7 @@ pub(crate) fn render_attachments(
     let client = PREVIEW_CLIENT.with(|slot| slot.borrow().upgrade());
     if let Some(client) = client {
         let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&client);
-        let chat_state = client.chat_state().clone();
+        let chat_state = client.clone();
         for attachment in attachments.iter().filter(|a| {
             a.mime_type.starts_with("image/")
                 && a.path
@@ -132,7 +134,7 @@ pub(crate) fn render_attachments(
                 let _ = slint::invoke_from_event_loop(move || {
                     if !session.is_current()
                         || !chat_state
-                            .get_pending_attachments()
+                            .pending_attachments()
                             .iter()
                             .any(|a| a.id == id && a.path == path)
                     {
@@ -176,11 +178,11 @@ pub(crate) fn render_attachments(
 
 pub(crate) fn wire_attachment_clicked(
     window: &MainWindow,
-    chat_state: ChatState,
     ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
 ) {
     let weak_window = window.as_weak();
     let ui_ctx_attach = ui_ctx.clone();
+    let chat_state = ui_ctx.clone();
 
     window.on_attachment_clicked(move || {
         let weak = weak_window.clone();
@@ -211,7 +213,7 @@ pub(crate) fn wire_attachment_clicked(
         }
 
         // Check if we have an active conversation BEFORE opening file picker
-        let snapshot = chat_state.get();
+        let snapshot = chat_state.chat_snapshot();
         let conversation = snapshot.active_conversation;
         let revision = snapshot.attachment_revision;
 
@@ -334,7 +336,7 @@ pub(crate) fn wire_attachment_clicked(
 /// opened in another conversation/session must never focus that new composer.
 fn finish_picker(
     weak: &Weak<MainWindow>,
-    chat_state: &ChatState,
+    chat_state: &Arc<ChatterClient>,
     conversation: ActiveConversation,
     revision: u64,
 ) {
@@ -343,7 +345,7 @@ fn finish_picker(
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             let restore = chat_state.active_conversation() == conversation
-                && chat_state.get().attachment_revision == revision;
+                && chat_state.chat_snapshot().attachment_revision == revision;
             w.invoke_finish_attachment_picker(restore);
         }
     });
@@ -358,7 +360,7 @@ pub(crate) fn wire_paste_image(
     ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
 ) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state().clone();
+    let chat_state = ui_ctx.clone();
     let ui_ctx = ui_ctx.clone();
 
     window.on_paste_image(move || {
@@ -366,7 +368,7 @@ pub(crate) fn wire_paste_image(
         let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
 
-        let snapshot = chat_state.get();
+        let snapshot = chat_state.chat_snapshot();
         let conversation = snapshot.active_conversation;
         let revision = snapshot.attachment_revision;
         // No point reading the clipboard if there's nowhere to attach.
@@ -460,7 +462,7 @@ pub(crate) fn wire_remove_attachment(
     let ui_ctx = ui_ctx.clone();
 
     window.on_remove_attachment(move |attachment_id: SharedString| {
-        let chat_state = ui_ctx.chat_state();
+        let chat_state = &ui_ctx;
         let id_str = attachment_id.to_string();
         tracing::debug!("Remove attachment clicked: {}", id_str);
 
@@ -469,7 +471,7 @@ pub(crate) fn wire_remove_attachment(
         match parsed_id {
             Ok(id) => {
                 let removed: Vec<PendingAttachment> = chat_state
-                    .get_pending_attachments()
+                    .pending_attachments()
                     .into_iter()
                     .filter(|a| a.id == id)
                     .collect();

@@ -3,6 +3,50 @@
 use super::ChatterClient;
 
 impl ChatterClient {
+    pub fn clear_pinned(&self) {
+        self.services.chat_state.clear_pinned();
+    }
+
+    pub fn pinned_should_show(&self) -> bool {
+        self.services.chat_state.pinned_should_show()
+    }
+
+    pub fn pinned_navigate_prev(&self) {
+        self.services.chat_state.pinned_navigate_prev();
+    }
+
+    pub fn pinned_navigate_next(&self) {
+        self.services.chat_state.pinned_navigate_next();
+    }
+
+    pub fn pinned_navigate_to(&self, index: usize) {
+        self.services.chat_state.pinned_navigate_to(index);
+    }
+
+    pub fn pinned_dismiss(&self) {
+        self.services.chat_state.pinned_dismiss();
+    }
+
+    pub fn set_pinned_messages(&self, ids: Vec<crate::domain::ids::MessageId>) {
+        self.services.chat_state.set_pinned_messages(ids);
+    }
+
+    pub fn pinned_current_message_id(&self) -> Option<crate::domain::ids::MessageId> {
+        self.services.chat_state.pinned_current_message_id()
+    }
+
+    pub fn pinned_total_count(&self) -> usize {
+        self.services.chat_state.pinned_total_count()
+    }
+
+    pub fn add_pinned_message(&self, message_id: crate::domain::ids::MessageId) {
+        self.services.chat_state.add_pinned_message(message_id);
+    }
+
+    pub fn remove_pinned_message(&self, message_id: &crate::domain::ids::MessageId) {
+        self.services.chat_state.remove_pinned_message(message_id);
+    }
+
     /// Every stored pin, newest pin-added first, regardless of loaded history.
     pub async fn pinned_display_items(
         &self,

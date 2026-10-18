@@ -168,7 +168,7 @@ pub(super) fn handle_message_received(
     // inserting it inline, which used to render every reply twice.
     let thread_root = message.thread_id;
     let panel_shows_this_thread = thread_root
-        .zip(ui_ctx.chat_state().active_thread())
+        .zip(ui_ctx.active_thread())
         .map(|(root, panel)| panel.root_message_id == root)
         .unwrap_or(false);
 
@@ -189,7 +189,7 @@ pub(super) fn handle_message_received(
             super::super::typing::set_typing_with_timer(
                 &w,
                 &conversation_id.to_string(),
-                ui_ctx_ui.chat_state(),
+                &ui_ctx_ui,
                 conversation_id,
                 &typing_text,
             );

@@ -11,7 +11,7 @@ use slint::ComponentHandle;
 use winit::event::WindowEvent;
 
 use chatter_core::client::ChatterClient;
-use chatter_core::state::{ActiveConversation, ChatState};
+use chatter_core::state::ActiveConversation;
 
 use super::attachments::process_and_add_file;
 use crate::MainWindow;
@@ -28,7 +28,7 @@ use crate::MainWindow;
 /// receipted until the user is back (`ChatterClient::set_app_visible`).
 pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let state = ui_ctx.chat_state().clone();
+    let state = ui_ctx.clone();
     let ui_ctx = ui_ctx.clone();
 
     window.window().on_winit_window_event(move |_win, event| {
@@ -68,10 +68,14 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Handle a file dropped onto the window.
-fn handle_dropped_file(path: PathBuf, chat_state: &ChatState, weak: &slint::Weak<MainWindow>) {
+fn handle_dropped_file(
+    path: PathBuf,
+    chat_state: &Arc<ChatterClient>,
+    weak: &slint::Weak<MainWindow>,
+) {
     tracing::info!("File dropped: {:?}", path);
 
-    let snapshot = chat_state.get();
+    let snapshot = chat_state.chat_snapshot();
     let conversation = snapshot.active_conversation;
     let revision = snapshot.attachment_revision;
     // Check if we have an active conversation

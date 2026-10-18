@@ -96,7 +96,7 @@ pub(super) fn handle_pin_ui_update(
         return;
     }
     let refresh_ctx = ui_ctx.clone();
-    let chat_state = ui_ctx.chat_state().clone();
+    let chat_state = ui_ctx.clone();
     let channel_id_str = channel_id.to_string();
     let target_ts_str = target_sent_timestamp.to_string();
 

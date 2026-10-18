@@ -90,7 +90,7 @@ fn edit_private_friend(
 pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ctx = ui_ctx.clone();
-    let chat_state = ctx.chat_state().clone();
+    let chat_state = ctx.clone();
 
     // File picker for channel icon — stores the chosen path so on_create can
     // upload it through AttachmentService. Preview decoding is local UI state only.
@@ -293,7 +293,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     );
                                     return;
                                 }
-                                chat_state.set_active_channel(channel_id);
+                                chat_state.prepare_channel_selection(channel_id);
                                 w.set_create_channel_name("".into());
                                 w.set_create_channel_description("".into());
                                 w.set_create_channel_icon_url("".into());

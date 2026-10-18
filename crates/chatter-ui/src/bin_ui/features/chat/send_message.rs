@@ -415,7 +415,7 @@ fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_send_notice(window, ui_ctx);
-    let chat_state = ui_ctx.chat_state().clone();
+    let chat_state = ui_ctx.clone();
     let ui_ctx_jarvis = ui_ctx.clone();
 
     let weak_window = window.as_weak();
@@ -423,7 +423,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_send(move |text: slint::SharedString| {
         let send_started = std::time::Instant::now();
         let text = text.to_string();
-        let pending_attachments = chat_state.get_pending_attachments();
+        let pending_attachments = chat_state.pending_attachments();
         let has_attachments = !pending_attachments.is_empty();
 
         if text.trim().is_empty() && !has_attachments {
@@ -442,7 +442,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         // Local AI channel: every send routes to Jarvis, nothing networks.
         #[cfg(feature = "jarvis")]
-        if let Some(id) = chat_state.get().active_channel_id {
+        if let Some(id) = chat_state.chat_snapshot().active_channel_id {
             if chatter_core::client::is_jarvis_channel(&id) {
                 if text.trim().is_empty() {
                     return false;
@@ -682,16 +682,9 @@ pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
         show_reply(w, reply);
     }
     for attachment in send.attachments {
-        ui_ctx.chat_state().add_pending_attachment_for(
-            send.conversation,
-            chat.attachment_revision,
-            attachment,
-        );
+        ui_ctx.add_pending_attachment_for(send.conversation, chat.attachment_revision, attachment);
     }
-    crate::bin_ui::features::composer::render_attachments(
-        w,
-        &ui_ctx.chat_state().get_pending_attachments(),
-    );
+    crate::bin_ui::features::composer::render_attachments(w, &ui_ctx.pending_attachments());
 }
 
 /// Send `send` to the conversation it names. `true` once core stored it
@@ -733,19 +726,15 @@ async fn deliver_inner(
         reply,
         attachments: pending_attachments,
     } = send;
-    let auth_state = ui_ctx.auth_state();
-    if !auth_state.is_logged_in() {
+    if !ui_ctx.has_auth_identity() {
         return false;
     }
-    let current_user_id = auth_state
-        .get()
+    let auth = ui_ctx.auth_snapshot();
+    let current_user_id = auth
         .current_user_id
         .map(|id| id.to_string())
         .unwrap_or_default();
-    let current_user_name = auth_state
-        .get()
-        .display_name
-        .unwrap_or_else(|| "Me".to_string());
+    let current_user_name = auth.display_name.unwrap_or_else(|| "Me".to_string());
     let pending_id = pending_message_id(&send_for_delivery);
     show_pending_bubble(
         &weak,

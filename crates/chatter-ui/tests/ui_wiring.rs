@@ -1038,10 +1038,8 @@ fn ai_channel_select_and_send_are_wired_to_jarvis() {
     // L1 dynamic: with the AI channel active, firing `send` runs the intercept
     // (spawns the Jarvis task; offline it errors later — the WIRE is under test).
     let nil: chatter_core::domain::ids::ChannelId = uuid::Uuid::nil().into();
-    client.chat_state().set_active_channel(nil);
-    client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(nil));
+    client.prepare_channel_selection(nil);
+    client.select_conversation(chatter_core::state::ActiveConversation::Channel(nil));
     w.invoke_send("hello jarvis".into());
 
     // L2 static (Rust): the send handler branches on the AI channel BEFORE the
@@ -2829,7 +2827,9 @@ fn message_selection_toggle_reaches_the_selection_store() {
 fn the_message_hover_action_bar_never_appears_on_touch() {
     let item_src = include_str!("../../../ui/chat/message_item.slint");
     assert!(
-        item_src.contains("property <bool> is-hovered: !root.mobile && !root.menu-open && touch.has-hover;"),
+        item_src.contains(
+            "property <bool> is-hovered: !root.mobile && !root.menu-open && touch.has-hover;"
+        ),
         "the message action bar's hover gate must exclude touch platforms"
     );
     assert!(
@@ -3626,9 +3626,7 @@ fn wired_dm_open(
     // The accept handler reads the peer from the ACTIVE conversation, never
     // from the callback, so the key it pins always belongs to the conversation
     // the prompt was drawn in.
-    client.chat_state().set_active_conversation(
-        chatter_core::state::ActiveConversation::ServerDm { peer_id: peer },
-    );
+    client.select_conversation(chatter_core::state::ActiveConversation::ServerDm { peer_id: peer });
     (tmp, client, w)
 }
 
@@ -4182,9 +4180,9 @@ fn headers_use_the_shared_header_button() {
         ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
         ("chat/message_composer.slint", "Icons.x"), // cancel reply / edit strip
         ("chat/message_composer.slint", "\\u{00D7}"), // remove a pending attachment
-        ("chat/pinned_bar.slint", "Icons.x"),       // dismiss the pinned banner
+        ("chat/pinned_bar.slint", "Icons.x"),  // dismiss the pinned banner
         ("components/connection_banner.slint", "Icons.x"), // dismiss the banner
-        ("components/toast.slint", "Icons.x"),      // dismiss a toast
+        ("components/toast.slint", "Icons.x"), // dismiss a toast
         ("components/emoji_picker.slint", "Icons.x"), // clear the search field
         ("components/gif_picker.slint", "Icons.x"), // clear the search field
         ("modals/channel_settings.slint", "Icons.more-vertical"), // a member row's menu
@@ -5653,7 +5651,9 @@ fn polish_shared_controls_and_rc28_regressions() {
     let picker = source("chat/reaction_picker.slint");
     assert!(picker.contains("max-picker-width: picker-shell.width;"));
     // The quick row is taller on touch (9d055847); the picker gets the rest.
-    assert!(picker.contains("max-picker-height: max(0px, picker-shell.height - root.quick-row-height - Spacing.stroke);"));
+    assert!(picker.contains(
+        "max-picker-height: max(0px, picker-shell.height - root.quick-row-height - Spacing.stroke);"
+    ));
     // D3 and the notification-inbox portion of D9 were already migrated to
     // the shared shell before this pass; protect the title and that route.
     assert!(source("settings/account_menu.slint").contains("title: \"Profile\";"));
@@ -6176,7 +6176,7 @@ impl GifHarness {
             .expect("offline ChatterClient::build");
         // Durable send admission keys attempts by the authenticated user.
         // This is in-memory fixture identity only; no login or connection occurs.
-        client.auth_state().set_logged_in(
+        client.testing_set_logged_in(
             chatter_core::domain::ids::UserId::new(),
             1,
             "GIF fixture".into(),
@@ -6190,8 +6190,7 @@ impl GifHarness {
             b: chatter_core::domain::ids::ChannelId::new(),
         };
         h.client
-            .chat_state()
-            .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+            .select_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
         chatter_ui::bin_ui::features::composer::switch_composer_draft(
             &h.w,
             &h.client,
@@ -6208,8 +6207,7 @@ impl GifHarness {
             _ => unreachable!(),
         };
         self.client
-            .chat_state()
-            .set_active_conversation(chatter_core::state::ActiveConversation::Channel(to));
+            .select_conversation(chatter_core::state::ActiveConversation::Channel(to));
         chatter_ui::bin_ui::features::composer::switch_composer_draft(
             &self.w,
             &self.client,
@@ -6219,10 +6217,10 @@ impl GifHarness {
     }
 
     fn stage(&self, name: &str) {
-        let chat = self.client.chat_state();
-        chat.add_pending_attachment_for(
-            chat.active_conversation(),
-            chat.get().attachment_revision,
+        let snapshot = self.client.chat_snapshot();
+        self.client.add_pending_attachment_for(
+            snapshot.active_conversation,
+            snapshot.attachment_revision,
             chatter_core::state::PendingAttachment::new(
                 chatter_core::domain::ids::AttachmentId::new(),
                 name.into(),
@@ -6235,8 +6233,7 @@ impl GifHarness {
 
     fn staged(&self) -> Vec<String> {
         self.client
-            .chat_state()
-            .get_pending_attachments()
+            .pending_attachments()
             .into_iter()
             .map(|a| a.filename)
             .collect()
@@ -6351,7 +6348,7 @@ fn a_gif_completing_after_navigation_never_touches_the_other_chat() {
     );
 
     h.w.set_composer_text("".into());
-    h.client.chat_state().clear_pending_attachments();
+    h.client.clear_pending_attachments();
     h.open(h.a);
     assert_eq!(h.w.get_composer_text().as_str(), "for A");
     assert_eq!(
@@ -6396,8 +6393,7 @@ fn a_failed_gif_in_an_untouched_composer_is_restored_at_once() {
 fn a_gif_with_nowhere_to_go_consumes_nothing() {
     let h = GifHarness::new();
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::None);
+        .select_conversation(chatter_core::state::ActiveConversation::None);
     h.w.set_composer_text("keep".into());
     h.stage("keep.png");
     assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
@@ -6552,8 +6548,7 @@ fn a_gif_picked_mid_switch_is_refused() {
     h.w.set_composer_text("for A".into());
     h.stage("a.png");
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
     assert_eq!(
         h.w.get_toast_message().as_str(),
@@ -6584,8 +6579,7 @@ fn a_gif_failing_mid_switch_is_not_restored_into_the_old_composer() {
     let (tx, task) = h.pick();
     h.open(h.b);
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
     h.complete(tx, task, Err("download failed".into()));
     assert_eq!(
         h.w.get_composer_text().as_str(),
@@ -6666,8 +6660,7 @@ fn ordinary_send_mid_switch_refuses_without_taking_the_new_chats_tray_or_reply()
     h.w.set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
     h.w.set_composer_reply_to_timestamp("1700000000000".into());
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     h.stage("b.png");
     assert!(!h.w.invoke_send("A draft".into()));
     assert_eq!(h.w.get_composer_text().as_str(), "A draft");
@@ -6684,12 +6677,10 @@ fn queued_draft_navigation_uses_actual_owner_and_expires_on_session_reset() {
     h.stage("a.png");
     let revision = h.client.chat_snapshot().attachment_revision;
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     let c = chatter_core::domain::ids::ChannelId::new();
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(c));
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(c));
     // The B callback never ran. Its replacement must park what is actually
     // displayed under A, not the asynchronously expected intermediate B.
     chatter_ui::bin_ui::features::composer::sync_composer_draft(&h.w, &h.client, revision);
@@ -6768,15 +6759,13 @@ fn definite_send_failure_parks_exact_reply_and_files_without_overwriting_new_inp
 fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
     let (_tmp, client, w) = composer_with_caret("", 0);
     // Admit the frozen send before exercising the newer IME preedit guard.
-    client.auth_state().set_logged_in(
+    client.testing_set_logged_in(
         chatter_core::domain::ids::UserId::new(),
         1,
         "IME fixture".into(),
     );
     let channel = chatter_core::domain::ids::ChannelId::new();
-    client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel));
+    client.select_conversation(chatter_core::state::ActiveConversation::Channel(channel));
     chatter_ui::bin_ui::features::composer::switch_composer_draft(
         &w,
         &client,
@@ -6806,14 +6795,12 @@ fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
 fn a_gif_finishing_after_an_account_change_is_discarded() {
     let h = GifHarness::new();
     h.client
-        .auth_state()
-        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
-    h.client.auth_state().set_logged_out();
+    h.client.testing_set_logged_out();
     h.client
-        .auth_state()
-        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
     h.w.set_composer_text("B's draft".into());
     h.stage("b.png");
     tx.send(Ok(gif_attachment())).unwrap();
@@ -6823,7 +6810,7 @@ fn a_gif_finishing_after_an_account_change_is_discarded() {
     );
     assert_eq!(h.w.get_composer_text().as_str(), "B's draft");
     assert_eq!(h.staged(), ["b.png"]);
-    h.client.chat_state().clear_pending_attachments();
+    h.client.clear_pending_attachments();
     assert!(h.client.take_parked_send(true).is_none());
 }
 
@@ -6831,8 +6818,7 @@ fn a_gif_finishing_after_an_account_change_is_discarded() {
 fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
     let h = GifHarness::new();
     h.client
-        .auth_state()
-        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.set_composer_text("A's caption".into());
     let old = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
     h.w.set_composer_text("A's later draft".into());
@@ -6844,13 +6830,11 @@ fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
     // A completion queued behind the reset must not repopulate the old UI.
     chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, old);
     assert!(h.w.get_composer_text().is_empty());
-    h.client.auth_state().set_logged_out();
+    h.client.testing_set_logged_out();
     h.client
-        .auth_state()
-        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
     h.client
-        .chat_state()
-        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+        .select_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
     chatter_ui::bin_ui::features::composer::switch_composer_draft(
         &h.w,
         &h.client,
@@ -6868,14 +6852,12 @@ fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
 fn a_gif_upload_error_after_account_change_cannot_restore_or_show_a_toast() {
     let h = GifHarness::new();
     h.client
-        .auth_state()
-        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
     h.w.set_composer_text("A's caption".into());
     let (tx, task) = h.pick();
-    h.client.auth_state().set_logged_out();
+    h.client.testing_set_logged_out();
     h.client
-        .auth_state()
-        .set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+        .testing_set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
     h.w.set_composer_text("B's draft".into());
     tx.send(Err("download failed".into())).unwrap();
     let expired = test_rt().block_on(task).unwrap().unwrap();

@@ -29,7 +29,7 @@ pub fn load_private_group_messages(
     };
 
     let ui_ctx = ui_ctx.clone();
-    let auth_state = ui_ctx.auth_state().clone();
+    let auth_state = ui_ctx.clone();
     let weak_window = window.as_weak();
     let group_id_str = group_id_str.to_string();
 
@@ -54,7 +54,7 @@ pub fn load_private_group_messages(
         let (member_count, invited_count) = ui_ctx.anon_group_member_counts(&group_id);
 
         // Get current user ID for is_own calculation
-        let current_user_id = auth_state.get().current_user_id;
+        let current_user_id = auth_state.auth_snapshot().current_user_id;
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
         // Load messages for this group (reaction counts populated in core).
@@ -163,9 +163,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = group_id_str.parse::<AnonGroupId>() {
-            ui_ctx.select_conversation(
-                chatter_core::state::ActiveConversation::AnonGroup(parsed),
-            );
+            ui_ctx.select_conversation(chatter_core::state::ActiveConversation::AnonGroup(parsed));
         }
         if let Some(w) = weak.upgrade() {
             w.invoke_refresh_screen_protection();
@@ -208,7 +206,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             if !owner.is_current() {
                 return;
             }
-            super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
+            super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
             // Mark messages as read
             let handle =
@@ -241,7 +239,7 @@ async fn load_private_group_messages_internal(
     if !owner.is_current() {
         return;
     }
-    let auth_state = ui_ctx.auth_state().clone();
+    let auth_state = ui_ctx.clone();
 
     // Get group info
     let group = match ui_ctx.get_anon_group(&group_id) {
@@ -255,7 +253,7 @@ async fn load_private_group_messages_internal(
     let (member_count, invited_count) = ui_ctx.anon_group_member_counts(&group_id);
 
     let current_user_id_str = auth_state
-        .get()
+        .auth_snapshot()
         .current_user_id
         .map(|id| id.to_string())
         .unwrap_or_default();
