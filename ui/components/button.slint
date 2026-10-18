@@ -8,7 +8,7 @@ import { Typography } from "../theme/typography.slint";
 
 export component Button inherits Rectangle {
     in property <string> text: "";
-    in property <string> variant: "primary";  // primary, secondary, ghost/tertiary, danger/destructive, icon
+    in property <string> variant: "primary";  // primary, secondary, ghost/tertiary, danger/destructive, danger-ghost, icon
     in property <string> size: "medium"; // small, medium, large
     in property <bool> touch: false;
     in property <bool> hover-enabled: true;
@@ -44,11 +44,13 @@ export component Button inherits Rectangle {
             variant == "primary" ? Colors.action-active :
             variant == "secondary" ? Colors.fill-secondary-hover :
             (variant == "destructive" || variant == "danger") ? root.destructive-fill-active :
+            variant == "danger-ghost" ? Colors.error.with-alpha(0.16) :
             Materials.pressed
         } else if hover && root.hover-enabled {
             variant == "primary" ? Colors.action-hover :
             variant == "secondary" ? Colors.fill-secondary-hover :
             (variant == "destructive" || variant == "danger") ? root.destructive-fill-active :
+            variant == "danger-ghost" ? Colors.error.with-alpha(0.10) :
             Materials.hover
         } else {
             variant == "primary" ? Colors.action-fill :
@@ -64,7 +66,7 @@ export component Button inherits Rectangle {
     vertical-stretch: 0;
     border-radius: root.variant == "icon" ? self.height / 2 : Spacing.radius-md;
 
-    property <color> foreground: (root.variant == "primary" || root.variant == "destructive" || root.variant == "danger") ? Colors.on-action : Colors.text-primary;
+    property <color> foreground: (root.variant == "primary" || root.variant == "destructive" || root.variant == "danger") ? Colors.on-action : root.variant == "danger-ghost" ? Colors.error : Colors.text-primary;
 
     // Keep opacity on the visual child. A root opacity binding makes Slint
     // inline the whole Button (including its loading animation) at every use.
