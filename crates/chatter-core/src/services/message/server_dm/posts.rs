@@ -128,7 +128,7 @@ impl MessageService {
                     .first_sealed_dm_attempt(&message.id, &generation)
                     .await?
                 {
-                    super::dm_outbox::FirstAttempt::Refused(e) => {
+                    super::super::dm_outbox::FirstAttempt::Refused(e) => {
                         tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM refused before submission; stored as failed");
                         (false, Some(e))
                     }
@@ -178,7 +178,7 @@ impl MessageService {
             crate::proto::content_v1::Content,
             Option<(
                 &'q crate::services::gateway::outgoing::QuoteIntent,
-                super::dm::OutboundReplyParts,
+                super::super::dm::OutboundReplyParts,
             )>,
             Option<u32>,
         ),
@@ -316,7 +316,8 @@ impl MessageService {
             dm.disappearing_enabled_until = 0;
             dm.disappearing_activation_seconds = 0;
         }
-        if message.failure_reason.as_deref() == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
+        if message.failure_reason.as_deref() == Some(super::super::core::SHIELD_WAITING_FOR_TOKENS)
+        {
             // This row was parked before any submission or device snapshot.
             // It is still a Shield intent, even if the user left Shield while
             // it waited. Never auto-fall through to the direct sealed outbox.
@@ -362,9 +363,9 @@ impl MessageService {
                 .first_sealed_dm_attempt(&message.id, &generation)
                 .await?
             {
-                super::dm_outbox::FirstAttempt::Sent => Ok("sent"),
-                super::dm_outbox::FirstAttempt::Queued => Ok("sending"),
-                super::dm_outbox::FirstAttempt::Refused(e) => Err(e),
+                super::super::dm_outbox::FirstAttempt::Sent => Ok("sent"),
+                super::super::dm_outbox::FirstAttempt::Queued => Ok("sending"),
+                super::super::dm_outbox::FirstAttempt::Refused(e) => Err(e),
             };
         }
         let status = match self

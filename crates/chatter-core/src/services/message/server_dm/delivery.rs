@@ -26,7 +26,11 @@ impl MessageService {
     }
 
     /// Devices of `peer` recorded for the DM sent at `sent_at`.
-    fn original_dm_devices(&self, peer: UserId, sent_at: u64) -> Result<Vec<u32>, MessageError> {
+    pub(super) fn original_dm_devices(
+        &self,
+        peer: UserId,
+        sent_at: u64,
+    ) -> Result<Vec<u32>, MessageError> {
         let me = self.current_user_id()?;
         let devices =
             crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(

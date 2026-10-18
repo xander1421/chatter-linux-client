@@ -34,8 +34,8 @@ impl MessageService {
         plaintext: &[u8],
         group_id: Option<&[u8]>,
     ) -> DepositOutcome {
-        let client_request_id =
-            super::dm_outbox::request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let client_request_id = super::super::dm_outbox::request_id()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let mismatch = match self
             .deposit_sealed_to_session_devices(
                 auth_client,
@@ -312,8 +312,8 @@ impl MessageService {
             })
             .collect();
         messages.sort_by_key(|m| m.device_id);
-        let client_request_id =
-            super::dm_outbox::request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let client_request_id = super::super::dm_outbox::request_id()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let mut error = None;
         for _attempt in 0..2 {
@@ -411,12 +411,18 @@ impl MessageService {
         crate::services::gateway::submission::check_send_session()
             .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
         // A queued DM stores these exact envelopes before the first byte goes.
-        super::dm_outbox::retain_request(recipient_id, &messages, delivery, uak, client_request_id)
-            .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        super::super::dm_outbox::retain_request(
+            recipient_id,
+            &messages,
+            delivery,
+            uak,
+            client_request_id,
+        )
+        .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
         // Shield turned on during a queued DM's attempt: this transport names
         // the recipient, so the stored envelope waits instead.
         let shield_fence = || {
-            if super::dm_outbox::request_id().is_some()
+            if super::super::dm_outbox::request_id().is_some()
                 && self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
             {
                 return Err(crate::error::NetworkError::Unavailable);
