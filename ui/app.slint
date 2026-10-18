@@ -219,10 +219,11 @@ export component MainWindow inherits Window {
     // In the main content layer's coordinates (it and the dock both live
     // there, below the status bar), not the window's: measuring from
     // root.height put it a status bar's height low, over the dock.
+    property <length> return-to-call-height: 116px;
     property <length> fab-y: root.height - root.safe-area-top - root.safe-area-bottom
         - Spacing.fab-size - Spacing.xl
         - (Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom)
-        - (root.active-call-visible ? 44px + Spacing.sm : 0px);
+        - (root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
 
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
@@ -1992,7 +1993,7 @@ export component MainWindow inherits Window {
                     y: 0px;
                     height: parent.height;
                     bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
-                        + (root.active-call-visible ? 44px + Spacing.sm : 0px) : 0px;
+                        + (root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px) : 0px;
                     // Survives dismissing the connection banner: the dot on the
                     // settings button is what keeps saying the server is down.
                     server-unreachable: root.server-unreachable;
@@ -3087,7 +3088,7 @@ export component MainWindow inherits Window {
             // During a call the return bar occupies the strip above the dock.
             // Reserve it for fixed confirmation controls as well as list rows.
             bottom-inset: (root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px)
-                + (root.compact-layout && root.active-call-visible ? 44px + Spacing.sm : 0px);
+                + (root.compact-layout && root.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px);
             show-modal: true;
             rows: root.call-history-rows;
             loading: root.call-history-loading;
@@ -4314,6 +4315,10 @@ export component MainWindow inherits Window {
             || (root.compact-layout && !root.mobile-show-chat)): ReturnToCallBar {
             z: -1;
             call-data: root.active-call-data;
+            remote-video-frames: root.call-remote-video-frames;
+            is-muted: root.call-is-muted;
+            is-video-enabled: root.call-is-video-enabled;
+            height: root.return-to-call-height;
             width: min(420px, parent.width - 2 * Spacing.lg);
             x: (parent.width - self.width) / 2;
             y: parent.height - self.height - Spacing.sm - (root.bottom-nav-visible
@@ -4326,6 +4331,9 @@ export component MainWindow inherits Window {
                     root.active-call-fullscreen = true;
                 }
             }
+            toggle-mute => { root.call-toggle-mute(); }
+            toggle-video => { root.call-toggle-video(); }
+            end-call => { root.call-end(); root.active-call-fullscreen = false; }
         }
 
         // ========== Toast notification overlay (top-right) ==========
