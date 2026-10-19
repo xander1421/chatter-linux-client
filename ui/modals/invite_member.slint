@@ -25,6 +25,7 @@ export struct InviteUser {
 export component InviteMemberModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> channel-name: "";
+    in property <bool> private-channel: false;
     in-out property <string> search-text: "";
     in-out property <[InviteUser]> users: [];
     in-out property <int> selected-count: 0;
@@ -55,10 +56,27 @@ export component InviteMemberModal inherits Rectangle {
             spacing: Spacing.md;
 
             // Header text showing channel name
-            Text {
-                text: "Invite to #" + root.channel-name;
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
+            HorizontalLayout {
+                spacing: Spacing.xs;
+                alignment: start;
+                Text {
+                    text: "Invite to";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                }
+                Image {
+                    source: root.private-channel ? Icons.lock : Icons.hash;
+                    width: 16px;
+                    height: 16px;
+                    colorize: Colors.text-secondary;
+                    accessible-label: root.private-channel ? "Private channel" : "Public channel";
+                }
+                Text {
+                    text: root.channel-name;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    overflow: elide;
+                }
             }
 
             // Search input
