@@ -454,6 +454,11 @@ impl AnonDmService {
         // Use envelope_type=4 (ECIES_INIT) so receiver knows to use HPKE decryption
         const ENVELOPE_TYPE_ECIES_INIT: i32 = 4;
 
+        // The chat is bound to the one device the code names: the request is
+        // sealed to it alone (the peer's other devices never see it), and an
+        // acceptance from any other device is refused (`handle_acceptance`).
+        self.anon_dm_repo
+            .pin_peer_device(conversation_id, friend_code.device_id)?;
         let dm = self.reload(*conversation_id)?;
         // From here on the request may leave this device.
         self.anon_dm_repo
@@ -463,11 +468,12 @@ impl AnonDmService {
                 &super::infrastructure::request_id(conversation_id),
                 &friend_code.user_id.to_string(),
                 vec![crate::proto::chat_v1::SealedDeviceMessage {
-                    device_id: 0,
+                    device_id: friend_code.device_id,
+                    // Not compared for named devices: there is no session.
                     registration_id: 0,
                     sealed_message: Some(sealed_message),
                 }],
-                crate::proto::chat_v1::SealedDelivery::Broadcast,
+                crate::proto::chat_v1::SealedDelivery::NamedDevices,
                 ENVELOPE_TYPE_ECIES_INIT,
                 &token.public_key,
                 &token.signature,
@@ -558,7 +564,7 @@ mod tests {
         let (_dir, client) = client();
         let svc = client.anon_dms();
         let peer = UserId::new();
-        let code = PrivateFriendCode::new(peer, [1; 33], [2; 12]);
+        let code = PrivateFriendCode::new(peer, 1, [1; 33], [2; 12]);
         assert!(matches!(
             svc.start_conversation_private_attempt(&code, None, None)
                 .await,

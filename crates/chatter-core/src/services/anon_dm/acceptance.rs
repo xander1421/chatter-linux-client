@@ -246,9 +246,9 @@ impl AnonDmService {
             ));
         }
 
-        // The chat is bound to the device our request was sealed to; an
-        // acceptance from any other device is refused (a Shield ECIES request
-        // went unbound, so the accepting device binds it here).
+        // The chat is bound to the device our request was sealed to (a
+        // private-code request: the device the code names); an acceptance
+        // from any other device is refused.
         self.anon_dm_repo
             .pin_peer_device(&conversation_id, peer_device_id)
             .map_err(|_| {
