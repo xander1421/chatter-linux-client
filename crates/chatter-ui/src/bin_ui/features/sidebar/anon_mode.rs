@@ -114,7 +114,15 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Rebuild the chat list so the anon-mode filter takes effect: core's
-/// `sidebar_rows` applies `anon_mode_enabled()` to every kind.
+/// `sidebar_rows` applies `anon_mode_enabled()` to every kind. Contacts and
+/// the New Chat picker are mode-exclusive the same way (`friends_tab_entries`),
+/// and used to keep the other mode's rows: a refresh while in Shield painted
+/// its anon-peer list, and leaving Shield left "0 Friends" up until some
+/// later refresh happened to run.
 fn refresh_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     crate::bin_ui::features::sidebar::refresh_chat_list(window, ui_ctx);
+    crate::bin_ui::features::auth::initial_data::refresh_friends_list_for_mode(
+        window.as_weak(),
+        ui_ctx.clone(),
+    );
 }
