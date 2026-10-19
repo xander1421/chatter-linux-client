@@ -7,7 +7,7 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::domain::ids::UserId;
-use crate::domain::user::{Friendship, FriendshipStatus, Profile, StatusMessage, User};
+use crate::domain::user::{Friendship, FriendshipStatus, Profile, StatusMessage};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::user::conversions::presence_from_proto;
@@ -170,6 +170,31 @@ impl UserSync {
                 };
                 server_friend_ids.insert(user_id);
 
+                // Membership and profile data have separate server caches.
+                // Never upsert the contact snapshot: it can overwrite a newer
+                // profile learned from DM open or an incoming profile key.
+                if let Err(e) = self.user_repo.ensure_user_exists(&user_id) {
+                    had_failure = true;
+                    tracing::debug!(%user_id, error = %e, "Failed to create friend during sync");
+                    continue;
+                }
+                had_failure |=
+                    !record_friend_edge(&self.user_repo, &current_user, user_id, &mut result);
+                result.friends_synced += 1;
+                let friend_profile = match client.get_user_profile(&user_id.to_string()).await {
+                    Ok(profile) if profile.user_id == user_id.to_string() => profile,
+                    Ok(_) => {
+                        had_failure = true;
+                        tracing::warn!(%user_id, "Profile sync returned a different user");
+                        continue;
+                    }
+                    Err(e) => {
+                        had_failure = true;
+                        tracing::debug!(%user_id, error = %e, "Failed to fetch current friend profile");
+                        continue;
+                    }
+                };
+
                 // The server sends display_name ENCRYPTED (Signal-style, per
                 // friend profile key). Decrypt it here or fall back to a safe
                 // name — never persist ciphertext, or reloads render base64.
@@ -195,24 +220,11 @@ impl UserSync {
                     existing_user
                         .as_ref()
                         .map(|u| u.username.clone())
-                        .filter(|n| !n.is_empty())
+                        .filter(|n| !n.is_empty() && *n != user_id.to_string())
                 })
                 .unwrap_or_else(|| {
                     crate::services::user::friend_display_name_placeholder(&user_id)
                 });
-
-                // Username requires a non-empty value; the resolver never
-                // returns empty, so reuse the resolved (decrypted) name.
-                if existing_user.is_none() {
-                    let user = User::new(user_id, display_name.clone(), vec![]);
-                    if let Err(e) = self.user_repo.insert(&user) {
-                        had_failure = true;
-                        tracing::debug!(
-                            error = %e,
-                            "Failed to insert user during sync (may already exist)"
-                        );
-                    }
-                }
 
                 // Status is E2E-encrypted like the name; decrypt with the
                 // friend's key, else keep what we already have.
@@ -254,11 +266,6 @@ impl UserSync {
                         );
                     }
                 }
-
-                had_failure |=
-                    !record_friend_edge(&self.user_repo, &current_user, user_id, &mut result);
-
-                result.friends_synced += 1;
             }
 
             if (page_len as i32) < PAGE_SIZE {

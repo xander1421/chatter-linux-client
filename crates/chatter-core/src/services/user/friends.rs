@@ -285,8 +285,9 @@ impl UserService {
 
     /// List accepted friends with their profile data.
     ///
-    /// Returns `(Friendship, Profile)` pairs by converting the `UserProfile`
-    /// objects already present in the server response, avoiding extra RPCs.
+    /// `ListFriends` supplies membership only: its embedded profiles can be
+    /// stale contact-cache snapshots. Resolve each profile through the same
+    /// authoritative fetch, persistence and notification path as DM open.
     pub async fn list_friends_with_profiles(
         &self,
         limit: u32,
@@ -319,56 +320,7 @@ impl UserService {
             self.user_repo
                 .accept_friendship_unless_blocked(&current_user, &friend_id)?;
 
-            // Build profile from the proto UserProfile already in the response.
-            let mut profile = proto_to_domain_profile(friend)?;
-            profile.display_name = decrypt_friend_display_name(
-                &self.user_repo,
-                &current_user,
-                &friend_id,
-                &friend.display_name,
-            )
-            // No key on this row (or the decrypt missed): keep the name we
-            // already resolved, as `UserSync::sync_friends` does, rather than
-            // write the placeholder over it.
-            .or_else(|| {
-                self.user_repo
-                    .get_profile(&friend_id)
-                    .ok()
-                    .flatten()
-                    .map(|stored| stored.display_name)
-                    .filter(|n| !n.is_empty())
-            })
-            .unwrap_or_else(|| friend_display_name_placeholder(&friend_id));
-            profile.status_message = decrypt_friend_status(
-                &self.user_repo,
-                &current_user,
-                &friend_id,
-                &friend.status_message,
-            )
-            .map(StatusMessage::new);
-            // The server's copy is authoritative WHEN IT HAS ONE. It legitimately
-            // may not: the friend never set an avatar, the response omits it, or
-            // the decrypt misses. Falling through to None was not merely "no
-            // picture in this list" — the `upsert_profile` below then wrote that
-            // None straight over the locally stored avatar, the same row the DM
-            // list reads. That is why one contact showed a photo in Chats and
-            // bare initials in Contacts: opening Contacts erased it.
-            profile.avatar_bytes = self
-                .try_decrypt_avatar(&current_user, &friend_id, &friend.encrypted_avatar)
-                .or_else(|| {
-                    self.user_repo
-                        .get_profile(&friend_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|stored| stored.avatar_bytes)
-                });
-
-            // Callers use these decrypted bytes from this response. Persist
-            // them before returning so every other avatar surface can resolve
-            // the same friend from the local profile store.
-            if self.user_repo.upsert_profile(&profile)? {
-                self.event_bus.emit_domain(super::profile_updated_event(&profile));
-            }
+            let profile = self.get_user_profile(&friend_id).await?;
 
             results.push((friendship, profile));
         }
