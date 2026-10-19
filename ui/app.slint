@@ -509,7 +509,11 @@ export component MainWindow inherits Window {
         root.refresh-screen-protection();
         ModalHostState.modal-generation += 1;
         ModalHostState.sessions-generation += 1;
-        if root.active-modal == "sessions" { SettingsPane.settings-view-sessions(); }
+        // Modal changes invalidate the loader even when Settings stays mounted.
+        // Reissue it so an approval dialog closing cannot strand loading=true.
+        if root.active-modal == "sessions" || ModalHostState.settings-open {
+            SettingsPane.settings-view-sessions();
+        }
         modal-transitions.present-active-modal();
         CallView.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
