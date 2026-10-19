@@ -33,7 +33,9 @@ enum Action {
     Cancel(String),
 }
 
-fn sessions_visible(w: &MainWindow) -> bool {
+/// Where the device list is on screen: the Sessions modal, or Settings ›
+/// Linked devices (any page pushed over Settings keeps it mounted).
+pub(crate) fn sessions_visible(w: &MainWindow) -> bool {
     w.get_active_modal() == "sessions" || w.global::<crate::ModalHostState>().get_settings_open()
 }
 

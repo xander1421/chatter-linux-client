@@ -38,7 +38,10 @@ pub(super) fn handle_device_linked(
             return;
         }
         if let Some(w) = weak.upgrade() {
-            if w.get_active_modal() == "sessions"
+            // The same visibility rule as the loader: gating on the Sessions
+            // modal alone missed Settings › Linked devices, which kept
+            // showing the old count after a link completed.
+            if crate::bin_ui::features::modals::sessions::sessions_visible(&w)
                 && !w.global::<crate::ModalHostState>().get_sessions_revoking()
             {
                 w.global::<crate::SettingsPane>()
