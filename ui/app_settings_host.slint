@@ -28,7 +28,7 @@ export component AppSettingsHost inherits Rectangle {
         bottom-inset: root.compact-layout ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         mobile-platform: root.is-mobile-platform;
         shield-toggled => { root.toggle-anon-mode(); }
-        display-name: SettingsPane.settings-display-name;
+        display-name: SidebarPane.user-display-name;
         username: SettingsPane.settings-username;
         session-count: SettingsPane.settings-session-count;
         sessions: ModalHostState.sessions;

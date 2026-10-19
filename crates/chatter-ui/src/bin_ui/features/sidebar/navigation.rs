@@ -110,7 +110,6 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 }
 
 pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let auth_state = ui_ctx.clone();
     let ui_ctx_fp = ui_ctx.clone();
     let ui_ctx_ai = ui_ctx.clone();
 
@@ -120,7 +119,6 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         .global::<crate::SidebarPane>()
         .on_settings_clicked(move || {
             let weak = weak_window.clone();
-            let auth_state = auth_state.clone();
             let ui_ctx_fp = ui_ctx_fp.clone();
             let ui_ctx_settings = ui_ctx_ai.clone();
 
@@ -154,9 +152,8 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    let state = auth_state.auth_snapshot();
-                    w.global::<crate::SettingsPane>()
-                        .set_settings_display_name(state.display_name.unwrap_or_default().into());
+                    // The account card's name binds SidebarPane.user-display-name,
+                    // which own-profile saves and pushes keep current.
                     w.global::<crate::SettingsPane>().set_settings_username(
                         ui_ctx_settings.full_username().unwrap_or_default().into(),
                     );

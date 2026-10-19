@@ -65,6 +65,21 @@ pub fn default_avatar_bytes(index: usize, name: &str) -> Option<Vec<u8>> {
         .or_else(|| registration_avatar(name, choice.color))
 }
 
+/// Which preset `avatar` is, if any. Presets are stored and uploaded as the
+/// exact bytes `default_avatar_bytes` returns (registration and the profile
+/// editor both send them unprocessed), so equality identifies one; an initials
+/// preset is matched against `name`'s rendering. `None` for a custom photo.
+pub fn preset_avatar_index(avatar: &[u8], name: &str) -> Option<usize> {
+    DEFAULT_AVATARS
+        .iter()
+        .position(|choice| choice.image == Some(avatar))
+        .or_else(|| {
+            (0..DEFAULT_AVATARS.len())
+                .filter(|&i| DEFAULT_AVATARS[i].image.is_none())
+                .find(|&i| default_avatar_bytes(i, name).as_deref() == Some(avatar))
+        })
+}
+
 // Render the same initials shown by Avatar into real image bytes. Registration
 // uploads these bytes, so friends and linked surfaces see the chosen identity.
 pub fn registration_avatar(name: &str, color: [u8; 3]) -> Option<Vec<u8>> {

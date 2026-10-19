@@ -336,3 +336,4 @@ mod friends;
 mod local;
 mod lookup;
 mod profile;
+pub(crate) use profile::restore_own_profile;
