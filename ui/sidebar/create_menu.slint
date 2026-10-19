@@ -144,48 +144,53 @@ export component NewChatPicker inherits Rectangle {
         fill-height: root.mobile-mode;
         close => { root.close(); }
 
-        if root.friends.length == 0: Text {
-            text: "No friends yet. Add one from Contacts.";
-            color: Colors.text-muted;
-            font-size: Typography.base;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            wrap: word-wrap;
-        }
+        // A plain Rectangle hosts the Modal body and takes constraints from
+        // static children only; `if` children are dynamic, so without this
+        // layout the list counted as 0px tall and the card showed nothing.
+        VerticalLayout {
+            if root.friends.length == 0: Text {
+                text: "No friends yet. Add one from Contacts.";
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
 
-        if root.friends.length > 0: Flickable {
-            // The Modal sizes to its content; a Flickable has no preferred
-            // height of its own, so without this the list got 0px.
-            preferred-height: list.preferred-height;
-            viewport-height: list.preferred-height;
-            list := VerticalLayout {
-                alignment: start;
-                for friend in root.friends: Rectangle {
-                    height: root.mobile-mode ? Spacing.row-height-touch : 48px;
-                    background: row-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-md;
-                    accessible-role: button;
-                    accessible-label: friend.display-name;
-                    accessible-action-default => { if root.show { root.pick(friend.user-id); } }
-                    HorizontalLayout {
-                        padding: Spacing.sm;
-                        spacing: Spacing.sm;
-                        Avatar {
-                            size: root.mobile-mode ? Spacing.row-avatar-touch : 32px;
-                            source: friend.avatar-source;
-                            fallback-text: friend.initials;
-                            name: friend.display-name;
+            if root.friends.length > 0: Flickable {
+                // A Flickable has no size of its own; bounded so a long list
+                // scrolls in here.
+                min-height: min(list.preferred-height, 480px);
+                viewport-height: list.preferred-height;
+                list := VerticalLayout {
+                    alignment: start;
+                    for friend in root.friends: Rectangle {
+                        height: root.mobile-mode ? Spacing.row-height-touch : 48px;
+                        background: row-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-md;
+                        accessible-role: button;
+                        accessible-label: friend.display-name;
+                        accessible-action-default => { if root.show { root.pick(friend.user-id); } }
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+                            Avatar {
+                                size: root.mobile-mode ? Spacing.row-avatar-touch : 32px;
+                                source: friend.avatar-source;
+                                fallback-text: friend.initials;
+                                name: friend.display-name;
+                            }
+                            Text {
+                                text: friend.display-name;
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
                         }
-                        Text {
-                            text: friend.display-name;
-                            color: Colors.text-primary;
-                            font-size: Typography.base;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
+                        row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.pick(friend.user-id); } }
                     }
-                    row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.pick(friend.user-id); } }
                 }
             }
         }
