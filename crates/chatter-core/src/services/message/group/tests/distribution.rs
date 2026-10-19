@@ -404,7 +404,7 @@
         )
         .unwrap();
         assert_eq!(plain.sent_at, transport);
-        let inbound = ChannelInbound::new(t.bob.messages().clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(t.bob.messages().clone(), t.bob.attachments().clone(), t.bob.users().clone());
         assert_eq!(
             inbound.ingest(&envelope, t.channel_id, false).await,
             Ingested::DeferredPendingSenderKey

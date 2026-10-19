@@ -26,7 +26,8 @@ impl UserService {
             )?;
             self.user_repo.ensure_user_exists(user_id)?;
             if self.user_repo.upsert_profile(&profile)? {
-                self.event_bus.emit_domain(super::profile_updated_event(&profile));
+                self.event_bus
+                    .emit_domain(super::profile_updated_event(&profile));
             }
             self.profile_fetched_at
                 .lock()
@@ -35,11 +36,9 @@ impl UserService {
         }
 
         // Decrypt with their profile key. The server value is always
-        // ciphertext, so we never fall back to it. A miss (no key on this
-        // device, or a stale one) keeps what we already resolved — this is the
-        // on-open refresh (`refresh_profile_if_stale`), and writing the
-        // placeholder here turned a known name into "User 1c242673" mid-session
-        // everywhere the stored profile is read. Same rule as `list_friends`.
+        // ciphertext, so we never fall back to it. No key yet keeps a known
+        // local name; a held key that fails authentication explicitly resolves
+        // to an unavailable label rather than presenting a stale name as current.
         let stored = self.user_repo.get_profile(user_id).ok().flatten();
         profile.display_name = decrypt_friend_display_name(
             &self.user_repo,
@@ -81,7 +80,8 @@ impl UserService {
 
         self.user_repo.ensure_user_exists(user_id)?;
         if self.user_repo.upsert_profile(&profile)? {
-            self.event_bus.emit_domain(super::profile_updated_event(&profile));
+            self.event_bus
+                .emit_domain(super::profile_updated_event(&profile));
         }
         self.profile_fetched_at
             .lock()

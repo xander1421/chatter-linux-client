@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::current_user::CurrentUserProvider;
 
 impl MessageService {
     /// Distribute a sender key distribution message to channel members.
@@ -153,6 +154,26 @@ impl MessageService {
             &recipient,
         )
         .map(|k| k.to_vec())
+    }
+
+    /// A sender-key ciphertext is readable by the entire verified group.
+    /// Restate our key only if every peer is allowed to receive it; otherwise
+    /// the pairwise SKDM remains the selective profile-sharing path.
+    pub(crate) fn group_profile_key(&self, verified: &VerifiedChannel) -> Option<Vec<u8>> {
+        let us = self.settings_repo.current_user_id().ok()?;
+        let mut key = None;
+        for member in verified.members() {
+            let peer: UserId = member.parse().ok()?;
+            if peer == us {
+                continue;
+            }
+            key = Some(crate::services::profile_visibility::shareable_profile_key(
+                &self.settings_repo,
+                &self.user_repo,
+                &peer,
+            )?);
+        }
+        key.map(|k| k.to_vec())
     }
 
     /// Record exactly the devices an SKDM deposit reached (`deposits` of its

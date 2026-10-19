@@ -653,7 +653,7 @@
         let mut copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
         let ghost = UserId::new();
         copy.author_id = ghost.to_string();
-        let inbound = ChannelInbound::new(t.bob.messages().clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(t.bob.messages().clone(), t.bob.attachments().clone(), t.bob.users().clone());
         assert_eq!(
             inbound.ingest(&copy, t.channel_id, false).await,
             Ingested::Dropped

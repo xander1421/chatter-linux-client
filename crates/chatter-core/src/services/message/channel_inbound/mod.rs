@@ -63,13 +63,19 @@ pub enum Ingested {
 pub struct ChannelInbound {
     messages: Arc<MessageService>,
     attachments: Arc<AttachmentService>,
+    users: Arc<crate::services::user::UserService>,
 }
 
 impl ChannelInbound {
-    pub fn new(messages: Arc<MessageService>, attachments: Arc<AttachmentService>) -> Self {
+    pub fn new(
+        messages: Arc<MessageService>,
+        attachments: Arc<AttachmentService>,
+        users: Arc<crate::services::user::UserService>,
+    ) -> Self {
         Self {
             messages,
             attachments,
+            users,
         }
     }
 

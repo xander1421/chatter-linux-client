@@ -200,6 +200,7 @@ impl MessageService {
             };
             if let Some(state) = &group_state {
                 super::group::stamp_group_data_message(&mut dm, state);
+                dm.profile_key = self.group_profile_key(state);
             }
             let wrap = crate::proto::content_v1::Content {
                 timestamp: dm.timestamp,

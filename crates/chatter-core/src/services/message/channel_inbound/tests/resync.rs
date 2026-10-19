@@ -9,7 +9,11 @@ async fn resync_clock_conflict_keeps_local_history_and_allows_later_rows() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
     let channel = ChannelId::new();
     let id = crate::domain::ids::MessageId::new();
     let mut row = chat_v1::Message {

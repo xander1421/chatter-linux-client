@@ -77,7 +77,7 @@
             .await
             .unwrap();
         let server_copy = server_copy(&t, &message_id, server_ts, &ge);
-        let inbound = ChannelInbound::new(bob.messages().clone(), bob.attachments().clone());
+        let inbound = ChannelInbound::new(bob.messages().clone(), bob.attachments().clone(), bob.users().clone());
         assert_eq!(
             inbound.ingest(&server_copy, channel_id, false).await,
             Ingested::RetryableFailure,
@@ -437,7 +437,7 @@
         let message_id = MessageId::new();
         let copy = server_copy(&t, &message_id, TimestampNanos::now().as_u64(), &ge);
         let m = t.bob.messages();
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
         assert_eq!(
             inbound.ingest(&copy, t.channel_id, false).await,
             Ingested::DeferredPendingSenderKey
@@ -474,7 +474,7 @@
 
         let t = two_members();
         let m = t.bob.messages();
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
         let (ge, _) = t
             .alice
             .signal()
@@ -549,7 +549,7 @@
             .await
             .unwrap();
         let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
 
         assert_eq!(
             inbound.ingest(&copy, t.channel_id, false).await,

@@ -170,6 +170,7 @@ impl CoreServices {
             crate::services::message::channel_inbound::ChannelInbound::new(
                 services.message_service.clone(),
                 services.attachment_service.clone(),
+                services.user_service.clone(),
             ),
         );
 

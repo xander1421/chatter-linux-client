@@ -863,57 +863,28 @@ impl MessageService {
         peer_id: &UserId,
         mut content: crate::proto::content_v1::Content,
     ) -> Result<crate::proto::content_v1::Content, MessageError> {
-        use crate::domain::user::FriendshipStatus;
         use crate::proto::content_v1::content;
 
-        // Get current user ID
         let our_user_id = self.settings_repo.current_user_id()?;
-
-        // Check if this is a friendship
-        let friendship = self
-            .user_repo
-            .get_friendship(&our_user_id, peer_id)
-            .ok()
-            .flatten();
-
-        // Only share profile key with accepted friends
-        let is_friend = friendship
-            .as_ref()
-            .map(|f| matches!(f.status, FriendshipStatus::Accepted))
-            .unwrap_or(false);
-
-        if !is_friend {
-            tracing::trace!(
-                peer_id = %peer_id,
-                "Not a friend, skipping profile key injection"
-            );
+        // Sharing is enabled automatically for accepted friends. Update the
+        // actual stored request direction, including incoming friendships.
+        let friendship = [(our_user_id, *peer_id), (*peer_id, our_user_id)]
+            .iter()
+            .find_map(|(a, b)| {
+                self.user_repo
+                    .get_friendship(a, b)
+                    .ok()
+                    .flatten()
+                    .filter(|f| f.status == crate::domain::user::FriendshipStatus::Accepted)
+            });
+        let Some(friendship) = friendship else {
             return Ok(content);
-        }
-
-        // Check if profile sharing is enabled for this friendship
-        let is_sharing = self
-            .user_repo
-            .is_profile_sharing(&our_user_id, peer_id)
-            .unwrap_or(false);
-
-        // Auto-enable profile sharing on first message to a friend
-        if !is_sharing {
-            if let Err(e) = self
-                .user_repo
-                .set_profile_sharing(&our_user_id, peer_id, true)
-            {
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    error = %e,
-                    "Failed to auto-enable profile sharing"
-                );
-                return Ok(content);
-            }
-            tracing::info!(
-                peer_id = %peer_id,
-                "Auto-enabled profile sharing for friendship"
-            );
-        }
+        };
+        self.user_repo.set_profile_sharing(
+            &friendship.requester_id,
+            &friendship.addressee_id,
+            true,
+        )?;
 
         // Whether this friend may hold it is the visibility setting's call
         // ("nobody", a block, a rotation in flight).
