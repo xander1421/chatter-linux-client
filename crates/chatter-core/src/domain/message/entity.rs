@@ -291,6 +291,7 @@ impl Message {
     ///
     /// - Text messages (emoji-only included — an emoji IS the text) are
     ///   truncated to 50 chars.
+    /// - A captioned attachment prefixes the caption with the label's icon.
     /// - Empty-body messages take `attachment_label` when the caller resolved
     ///   one ("🖼️ Photo", "📎 report.pdf"), else "📎 N attachment(s)".
     /// - A call reads "📞 Missed/Incoming/Outgoing call"; a system notice reads
@@ -339,7 +340,12 @@ impl Message {
             _ => {}
         }
         let body = if !text.is_empty() {
-            text.to_string()
+            // A caption keeps its attachment's icon ("📷 caption"), as Signal
+            // does; every label starts with its icon.
+            match attachment_label.and_then(|label| label.split_once(' ')) {
+                Some((icon, _)) => format!("{} {}", icon, text),
+                None => text.to_string(),
+            }
         } else if let Some(label) = attachment_label {
             label.to_string()
         } else if att_count > 0 {

@@ -374,6 +374,14 @@ mod tests {
             "You: \u{1F4CE} 1 attachment"
         );
 
+        // A caption keeps its attachment's icon.
+        let mut captioned = text(me, "beach");
+        captioned.attachments = vec![AttachmentId::new()];
+        assert_eq!(
+            captioned.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo")),
+            "You: \u{1F4F7} beach"
+        );
+
         // Nothing renderable at all still names the row.
         assert_eq!(text(them, "").sidebar_preview(Some(&me), None), "[Message]");
 
