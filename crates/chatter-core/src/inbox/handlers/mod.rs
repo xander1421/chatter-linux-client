@@ -475,6 +475,18 @@ pub enum DomainEvent {
     // ========================================================================
     // Local Send Events
     // ========================================================================
+    /// This device stored an outgoing message — from the composer, a
+    /// forward, a thread reply, any send origin. Carries the chat-list row's
+    /// new second line and time, shaped by core, so every origin moves the
+    /// row the same way (preview, time, to the top) without each UI caller
+    /// remembering to.
+    MessageSent {
+        conversation: crate::state::ActiveConversation,
+        /// Sidebar preview of the stored row ("You: …", or its attachment label).
+        preview: String,
+        /// The row's activity time (`Message::created_at`).
+        at: chrono::DateTime<chrono::Utc>,
+    },
     /// A send that finished in the background (the post-bootstrap flush)
     /// failed; the user has no other way to learn the message did not go.
     MessageSendFailed {
@@ -692,6 +704,7 @@ impl DomainEvent {
             DomainEvent::FriendAccepted { .. } => None,
             DomainEvent::AnonGroupUpdated { .. } => None,
             DomainEvent::MessageSendFailed { channel_id, .. } => Some(*channel_id),
+            DomainEvent::MessageSent { conversation, .. } => conversation.channel_id(),
             DomainEvent::ChannelMemberJoined { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
             DomainEvent::ChannelUpdated { channel_id, .. } => Some(*channel_id),

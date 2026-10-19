@@ -225,6 +225,8 @@ impl EventHandlers {
             event @ DomainEvent::SavedMessageSynced { .. } => self.handle_messages_event(event),
             event @ DomainEvent::DmBootstrapCompleted { .. } => self.handle_messages_event(event),
             event @ DomainEvent::MessageSendFailed { .. } => self.handle_messages_event(event),
+            // Chat-list presentation only; no state store holds it.
+            DomainEvent::MessageSent { .. } => {}
             event @ DomainEvent::KeyExchangeReceived { .. } => self.handle_channels_event(event),
             event @ DomainEvent::SenderKeyReceived { .. } => self.handle_channels_event(event),
             event @ DomainEvent::GroupMailboxReceived { .. } => self.handle_channels_event(event),

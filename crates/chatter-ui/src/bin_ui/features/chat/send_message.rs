@@ -991,10 +991,8 @@ async fn deliver_inner(
     }
 
     let ui_ctx_for_gifs = ui_ctx.clone();
-    let ui_ctx_for_sidebar = ui_ctx.clone();
     let sent_text = text.clone();
     let timestamp_str = ui_result.timestamp_display.clone();
-    let sidebar_preview = ui_result.sidebar_preview.clone();
     let reply_thumbnail_rgba = ui_result
         .reply_thumbnail_bytes
         .as_ref()
@@ -1119,14 +1117,6 @@ async fn deliver_inner(
             w.set_toast_visible(true);
             w.global::<crate::Haptics>().invoke_error();
         }
-
-        crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w,
-            &ui_ctx_for_sidebar,
-            conversation,
-            &sidebar_preview,
-            &timestamp_str,
-        );
     });
     true
 }
