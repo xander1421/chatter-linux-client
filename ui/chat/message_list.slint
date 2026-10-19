@@ -63,7 +63,17 @@ export component MessageList inherits Rectangle {
     arrival-ready := Timer {
         interval: 1ms;
         running: false;
-        triggered => { self.running = false; root.ready-for-arrivals = true; }
+        triggered => {
+            self.running = false;
+            // Model/row-count notifications are deferred. Establish the loaded
+            // page as the baseline before accepting live arrivals, even when
+            // its row-count notification has not run yet (notably after a
+            // jump replaces the page). Loading existing rows is never unread.
+            root.observed-message-count = root.messages.length;
+            root.observed-last-message-id = root.messages.length > 0
+                ? root.messages[root.messages.length - 1].message-id : "";
+            root.ready-for-arrivals = true;
+        }
     }
     private property <int> arrival-start-index: -1;
     private property <int> arrival-end-index: -1;
