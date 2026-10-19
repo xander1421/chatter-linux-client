@@ -295,7 +295,11 @@ async fn load_private_group_messages_internal(
     let ui_ctx_for_ui = ui_ctx.clone();
     let anchor_page = messages.clone();
     crate::run_history_ui!(weak, owner, |w| {
-        super::apply_unread_anchor(&w, anchor, &anchor_page);
+        super::apply_unread_anchor(
+            &w,
+            ui_ctx_for_ui.opening_unread_anchor(anchor),
+            &anchor_page,
+        );
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
             &w,

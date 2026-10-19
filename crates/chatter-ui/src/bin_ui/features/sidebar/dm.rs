@@ -400,7 +400,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     use slint::Model;
                     super::apply_unread_anchor(
                         &w,
-                        anchor,
+                        ui_ctx.opening_unread_anchor(anchor),
                         &anchor_page,
                     );
                     let before = w.global::<crate::ChatPane>().get_messages().row_count();
@@ -524,7 +524,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             crate::run_history_ui!(weak, owner, |w| {
                 super::apply_unread_anchor(
                     &w,
-                    anchor,
+                    ui_ctx.opening_unread_anchor(anchor),
                     &anchor_page,
                 );
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();

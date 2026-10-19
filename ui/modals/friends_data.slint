@@ -40,3 +40,15 @@ export struct BlockedUserData {
     anon-chat: bool,  // its anon conversation is still stored locally
     avatar-source: image,
 }
+
+// A channel invitation has its own channel-kind presentation data.
+export struct ChannelInviteData {
+    user-id: string,
+    display-name: string,
+    username: string,
+    avatar-source: image,
+    has-avatar: bool,
+    sent-at: string,
+    note: string,
+    private-channel: bool,
+}

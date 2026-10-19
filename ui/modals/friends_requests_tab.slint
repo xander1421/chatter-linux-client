@@ -1,5 +1,5 @@
 import { RequestTabs } from "friends_request_tabs.slint";
-import { FriendRequestData } from "friends_data.slint";
+import { FriendRequestData, ChannelInviteData } from "friends_data.slint";
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -16,7 +16,7 @@ export component RequestsTab inherits VerticalLayout {
     in property <[FriendRequestData]> sent-requests;
     in property <[FriendRequestData]> private-requests;
     in property <[FriendRequestData]> group-invites;
-    in property <[FriendRequestData]> channel-invites;
+    in property <[ChannelInviteData]> channel-invites;
     in property <string> private-request-decision;
     in property <string> group-invite-decision;
     in property <string> group-invite-error-id;
@@ -650,7 +650,12 @@ export component RequestsTab inherits VerticalLayout {
                                     name: invite.display-name;
                                 }
 
-                                // No "#" chip: the name already reads "#<channel>" (§121).
+                                Image {
+                                    source: invite.private-channel ? Icons.lock : Icons.hash;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: Colors.text-muted;
+                                }
                                 VerticalLayout {
                                     horizontal-stretch: 1;
                                     alignment: center;

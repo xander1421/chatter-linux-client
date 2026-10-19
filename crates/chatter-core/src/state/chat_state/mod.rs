@@ -40,6 +40,8 @@ pub struct ChatStateData {
     pub active_channel_id: Option<ChannelId>,
     /// Typed active conversation (replaces string-based dispatch).
     pub active_conversation: ActiveConversation,
+    /// Sending dismisses the opening unread boundary until the next selection.
+    pub opening_unread_dismissed: bool,
     /// Open thread panels (max 3 concurrent).
     pub open_threads: Vec<ThreadPanel>,
     /// Index of the focused thread panel (0, 1, or 2), if any.
@@ -139,7 +141,17 @@ impl ChatState {
             Self::switch_attachment_tray(state, conversation.channel_id());
             state.active_channel_id = conversation.channel_id();
             state.active_conversation = conversation;
+            state.opening_unread_dismissed = false;
             state.active_thread_index = None;
+        });
+    }
+
+    /// An own send ends the unread boundary only in its open conversation.
+    pub fn dismiss_opening_unread(&self, conversation: ActiveConversation) {
+        self.store.update(|state| {
+            if state.active_conversation == conversation {
+                state.opening_unread_dismissed = true;
+            }
         });
     }
 

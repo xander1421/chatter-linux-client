@@ -13,8 +13,8 @@ import { FriendsTab } from "friends_friends_tab.slint";
 import { FindTab } from "friends_find_tab.slint";
 import { RequestsTab } from "friends_requests_tab.slint";
 import { BlockedTab } from "friends_blocked_tab.slint";
-import { FriendData, FriendRequestData, BlockedUserData } from "friends_data.slint";
-export { FriendData, FriendRequestData, BlockedUserData } from "friends_data.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
+export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
 
 export component FriendsModal inherits Rectangle {
     in property <bool> show-modal: false;
@@ -44,7 +44,7 @@ export component FriendsModal inherits Rectangle {
     in property <[FriendRequestData]> sent-requests: [];
     in property <[FriendRequestData]> private-requests: [];  // Anonymous DM requests
     in property <[FriendRequestData]> group-invites: [];     // Pending anonymous group invites
-    in property <[FriendRequestData]> channel-invites: [];   // Pending channel invitations
+    in property <[ChannelInviteData]> channel-invites: [];   // Pending channel invitations
 
     // Blocked tab data
     in property <[BlockedUserData]> blocked-users: [];
