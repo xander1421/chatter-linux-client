@@ -46,7 +46,8 @@ impl ChatterClient {
         mentioned_integrations: Vec<crate::domain::ids::IntegrationId>,
         targets_ai_bot: bool,
     ) -> Result<crate::domain::message::Message, crate::services::message::MessageError> {
-        self.messages()
+        let message = self
+            .messages()
             .send(
                 group_fanout,
                 channel_id,
@@ -58,7 +59,15 @@ impl ChatterClient {
                 targets_ai_bot,
                 None, // thread replies use parent_id, not a reply quote
             )
-            .await
+            .await?;
+        // A received thread reply moves the chat-list row; a sent one does too.
+        let conversation = self.classify_active_conversation(
+            &message.conversation_id,
+            &message.conversation_type,
+            None,
+        );
+        self.announce_sent(conversation, Some(&message), text.trim());
+        Ok(message)
     }
 
     /// Signal-style profile-key handshake, fired once on both sides right

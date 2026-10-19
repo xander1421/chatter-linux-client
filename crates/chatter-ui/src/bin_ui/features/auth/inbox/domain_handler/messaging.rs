@@ -322,6 +322,31 @@ pub(super) fn handle_message_received(
     });
 }
 
+/// This device stored an outgoing message (any send origin): move its chat
+/// row to the top with core's preview and time. The unread badge is not
+/// touched — an own message is never unread.
+pub(super) fn handle_message_sent(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    preview: String,
+    at: chrono::DateTime<chrono::Utc>,
+) {
+    let timestamp = crate::bin_ui::converters::sidebar_time(at);
+    let weak = window.clone();
+    let ui_ctx = ui_ctx.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        crate::bin_ui::features::sidebar::update_sidebar_preview(
+            &w,
+            &ui_ctx,
+            conversation,
+            &preview,
+            &timestamp,
+        );
+    });
+}
+
 /// Handle DM bootstrap completed event.
 ///
 /// Core emits it once the messages queued behind the key exchange were sent,

@@ -223,8 +223,6 @@ pub struct SendMessageUiResult {
     pub sent_at: u64,
     /// Local-time `HH:MM` string for message header rendering.
     pub timestamp_display: String,
-    /// Sidebar preview with "You: " prefix, truncated to sidebar width.
-    pub sidebar_preview: String,
     /// `"sent"` (delivered), `"sending"` (DM bootstrap in flight),
     /// `"unconfirmed"` (submitted, outcome unknown, no retry), or
     /// `"failed"` (stored, not delivered — see `failure_notice`).

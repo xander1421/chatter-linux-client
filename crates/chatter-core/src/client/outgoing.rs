@@ -33,7 +33,69 @@ impl ChatterClient {
         .map_err(|(error, _)| error)
     }
 
+    /// Every send origin funnels through here — the composer, a forward, any
+    /// caller of [`send_message`](Self::send_message) — so this is where the
+    /// stored row is announced to the chat list ([`DomainEvent::MessageSent`]).
     async fn send_message_attempt(
+        &self,
+        attempt: uuid::Uuid,
+        conversation: ActiveConversation,
+        text: &str,
+        pending_attachments: &[PendingAttachment],
+        quote: Option<QuoteIntent>,
+        options: Option<SendOptions>,
+    ) -> Result<SendResult, (SendError, Option<String>)> {
+        let outcome = self
+            .send_message_attempt_inner(
+                attempt,
+                conversation,
+                text,
+                pending_attachments,
+                quote,
+                options,
+            )
+            .await;
+        // A send that stored a row — delivered, queued, or failed and
+        // retryable — shows in the conversation, so it moves the row too.
+        let stored = match &outcome {
+            Ok(result) => Some(result.message.clone()),
+            Err((_, row)) => row
+                .as_deref()
+                .and_then(|id| id.parse().ok())
+                .and_then(|id| self.get_message_local(&id))
+                .map(Some),
+        };
+        if let Some(message) = stored {
+            self.announce_sent(conversation, message.as_ref(), text.trim());
+        }
+        outcome
+    }
+
+    /// Tell the chat list this device stored an outgoing message: the row's
+    /// preview, built from the stored message so an attachment-only send gets
+    /// its type label, and its time. `message` is `None` only for a send with
+    /// no stored row to read back (queued behind a DM bootstrap).
+    pub(super) fn announce_sent(
+        &self,
+        conversation: ActiveConversation,
+        message: Option<&Message>,
+        text: &str,
+    ) {
+        let (preview, at) = match message {
+            Some(message) => (self.message_sidebar_preview(message), message.created_at),
+            None => (
+                messaging::plain_sidebar_preview(&format!("You: {}", text)),
+                chrono::Utc::now(),
+            ),
+        };
+        self.services.event_bus.emit_domain(DomainEvent::MessageSent {
+            conversation,
+            preview,
+            at,
+        });
+    }
+
+    async fn send_message_attempt_inner(
         &self,
         attempt: uuid::Uuid,
         conversation: ActiveConversation,
@@ -392,13 +454,6 @@ impl ChatterClient {
             .format("%H:%M")
             .to_string();
 
-        // Same wording as every other sidebar row; built from the stored
-        // message so an attachment-only send gets its type label, not "You: ".
-        let sidebar_preview = match result.message.as_ref() {
-            Some(message) => self.message_sidebar_preview(message),
-            None => messaging::plain_sidebar_preview(&format!("You: {}", text)),
-        };
-
         // Bootstrap sends carry attachments only after the key exchange, so
         // report an empty list for the "sending" placeholder. Non-bootstrap
         // sends resolve each attachment id against the local store.
@@ -434,7 +489,6 @@ impl ChatterClient {
             message_id_effective,
             sent_at: result.sent_at,
             timestamp_display,
-            sidebar_preview,
             delivery_status,
             bootstrap_initiated: result.bootstrap_initiated,
             attachments,

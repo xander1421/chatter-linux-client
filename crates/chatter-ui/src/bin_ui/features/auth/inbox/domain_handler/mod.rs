@@ -529,6 +529,14 @@ pub async fn handle_domain_event(
             messaging::handle_message_send_failed(window, channel_id, error, message_timestamps);
         }
 
+        DomainEvent::MessageSent {
+            conversation,
+            preview,
+            at,
+        } => {
+            messaging::handle_message_sent(window, ui_ctx, conversation, preview, at);
+        }
+
         // =========================================================================
         // Channel Member Events
         // =========================================================================
