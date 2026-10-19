@@ -45,6 +45,7 @@ export component ChannelSettingsModal inherits Rectangle {
     // Current user's permissions
     in property <bool> can-edit: false;
     in property <bool> can-manage-members: false;
+    in property <bool> can-invite: false;
     in property <bool> can-archive: false;
     in property <bool> can-delete: false;
     in property <bool> is-owner: false;
@@ -653,6 +654,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         if root.active-section == "members": ChannelMembersSection {
                             banned-members: root.banned-members;
                             can-manage-members: root.can-manage-members;
+                            can-invite: root.can-invite;
                             can-view-bans: root.can-view-bans;
                             channel-name: root.channel-name;
                             confirm-action <=> root.confirm-action;

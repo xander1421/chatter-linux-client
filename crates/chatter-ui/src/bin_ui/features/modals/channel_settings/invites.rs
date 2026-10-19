@@ -30,7 +30,8 @@ pub(super) fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         });
 }
 
-/// Shared header/settings entry: validate ownership and populate the picker.
+/// Shared header/settings entry: ask core whether we may invite, then populate
+/// the picker.
 pub fn open_private_group_invite_modal(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
@@ -42,11 +43,7 @@ pub fn open_private_group_invite_modal(
         return;
     };
     tokio::spawn(async move {
-        let allowed = ui_ctx.session_current_user_id().is_some_and(|uid| {
-            ui_ctx
-                .get_anon_group(&group_id)
-                .is_some_and(|g| g.owner_id == uid && g.my_role.can_invite())
-        });
+        let allowed = ui_ctx.can_invite_to_anon_group(&group_id);
         let candidates = if allowed {
             ui_ctx
                 .list_anon_group_invite_candidates(Some(&group_id))
@@ -96,6 +93,18 @@ pub fn open_invite_member_modal(
     channel_id: ChannelId,
 ) {
     tokio::spawn(async move {
+        // The same core answer that shows or hides every entry point; a stale
+        // button (role changed after it was drawn) gets a refusal, not a picker
+        // whose invites the server then rejects.
+        if !ui_ctx.can_invite_to_channel(&channel_id) {
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.set_toast_message("Your role in this channel can't invite members".into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            });
+            return;
+        }
         let channel_id_str = channel_id.to_string();
 
         let channel_name = ui_ctx

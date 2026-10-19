@@ -221,6 +221,8 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_manage_members(false);
     w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_invite(false);
+    w.global::<crate::ModalHostState>()
         .set_channel_settings_can_archive(false);
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_delete(false);
@@ -274,6 +276,7 @@ struct LocalChannelSettings {
     muted: bool,
     can_edit: bool,
     can_manage_members: bool,
+    can_invite: bool,
     can_archive: bool,
     can_delete: bool,
     is_owner: bool,
@@ -315,6 +318,8 @@ fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSetting
         .set_channel_settings_can_edit(settings.can_edit);
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_manage_members(settings.can_manage_members);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_invite(settings.can_invite);
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_archive(settings.can_archive);
     w.global::<crate::ModalHostState>()
@@ -461,6 +466,7 @@ pub fn open_channel_settings(
                 .unwrap_or(false),
             can_edit,
             can_manage_members,
+            can_invite: ui_ctx.can_invite_to_channel(&channel_id),
             can_archive,
             can_delete,
             is_owner,
@@ -694,6 +700,8 @@ pub fn apply_private_group_roster(
         .set_channel_settings_is_owner(roster.is_owner);
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_manage_members(roster.can_manage_members);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_invite(roster.can_invite);
     let rows: Vec<ChannelMemberData> = roster
         .members
         .into_iter()

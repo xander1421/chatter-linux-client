@@ -293,15 +293,34 @@ pub(crate) fn requesting_users(state: &MembershipState) -> Vec<UserId> {
 }
 
 /// The access-pane flags that come from the verified state alone.
+///
+/// Creating or revoking a join link passes two server gates: the signed log's
+/// `policy.manage_invites` and SpiceDB `channel#manage_members` (owner +
+/// admin, `schema.zed:82`, checked in `changes.go` `changeEffects`). A policy
+/// lowered below Admin does not open the second one, so it is not offered.
 pub(crate) fn access_flags(state: Option<&MembershipState>, me: &str) -> (bool, bool) {
     let Some(state) = state else {
         return (false, false);
     };
     let mine = my_role(state, me);
     (
-        allows(mine, state.policy.manage_invites),
+        allows(mine, state.policy.manage_invites.max(ChannelRole::Admin)),
         allows(mine, state.policy.add_member),
     )
+}
+
+/// Whether `me` may invite someone into the channel directly. The invite is a
+/// signed `AddMember { pending }` (log rule: `policy.add_member`) that the
+/// server also checks against SpiceDB `channel#invite` (owner + admin +
+/// moderator, `schema.zed:107`), so both must pass. No verified state, or not
+/// an active member of it: the role is unknown and the answer is no.
+pub(crate) fn can_invite_members(state: Option<&MembershipState>, me: &str) -> bool {
+    state.is_some_and(|s| {
+        allows(
+            my_role(s, me),
+            s.policy.add_member.max(ChannelRole::Moderator),
+        )
+    })
 }
 
 fn now_nanos() -> u64 {
@@ -322,6 +341,20 @@ impl ChatterClient {
             )
             .ok()
             .flatten()
+    }
+
+    /// Whether this account may invite people into `channel_id`, from its role
+    /// in the verified membership state. Every invite entry point (chat header,
+    /// channel settings, the picker itself) asks this.
+    pub fn can_invite_to_channel(&self, channel_id: &ChannelId) -> bool {
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
+        self.channel_with_log(channel_id).is_some()
+            && can_invite_members(
+                self.verified_channel(channel_id).as_ref().map(|v| &v.state),
+                &me.to_string(),
+            )
     }
 
     fn channel_with_log(&self, channel_id: &ChannelId) -> Option<Channel> {
@@ -768,10 +801,30 @@ mod tests {
         // A requester has no role yet.
         assert_eq!(access_flags(Some(&v.state), ASKING), (false, false));
         assert_eq!(access_flags(None, OWNER), (false, false));
+        // A policy below Admin cannot open SpiceDB `manage_members`.
+        let mut lowered = v.state.clone();
+        lowered.policy.manage_invites = ChannelRole::Member;
+        assert_eq!(access_flags(Some(&lowered), MEMBER), (false, false));
         assert_eq!(
             requesting_users(&v.state),
             vec![ASKING.parse::<UserId>().unwrap()]
         );
+    }
+
+    #[test]
+    fn invite_needs_add_member_policy_and_moderator() {
+        let v = channel(VerificationStatus::Ok, false);
+        // Default policy: add_member is Admin.
+        assert!(can_invite_members(Some(&v.state), OWNER));
+        assert!(can_invite_members(Some(&v.state), ADMIN));
+        assert!(!can_invite_members(Some(&v.state), MEMBER));
+        assert!(!can_invite_members(Some(&v.state), ASKING));
+        // Unknown role: hidden.
+        assert!(!can_invite_members(None, OWNER));
+        // A policy below Moderator still stops at SpiceDB `channel#invite`.
+        let mut lowered = v.state.clone();
+        lowered.policy.add_member = ChannelRole::Member;
+        assert!(!can_invite_members(Some(&lowered), MEMBER));
     }
 
     #[test]
