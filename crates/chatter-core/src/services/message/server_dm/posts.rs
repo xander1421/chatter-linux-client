@@ -349,15 +349,27 @@ impl MessageService {
             self.finish_retry_row(&message.id, status, None)?;
             return Ok(status);
         }
-        // The devices this message was encrypted for, not the peer's devices
-        // now. A device linked after the send is not in that set. No fallback
-        // when the set is empty: we do not know who the original was for.
+        // Retain the original fanout whenever it was recorded: a device
+        // added since a partial or unconfirmed send must not receive a copy.
+        // Only an explicitly unsent row with no targets can start a fresh
+        // fanout to the peer's current devices.
         let devices = self.original_dm_devices(peer_id, message.sent_at)?;
+        let fresh_fanout = devices.is_empty()
+            && message.failure_reason.as_deref() == Some("Message not submitted");
+        if devices.is_empty() && !fresh_fanout {
+            return Err(MessageError::InvalidContent(
+                "no original device of this message can be retried".into(),
+            ));
+        }
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             // Through the outbox, so an unconfirmed retry is replayed exactly
             // rather than encrypted again.
-            let generation =
-                self.enqueue_sealed_dm(&message.id, &peer_id, &content, Some(&devices))?;
+            let generation = self.enqueue_sealed_dm(
+                &message.id,
+                &peer_id,
+                &content,
+                if fresh_fanout { None } else { Some(&devices) },
+            )?;
             self.finish_retry_row(&message.id, "sending", None)?;
             return match self
                 .first_sealed_dm_attempt(&message.id, &generation)
@@ -368,10 +380,15 @@ impl MessageService {
                 super::super::dm_outbox::FirstAttempt::Refused(e) => Err(e),
             };
         }
-        let status = match self
-            .send_shield_dm_to_devices(&peer_id, content, &devices)
-            .await
-        {
+        let send = if fresh_fanout {
+            // The normal Shield path snapshots today's ready mailboxes before
+            // submitting; bootstrap remains available if none are ready.
+            self.send_dm(&peer_id, content, &self.mailbox_manager).await
+        } else {
+            self.send_shield_dm_to_devices(&peer_id, content, &devices)
+                .await
+        };
+        let status = match send {
             Ok(()) => "sent",
             Err(MessageError::BootstrapInitiated) => "sending",
             Err(e) => {

@@ -25,7 +25,8 @@ impl MessageService {
         }
     }
 
-    /// Devices of `peer` recorded for the DM sent at `sent_at`.
+    /// Devices of `peer` recorded for the DM sent at `sent_at`. An empty set
+    /// must be interpreted by the caller using the row's submission status.
     pub(super) fn original_dm_devices(
         &self,
         peer: UserId,
@@ -46,11 +47,6 @@ impl MessageService {
             .filter(|(user, _)| *user == peer)
             .map(|(_, device)| device.0)
             .collect::<Vec<_>>();
-        if devices.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "no original device of this message can be retried".into(),
-            ));
-        }
         Ok(devices)
     }
 
