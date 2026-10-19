@@ -164,7 +164,9 @@ mod pow;
 mod recovery;
 mod register;
 mod session;
+mod unlink;
 
 pub use pow::login_start_paying_pow;
 pub(crate) use pow::prove_password;
 pub use recovery::{RECOVERY_CODE_LEN, normalize_recovery_code};
+pub(crate) use unlink::{unlinked_account, wipe_unlinked_install};

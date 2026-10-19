@@ -58,6 +58,16 @@ impl Drop for AuthMode {
     }
 }
 
+/// The grpc-message the server sends, with `Unauthenticated`, to a device that
+/// another device of the account unlinked (server
+/// `internal/middleware/device_auth.go` `ErrDeviceUnlinked`). Only the holder
+/// of that device's token is ever told this. Any other `Unauthenticated`
+/// means the session ended (expiry, sign-out elsewhere, password change), and
+/// must never be read as an unlink: an unlink deletes this device's keys.
+pub(crate) const DEVICE_UNLINKED_MESSAGE: &str = "device unlinked";
+
+type GenerationCallback = Arc<RwLock<Option<Arc<dyn Fn(u64) + Send + Sync>>>>;
+
 /// Thread-safe authentication interceptor for gRPC requests.
 ///
 /// Injects appropriate authorization headers based on the current auth mode.
@@ -66,7 +76,8 @@ impl Drop for AuthMode {
 pub struct AuthInterceptor {
     auth: Arc<RwLock<AuthMode>>,
     generation: Arc<AtomicU64>,
-    session_ended: Arc<RwLock<Option<Arc<dyn Fn(u64) + Send + Sync>>>>,
+    session_ended: GenerationCallback,
+    device_unlinked: GenerationCallback,
 }
 
 impl AuthInterceptor {
@@ -76,6 +87,7 @@ impl AuthInterceptor {
             auth: Arc::new(RwLock::new(AuthMode::None)),
             generation: Arc::new(AtomicU64::new(0)),
             session_ended: Arc::new(RwLock::new(None)),
+            device_unlinked: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -129,6 +141,12 @@ impl AuthInterceptor {
         *self.session_ended.write() = Some(callback);
     }
 
+    /// Called instead of `on_session_ended` when the server says this device
+    /// was unlinked ([`DEVICE_UNLINKED_MESSAGE`]).
+    pub(crate) fn on_device_unlinked(&self, callback: Arc<dyn Fn(u64) + Send + Sync>) {
+        *self.device_unlinked.write() = Some(callback);
+    }
+
     /// Get the current auth mode (for inspection/debugging).
     pub fn current_mode(&self) -> AuthMode {
         self.auth.read().clone()
@@ -180,13 +198,23 @@ pub(crate) struct DeviceAuthRequest {
 
 impl DeviceAuthRequest {
     pub(crate) fn observe(&self, headers: &http::HeaderMap) {
-        if tonic::Status::from_header_map(headers)
-            .is_some_and(|status| status.code() == tonic::Code::Unauthenticated)
-            && self.interceptor.generation() == self.generation
+        let Some(status) = tonic::Status::from_header_map(headers) else {
+            return;
+        };
+        if status.code() != tonic::Code::Unauthenticated
+            || self.interceptor.generation() != self.generation
         {
-            if let Some(callback) = self.interceptor.session_ended.read().clone() {
-                callback(self.generation);
-            }
+            return;
+        }
+        // Exact match only: an unlink deletes keys, so nothing but the
+        // server's dedicated answer may select it.
+        let slot = if status.message() == DEVICE_UNLINKED_MESSAGE {
+            &self.interceptor.device_unlinked
+        } else {
+            &self.interceptor.session_ended
+        };
+        if let Some(callback) = slot.read().clone() {
+            callback(self.generation);
         }
     }
 }

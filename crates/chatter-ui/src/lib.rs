@@ -962,6 +962,13 @@ pub async fn app_init() -> Result<AppState, String> {
         let has_registered_before = ui_ctx.has_registered_before();
         if has_registered_before {
             window.set_current_view("login".into());
+            // Still unlinked from a previous run: say so, as Signal keeps its
+            // "Unlinked" banner up until the device is linked again.
+            if let Some(notice) = ui_ctx.device_unlinked_notice() {
+                window
+                    .global::<crate::AuthFlow>()
+                    .set_login_error(notice.into());
+            }
         } else {
             window.set_current_view("register".into());
         }

@@ -41,6 +41,11 @@ pub mod keys {
     // Auth settings
     pub const CURRENT_USER_ID: &str = "auth.current_user_id";
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
+    /// The account this install belonged to when the server said it was
+    /// unlinked (`storage::unlink`). Signal-Desktop keeps the same fact
+    /// (`uuid_id`, StorageKeys.std.ts STORAGE_KEYS_TO_PRESERVE_AFTER_UNLINK) to
+    /// tell a relink of that account from a link to a different one.
+    pub const UNLINKED_ACCOUNT_ID: &str = "auth.unlinked_account_id";
     /// Device authentication token (32 bytes, base64 encoded)
     pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
     /// Recovery codes awaiting explicit acknowledgment. The SQLCipher settings

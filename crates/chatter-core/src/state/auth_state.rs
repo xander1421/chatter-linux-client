@@ -7,6 +7,10 @@ use tokio::sync::broadcast;
 use crate::domain::ids::UserId;
 use crate::state::store::Store;
 
+/// Shown on the sign-in screen of a device the account unlinked.
+pub(crate) const DEVICE_UNLINKED_NOTICE: &str =
+    "This device was unlinked. Link it to your account again to continue messaging.";
+
 /// Authentication state data.
 ///
 /// Tracks the current user's authentication status, identity,
@@ -17,6 +21,10 @@ pub struct AuthStateData {
     pub session_revision: u64,
     /// Requires explicit reauthentication; persisted device and local data remain.
     pub session_ended: bool,
+    /// The server said another device of the account unlinked this one. Set
+    /// together with `session_ended`; this device's keys are gone, its
+    /// history stays until it is linked again (`storage::unlink`).
+    pub device_unlinked: bool,
     /// Currently logged in user ID, if any.
     pub current_user_id: Option<UserId>,
     /// Current device ID (1 = primary, 2-127 = linked devices).
@@ -97,6 +105,7 @@ impl AuthState {
         self.store.update(|state| {
             state.session_revision = state.session_revision.wrapping_add(1);
             state.session_ended = false;
+            state.device_unlinked = false;
             state.current_user_id = Some(user_id);
             state.device_id = Some(device_id);
             state.display_name = Some(display_name);
@@ -118,6 +127,7 @@ impl AuthState {
         self.store.update(|state| {
             state.session_revision = state.session_revision.wrapping_add(1);
             state.session_ended = false;
+            state.device_unlinked = false;
             state.current_user_id = None;
             state.device_id = None;
             state.display_name = None;
@@ -153,6 +163,7 @@ impl AuthState {
             if state.session_revision == revision {
                 state.session_revision = state.session_revision.wrapping_add(1);
                 state.session_ended = false;
+                state.device_unlinked = false;
                 state.current_user_id = None;
                 state.device_id = None;
                 state.display_name = None;
@@ -172,6 +183,24 @@ impl AuthState {
                 state.login_verifying = false;
                 state.session_ended = true;
                 state.login_error = Some("Your session ended. Sign in again to continue.".into());
+            }
+        });
+    }
+
+    /// Like `set_session_ended_if_current`, for a device the account
+    /// unlinked. The copy follows Signal-Desktop's "Unlinked" banner
+    /// (`icu:unlinked`, `icu:unlinkedWarning`).
+    pub(crate) fn set_device_unlinked_if_current(&self, revision: u64) {
+        self.store.update(|state| {
+            if state.session_revision == revision {
+                state.session_revision = state.session_revision.wrapping_add(1);
+                state.current_user_id = None;
+                state.device_id = None;
+                state.is_logging_in = false;
+                state.login_verifying = false;
+                state.session_ended = true;
+                state.device_unlinked = true;
+                state.login_error = Some(DEVICE_UNLINKED_NOTICE.into());
             }
         });
     }
