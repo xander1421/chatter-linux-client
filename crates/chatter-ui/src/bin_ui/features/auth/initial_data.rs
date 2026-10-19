@@ -3,6 +3,7 @@
 //! Uses ChatterClient services for all operations - no direct repository access.
 
 use slint::ComponentHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel, Weak};
@@ -13,7 +14,14 @@ use crate::bin_ui::converters::initials_from_name;
 use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
 use crate::{FriendData, FriendRequestData, MainWindow};
 
-/// Rebuild the FriendsModal "Friends" tab list and push it into the UI.
+/// Bumped by every friends-list refresh. Only the newest refresh may publish:
+/// concurrent refreshes (accept handler, `FriendAccepted`, sync, tab switch)
+/// finish in any order, and an older one landing last repainted whatever it
+/// had computed over the newer rows.
+static FRIENDS_LIST_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Rebuild the FriendsModal "Friends" tab list (also the New Chat picker) and
+/// push it into the UI.
 ///
 /// An empty list is painted from local storage before `ListFriends`
 /// returns, so a cold start with the server down does not sit on
@@ -23,23 +31,38 @@ use crate::{FriendData, FriendRequestData, MainWindow};
 /// When the server answers, its rows replace the local ones. When it
 /// does not, the local rows stay (or replace a stale online list).
 pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    refresh(window_weak, ui_ctx, false);
+}
+
+/// Shield was entered or left: the list on screen belongs to the other mode
+/// (anon-DM peers vs accepted friends), so repaint from local storage at once
+/// instead of leaving it up until the server answers.
+pub fn refresh_friends_list_for_mode(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    refresh(window_weak, ui_ctx, true);
+}
+
+fn refresh(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, paint_local_first: bool) {
     let owner = super::super::history_owner::SessionOwner::capture(&ui_ctx);
+    let generation = FRIENDS_LIST_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     tokio::spawn(async move {
-        let empty = friends_list_empty(&window_weak).await;
+        let paint_local = paint_local_first || friends_list_empty(&window_weak).await;
         if !owner.is_current() {
             return;
         }
-        if empty {
+        let shield = ui_ctx.anon_mode_enabled();
+        if paint_local {
             publish_friends(
                 window_weak.clone(),
+                &ui_ctx,
                 ui_ctx.local_friend_tab_entries(),
-                owner.clone(),
+                Stamp { generation, shield, owner: owner.clone() },
             );
         }
         if !owner.is_current() {
             return;
         }
-        publish_friends(window_weak, ui_ctx.friends_tab_entries().await, owner);
+        let rows = ui_ctx.friends_tab_entries().await;
+        publish_friends(window_weak, &ui_ctx, rows, Stamp { generation, shield, owner });
     });
 }
 
@@ -48,8 +71,15 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
 /// new name immediately after the live profile update.
 pub fn refresh_friends_list_local(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
     let owner = super::super::history_owner::SessionOwner::capture(&ui_ctx);
+    let generation = FRIENDS_LIST_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     tokio::spawn(async move {
-        publish_friends(window_weak, ui_ctx.local_friend_tab_entries(), owner);
+        let shield = ui_ctx.anon_mode_enabled();
+        publish_friends(
+            window_weak,
+            &ui_ctx,
+            ui_ctx.local_friend_tab_entries(),
+            Stamp { generation, shield, owner },
+        );
     });
 }
 
@@ -77,15 +107,40 @@ async fn friends_list_empty(window_weak: &Weak<MainWindow>) -> bool {
     rx.await.unwrap_or(true)
 }
 
+/// What a set of rows was computed for: the refresh that produced them, the
+/// Shield mode they were read in, and the account.
+struct Stamp {
+    generation: u64,
+    shield: bool,
+    owner: super::super::history_owner::SessionOwner,
+}
+
+impl Stamp {
+    /// Rows from an older refresh, or from the other Shield mode (a toggle
+    /// while `ListFriends` was in flight), are stale and must not paint.
+    fn is_current(&self, ui_ctx: &ChatterClient) -> bool {
+        self.owner.is_current()
+            && FRIENDS_LIST_GENERATION.load(Ordering::SeqCst) == self.generation
+            && ui_ctx.anon_mode_enabled() == self.shield
+    }
+}
+
 fn publish_friends(
     window_weak: Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
     friends_data: Vec<chatter_core::ui::sidebar_data::FriendDataSendData>,
-    owner: super::super::history_owner::SessionOwner,
+    stamp: Stamp,
 ) {
-    if !owner.is_current() {
+    if !stamp.is_current(ui_ctx) {
         return;
     }
+    let ui_ctx = ui_ctx.clone();
+    let owner = stamp.owner.clone();
     crate::run_history_ui!(window_weak, owner, |w| {
+        // Re-check on the UI thread, where a Shield toggle also runs.
+        if !stamp.is_current(&ui_ctx) {
+            return;
+        }
         let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
         w.global::<crate::ModalHostState>()
             .set_friends_list(ModelRc::new(VecModel::from(slint_list)));
