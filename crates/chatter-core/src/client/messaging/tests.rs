@@ -565,9 +565,9 @@ mod older_messages_tests {
         assert!(page(&ids[0]).is_empty());
     }
 
-    /// A jump to a message older than what is loaded installs the newest
-    /// rows grown back past it (the limit doubles: 50, 100, ...) — and
-    /// nothing for a target this list cannot hold.
+    /// A jump installs the rows from its target to the newest, the target
+    /// first (the page grows 50, 100, ... until it holds it) — and nothing
+    /// for a target this list cannot hold.
     #[tokio::test]
     async fn page_reaches_the_jump_target() {
         let (client, conv, ids) = conversation();
@@ -578,10 +578,10 @@ mod older_messages_tests {
                 .unwrap();
             rows.iter().map(|m| m.sent_at).collect::<Vec<_>>()
         };
-        // sent_at 30 is past the newest 50 (71..=120); 100 rows reach it.
-        assert_eq!(until(&ids[29]), (21..=120).collect::<Vec<u64>>());
+        // sent_at 30 is past the newest 50 (71..=120); the page starts at it.
+        assert_eq!(until(&ids[29]), (30..=120).collect::<Vec<u64>>());
         // sent_at 81 is on the newest page already.
-        assert_eq!(until(&ids[80]), (71..=120).collect::<Vec<u64>>());
+        assert_eq!(until(&ids[80]), (81..=120).collect::<Vec<u64>>());
 
         let elsewhere = Message::new_text(
             ChannelId::new(),

@@ -559,6 +559,10 @@ export component MessageList inherits Rectangle {
                     } else {
                         root.jump-stable-passes = 0;
                         self.viewport-y = self.row-y;
+                        // The move can take the target off screen (its last
+                        // position may predate a layout pass): steer from the
+                        // live rows again until it reports from the new offset.
+                        root.jump-measured = false;
                     }
                 }
             }

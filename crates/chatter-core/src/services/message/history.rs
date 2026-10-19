@@ -167,10 +167,13 @@ impl MessageService {
         Ok(self.resolve_stored_quotes(page))
     }
 
-    /// The conversation's newest rows grown back to `target`, oldest first —
+    /// The conversation's rows from `target` to the newest, oldest first —
     /// the list a jump to a message older than what is loaded installs (a
-    /// search hit, a quote, a pin). Same growth as a conversation opening on
-    /// its first unread ([`crate::domain::message::newest_page_reaching`]).
+    /// search hit, a quote, a pin). Grown like a conversation opening on its
+    /// first unread ([`crate::domain::message::newest_page_reaching`]), then
+    /// cut so `target` is the first row: the list lands on row 0 exactly,
+    /// where a seek into a virtualized list only lands on an estimate that
+    /// keeps moving as rows materialize. Older rows page in above it.
     ///
     /// Empty when `target` is not a message of this conversation's main list
     /// — never the whole history for a target that is not in it.
@@ -196,6 +199,7 @@ impl MessageService {
                     .list_for_channel_asc(channel_id, conversation_type, None, limit)
             },
         )?;
+        let page = page.into_iter().skip_while(|m| m.id != target.id).collect();
         Ok(self.resolve_stored_quotes(page))
     }
 
