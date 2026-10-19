@@ -62,10 +62,12 @@ impl UserService {
 
     /// Generate a private friend code for NDSS'21 compliant anonymous DM.
     ///
-    /// Format: `chatter://private/{base32(user_id || identity_key || delivery_token)}`
+    /// Format: `chatter://private/{base32(user_id || device_id || identity_key || delivery_token)}`
     ///
     /// This code embeds all cryptographic material needed for initial contact:
     /// - User ID (16 bytes)
+    /// - This device's ID (4 bytes): a secret chat is bound to one device, so
+    ///   a request made with this code reaches this device and no other
     /// - Identity key (33 bytes - 0x05 + Curve25519)
     /// - Delivery token (12 bytes - derived from profile key)
     ///
@@ -85,6 +87,10 @@ impl UserService {
         use crate::domain::PrivateFriendCode;
 
         let current_user = self.settings_repo.current_user_id()?;
+        let device_id: u32 = self
+            .settings_repo
+            .get(keys::CURRENT_DEVICE_ID)?
+            .ok_or(UserError::NotLoggedIn)?;
 
         // Get identity key
         let identity_key_bytes = self
@@ -120,7 +126,7 @@ impl UserService {
         let delivery_token = PrivateFriendCode::derive_delivery_token(&profile_key);
 
         // Build the private friend code
-        let code = PrivateFriendCode::new(current_user, identity_key, delivery_token);
+        let code = PrivateFriendCode::new(current_user, device_id, identity_key, delivery_token);
 
         Ok(code.to_url())
     }
