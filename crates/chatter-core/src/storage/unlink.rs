@@ -27,9 +27,15 @@ use crate::error::StorageError;
 
 /// This device's own Signal state, which an unlinked device can never use
 /// again: identity keypair, prekeys, ratchet sessions, sender keys and the
-/// resend log of messages encrypted under them. Remote identities stay, as
-/// Signal keeps its `identityKeys` table (the safety numbers the user saw).
+/// resend log of messages encrypted under them, and the queued sends that would
+/// need those keys (Signal's `jobs`). Remote identities stay, as Signal keeps
+/// its `identityKeys` table (the safety numbers the user saw).
 const DEVICE_CONFIGURATION_TABLES: &[&str] = &[
+    "dm_outbox",
+    "pending_dm_messages",
+    "pending_channel_messages",
+    "pending_anon_group_messages",
+    "pending_anon_group_invites",
     "kyber_prekey_usage",
     "sender_keys",
     "sender_key_metadata",
