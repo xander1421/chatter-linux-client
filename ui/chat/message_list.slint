@@ -185,6 +185,25 @@ export component MessageList inherits Rectangle {
     private property <int> jump-stable-passes: 0;
     private property <length> jump-bubble-y: 0px;
     private property <int> jump-measurement-serial: 0;
+    // One frame's materialized geometry, discarded after every correction.
+    private property <bool> jump-bootstrapped: false;
+    private property <int> jump-sample-index: -1;
+    private property <length> jump-sample-y: 0px;
+    private property <length> jump-height-sum: 0px;
+    private property <int> jump-sample-count: 0;
+    callback measured-navigation-row(int, length, length);
+    measured-navigation-row(index, y, height) => {
+        if (root.jump-row >= 0 && !root.jump-measured) {
+            root.jump-height-sum += height;
+            root.jump-sample-count += 1;
+            if (root.jump-sample-index < 0
+                    || Math.abs(index - root.jump-row) < Math.abs(root.jump-sample-index - root.jump-row)) {
+                root.jump-sample-index = index;
+                root.jump-sample-y = y;
+            }
+        }
+        if (index == root.jump-row) { root.measured-jump-row(index, y); }
+    }
     callback measured-jump-row(int, length);
     measured-jump-row(index, y) => {
         if (index == root.jump-row) {
@@ -230,6 +249,10 @@ export component MessageList inherits Rectangle {
         let last-id = count > 0 ? root.messages[count - 1].message-id : "";
         let new-tail = count > root.observed-message-count
             && last-id != root.observed-last-message-id
+            // A replacement history/search page is not incoming traffic.
+            // The first arrival into an already-open empty list still counts.
+            && (root.observed-message-count == 0
+                || root.messages[root.observed-message-count - 1].message-id == root.observed-last-message-id)
             && root.ready-for-arrivals && !root.loading;
         // Older history is inserted above the existing last message. Only a
         // changed tail represents new traffic that should rise into view.
@@ -295,6 +318,10 @@ export component MessageList inherits Rectangle {
         root.at-end = false;
         root.is-at-bottom = false;
         root.jump-measured = false;
+        root.jump-bootstrapped = false;
+        root.jump-sample-index = -1;
+        root.jump-height-sum = 0px;
+        root.jump-sample-count = 0;
         root.jump-stable-passes = 0;
         root.jump-row = i;
         root.nav-serial += 1;
@@ -379,10 +406,9 @@ export component MessageList inherits Rectangle {
             }
         }
 
-        // Bootstrap after layout has completed, rather than from the runtime's
-        // synchronous viewport callbacks. Its height and scroll estimates are
-        // updated separately; feeding one transient value straight back into
-        // the other can repeatedly materialize the wrong mixed-height rows.
+        // Correct from deferred live-row geometry after layout, rather than
+        // synchronous viewport callbacks whose height and y update separately.
+        // Only the first seek may bootstrap from the global height estimate.
         Timer {
             interval: 16ms;
             running: root.jump-row >= 0 && !root.jump-measured;
@@ -537,14 +563,28 @@ export component MessageList inherits Rectangle {
                 }
             }
             function seek-row(i: int) {
-                if (root.messages.length > 0 && self.measured) {
-                    if (!root.jump-measured) {
-                        // Bootstrap virtualization only; never count an estimated
-                        // offset as a completed jump.
+                if (root.messages.length > 0 && self.measured && !root.jump-measured) {
+                    if (root.jump-sample-count > 0) {
+                        // Anchor to a real bubble, then walk at most one screen
+                        // per pass so intervening rows supply fresh heights.
+                        let average = root.jump-height-sum / root.jump-sample-count;
+                        let error = root.jump-sample-y + (i - root.jump-sample-index) * average - root.top-inset;
+                        let step = Math.max(-self.height, Math.min(self.height, error));
+                        self.viewport-y = Math.min(0px, Math.max(
+                            Math.min(0px, self.height - self.viewport-height),
+                            self.viewport-y - step));
+                        root.jump-bootstrapped = true;
+                    } else if (!root.jump-bootstrapped) {
+                        // One initial estimate only; subsequent seeks must use
+                        // rendered geometry rather than reset to this offset.
                         self.viewport-y = Math.min(0px, Math.max(
                             Math.min(0px, self.height - self.viewport-height),
                             -(i * self.viewport-height / root.messages.length) - 1px));
+                        root.jump-bootstrapped = true;
                     }
+                    root.jump-sample-index = -1;
+                    root.jump-height-sum = 0px;
+                    root.jump-sample-count = 0;
                 }
             }
 
@@ -604,7 +644,7 @@ export component MessageList inherits Rectangle {
                         self.seek-end();
                     }
                 } else if (root.jump-row >= 0) {
-                    // The bootstrap timer or a fresh delegate measurement owns
+                    // The geometry timer or a fresh delegate measurement owns
                     // navigation; this callback's coordinates may be transient.
                 } else if ((root.at-end || root.following-tail || root.is-at-bottom)
                         && !root.opening-on-unread && !root.scrolling
@@ -703,20 +743,19 @@ export component MessageList inherits Rectangle {
             }
 
             for item[idx] in root.messages: message-row := VerticalLayout {
-                property <bool> jump-target: idx == root.jump-row;
                 // absolute-position follows the actual render geometry, including
                 // the virtualizer's anchor and all row separators/padding.
                 property <length> bubble-position:
                     message-bubble.absolute-position.y - list.absolute-position.y;
-                // The target's only timer is active while navigating. Deferring
-                // to the next frame avoids reporting freshly-created delegates'
-                // default y=0 before the virtualizer has positioned them.
+                // Every live row helps find an unmaterialized target. Once it
+                // exists, only that row reports the exact three-pass landing.
+                // Defer a frame so new delegates have rendered positions.
                 Timer {
                     interval: 16ms;
-                    running: message-row.jump-target;
+                    running: root.jump-row >= 0 && (!root.jump-measured || idx == root.jump-row);
                     triggered => {
                         if (message-bubble.height > 0px) {
-                            root.measured-jump-row(idx, message-row.bubble-position);
+                            root.measured-navigation-row(idx, message-row.bubble-position, message-row.height);
                         }
                     }
                 }
