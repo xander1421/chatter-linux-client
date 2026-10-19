@@ -337,6 +337,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Receipts go out below, for the page this open loads anyway.
             let read_handle = ui_ctx.conversation(active);
             let anchor = read_handle.mark_read_local().unwrap_or_default();
+            // A notification open lands on the newest message, with no divider.
+            let anchor = if open_latest { Default::default() } else { anchor };
             tracing::info!(kind = "dm", stage = "read_marked", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
             // 1. Handle Anon DM selection
@@ -368,7 +370,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
                 // Load messages
-                let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
+                let messages = match anchor.opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, limit as i32)) {
                     Ok(msgs) => msgs,
                     Err(e) => {
                         tracing::error!("Failed to list anon DM messages: {}", e);
@@ -398,7 +400,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     use slint::Model;
                     super::apply_unread_anchor(
                         &w,
-                        if open_latest { Default::default() } else { anchor },
+                        anchor,
                         &anchor_page,
                     );
                     let before = w.global::<crate::ChatPane>().get_messages().row_count();
@@ -468,7 +470,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
             // Load messages
-            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
+            let messages = match anchor.opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, limit)) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);
@@ -522,7 +524,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             crate::run_history_ui!(weak, owner, |w| {
                 super::apply_unread_anchor(
                     &w,
-                    if open_latest { Default::default() } else { anchor },
+                    anchor,
                     &anchor_page,
                 );
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();

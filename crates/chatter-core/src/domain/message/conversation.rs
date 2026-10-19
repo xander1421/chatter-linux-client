@@ -181,4 +181,53 @@ impl UnreadAnchor {
         page.iter()
             .position(|m| self.unread_sent_at.binary_search(&m.sent_at).is_ok())
     }
+
+    /// The page a conversation opens on: the newest rows, grown older until
+    /// it holds the first unread message — [`newest_page_reaching`] with that
+    /// message as the target.
+    ///
+    /// A fixed newest page put the divider above its own row 0 whenever more
+    /// unread messages arrived than fit in it (device ui135: 122 unread, the
+    /// divider sat above the newest 50 and the chat opened 72 messages past
+    /// where the user left off). With the first unread on the page,
+    /// `divider_index` lands on it and the divider and the pill agree.
+    pub fn opening_page<E>(
+        &self,
+        page_size: u32,
+        load: impl FnMut(u32) -> Result<Vec<Message>, E>,
+    ) -> Result<Vec<Message>, E> {
+        newest_page_reaching(self.unread_sent_at.first().copied(), page_size, load)
+    }
+}
+
+/// The newest rows of a conversation's main list, oldest first, grown older
+/// until the oldest row is older than `target_sent_at` — so the message sent
+/// then is on the page, whatever ties on `sent_at` there are — or history
+/// runs out. `None` is just the newest page.
+///
+/// One mechanism for every "open the list at this message" case: the first
+/// unread message on a conversation open (`UnreadAnchor::opening_page`) and a
+/// jump to a message older than what is loaded (a search hit, a quote, a pin).
+///
+/// `load(limit)` returns the newest `limit` rows, oldest first. The limit
+/// doubles per step, so a target any distance back costs a logarithmic number
+/// of reads and the page carries context above it. A target that is not on
+/// this list ends when history does (fewer rows than asked for), never spins.
+pub fn newest_page_reaching<E>(
+    target_sent_at: Option<u64>,
+    page_size: u32,
+    mut load: impl FnMut(u32) -> Result<Vec<Message>, E>,
+) -> Result<Vec<Message>, E> {
+    let mut limit = page_size.max(1);
+    loop {
+        let page = load(limit)?;
+        let reached = match (target_sent_at, page.first()) {
+            (Some(target), Some(oldest)) => oldest.sent_at < target,
+            _ => true,
+        };
+        if reached || (page.len() as u32) < limit {
+            return Ok(page);
+        }
+        limit = limit.saturating_mul(2);
+    }
 }

@@ -51,7 +51,7 @@ export global ChatPane {
     in-out property <bool> chat-menu-settings: false;
     in-out property <bool> chat-menu-secret-chat: false;
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
-    // The last older-history page failed to read (header.rs `load_older`);
+    // The last older-history page failed to read (header.rs `load_history`);
     // the list shows a Retry chip until a page loads or the conversation changes.
     in-out property <bool> history-load-failed: false;
     // Unread boundary from core — see MessageList.

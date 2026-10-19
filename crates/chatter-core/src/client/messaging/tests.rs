@@ -555,7 +555,7 @@ mod older_messages_tests {
         let kind = ConversationType::ServerDm;
         let page = |before: &MessageId| {
             let rows = client
-                .get_older_messages_local_asc(&conv, &kind, before, None)
+                .get_older_messages_local_asc(&conv, &kind, before)
                 .unwrap();
             rows.iter().map(|m| m.sent_at).collect::<Vec<_>>()
         };
@@ -565,22 +565,23 @@ mod older_messages_tests {
         assert!(page(&ids[0]).is_empty());
     }
 
-    /// A jump to a message older than what is loaded brings in every page
-    /// back to it — and nothing for a target this list cannot hold.
+    /// A jump to a message older than what is loaded installs the newest
+    /// rows grown back past it (the limit doubles: 50, 100, ...) — and
+    /// nothing for a target this list cannot hold.
     #[tokio::test]
-    async fn pages_until_the_jump_target() {
+    async fn page_reaches_the_jump_target() {
         let (client, conv, ids) = conversation();
         let kind = ConversationType::ServerDm;
         let until = |target: &MessageId| {
             let rows = client
-                .get_older_messages_local_asc(&conv, &kind, &ids[100], Some(target))
+                .get_messages_local_reaching(&conv, &kind, target)
                 .unwrap();
             rows.iter().map(|m| m.sent_at).collect::<Vec<_>>()
         };
-        // Row 101 is the oldest loaded; the target is two pages up. Whole
-        // pages, contiguous with what is loaded.
-        assert_eq!(until(&ids[29]), (1..=100).collect::<Vec<u64>>());
-        assert_eq!(until(&ids[80]), (51..=100).collect::<Vec<u64>>());
+        // sent_at 30 is past the newest 50 (71..=120); 100 rows reach it.
+        assert_eq!(until(&ids[29]), (21..=120).collect::<Vec<u64>>());
+        // sent_at 81 is on the newest page already.
+        assert_eq!(until(&ids[80]), (71..=120).collect::<Vec<u64>>());
 
         let elsewhere = Message::new_text(
             ChannelId::new(),

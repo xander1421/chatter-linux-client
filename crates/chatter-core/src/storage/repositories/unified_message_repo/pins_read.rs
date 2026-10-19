@@ -143,6 +143,12 @@ impl UnifiedMessageRepository {
 
     /// The unread boundary of a conversation, without clearing it.
     ///
+    /// Main-list messages only: thread replies are not rows of the list the
+    /// divider is drawn in, so one of them can neither be the first unread
+    /// row nor count toward the pill under it, and as a growth target for
+    /// `UnreadAnchor::opening_page` it would load the whole history looking
+    /// for a row that is not there.
+    ///
     /// One query, served by `idx_messages_unread`
     /// (conversation_type, conversation_id, is_read) WHERE is_read = 0.
     pub fn unread_anchor(
@@ -155,7 +161,7 @@ impl UnifiedMessageRepository {
             .prepare(
                 "SELECT sent_at FROM messages \
                  WHERE conversation_id = ?1 AND conversation_type = ?2 \
-                   AND is_read = 0 AND is_deleted = 0 \
+                   AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL \
                  ORDER BY sent_at",
             )?
             .query_map(

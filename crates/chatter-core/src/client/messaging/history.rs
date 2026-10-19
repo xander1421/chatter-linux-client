@@ -60,13 +60,26 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
         before: &crate::domain::ids::MessageId,
-        until: Option<&crate::domain::ids::MessageId>,
     ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
         self.messages().get_older_messages_local_asc(
             channel_id,
             conversation_type,
             before,
-            until,
+            crate::config::MESSAGE_PAGE_SIZE as u32,
+        )
+    }
+
+    /// See [`crate::services::message::MessageService::get_messages_local_reaching`].
+    pub fn get_messages_local_reaching(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        target: &crate::domain::ids::MessageId,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
+        self.messages().get_messages_local_reaching(
+            channel_id,
+            conversation_type,
+            target,
             crate::config::MESSAGE_PAGE_SIZE as u32,
         )
     }
@@ -165,17 +178,6 @@ impl ChatterClient {
         message_id: &crate::domain::ids::MessageId,
     ) -> Option<crate::domain::message::Message> {
         self.messages().get_message_local(message_id).ok().flatten()
-    }
-
-    pub fn get_history_target_local(
-        &self,
-        message_id: &crate::domain::ids::MessageId,
-        channel_id: &crate::domain::ids::ChannelId,
-        conversation_type: &ConversationType,
-    ) -> Vec<crate::domain::message::Message> {
-        self.messages()
-            .get_history_target_local(message_id, channel_id, conversation_type)
-            .unwrap_or_default()
     }
 
     /// Timestamp of an outgoing failed or parked message eligible for tap-to-retry.
