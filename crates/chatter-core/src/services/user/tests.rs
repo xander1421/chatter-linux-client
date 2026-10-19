@@ -386,6 +386,61 @@ mod tests {
         );
     }
 
+    /// Authentication failure must not fall through to a cached username
+    /// that was populated from the peer's previously decrypted profile.
+    #[tokio::test]
+    async fn failed_profile_authentication_does_not_restore_cached_name() {
+        use super::super::decrypt_friend_display_name;
+        use crate::client::ChatterClient;
+        use crate::domain::user::{Profile, User};
+        use base64::Engine;
+
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let (me, peer) = (UserId::new(), UserId::new());
+        let users = client.users();
+        users
+            .user_repo
+            .insert(&User::new(peer, "Old name".into(), Vec::new()))
+            .unwrap();
+        users
+            .user_repo
+            .set_friend_profile_key(&me, &peer, &[1; 32])
+            .unwrap();
+        let encrypted =
+            crate::crypto::profile_crypto::encrypt_display_name(&[2; 32], "New name").unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encrypted);
+
+        let unavailable =
+            decrypt_friend_display_name(&users.user_repo, &me, &peer, &encoded).unwrap();
+        assert_ne!(unavailable, friend_display_name_placeholder(&peer));
+        users
+            .user_repo
+            .upsert_profile(&Profile::new(peer, unavailable.clone()))
+            .unwrap();
+        assert_eq!(client.display_name(&peer), unavailable);
+
+        users
+            .user_repo
+            .set_friend_profile_key(&me, &peer, &[2; 32])
+            .unwrap();
+        let recovered =
+            decrypt_friend_display_name(&users.user_repo, &me, &peer, &encoded).unwrap();
+        users
+            .user_repo
+            .upsert_profile(&Profile::new(peer, recovered))
+            .unwrap();
+        assert_eq!(client.display_name(&peer), "New name");
+    }
+
     #[test]
     fn test_user_service_construction() {
         fn _verify_types(

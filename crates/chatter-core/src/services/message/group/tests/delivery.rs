@@ -40,7 +40,7 @@
             .process_sender_key(&t.alice_id, 1, &skdm)
             .await
             .unwrap();
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
 
         // Each sync traversal of the channel: every old message, plus one new
         // message per pass. Gate deadlines are pulled forward so each pass is
@@ -149,7 +149,7 @@
             .await
             .unwrap();
         let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
 
         for _ in 0..2 {
             assert_eq!(
@@ -316,7 +316,7 @@
             .unwrap();
         let id = MessageId::new();
         let copy = server_copy(&t, &id, TimestampNanos::now().as_u64(), &ge);
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
 
         assert_eq!(
             inbound.ingest(&copy, t.channel_id, true).await,
@@ -370,7 +370,7 @@
             .await
             .unwrap();
         let copy = server_copy(&t, &MessageId::new(), now - 3600 * 1_000_000_000, &ge);
-        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone(), t.bob.users().clone());
         assert_eq!(
             inbound.ingest(&copy, t.channel_id, false).await,
             Ingested::DeliveryIssue

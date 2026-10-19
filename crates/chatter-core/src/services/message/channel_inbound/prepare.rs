@@ -33,7 +33,7 @@ pub(super) fn record_decrypt_failure(
 }
 
 impl ChannelInbound {
-    /// Decrypt + convert, without touching storage.
+    /// Decrypt + convert, adopting authenticated profile keys on the way.
     ///
     /// `skip_own` drops messages THIS device authored — right for the live
     /// stream (already rendered optimistically), wrong for a backfill.
@@ -221,6 +221,41 @@ impl ChannelInbound {
                     // The sender's verified (revision, state_hash): fork or
                     // staleness check against ours.
                     self.messages.check_group_stamp(&channel_id, &dm);
+
+                    if current_user != Some(sid)
+                        && let Some(key) = dm
+                            .profile_key
+                            .as_deref()
+                            .and_then(|k| <[u8; 32]>::try_from(k).ok())
+                    {
+                        let Some(us) = current_user else {
+                            return Err(Ingested::RetryableFailure);
+                        };
+                        match self
+                            .messages
+                            .user_repo
+                            .set_friend_profile_key(&us, &sid, &key)
+                        {
+                            Ok(true) => {
+                                if let Err(error) = self.users.get_user_profile(&sid).await {
+                                    tracing::warn!(%sid, %error, "Could not refresh channel sender profile");
+                                }
+                            }
+                            Ok(false) => {
+                                // A prior refresh may have failed after the key
+                                // was stored. Next contact retries, throttled
+                                // only after a successful profile fetch.
+                                if let Err(error) = self.users.refresh_profile_if_stale(&sid).await
+                                {
+                                    tracing::warn!(%sid, %error, "Could not refresh channel sender profile");
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%sid, %error, "Could not store channel sender profile key");
+                                return Err(Ingested::RetryableFailure);
+                            }
+                        }
+                    }
 
                     inbound_quote = dm.quote.clone();
 

@@ -29,7 +29,11 @@ async fn server_channel_edits_follow_the_edit_rules() {
             &1u32,
         )
         .unwrap();
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
     let mut events = client.messages().event_bus.subscribe_domain();
     let mut edits = || {
         let mut n = 0;

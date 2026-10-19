@@ -15,7 +15,11 @@ async fn reingesting_a_read_message_keeps_it_read() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
 
     let channel_id = ChannelId::new();
     let proto = chat_v1::Message {
@@ -70,7 +74,11 @@ async fn reingesting_an_original_keeps_its_applied_edit() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
 
     let channel_id = ChannelId::new();
     let id = crate::domain::ids::MessageId::new();
@@ -128,7 +136,11 @@ async fn first_insert_announces_once_before_encrypted_stream_duplicate() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
     let channel = ChannelId::new();
     let mut events = client.subscribe_events();
     for first_live in [false, true] {
@@ -264,7 +276,11 @@ async fn reingesting_a_deleted_message_keeps_it_deleted() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .expect("build client");
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
 
     let channel_id = ChannelId::new();
     let message_id = crate::domain::ids::MessageId::new();

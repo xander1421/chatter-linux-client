@@ -89,7 +89,11 @@ async fn peer_channel_reaction_survives_empty_or_partial_server_resync() {
             .record_inbound_reaction(&scope, &own, &author, 100, "👍", false, 11)
             .unwrap()
     );
-    let inbound = ChannelInbound::new(service.clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        service.clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
     let mut envelope = chat_v1::Message {
         id: message.id.to_string(),
         channel_id: id.to_string(),

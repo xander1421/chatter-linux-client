@@ -443,6 +443,7 @@ impl MessageService {
             ..Default::default()
         };
         stamp_group_data_message(&mut dm, verified);
+        dm.profile_key = self.group_profile_key(verified);
         let mut content = Content {
             timestamp: dm.timestamp,
             content: Some(content::Content::DataMessage(dm)),

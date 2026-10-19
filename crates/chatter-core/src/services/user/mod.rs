@@ -50,7 +50,9 @@ use conversions::{
 /// handshake). Returns `None` when we have no key, the value isn't decodable,
 /// or the plaintext is empty. This is the single source of truth for friend
 /// name decryption — callers pick the fallback ([`friend_display_name_placeholder`]
-/// or an existing local name). Never guesses from length, never returns ciphertext.
+/// or an existing local name). Authentication failure returns an explicit
+/// unavailable label: unlike the missing-key placeholder, it must not resolve
+/// through an older cached username. Never returns ciphertext.
 pub fn decrypt_friend_display_name(
     user_repo: &UserRepository,
     current_user: &UserId,
@@ -72,12 +74,14 @@ pub fn decrypt_friend_display_name(
     let name = match crate::crypto::profile_crypto::decrypt_display_name(&key, &bytes) {
         Ok(name) => name,
         Err(_) => {
-            // We hold a key and it does not open their current profile: the
-            // key is stale (they rotated it and the new one has not reached
-            // this device). Every catch-up path then keeps the old name, so
-            // say so — this is the one case a rename can never arrive.
+            // A held key cannot authenticate this profile. Do not let callers
+            // preserve an old name as though it were still verified. A later
+            // authenticated message restates the sender's current profile key.
             tracing::warn!(%friend_id, "stored friend profile key does not decrypt their profile name");
-            return None;
+            return Some(format!(
+                "{} (profile unavailable)",
+                friend_display_name_placeholder(friend_id)
+            ));
         }
     };
     (!name.is_empty()).then_some(name)

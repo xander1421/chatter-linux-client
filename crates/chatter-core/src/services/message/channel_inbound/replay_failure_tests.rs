@@ -18,7 +18,11 @@ async fn failed_sqlite_write_is_not_acknowledged_by_live_or_resync_ingestion() {
         .data_dir(dir.path().to_str().unwrap())
         .build()
         .unwrap();
-    let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
     let channel = ChannelId::new();
     let message = chat_v1::Message {
         id: crate::domain::MessageId::new().to_string(),

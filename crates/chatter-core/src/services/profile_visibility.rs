@@ -114,10 +114,12 @@ pub fn shareable_profile_key(
     }
     let allowed = match ProfileVisibility::load(settings) {
         ProfileVisibility::Everyone => true,
-        ProfileVisibility::Contacts => matches!(
-            users.get_friendship(&us, recipient),
-            Ok(Some(f)) if f.status == FriendshipStatus::Accepted
-        ),
+        ProfileVisibility::Contacts => [(us, *recipient), (*recipient, us)].iter().any(|(a, b)| {
+            matches!(
+                users.get_friendship(a, b),
+                Ok(Some(f)) if f.status == FriendshipStatus::Accepted
+            )
+        }),
         ProfileVisibility::Nobody => false,
     };
     if allowed {
@@ -253,6 +255,32 @@ mod tests {
                 .unwrap();
         }
         id
+    }
+
+    #[test]
+    fn contacts_shares_with_incoming_friend_but_still_honors_our_block() {
+        let t = setup();
+        let friend = peer(&t, None);
+        t.users
+            .insert_friendship(&Friendship {
+                requester_id: friend,
+                addressee_id: t.me,
+                status: FriendshipStatus::Accepted,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        ProfileVisibility::Contacts.store(&t.settings).unwrap();
+        assert!(shareable_profile_key(&t.settings, &t.users, &friend).is_some());
+
+        t.users
+            .insert_friendship(&Friendship {
+                requester_id: t.me,
+                addressee_id: friend,
+                status: FriendshipStatus::Blocked,
+                created_at: chrono::Utc::now(),
+            })
+            .unwrap();
+        assert!(shareable_profile_key(&t.settings, &t.users, &friend).is_none());
     }
 
     #[test]
