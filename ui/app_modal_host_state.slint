@@ -209,6 +209,8 @@ export global ModalHostState {
     in property <int> channel-settings-invited-count: 0;
     in property <bool> channel-settings-can-edit: false;
     in property <bool> channel-settings-can-manage-members: false;
+    // Core's answer (`can_invite_to_channel` / `can_invite_to_anon_group`).
+    in property <bool> channel-settings-can-invite: false;
     in property <bool> channel-settings-can-archive: false;
     in property <bool> channel-settings-can-delete: false;
     in property <bool> channel-settings-is-owner: false;

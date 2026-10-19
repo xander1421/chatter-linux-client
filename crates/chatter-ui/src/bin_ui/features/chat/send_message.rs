@@ -354,9 +354,9 @@ fn set_send_notice(
         return;
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
-    let can_call = ui_ctx
-        .conversation_actions(ui_ctx.active_conversation())
-        .can_call;
+    // A role change (`ChannelMemberUpdated`) lands here too, so the header's
+    // invite button follows promotion and demotion.
+    let actions = ui_ctx.conversation_actions(ui_ctx.active_conversation());
     // The membership banner and public badge travel with the notice: both say
     // whether (and why) this channel can be posted to.
     let membership = ui_ctx.channel_membership_header(&channel_id);
@@ -374,7 +374,10 @@ fn set_send_notice(
                 .set_secret_request_actions(answer);
             w.global::<crate::ChatPane>()
                 .set_conversation_read_only(read_only);
-            w.global::<crate::ChatPane>().set_header_can_call(can_call);
+            w.global::<crate::ChatPane>()
+                .set_header_can_call(actions.can_call);
+            w.global::<crate::ChatPane>()
+                .set_header_can_invite(actions.can_invite);
             super::membership::apply_header(&w, &membership);
         }
     });

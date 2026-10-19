@@ -7,6 +7,7 @@ pub struct PrivateGroupRoster {
     pub name: String,
     pub is_owner: bool,
     pub can_manage_members: bool,
+    pub can_invite: bool,
     pub can_leave: bool,
     pub blocked: bool,
     pub member_count: i32,
@@ -57,9 +58,26 @@ impl ChatterClient {
         Some(PrivateGroupRoster {
             is_owner,
             can_manage_members: group.status.can_send() && group.can_manage_members(),
+            can_invite: self.can_invite_to_anon_group(&group_id),
             can_leave: self.can_leave_anon_group(&group_id),
             blocked: group.is_blocked(),
             name: group.name, member_count, invited_count, members,
+        })
+    }
+
+    /// Whether this account may invite people into `group_id`: the same rule
+    /// `AnonGroupService::require_invitation_owner` enforces when sending (V1
+    /// invitations are owner-only, `AnonGroupRole::can_invite`), plus a group
+    /// we can still send to. Unknown group or no session: no.
+    pub fn can_invite_to_anon_group(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> bool {
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
+        self.get_anon_group(group_id).is_some_and(|g| {
+            g.status.can_send() && !g.is_blocked() && g.owner_id == me && g.my_role.can_invite()
         })
     }
 

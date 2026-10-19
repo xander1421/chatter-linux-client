@@ -203,9 +203,18 @@ impl ChatterClient {
             && !conversation
                 .channel_id()
                 .is_some_and(|id| self.is_former_channel(&id));
+        let can_invite = match (&kind, &conversation) {
+            (Kind::Channel, crate::state::ActiveConversation::Channel(id)) => {
+                self.can_invite_to_channel(id)
+            }
+            (Kind::AnonGroup, crate::state::ActiveConversation::AnonGroup(id)) => {
+                self.can_invite_to_anon_group(id)
+            }
+            _ => false,
+        };
         ConversationActions {
             can_call,
-            can_invite: matches!(kind, Kind::Channel | Kind::AnonGroup),
+            can_invite,
             can_open_settings: matches!(kind, Kind::Channel | Kind::ServerDm | Kind::AnonGroup),
             can_open_pinned_list: matches!(kind, Kind::SavedMessages),
         }
