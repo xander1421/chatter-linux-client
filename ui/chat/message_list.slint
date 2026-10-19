@@ -668,6 +668,8 @@ export component MessageList inherits Rectangle {
                     root.unread-index-shifted = false;
                 } else if (self.open-index >= 0) {
                     root.go-to-row(self.open-index);
+                } else {
+                    root.opening-on-unread = false;
                 }
             }
 

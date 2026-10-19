@@ -8,7 +8,7 @@ import { GifData } from "components/gif_picker.slint";
 import { MentionSuggestion } from "components/mention_autocomplete.slint";
 import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
 import { SharedContentItem, SharedTab } from "modals/mod.slint";
-import { FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "modals/friends.slint";
 import { ForwardTarget } from "modals/forward_message.slint";
 import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
@@ -152,7 +152,7 @@ export global ModalHostState {
     in-out property <string> group-invite-decision: "";
     in-out property <string> group-invite-error-id: "";
     in-out property <string> group-invite-error: "";
-    in property <[FriendRequestData]> friends-channel-invites: [];
+    in property <[ChannelInviteData]> friends-channel-invites: [];
     in property <[BlockedUserData]> friends-blocked-users: [];
     in property <bool> friends-loading: false;
     // Pending message requests count (for sidebar badge)

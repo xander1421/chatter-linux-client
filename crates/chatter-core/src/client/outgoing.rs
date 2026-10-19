@@ -81,6 +81,9 @@ impl ChatterClient {
         message: Option<&Message>,
         text: &str,
     ) {
+        self.services
+            .chat_state
+            .dismiss_opening_unread(conversation);
         let (preview, at) = match message {
             Some(message) => (self.message_sidebar_preview(message), message.created_at),
             None => (

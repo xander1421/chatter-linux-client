@@ -89,7 +89,7 @@ impl ChatterClient {
                 let channel_name = if invite.channel_name.is_empty() {
                     "Channel invite".to_string()
                 } else {
-                    format!("#{}", invite.channel_name)
+                    invite.channel_name
                 };
                 let invited_by = invite
                     .inviter_id
@@ -102,6 +102,8 @@ impl ChatterClient {
                 ChannelInviteRow {
                     channel_id: invite.channel_id,
                     channel_name,
+                    private_channel: invite.channel_type
+                        == crate::proto::chat_v1::ChannelType::ChannelPrivate as i32,
                     invited_by,
                     created_at: invite.created_at,
                     note: invite.message,
@@ -110,7 +112,7 @@ impl ChatterClient {
             .collect()
     }
 
-    /// Accept or decline a channel invitation. Returns the channel on accept,
+    /// Accept or decline a channel invitation. Selects and returns the channel on accept,
     /// `None` on decline.
     ///
     /// Accepting is a join, so this finishes the join the same way
@@ -167,6 +169,7 @@ impl ChatterClient {
             );
         }
 
+        self.select_channel(channel.id);
         Ok(Some(channel))
     }
 

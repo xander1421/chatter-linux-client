@@ -263,6 +263,27 @@ impl ChatterClient {
         self.services.chat_state.set_active_channel(channel);
     }
 
+    /// Core owns whether the opening unread boundary survives an own send.
+    pub fn opening_unread_anchor(
+        &self,
+        anchor: crate::domain::message::UnreadAnchor,
+    ) -> crate::domain::message::UnreadAnchor {
+        if self.chat_snapshot().opening_unread_dismissed {
+            crate::domain::message::UnreadAnchor::default()
+        } else {
+            anchor
+        }
+    }
+
+    /// Whether a send has dismissed the boundary in the currently open chat.
+    pub fn opening_unread_dismissed_for(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> bool {
+        let state = self.chat_snapshot();
+        state.active_conversation == conversation && state.opening_unread_dismissed
+    }
+
     /// Read-only copy of chat state for presentation consumers.
     pub fn chat_snapshot(&self) -> crate::state::ChatStateData {
         self.services.chat_state.get()

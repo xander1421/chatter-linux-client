@@ -44,7 +44,7 @@ import { MentionSuggestion } from "components/mention_autocomplete.slint";
 // Import modals
 import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
 import { SharedContentItem, SharedTab } from "modals/mod.slint";
-import { FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "modals/friends.slint";
 import { ForwardTarget } from "modals/forward_message.slint";
 import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
@@ -69,7 +69,7 @@ import { ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData, 
 import { ShieldWash } from "anon_mode/shield_wash.slint";
 
 // Re-export types for Rust binding
-export { ChatRowData, CustomSectionData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
+export { ChatRowData, CustomSectionData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component MainWindow inherits Window {
     title: "Chatter";

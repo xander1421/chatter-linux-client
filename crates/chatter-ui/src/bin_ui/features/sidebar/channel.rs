@@ -435,7 +435,7 @@ pub(crate) async fn load_channel_into_ui_owned(
 
     let anchor_page = messages.clone();
     crate::run_history_ui!(weak, owner, |w| {
-        super::apply_unread_anchor(&w, anchor, &anchor_page);
+        super::apply_unread_anchor(&w, ui_ctx_gifs.opening_unread_anchor(anchor), &anchor_page);
         metadata.apply(&w);
         crate::bin_ui::converters::set_conversation_kind(
             &w,

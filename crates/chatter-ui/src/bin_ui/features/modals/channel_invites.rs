@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
-use crate::{FriendRequestData, MainWindow};
+use crate::{ChannelInviteData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
@@ -18,6 +18,7 @@ use chatter_core::domain::ids::ChannelId;
 struct ChannelInviteSendData {
     channel_id: String,
     channel_name: String,
+    private_channel: bool,
     invited_by: String,
     sent_at: String,
     note: String,
@@ -48,6 +49,7 @@ pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>)
             .map(|invite| ChannelInviteSendData {
                 channel_id: invite.channel_id,
                 channel_name: invite.channel_name,
+                private_channel: invite.private_channel,
                 invited_by: invite.invited_by,
                 sent_at: format_created_at(invite.created_at),
                 note: invite.note,
@@ -58,11 +60,12 @@ pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>)
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let items: Vec<FriendRequestData> = send_items
+                let items: Vec<ChannelInviteData> = send_items
                     .into_iter()
-                    .map(|d| FriendRequestData {
+                    .map(|d| ChannelInviteData {
                         user_id: d.channel_id.into(),
                         display_name: d.channel_name.into(),
+                        private_channel: d.private_channel,
                         username: d.invited_by.into(),
                         avatar_source: slint::Image::default(),
                         has_avatar: false,
@@ -152,8 +155,15 @@ fn respond(
                 // did. Rebuild it the same way a created or deleted channel
                 // does, so the channel the user just accepted appears without
                 // waiting for the next sync (OPEN-ITEMS §69).
-                if joined.is_some() {
+                if let Some(channel) = joined {
                     crate::bin_ui::features::auth::load_initial_data(weak.clone(), &ui_ctx).await;
+                    let open = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = open.upgrade() {
+                            w.global::<crate::SidebarPane>()
+                                .invoke_channel_selected(channel.id.to_string().into());
+                        }
+                    });
                 }
             }
             Err(e) => {

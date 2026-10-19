@@ -11,6 +11,7 @@ use crate::state::ActiveConversation;
 pub struct ChannelInviteRow {
     pub channel_id: String,
     pub channel_name: String,
+    pub private_channel: bool,
     pub invited_by: String,
     pub created_at: u64,
     pub note: String,

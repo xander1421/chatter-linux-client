@@ -337,6 +337,10 @@ pub(super) fn handle_message_sent(
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        if ui_ctx.opening_unread_dismissed_for(conversation) {
+            w.global::<crate::ChatPane>().set_unread_index(-1);
+            w.global::<crate::ChatPane>().set_unread_count(0);
+        }
         crate::bin_ui::features::sidebar::update_sidebar_preview(
             &w,
             &ui_ctx,
