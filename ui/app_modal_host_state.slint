@@ -182,6 +182,10 @@ export global ModalHostState {
     in-out property <int> sessions-generation: 0;
     in-out property <int> modal-generation: 0;
     in property <string> sessions-error: "";
+    // Outcome of a finished action (e.g. revoke all), shown without error styling.
+    in property <string> sessions-notice: "";
+    // Devices "Revoke all other sessions" would sign out (core's revocable_count).
+    in property <int> sessions-revocable-count: 0;
     in property <bool> sessions-loaded: false;
     in property <bool> sessions-loading: false;
     in property <bool> sessions-revoking: false;

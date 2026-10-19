@@ -107,44 +107,41 @@ impl ChatterClient {
             .map_err(crate::services::session_service::SessionError::Device)
     }
 
-    /// Revoke other sessions, retaining primary-device protection and reporting
-    /// partial failures with the affected device IDs.
+    /// Sign out every device `Session::can_revoke` allows (all others but
+    /// the primary). Ok when all of them went; a device that could not be
+    /// revoked makes it `PartialRevocation`.
     pub async fn revoke_all_other_sessions(
         &self,
-    ) -> Result<(), crate::services::session_service::SessionError> {
-        use crate::services::session_service::SessionError;
+    ) -> Result<
+        crate::services::session_service::RevokeAllOutcome,
+        crate::services::session_service::SessionError,
+    > {
+        use crate::services::session_service::{RevokeAllOutcome, SessionError};
         let owner = self.session_current_user_id();
         let revision = self.auth_state().get().session_revision;
         let sessions = self.list_sessions().await?;
+        let primary_kept = sessions.iter().any(|s| !s.is_current && !s.can_revoke);
         let mut revoked = 0;
         let mut failed = Vec::new();
-        let mut protected = Vec::new();
-        for session in sessions {
+        for session in sessions.into_iter().filter(|s| s.can_revoke) {
             if self.session_current_user_id() != owner
                 || self.auth_state().get().session_revision != revision
             {
                 return Err(SessionError::SessionChanged);
-            }
-            if session.is_current {
-                continue;
-            }
-            if session.device_id == 1 {
-                protected.push(session.device_id);
-                continue;
             }
             match self.revoke_session(session.device_id).await {
                 Ok(()) => revoked += 1,
                 Err(e) => failed.push((session.device_id, e.to_string())),
             }
         }
-        if failed.is_empty() && protected.is_empty() {
-            Ok(())
-        } else {
-            Err(SessionError::PartialRevocation {
+        if failed.is_empty() {
+            Ok(RevokeAllOutcome {
                 revoked,
-                failed,
-                protected,
+                primary_kept,
             })
+        } else {
+            tracing::warn!(?failed, revoked, "revoke all other sessions: some devices failed");
+            Err(SessionError::PartialRevocation { revoked, failed })
         }
     }
 

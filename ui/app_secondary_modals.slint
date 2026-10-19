@@ -67,6 +67,8 @@ export component AppSecondaryModals inherits Rectangle {
         show-modal: root.active-modal == "sessions";
         sessions: ModalHostState.sessions;
         error: ModalHostState.sessions-error;
+        notice: ModalHostState.sessions-notice;
+        revocable-count: ModalHostState.sessions-revocable-count;
         loaded: ModalHostState.sessions-loaded;
         loading: ModalHostState.sessions-loading;
         revoking: ModalHostState.sessions-revoking;

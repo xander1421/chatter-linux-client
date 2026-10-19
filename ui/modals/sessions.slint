@@ -31,6 +31,9 @@ export component SessionsModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <[SessionInfo]> sessions: [];
     in property <string> error: "";
+    in property <string> notice: "";
+    // Other devices this one may sign out (not itself, not the primary).
+    in property <int> revocable-count: 0;
     in property <bool> loaded: false;
     in property <bool> loading: false;
     in property <bool> revoking: false;
@@ -69,6 +72,12 @@ export component SessionsModal inherits Rectangle {
             if root.error != "": Text {
                 text: root.error;
                 color: Colors.error;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+            if root.notice != "": Text {
+                text: root.notice;
+                color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
@@ -337,8 +346,9 @@ export component SessionsModal inherits Rectangle {
             }
 
             // Revoke-all sits under the list, away from the primary
-            // button, and asks first (REVIEW-R4 P1-9).
-            if root.sessions.length > 1 && !root.confirm-revoke-all: Button {
+            // button, and asks first (REVIEW-R4 P1-9). Offered only when it
+            // can sign something out: the primary is never revocable from here.
+            if root.revocable-count > 0 && !root.confirm-revoke-all: Button {
                 text: "Revoke all other sessions";
                 variant: "ghost";
                 disabled: root.revoking || root.loading;
@@ -348,11 +358,13 @@ export component SessionsModal inherits Rectangle {
                 }
             }
 
-            if root.confirm-revoke-all: VerticalLayout {
+            if root.confirm-revoke-all && root.revocable-count > 0: VerticalLayout {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: "Log out other linked devices? The primary device is protected. Revoked devices must be linked again.";
+                    text: root.revocable-count == 1
+                        ? "Sign out the other linked device? It must be linked again to use this account."
+                        : "Sign out all \{root.revocable-count} other linked devices? They must be linked again to use this account.";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     wrap: word-wrap;

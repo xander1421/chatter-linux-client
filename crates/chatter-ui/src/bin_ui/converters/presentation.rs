@@ -34,6 +34,24 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
     local.format("%b %-d, %Y").to_string()
 }
 
+/// A linked device's last activity, to the day. The server records it per
+/// UTC day (`user_devices.last_active`, like Signal's `lastSeen`), so the
+/// day is compared in UTC: a local date or a time of day would claim more
+/// than the server knows.
+pub fn format_activity_day(datetime: DateTime<Utc>) -> String {
+    let day = datetime.date_naive();
+    let today = Utc::now().date_naive();
+    if day >= today {
+        "Today".to_string()
+    } else if day == today - Duration::days(1) {
+        "Yesterday".to_string()
+    } else if day.year() == today.year() {
+        day.format("%b %-d").to_string()
+    } else {
+        day.format("%b %-d, %Y").to_string()
+    }
+}
+
 pub fn last_seen_label(presence: PresenceStatus, last_seen_at: Option<i64>) -> String {
     match presence {
         PresenceStatus::Online => "online".to_string(),

@@ -18,7 +18,9 @@ pub(crate) fn session_to_slint(s: Session) -> SessionInfo {
         device_id: s.device_id as i32,
         device_info: s.device_info.into(),
         ip_address: s.ip_address.into(),
-        last_used: crate::bin_ui::converters::format_timestamp(s.last_used).into(),
+        // Day precision: the server records a device's activity per day
+        // (Signal's lastSeen), so a time of day would be invented.
+        last_used: crate::bin_ui::converters::format_activity_day(s.last_used).into(),
         created_at: crate::bin_ui::converters::format_timestamp(s.created_at).into(),
         is_current: s.is_current,
         is_mobile: s.is_mobile,
@@ -66,6 +68,8 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
         .set_sessions_revoking(!listing);
     w.global::<crate::ModalHostState>()
         .set_sessions_error("".into());
+    w.global::<crate::ModalHostState>()
+        .set_sessions_notice("".into());
     if listing {
         // Never retain another owner's rows while opening a new view.
         w.global::<crate::ModalHostState>()
@@ -76,6 +80,8 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
             )));
         w.global::<crate::ModalHostState>()
             .set_sessions_loaded(false);
+        w.global::<crate::ModalHostState>()
+            .set_sessions_revocable_count(0);
     }
     tokio::spawn(async move {
         let current = || {
@@ -88,22 +94,29 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
         let mut errors = Vec::new();
         let mutation = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             match action {
-                Action::List => Ok(()),
-                Action::Revoke(id) => client.revoke_session(id).await.map_err(|e| e.to_string()),
+                Action::List => Ok(None),
+                Action::Revoke(id) => client
+                    .revoke_session(id)
+                    .await
+                    .map(|()| None)
+                    .map_err(|e| e.to_string()),
                 Action::RevokeAll => client
                     .revoke_all_other_sessions()
                     .await
+                    .map(|outcome| Some(outcome.summary()))
                     .map_err(|e| e.to_string()),
                 Action::Cancel(uuid) => client
                     .cancel_pending_link(&uuid)
                     .await
+                    .map(|()| None)
                     .map_err(|e| e.to_string()),
             }
         })
         .await;
+        let mut notice = String::new();
         match mutation {
-            Ok(Ok(())) => {},
-            Ok(Err(e)) => errors.push(format!("Action failed or only partly completed: {e}")),
+            Ok(Ok(summary)) => notice = summary.unwrap_or_default(),
+            Ok(Err(e)) => errors.push(e),
             Err(_) => errors.push("Action timed out; its outcome is uncertain. Review the refreshed devices and pending links.".to_string()),
         }
         if !current() {
@@ -169,6 +182,9 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
             if let Some(rows) = sessions {
                 w.global::<crate::SettingsPane>()
                     .set_settings_session_count(rows.len() as i32);
+                w.global::<crate::ModalHostState>().set_sessions_revocable_count(
+                    chatter_core::services::session_service::revocable_count(&rows) as i32,
+                );
                 w.global::<crate::ModalHostState>()
                     .set_sessions(ModelRc::new(VecModel::from(
                         rows.into_iter().map(session_to_slint).collect::<Vec<_>>(),
@@ -182,6 +198,8 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
             }
             w.global::<crate::ModalHostState>()
                 .set_sessions_error(errors.join("\n").into());
+            w.global::<crate::ModalHostState>()
+                .set_sessions_notice(notice.into());
             w.global::<crate::ModalHostState>()
                 .set_sessions_loading(false);
             w.global::<crate::ModalHostState>()

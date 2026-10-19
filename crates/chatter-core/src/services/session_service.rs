@@ -54,13 +54,12 @@ pub enum SessionError {
     #[error("session changed; reopen Active sessions")]
     SessionChanged,
 
-    #[error(
-        "revoked {revoked} session(s); failed devices: {failed:?}; protected primary devices: {protected:?}"
-    )]
+    /// Some revocable devices could not be signed out. `failed` keeps each
+    /// device's id and cause for logs; the message is user copy.
+    #[error("{}", partial_revocation_message(*revoked, failed.len()))]
     PartialRevocation {
         revoked: usize,
         failed: Vec<(u32, String)>,
-        protected: Vec<u32>,
     },
 
     /// Network operation failed.
@@ -74,6 +73,60 @@ pub enum SessionError {
     /// Device revoke/rotate failed.
     #[error("device error: {0}")]
     Device(#[from] crate::services::device_service::DeviceError),
+}
+
+fn devices(n: usize) -> String {
+    if n == 1 {
+        "1 device".to_string()
+    } else {
+        format!("{n} devices")
+    }
+}
+
+fn partial_revocation_message(revoked: usize, failed: usize) -> String {
+    let head = if revoked == 0 {
+        String::new()
+    } else {
+        format!("Signed out {}. ", devices(revoked))
+    };
+    format!(
+        "{head}Could not sign out {}. Check your connection and try again.",
+        devices(failed)
+    )
+}
+
+/// The devices "Revoke all other sessions" would sign out: every listed
+/// device this one may revoke (not itself, not the primary). The UI offers
+/// the action only when this is non-zero.
+pub fn revocable_count(sessions: &[Session]) -> usize {
+    sessions.iter().filter(|s| s.can_revoke).count()
+}
+
+/// What "Revoke all other sessions" did when every revocable device was
+/// signed out. Not an error: the primary staying signed in is the server's
+/// rule (`RevokeDevice` refuses it), not a failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevokeAllOutcome {
+    /// Devices signed out.
+    pub revoked: usize,
+    /// Another device is the primary and stayed signed in.
+    pub primary_kept: bool,
+}
+
+impl RevokeAllOutcome {
+    /// One line for the Active sessions screen.
+    pub fn summary(&self) -> String {
+        let head = if self.revoked == 0 {
+            "No other devices to sign out.".to_string()
+        } else {
+            format!("Signed out {}.", devices(self.revoked))
+        };
+        if self.primary_kept {
+            format!("{head} The primary device can't be signed out from another device.")
+        } else {
+            head
+        }
+    }
 }
 
 /// Session management service.
@@ -214,7 +267,27 @@ impl SessionService {
 
 #[cfg(test)]
 mod tests {
-    use super::is_mobile_device_name;
+    use super::{RevokeAllOutcome, SessionError, is_mobile_device_name};
+
+    #[test]
+    fn revoke_all_copy_is_human() {
+        let o = RevokeAllOutcome {
+            revoked: 2,
+            primary_kept: true,
+        };
+        assert_eq!(
+            o.summary(),
+            "Signed out 2 devices. The primary device can't be signed out from another device."
+        );
+        let e = SessionError::PartialRevocation {
+            revoked: 1,
+            failed: vec![(3, "network".into())],
+        };
+        assert_eq!(
+            e.to_string(),
+            "Signed out 1 device. Could not sign out 1 device. Check your connection and try again."
+        );
+    }
 
     #[test]
     fn mobile_names_get_the_phone_icon() {
