@@ -15,7 +15,7 @@ pub mod link_approve;
 // `pub` so the ui_wiring harness can wire ONLY the profile callbacks (incl.
 // the username-link share wires) against a real offline ChatterClient.
 pub mod profile;
-mod sessions;
+pub(crate) mod sessions;
 // `pub` so the VALIDATED-UI headless harness can wire ONLY the settings
 // callbacks against a real offline ChatterClient, without invoking the full
 // `wire_all` (which spawns a call-orchestrator subscriber that needs a live
