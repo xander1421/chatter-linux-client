@@ -20,7 +20,7 @@ use crate::proto::chat_v1::FriendStatus;
 use crate::proto::chat_v1::{friend_requests_filter, user_event};
 use crate::services::user::PROFILE_REFRESH_INTERVAL;
 use crate::services::user::conversions::proto_to_domain_profile;
-use crate::storage::repositories::UserRepository;
+use crate::storage::repositories::{SettingsRepository, UserRepository};
 
 /// Spawn the user events stream handler.
 ///
@@ -39,6 +39,7 @@ pub async fn spawn_user_events_stream(
     grpc_pool: Arc<GrpcClientPool>,
     event_tx: broadcast::Sender<InboxEvent>,
     user_repo: Arc<UserRepository>,
+    settings_repo: Arc<SettingsRepository>,
     domain_tx: Option<broadcast::Sender<DomainEvent>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
@@ -109,6 +110,7 @@ pub async fn spawn_user_events_stream(
                                             &grpc_pool,
                                             &event_tx,
                                             &user_repo,
+                                            &settings_repo,
                                             current_user_id.as_ref(),
                                             domain_tx.as_ref(),
                                         ).await;
@@ -195,6 +197,7 @@ async fn handle_user_event(
     grpc_pool: &Arc<GrpcClientPool>,
     event_tx: &broadcast::Sender<InboxEvent>,
     user_repo: &Arc<UserRepository>,
+    settings_repo: &SettingsRepository,
     current_user_id: Option<&UserId>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
@@ -232,7 +235,11 @@ async fn handle_user_event(
                 user_id = %proto_profile.user_id,
                 "Profile updated event received"
             );
-            apply_profile(&proto_profile, user_repo, current_user_id, domain_tx, true);
+            if current_user_id.is_some_and(|me| me.to_string() == proto_profile.user_id) {
+                apply_own_profile(&proto_profile, user_repo, settings_repo, domain_tx);
+            } else {
+                apply_profile(&proto_profile, user_repo, current_user_id, domain_tx, true);
+            }
         }
         Some(user_event::Event::PresenceChanged(presence)) => {
             tracing::trace!(
@@ -367,6 +374,49 @@ fn apply_profile(
     }
 }
 
+/// Our OWN profile, pushed because a device of this account (this one or a
+/// linked one) edited it. It is encrypted under our own profile key, not a
+/// friend key, so it takes the fetch path's own-profile restore, which also
+/// rewrites the local copies (`keys::DISPLAY_NAME`, `keys::AVATAR`) the UI
+/// reads. The editing device receives the echo too; it decrypts to what it
+/// just saved.
+fn apply_own_profile(
+    proto: &crate::proto::chat_v1::UserProfile,
+    user_repo: &UserRepository,
+    settings_repo: &SettingsRepository,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+) {
+    let mut profile = match proto_to_domain_profile(proto) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to convert own proto profile");
+            return;
+        }
+    };
+    if let Err(e) =
+        crate::services::user::restore_own_profile(settings_repo, user_repo, &mut profile, proto)
+    {
+        tracing::warn!(error = %e, "Failed to restore pushed own profile");
+        return;
+    }
+    if let Err(e) = user_repo
+        .ensure_user_exists(&profile.user_id)
+        .and_then(|()| user_repo.upsert_profile(&profile))
+    {
+        tracing::warn!(error = %e, "Failed to store pushed own profile");
+        return;
+    }
+    if let Some(tx) = domain_tx {
+        let _ = tx.send(DomainEvent::UserProfileUpdated {
+            user_id: profile.user_id,
+            display_name: profile.display_name.clone(),
+            status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+            avatar_bytes: profile.avatar_bytes.clone(),
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+        });
+    }
+}
+
 /// Did name, status or avatar change? Presence has its own event. An avatar of
 /// `None` means "not decrypted", and the upsert keeps the stored one.
 fn profile_changed(before: Option<&Profile>, after: &Profile) -> bool {
@@ -380,7 +430,7 @@ fn profile_changed(before: Option<&Profile>, after: &Profile) -> bool {
 /// Refetch every accepted friend's profile and announce what changed.
 ///
 /// Profile edits reach us only as a live push on this stream (the server's
-/// `publishProfileToFriends`), so an edit made while the stream was down was
+/// `publishProfileUpdate`), so an edit made while the stream was down was
 /// missed until something else happened to refetch that profile.
 async fn refresh_friend_profiles(
     grpc_pool: &GrpcClientPool,

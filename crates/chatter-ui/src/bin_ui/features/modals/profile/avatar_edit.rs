@@ -60,9 +60,20 @@ pub(super) fn retire() {
         };
     });
 }
-fn open(w: &MainWindow, owner: Owner) {
+fn open(w: &MainWindow, owner: Owner, current_avatar: Option<&[u8]>) {
     retire();
-    let default_index = crate::bin_ui::converters::random_preset_avatar_index();
+    // Ring the preset the account is actually using; none for a custom photo
+    // (was a random preset, so the ring rarely matched the avatar shown).
+    let current_preset = current_avatar.and_then(|bytes| {
+        crate::bin_ui::converters::preset_avatar_index(
+            bytes,
+            w.global::<crate::ModalHostState>()
+                .get_profile_display_name()
+                .as_str(),
+        )
+    });
+    let default_index =
+        current_preset.unwrap_or_else(crate::bin_ui::converters::random_preset_avatar_index);
     w.global::<crate::ModalHostState>()
         .set_edit_profile_display_name(
             w.global::<crate::ModalHostState>()
@@ -81,7 +92,12 @@ fn open(w: &MainWindow, owner: Owner) {
                 > 0,
         );
     w.global::<crate::ModalHostState>()
-        .set_edit_profile_selected_default_idx(default_index as i32);
+        .set_edit_profile_selected_default_idx(
+            // With no avatar at all, Save uploads `default_index`: ring it.
+            current_preset
+                .or(current_avatar.is_none().then_some(default_index))
+                .map_or(-1, |i| i as i32),
+        );
     w.global::<crate::ModalHostState>()
         .set_edit_profile_avatar_color(slint::Color::from_rgb_u8(15, 118, 110));
     w.global::<crate::ModalHostState>()
@@ -342,7 +358,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
         .on_profile_edit_profile(move || {
             if let Some(w) = weak.upgrade() {
                 if Owner::read(&client).user.is_some() {
-                    open(&w, Owner::read(&client));
+                    open(&w, Owner::read(&client), client.my_avatar().as_deref());
                 }
             }
         });
@@ -503,11 +519,11 @@ mod tests {
         let persisted = normalize(&png([200, 100, 50, 255])).unwrap();
         w.global::<crate::ModalHostState>()
             .set_profile_display_name("Original fixture".into());
-        open(&w, owner);
+        open(&w, owner, None);
         let old = begin(&w, owner, false).unwrap().0;
         crate::bin_ui::features::back::pop(&w);
         assert!(!old.alive.load(Ordering::SeqCst));
-        open(&w, owner);
+        open(&w, owner, None);
         finish_picker(&w, owner, old, Ok(Some(picked.clone())));
         assert!(EDIT.with(|s| s.borrow().staged.is_none()));
         let first = begin(&w, owner, false).unwrap().0;
@@ -557,7 +573,7 @@ mod tests {
         );
         let save = begin(&w, owner, true).unwrap().0;
         crate::bin_ui::features::back::close(&w, "edit-profile");
-        open(&w, owner);
+        open(&w, owner, None);
         let mut profile = Profile::new(owner.user.unwrap(), "Saved fixture".into());
         profile.avatar_bytes = Some(persisted.clone());
         finish_save(&w, owner, save, Ok(profile.clone()));
@@ -630,7 +646,7 @@ mod tests {
                 .as_str(),
             "Saved fixture"
         );
-        open(&w, owner);
+        open(&w, owner, None);
         assert_eq!(
             bytes(&w),
             expected,

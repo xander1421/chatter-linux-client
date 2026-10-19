@@ -165,7 +165,7 @@ impl ChatterClient {
 
     /// Refetch OUR profile (throttled) and restore the local copies the UI
     /// reads — name, bio, avatar — decrypted with our own profile key
-    /// (`UserService::restore_own_profile`). Only login did this, so a LINKED
+    /// (`services::user::restore_own_profile`). Only login did this, so a LINKED
     /// device, or one signed in before that fix, showed initials and a
     /// fallback name while every peer saw the photo. `Some` when refetched.
     /// Not in Shield: it is an identified fetch.
@@ -190,6 +190,29 @@ impl ChatterClient {
                 None
             }
         }
+    }
+
+    /// A `UserProfileUpdated` arrived: is it OUR profile? If so, adopt its
+    /// name into the session state, the way `save_own_profile_in_session` and
+    /// `refresh_own_profile` do, so every own-profile surface reads the new
+    /// name. The user-events stream has already stored it (decrypted with our
+    /// own profile key) — this is how a LINKED device learns of an edit made
+    /// on another device of the account without a restart.
+    pub fn adopt_own_profile_update(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        display_name: &str,
+    ) -> bool {
+        let state = self.auth_state().get();
+        if state.current_user_id != Some(*user_id) {
+            return false;
+        }
+        self.auth_state().update_display_name_if_current(
+            state.session_revision,
+            *user_id,
+            display_name.to_owned(),
+        );
+        true
     }
 
     /// Search for users by exact `nickname.discriminator` username.
@@ -302,5 +325,4 @@ impl ChatterClient {
     pub fn my_display_name(&self) -> Option<String> {
         self.anon_dms().get_my_display_name()
     }
-
 }

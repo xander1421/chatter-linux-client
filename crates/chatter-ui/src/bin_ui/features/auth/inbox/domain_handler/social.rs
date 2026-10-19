@@ -434,10 +434,13 @@ fn update_pending_anon_dm_avatar(w: &MainWindow, conversation_id: &str, bytes: &
 /// Mirrors `handle_anon_dm_profile_updated` but matches DM rows by
 /// `user_id` (server DMs are channel-scoped, but the row carries the
 /// peer user_id). Updates display name + status in sidebar, chat
-/// header, and profile modal in real-time.
+/// header, and profile modal in real-time. `own` (decided in core) also
+/// repaints this account's own name, initials and avatar — the sidebar footer,
+/// Profile tab and Settings account card all read `SidebarPane`.
 pub(super) fn handle_user_profile_updated(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
+    own: bool,
     user_id: UserId,
     display_name: String,
     status_message: Option<String>,
@@ -482,6 +485,19 @@ pub(super) fn handle_user_profile_updated(
         let avatar_img: Option<slint::Image> = avatar_decoded.as_ref().map(|(aw, ah, px)| {
             crate::bin_ui::slint_conversions::rgba_to_slint_image(px, *aw, *ah)
         });
+
+        if own {
+            let sidebar = w.global::<crate::SidebarPane>();
+            sidebar.set_user_display_name(display_name_slint.clone());
+            sidebar.set_user_initials(initials.clone().into());
+            if let Some(img) = &avatar_img {
+                sidebar.set_user_avatar_source(img.clone());
+            }
+            if w.global::<crate::ModalHostState>().get_profile_user_id() == user_id_str {
+                w.global::<crate::ModalHostState>()
+                    .set_profile_initials(initials.clone().into());
+            }
+        }
 
         // 1. Sidebar DM rows — update display name + initials + avatar for matching peer.
         let dms = w.global::<crate::SidebarPane>().get_chat_rows();

@@ -739,9 +739,13 @@ pub async fn handle_domain_event(
             avatar_bytes,
             timestamp,
         } => {
+            // Our own profile, edited here or on a linked device: core adopts
+            // the name into the session; the handler repaints own surfaces.
+            let own = ui_ctx.adopt_own_profile_update(&user_id, &display_name);
             social::handle_user_profile_updated(
                 window,
                 ui_ctx,
+                own,
                 user_id,
                 display_name,
                 status_message,
