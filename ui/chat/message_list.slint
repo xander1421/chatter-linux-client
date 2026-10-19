@@ -195,7 +195,7 @@ export component MessageList inherits Rectangle {
     // Older history is requested once per approach to the top.
     private property <bool> load-more-armed: true;
     // The last older page did not load (a storage read failed, header.rs
-    // `load_older`). The rows and the scroll anchor are untouched; the banner
+    // `load_history`). The rows and the scroll anchor are untouched; the banner
     // below says so and offers Retry, because the top is already reached and
     // asks for nothing more until the user scrolls away and back. Written by
     // Rust, cleared here on retry and on a conversation open.

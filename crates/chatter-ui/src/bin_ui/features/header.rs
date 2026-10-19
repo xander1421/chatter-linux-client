@@ -706,7 +706,14 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.global::<crate::ChatPane>().on_load_more(move || {
         if let Some(w) = weak_window.upgrade() {
-            load_older(&w, &ui_ctx, None);
+            let oldest = w
+                .global::<crate::ChatPane>()
+                .get_messages()
+                .row_data(0)
+                .and_then(|m| m.message_id.parse::<MessageId>().ok());
+            if let Some(oldest) = oldest {
+                load_history(&w, &ui_ctx, HistoryLoad::Older(oldest));
+            }
         }
     });
 }
@@ -727,7 +734,7 @@ fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
 pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, message_id: &str) {
     let Some(row) = row_of(w, message_id) else {
         match message_id.parse() {
-            Ok(id) => load_older(w, ui_ctx, Some(id)),
+            Ok(id) => load_history(w, ui_ctx, HistoryLoad::Reaching(id)),
             Err(_) => {
                 tracing::debug!(message_id, "Jump target is not a stored message");
                 report_jump_unavailable(w);
@@ -778,19 +785,26 @@ fn report_jump_unavailable_later(
     });
 }
 
-/// Load history older than the oldest row of the open list and insert it
-/// above: one page, or with `until` every page back to that message, which
-/// is then jumped to. The oldest loaded row is the cursor — the list itself,
-/// not a copy of where it was last time. UI thread.
-fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<MessageId>) {
-    let before = w
-        .global::<crate::ChatPane>()
-        .get_messages()
-        .row_data(0)
-        .and_then(|m| m.message_id.parse::<MessageId>().ok());
-    if before.is_none() && until.is_none() {
-        return;
-    }
+/// Older history requested by the list, or a jump target that is not loaded.
+enum HistoryLoad {
+    /// One page older than the oldest loaded row, inserted above it.
+    Older(MessageId),
+    /// The newest rows grown back to this message, installed in place of the
+    /// list, then jumped to.
+    Reaching(MessageId),
+}
+
+/// Load history into the open list. The oldest loaded row is the paging
+/// cursor — the list itself, not a copy of where it was last time. UI thread.
+///
+/// A jump is not a prepend. Inserting rows in the same turn as the seek
+/// races the list's own bookkeeping (message_list.slint `settle`: a pass
+/// that sees `grown != 0` drops `jump-row`, then restores the old top row),
+/// and a jump to a search hit older than the open page stayed at the bottom
+/// (device ui135, desktop Foxtrot, "p135-007"). It installs the page core
+/// grew back to the target as a fresh list instead, the way a conversation
+/// opens, and jumps once that list exists.
+fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) {
     // Bind this request before spawning; a later manual switch must never
     // reinterpret the target as belonging to the newly opened conversation.
     let conversation = ui_ctx.active_conversation();
@@ -800,8 +814,9 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
     let Some(conversation_type) = ui_ctx.active_conversation_type() else {
         return;
     };
+    let jump = matches!(load, HistoryLoad::Reaching(_));
     let Some(owner) = super::history_owner::HistoryOwner::admit_older(ui_ctx, conversation) else {
-        if until.is_some() {
+        if jump {
             w.set_toast_message("History is still loading. Try again in a moment.".into());
             w.set_toast_variant("info".into());
             w.set_toast_visible(true);
@@ -818,24 +833,20 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             ui_ctx.set_message_loading(channel_id, false);
             return;
         }
-        let older_messages = match before.as_ref() {
-            Some(before) => ui_ctx.get_older_messages_local_asc(
-                &channel_id,
-                &conversation_type,
-                before,
-                until.as_ref(),
-            ),
-            None => Ok(until
-                .as_ref()
-                .map(|id| ui_ctx.get_history_target_local(id, &channel_id, &conversation_type))
-                .unwrap_or_default()),
+        let messages = match &load {
+            HistoryLoad::Older(before) => {
+                ui_ctx.get_older_messages_local_asc(&channel_id, &conversation_type, before)
+            }
+            HistoryLoad::Reaching(target) => {
+                ui_ctx.get_messages_local_reaching(&channel_id, &conversation_type, target)
+            }
         };
         ui_ctx.set_message_loading(channel_id, false);
-        let older_messages = match older_messages {
+        let messages = match messages {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::error!("Failed to load more messages: {}", e);
-                if until.is_some() {
+                if jump {
                     report_jump_unavailable_later(weak, owner);
                 } else {
                     // Ordinary paging: the list keeps its rows and anchor and
@@ -852,22 +863,21 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 return;
             }
         };
-        if older_messages.is_empty() {
+        if messages.is_empty() {
             tracing::debug!("No older messages for channel: {}", channel_id);
-            if until.is_some() {
+            if jump {
                 report_jump_unavailable_later(weak, owner);
             }
             return;
         }
 
-        let older_messages =
-            chatter_core::services::disappearing::visible_history_messages(older_messages);
+        let messages = chatter_core::services::disappearing::visible_history_messages(messages);
         if !owner.is_current() {
             return;
         }
         // Convert older messages to display data
         let mut display_messages = messages_to_display_batch(
-            &older_messages,
+            &messages,
             |ms| ui_ctx.message_sender_display_names(ms),
             |m| ui_ctx.message_sender_avatar(m),
             crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
@@ -898,32 +908,64 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 .map(|d| d.to_slint_with_user(&current_user_id))
                 .collect();
 
-            let current_model = w.global::<crate::ChatPane>().get_messages();
-            let current_ids = current_model.iter().map(|msg| msg.message_id.to_string());
+            let HistoryLoad::Reaching(target) = load else {
+                let current_model = w.global::<crate::ChatPane>().get_messages();
+                let current_ids = current_model.iter().map(|msg| msg.message_id.to_string());
 
-            // Prepend older messages (older go at top), skipping
-            // duplicates. Inserted in place: rows added above the
-            // first visible one shift the list's index without
-            // moving what is on screen, so history loads without
-            // a jump.
-            let older = ui_ctx.unseen_history_rows(
-                slint_messages,
-                current_ids,
-                |msg: &crate::MessageItemData| msg.message_id.as_str(),
-            );
-            tracing::debug!("Loaded {} older messages for channel", older.len());
-            crate::bin_ui::features::chat::edit_messages(&w, |model| {
-                for (i, msg) in older.into_iter().enumerate() {
-                    model.insert(i, msg);
-                }
-            });
-            if let Some(target) = until.map(|id| id.to_string()) {
-                if row_of(&w, &target).is_some() {
-                    jump_to_message(&w, &ui_ctx, &target);
-                } else {
-                    report_jump_unavailable(&w);
-                }
-            }
+                // Prepend older messages (older go at top), skipping
+                // duplicates. Inserted in place: rows added above the
+                // first visible one shift the list's index without
+                // moving what is on screen, so history loads without
+                // a jump.
+                let older = ui_ctx.unseen_history_rows(
+                    slint_messages,
+                    current_ids,
+                    |msg: &crate::MessageItemData| msg.message_id.as_str(),
+                );
+                tracing::debug!("Loaded {} older messages for channel", older.len());
+                crate::bin_ui::features::chat::edit_messages(&w, |model| {
+                    for (i, msg) in older.into_iter().enumerate() {
+                        model.insert(i, msg);
+                    }
+                });
+                return;
+            };
+            install_and_jump(&w, &ui_ctx, owner, slint_messages, target.to_string());
         });
+    });
+}
+
+/// Replace the open list with `rows` and jump to `target` in it.
+///
+/// `loading-messages` is raised for the swap so the list (which lives under
+/// `!loading`, message_list.slint) is torn down and built fresh on the new
+/// model — no previous row count for the jump to be measured against. It is
+/// lowered on a later event-loop turn, not in this one: a property set and
+/// reset in the same turn is never observed, and the old list would survive.
+/// The jump then lands on a fresh list, as it does for a search hit that
+/// opens its conversation (`finish_pending_jump`). UI thread.
+fn install_and_jump(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    owner: super::history_owner::HistoryOwner,
+    rows: Vec<crate::MessageItemData>,
+    target: String,
+) {
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_loading_messages(true);
+    pane.set_messages(ModelRc::new(slint::VecModel::from(rows)));
+    let weak = w.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+        let Some(w) = weak.upgrade() else { return };
+        if !owner.is_current() {
+            return;
+        }
+        w.global::<crate::ChatPane>().set_loading_messages(false);
+        if row_of(&w, &target).is_some() {
+            jump_to_message(&w, &ui_ctx, &target);
+        } else {
+            report_jump_unavailable(&w);
+        }
     });
 }

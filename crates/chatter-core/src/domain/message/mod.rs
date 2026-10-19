@@ -12,7 +12,7 @@ pub use content::{
     AIMessage, CallMessage, CallMessageType, EncryptedContent, EncryptedMessageType,
     MessageContent, MixedContent, ReactionCount, SealedSenderContent,
 };
-pub use conversation::{ConversationType, UnreadAnchor};
+pub use conversation::{newest_page_reaching, ConversationType, UnreadAnchor};
 pub use entity::{
     truncate_preview_text, Message, MessageActions, MessageMenu, REMOTE_ACTION_WINDOW_NS,
 };

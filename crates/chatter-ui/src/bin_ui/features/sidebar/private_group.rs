@@ -273,8 +273,10 @@ async fn load_private_group_messages_internal(
         .unwrap_or_default();
 
     // Reaction counts populated in core.
-    let messages = ui_ctx
-        .get_anon_group_messages_asc(&group_id, None, chatter_core::config::MESSAGE_PAGE_SIZE)
+    let messages = anchor
+        .opening_page(chatter_core::config::MESSAGE_PAGE_SIZE as u32, |limit| {
+            ui_ctx.get_anon_group_messages_asc(&group_id, None, limit as i32)
+        })
         .unwrap_or_default();
 
     let display_messages = crate::bin_ui::converters::messages_to_display_batch(

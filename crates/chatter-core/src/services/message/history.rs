@@ -149,48 +149,54 @@ impl MessageService {
         Ok(self.resolve_stored_quotes(messages))
     }
 
-    /// History older than `before`, oldest first: one page, or with `until`
-    /// as many pages as it takes to reach that message (a jump to a quote,
-    /// a search hit or a pin that is older than what is loaded). Empty when
-    /// there is nothing older, or when `until` is not a message of this
-    /// conversation's main list — never the whole history for a target that
-    /// is not in it.
+    /// One page of history older than `before`, oldest first. Empty when
+    /// there is nothing older.
     pub fn get_older_messages_local_asc(
         &self,
         channel_id: &ChannelId,
         conversation_type: &ConversationType,
         before: &crate::domain::ids::MessageId,
-        until: Option<&crate::domain::ids::MessageId>,
         page_size: u32,
     ) -> Result<Vec<Message>, MessageError> {
-        if let Some(target) = until {
-            let reachable = self.message_repo.get(target)?.is_some_and(|m| {
-                m.conversation_id == *channel_id
-                    && m.conversation_type == *conversation_type
-                    && m.thread_id.is_none()
-            });
-            if !reachable {
-                return Ok(Vec::new());
-            }
-        }
-        let mut older = Vec::new();
-        let mut before = *before;
-        loop {
-            let page = self.message_repo.list_for_channel_asc(
-                channel_id,
-                conversation_type,
-                Some(&before),
-                page_size,
-            )?;
-            let Some(first) = page.first() else { break };
-            before = first.id;
-            let reached = until.is_none_or(|target| page.iter().any(|m| m.id == *target));
-            older.splice(0..0, page);
-            if reached {
-                break;
-            }
-        }
-        Ok(self.resolve_stored_quotes(older))
+        let page = self.message_repo.list_for_channel_asc(
+            channel_id,
+            conversation_type,
+            Some(before),
+            page_size,
+        )?;
+        Ok(self.resolve_stored_quotes(page))
+    }
+
+    /// The conversation's newest rows grown back to `target`, oldest first —
+    /// the list a jump to a message older than what is loaded installs (a
+    /// search hit, a quote, a pin). Same growth as a conversation opening on
+    /// its first unread ([`crate::domain::message::newest_page_reaching`]).
+    ///
+    /// Empty when `target` is not a message of this conversation's main list
+    /// — never the whole history for a target that is not in it.
+    pub fn get_messages_local_reaching(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        target: &crate::domain::ids::MessageId,
+        page_size: u32,
+    ) -> Result<Vec<Message>, MessageError> {
+        let Some(target) = self.message_repo.get(target)?.filter(|m| {
+            m.conversation_id == *channel_id
+                && m.conversation_type == *conversation_type
+                && m.thread_id.is_none()
+        }) else {
+            return Ok(Vec::new());
+        };
+        let page = crate::domain::message::newest_page_reaching(
+            Some(target.sent_at),
+            page_size,
+            |limit| {
+                self.message_repo
+                    .list_for_channel_asc(channel_id, conversation_type, None, limit)
+            },
+        )?;
+        Ok(self.resolve_stored_quotes(page))
     }
 
     /// Reply count per thread root for a conversation (drives the "N replies"
@@ -240,24 +246,6 @@ impl MessageService {
         Ok(self
             .resolve_stored_quotes(self.message_repo.get(message_id)?.into_iter().collect())
             .pop())
-    }
-
-    /// A jump target eligible for the open conversation's history list.
-    pub fn get_history_target_local(
-        &self,
-        message_id: &crate::domain::ids::MessageId,
-        channel_id: &ChannelId,
-        conversation_type: &ConversationType,
-    ) -> Result<Vec<Message>, MessageError> {
-        Ok(self
-            .get_message_local(message_id)?
-            .filter(|message| {
-                message.conversation_id == *channel_id
-                    && message.conversation_type == *conversation_type
-                    && !message.is_deleted
-            })
-            .into_iter()
-            .collect())
     }
 
     /// Whether the parent message a reply quotes is missing or deleted.
