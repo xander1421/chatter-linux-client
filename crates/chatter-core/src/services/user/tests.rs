@@ -403,6 +403,7 @@ mod tests {
                 user_repo,
                 anon_dm_repo,
                 anon_group_repo,
+                crate::events::EventBus::new(),
             );
         }
     }

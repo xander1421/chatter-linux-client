@@ -366,7 +366,9 @@ impl UserService {
             // Callers use these decrypted bytes from this response. Persist
             // them before returning so every other avatar surface can resolve
             // the same friend from the local profile store.
-            self.user_repo.upsert_profile(&profile)?;
+            if self.user_repo.upsert_profile(&profile)? {
+                self.event_bus.emit_domain(super::profile_updated_event(&profile));
+            }
 
             results.push((friendship, profile));
         }

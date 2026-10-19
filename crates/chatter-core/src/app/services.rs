@@ -190,6 +190,7 @@ impl ServiceContainer {
             infra.user_repo.clone(),
             infra.anon_dm_repo.clone(),
             infra.anon_group_repo.clone(),
+            infra.event_bus.clone(),
         ));
 
         // 8. Channel service, on the signed membership log

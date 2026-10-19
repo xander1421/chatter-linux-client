@@ -189,30 +189,18 @@ impl InboxEventProcessor {
         }
     }
 
-    /// Fetch + decrypt a peer's profile (`get_user_profile` upserts it
-    /// locally) and emit it as `UserProfileUpdated`, the event the UI already
-    /// handles for sidebar / header / friends-list refresh.
+    /// Fetch + decrypt a peer's profile. `get_user_profile` upserts it and,
+    /// when that changed what is stored, emits `UserProfileUpdated` — the
+    /// event the UI handles for sidebar / header / friends-list refresh.
     pub(super) fn spawn_peer_profile_refresh(&self, peer_id: UserId) {
         let user_service = self.user_service.clone();
-        let event_bus = self.event_bus.clone();
         tokio::spawn(async move {
-            match user_service.get_user_profile(&peer_id).await {
-                Ok(profile) => {
-                    event_bus.emit_domain(DomainEvent::UserProfileUpdated {
-                        user_id: peer_id,
-                        display_name: profile.display_name,
-                        status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
-                        avatar_bytes: profile.avatar_bytes,
-                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "failed to fetch/decrypt peer profile"
-                    );
-                }
+            if let Err(e) = user_service.get_user_profile(&peer_id).await {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "failed to fetch/decrypt peer profile"
+                );
             }
         });
     }
