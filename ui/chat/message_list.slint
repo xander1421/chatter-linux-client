@@ -182,6 +182,7 @@ export component MessageList inherits Rectangle {
     // seek made live and close on the exact row.
     private property <int> jump-row: -1;
     private property <bool> jump-measured: false;
+    private property <int> jump-stable-passes: 0;
     private property <length> jump-bubble-y: 0px;
     private property <int> jump-measurement-serial: 0;
     callback measured-jump-row(int, length);
@@ -294,6 +295,7 @@ export component MessageList inherits Rectangle {
         root.at-end = false;
         root.is-at-bottom = false;
         root.jump-measured = false;
+        root.jump-stable-passes = 0;
         root.jump-row = i;
         root.nav-serial += 1;
     }
@@ -513,19 +515,23 @@ export component MessageList inherits Rectangle {
             property <int> target-measurement: root.jump-measurement-serial;
             changed target-measurement => {
                 if (root.jump-row >= 0 && root.jump-measured) {
-                    // Delegate y is already in visible-list coordinates: the
-                    // virtualizer lays out from its on-screen anchor, then
-                    // rebases viewport-y separately for the scrollbar. Apply
-                    // the measured error to the current offset, rather than
-                    // treating bubble y as an absolute content coordinate.
-                    // Use only a fresh post-layout measurement.
+                    // The delegate reports window geometry relative to this
+                    // list. Its public y is NOT its rendered y: Slint's
+                    // flickable pass exposes actual-y - viewport-y there.
+                    // Apply the visible error to the current scrollbar offset.
                     self.row-y = Math.min(0px, Math.max(
                         Math.min(0px, self.height - self.viewport-height),
                         self.viewport-y + root.top-inset - root.jump-bubble-y));
                     if (Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
-                        root.jump-row = -1;
-                        self.read-position();
+                        // Keep measuring across frames: a newly materialized
+                        // row can still change height as its layout settles.
+                        root.jump-stable-passes += 1;
+                        if (root.jump-stable-passes >= 3) {
+                            root.jump-row = -1;
+                            self.read-position();
+                        }
                     } else {
+                        root.jump-stable-passes = 0;
                         self.viewport-y = self.row-y;
                     }
                 }
@@ -695,7 +701,10 @@ export component MessageList inherits Rectangle {
 
             for item[idx] in root.messages: message-row := VerticalLayout {
                 property <bool> jump-target: idx == root.jump-row;
-                property <length> bubble-position: self.y + message-bubble.y;
+                // absolute-position follows the actual render geometry, including
+                // the virtualizer's anchor and all row separators/padding.
+                property <length> bubble-position:
+                    message-bubble.absolute-position.y - list.absolute-position.y;
                 // The target's only timer is active while navigating. Deferring
                 // to the next frame avoids reporting freshly-created delegates'
                 // default y=0 before the virtualizer has positioned them.
