@@ -107,9 +107,9 @@ pub fn open_invite_member_modal(
         }
         let channel_id_str = channel_id.to_string();
 
-        let channel_name = ui_ctx
+        let (channel_name, private_channel) = ui_ctx
             .get_channel_local(&channel_id)
-            .map(|c| c.name.clone())
+            .map(|c| (c.name.clone(), c.is_private()))
             .unwrap_or_default();
 
         // Carry Send `InviteCandidate`s across the thread boundary; build the
@@ -129,6 +129,8 @@ pub fn open_invite_member_modal(
                     .set_invite_member_channel_id(channel_id_str.into());
                 w.global::<crate::ModalHostState>()
                     .set_invite_member_channel_name(channel_name.into());
+                w.global::<crate::ModalHostState>()
+                    .set_invite_member_private_channel(private_channel);
                 w.global::<crate::ModalHostState>()
                     .set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
                 w.global::<crate::ModalHostState>()

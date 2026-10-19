@@ -513,11 +513,15 @@ export component MessageList inherits Rectangle {
             property <int> target-measurement: root.jump-measurement-serial;
             changed target-measurement => {
                 if (root.jump-row >= 0 && root.jump-measured) {
-                    // Confirm only from a fresh post-layout measurement, never
-                    // from the viewport setter's own synchronous callback.
+                    // Delegate y is already in visible-list coordinates: the
+                    // virtualizer lays out from its on-screen anchor, then
+                    // rebases viewport-y separately for the scrollbar. Apply
+                    // the measured error to the current offset, rather than
+                    // treating bubble y as an absolute content coordinate.
+                    // Use only a fresh post-layout measurement.
                     self.row-y = Math.min(0px, Math.max(
                         Math.min(0px, self.height - self.viewport-height),
-                        root.top-inset - root.jump-bubble-y));
+                        self.viewport-y + root.top-inset - root.jump-bubble-y));
                     if (Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
                         root.jump-row = -1;
                         self.read-position();

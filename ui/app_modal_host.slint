@@ -143,6 +143,7 @@ export component AppModalHost inherits Rectangle {
     if root.is-presented("invite-member"): InviteMemberModal {
         show-modal: root.active-modal == "invite-member";
         channel-name: ModalHostState.invite-member-channel-name;
+        private-channel: ModalHostState.invite-member-private-channel;
         users <=> ModalHostState.invite-member-users;
         selected-count <=> ModalHostState.invite-member-selected-count;
         loading: ModalHostState.invite-member-loading;
