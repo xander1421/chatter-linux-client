@@ -143,11 +143,14 @@ export component ChannelSettingsModal inherits Rectangle {
         show: root.show-modal;
         title: root.is-private-group ? "Group Settings" : "Channel Settings";
         modal-width: 640px;
-        max-modal-height: max(240px, root.height - 48px);
+        // One fixed card height for every section, the body scrolling inside
+        // it: a card that hugged each tab's content changed height and, being
+        // centred, moved the tab bar under the pointer on every switch.
+        // Modal still caps this to the viewport.
+        max-modal-height: 720px;
+        fill-height: true;
         full-screen: root.narrow;
         plain-header: true;
-        // Let the card hug short sections; Modal caps taller sections to the
-        // viewport and scrolls their content.
 
         close => {
             if root.has-edits { root.show-discard-confirm = true; }

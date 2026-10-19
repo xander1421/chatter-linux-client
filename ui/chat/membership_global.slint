@@ -36,6 +36,9 @@ export global MembershipGlobal {
 
     // ---- Channel Settings › Access ----
     in property <string> access-public-badge: "";
+    // How people join and who manages links, for a viewer without the
+    // link controls (core's `join_summary`); "" otherwise.
+    in property <string> access-join-summary: "";
     in property <bool> can-manage-invites: false;
     in property <[InviteLinkRowData]> invite-links: [];
     in property <bool> can-approve-joins: false;

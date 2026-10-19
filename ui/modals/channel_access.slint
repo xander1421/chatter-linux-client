@@ -35,6 +35,13 @@ export component ChannelAccessSection inherits VerticalLayout {
         }
     }
 
+    if MembershipGlobal.access-join-summary != "": Text {
+        text: MembershipGlobal.access-join-summary;
+        color: Colors.text-secondary;
+        font-size: Typography.sm;
+        wrap: word-wrap;
+    }
+
     // Server-run readers (AI integrations): not members
     // anyone signed in, but they read this channel.
     for bot in MembershipGlobal.server-operated: HorizontalLayout {
