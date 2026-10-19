@@ -49,6 +49,14 @@ impl ChatterClient {
         }
     }
 
+    /// Whether the open conversation may stay open in the current mode
+    /// ([`Self::visible_in_mode`]). Nothing open counts as visible. Entering
+    /// Shield with a channel or Saved Messages open must close it.
+    pub fn active_conversation_visible_in_mode(&self) -> bool {
+        self.active_conversation_type()
+            .is_none_or(|kind| self.visible_in_mode(&kind))
+    }
+
     pub fn create_section(
         &self,
         name: &str,

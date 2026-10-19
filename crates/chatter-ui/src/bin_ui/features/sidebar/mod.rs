@@ -588,32 +588,50 @@ pub(crate) fn conversation_removed(
         if ui_ctx_ui.composer_session_is_current(session_revision)
             && ui_ctx_ui.active_conversation() == conv
         {
-            ui_ctx_ui.select_conversation(chatter_core::state::ActiveConversation::None);
-            w.invoke_refresh_screen_protection();
-            w.global::<crate::ChatPane>()
-                .set_messages(slint::ModelRc::new(
-                    slint::VecModel::<crate::MessageItemData>::default(),
-                ));
-            // No name = nothing open: the pane shows "Select a conversation".
-            w.global::<crate::ChatPane>().set_channel_name("".into());
-            w.global::<crate::ChatPane>().set_header_can_call(false);
-            w.global::<crate::ChatPane>().set_header_can_invite(false);
-            w.global::<crate::ChatPane>()
-                .set_header_can_open_settings(false);
-            w.global::<crate::ChatPane>()
-                .set_header_can_open_pinned_list(false);
-            // The empty detail pane is useful on desktop; on a phone the
-            // removed conversation must reveal the list without another Back.
-            // Keep pushed screens intact: their owners close them separately.
-            if w.get_is_mobile_platform() {
-                w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
-                w.global::<crate::SidebarPane>()
-                    .set_active_tab("chats".into());
-            }
+            close_open_conversation(&w, &ui_ctx_ui);
         }
     });
     sections::refresh_sections_ui(weak, ui_ctx);
     rebuild_chat_list(weak, ui_ctx);
+}
+
+/// Close whatever conversation is open: the pane shows "Select a
+/// conversation" on desktop, and a phone returns to the list. UI thread.
+/// Pushed screens are left alone: their owners close them separately.
+pub(crate) fn close_open_conversation(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    // The thread panel hangs off the conversation; it stayed open beside the
+    // empty pane. Keep its draft, as its own close button does.
+    if w.global::<crate::ChatPane>().get_thread_panel_visible() {
+        crate::bin_ui::features::composer::autosave_thread_draft(w, ui_ctx);
+        w.global::<crate::ChatPane>()
+            .set_thread_root_message_id("".into());
+        w.global::<crate::ChatPane>()
+            .set_thread_composer_text("".into());
+        w.global::<crate::ChatPane>().set_thread_panel_visible(false);
+        w.global::<crate::ChatPane>()
+            .set_thread_replies(slint::ModelRc::new(slint::VecModel::default()));
+    }
+    ui_ctx.select_conversation(chatter_core::state::ActiveConversation::None);
+    w.invoke_refresh_screen_protection();
+    w.global::<crate::ChatPane>()
+        .set_messages(slint::ModelRc::new(
+            slint::VecModel::<crate::MessageItemData>::default(),
+        ));
+    // No name = nothing open: the pane shows "Select a conversation".
+    w.global::<crate::ChatPane>().set_channel_name("".into());
+    w.global::<crate::ChatPane>().set_header_can_call(false);
+    w.global::<crate::ChatPane>().set_header_can_invite(false);
+    w.global::<crate::ChatPane>()
+        .set_header_can_open_settings(false);
+    w.global::<crate::ChatPane>()
+        .set_header_can_open_pinned_list(false);
+    // The empty detail pane is useful on desktop; on a phone the closed
+    // conversation must reveal the list without another Back.
+    if w.get_is_mobile_platform() {
+        w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
+        w.global::<crate::SidebarPane>()
+            .set_active_tab("chats".into());
+    }
 }
 
 /// [`rebuild_chat_list`] from the UI thread. Rows are rebuilt from local

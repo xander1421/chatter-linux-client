@@ -102,6 +102,7 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             .set_composer_gifs_available(ui_ctx.gif_picker_available());
                         crate::bin_ui::features::back::close(&w, "anon-mode-pin");
                         w.set_anon_mode_pin("".into());
+                        close_hidden_conversation(&w, &ui_ctx);
                         refresh_sidebar(&w, &ui_ctx);
                         tracing::info!("Anon Mode enabled");
                     } else {
@@ -111,6 +112,31 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         });
     });
+}
+
+/// Screens pushed for the open conversation (its settings and invite, pinned
+/// list, header menu, a message's info or forward picker).
+const CONVERSATION_SCREENS: [&str; 6] = [
+    "channel-settings",
+    "invite-member",
+    "pinned-messages",
+    "chat-menu",
+    "message-info",
+    "forward-message",
+];
+
+/// Entering Shield hid the open conversation's row (a channel or Saved
+/// Messages, per core's `visible_in_mode`), but its header, messages and
+/// composer stayed on screen until another chat was opened. Close it and the
+/// screens pushed for it.
+fn close_hidden_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    if ui_ctx.active_conversation_visible_in_mode() {
+        return;
+    }
+    for screen in CONVERSATION_SCREENS {
+        crate::bin_ui::features::back::close(window, screen);
+    }
+    crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
 }
 
 /// Rebuild the chat list so the anon-mode filter takes effect: core's
