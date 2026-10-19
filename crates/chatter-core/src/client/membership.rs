@@ -124,6 +124,9 @@ pub struct ServerOperatedMember {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChannelAccessView {
     pub public_badge: String,
+    /// Read-only summary of how people join and who manages join links, for
+    /// a viewer who cannot manage them (empty for one who can).
+    pub join_summary: String,
     pub can_manage_invites: bool,
     pub invite_links: Vec<InviteLinkRow>,
     pub can_approve_joins: bool,
@@ -213,6 +216,41 @@ pub(crate) fn public_badge(
     } else {
         String::new()
     }
+}
+
+/// How people join, and which roles manage join links, for a viewer who
+/// cannot manage them; empty for one who can (the "Join links" controls say
+/// it). Uses the verified policy; without one only the join mode (from the
+/// channel type, as [`public_badge`]) is stated, since nothing verified says
+/// who manages links.
+pub(crate) fn join_summary(
+    channel_type: ChannelType,
+    state: Option<&MembershipState>,
+    can_manage_invites: bool,
+) -> String {
+    if can_manage_invites {
+        return String::new();
+    }
+    let open = match state {
+        Some(s) => s.policy.join == JoinMode::Open,
+        None => channel_type == ChannelType::Public,
+    };
+    let mut parts = Vec::new();
+    if !open {
+        // An open channel's public badge already says anyone can join.
+        parts.push("Invite only \u{2014} people join through an invitation or a join link.");
+    }
+    if let Some(s) = state {
+        parts.push(match s.policy.manage_invites {
+            ChannelRole::Owner => "Only the owner creates and revokes join links.",
+            ChannelRole::Admin => "Owners and admins create and revoke join links.",
+            ChannelRole::Moderator => {
+                "Owners, admins and moderators create and revoke join links."
+            }
+            _ => "Members create and revoke join links.",
+        });
+    }
+    parts.join(" ")
 }
 
 /// Whether a roster row (from the server's member list) is outside the
@@ -411,6 +449,7 @@ impl ChatterClient {
 
         ChannelAccessView {
             public_badge: public_badge(channel.channel_type, verified.as_ref()),
+            join_summary: join_summary(channel.channel_type, state, can_manage_invites),
             can_manage_invites,
             invite_links: if can_manage_invites {
                 state
@@ -719,6 +758,33 @@ mod tests {
         // No verified state yet: fall back to the type.
         assert_eq!(public_badge(ChannelType::Public, None), PUBLIC_BADGE);
         assert_eq!(public_badge(ChannelType::Private, None), "");
+    }
+
+    #[test]
+    fn join_summary_for_members_who_cannot_manage_links() {
+        let private = channel(VerificationStatus::Ok, false);
+        let open = channel(VerificationStatus::Ok, true);
+        // A manager sees the controls instead.
+        assert_eq!(
+            join_summary(ChannelType::Private, Some(&private.state), true),
+            ""
+        );
+        assert_eq!(
+            join_summary(ChannelType::Private, Some(&private.state), false),
+            "Invite only \u{2014} people join through an invitation or a join link. \
+             Owners and admins create and revoke join links."
+        );
+        // Open: the public badge already says anyone can join.
+        assert_eq!(
+            join_summary(ChannelType::Public, Some(&open.state), false),
+            "Owners and admins create and revoke join links."
+        );
+        // Nothing verified: the join mode from the type, no role claim.
+        assert_eq!(
+            join_summary(ChannelType::Private, None, false),
+            "Invite only \u{2014} people join through an invitation or a join link."
+        );
+        assert_eq!(join_summary(ChannelType::Public, None, false), "");
     }
 
     #[test]

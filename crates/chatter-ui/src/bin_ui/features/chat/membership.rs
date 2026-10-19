@@ -45,6 +45,7 @@ pub fn apply_header(w: &MainWindow, header: &ChannelMembershipHeader) {
 fn apply_access(w: &MainWindow, view: &ChannelAccessView) {
     let g = w.global::<MembershipGlobal>();
     g.set_access_public_badge(view.public_badge.as_str().into());
+    g.set_access_join_summary(view.join_summary.as_str().into());
     g.set_can_manage_invites(view.can_manage_invites);
     g.set_can_approve_joins(view.can_approve_joins);
     let links: Vec<InviteLinkRowData> = view
