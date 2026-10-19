@@ -16,6 +16,7 @@ pub mod migrations;
 pub mod receive_artifact;
 pub mod repositories;
 pub mod serialization;
+pub mod unlink;
 
 pub use database::Database;
 pub use key_store::KeyStore;

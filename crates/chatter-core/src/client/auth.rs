@@ -77,6 +77,61 @@ impl ChatterClient {
                         .set_session_ended_if_current(teardown_revision);
                 });
             }));
+
+        // The server's dedicated "device unlinked" answer, and nothing else
+        // (network/grpc/interceptors.rs DEVICE_UNLINKED_MESSAGE). Signal-Desktop
+        // `unlinkAndDisconnect` (background.preload.ts): stop, delete this
+        // device's credentials, keys and sessions at once, keep the history
+        // until the device is linked again (storage/unlink.rs).
+        let weak = Arc::downgrade(self);
+        self.auth()
+            .auth_interceptor
+            .on_device_unlinked(Arc::new(move |generation| {
+                let Some(client) = weak.upgrade() else { return };
+                tokio::spawn(async move {
+                    let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    if client.auth().auth_interceptor.generation() != generation {
+                        return;
+                    }
+                    let Some((former_owner, _)) = client.auth().current_user() else {
+                        tracing::error!("device unlinked, but no account is recorded on it");
+                        return;
+                    };
+                    tracing::warn!("this device was unlinked from the account; deleting its keys");
+                    // Drafts are history, which an unlink keeps.
+                    {
+                        let (drafts, _) = client.composer_drafts_for_session();
+                        client.persist_composer_drafts(&drafts);
+                    }
+                    client.persist_composer_recovery();
+                    client.auth_state().invalidate_session();
+                    let teardown_revision = client.auth_state().get().session_revision;
+                    // Stop authenticating before teardown, as the ended-session
+                    // path does; there is nothing left to tell the server.
+                    client.auth().auth_interceptor.clear();
+                    client.shutdown_session(teardown_revision, false).await;
+                    // Keys go after every session task has stopped, so none
+                    // can write a prekey or session back.
+                    if let Err(error) = client.auth().forget_unlinked_device(former_owner) {
+                        tracing::error!(%error, "could not delete the unlinked device's keys");
+                    }
+                    #[cfg(feature = "mesh")]
+                    if let Err(error) = client.mesh().remove_account_bindings(former_owner) {
+                        tracing::error!(%error, "could not remove the unlinked account's mesh bindings");
+                    }
+                    client
+                        .auth_state()
+                        .set_device_unlinked_if_current(teardown_revision);
+                });
+            }));
+    }
+
+    /// Text for the sign-in screen when this install was unlinked by another
+    /// device of its account and has not been linked or signed in since.
+    pub fn device_unlinked_notice(&self) -> Option<String> {
+        self.auth()
+            .unlinked_account()
+            .map(|_| crate::state::auth_state::DEVICE_UNLINKED_NOTICE.to_string())
     }
 
     /// Ensure the gRPC pool is connected before running an auth RPC.

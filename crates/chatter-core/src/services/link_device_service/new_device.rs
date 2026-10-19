@@ -110,6 +110,16 @@ impl LinkDeviceService {
             .parse()
             .map_err(|e| LinkDeviceError::Invalid(format!("invalid aci: {e}")))?;
 
+        // Linking imports the primary's history (Link'n'Sync), Signal's
+        // "Transfer" relink, which deletes all local data first
+        // (DialogRelink.dom.tsx -> DeleteDataAndRelinkConfirmationDialog ->
+        // removeAllData). Only an install the server unlinked has an old
+        // history here to delete; it goes before any key of the new link is
+        // generated, since generating them already writes the key store.
+        if crate::services::auth_service::unlinked_account(&self.settings_repo).is_some() {
+            crate::services::auth_service::wipe_unlinked_install(&self.database)?;
+        }
+
         // Reconstruct identity keypair from primary's private key.
         let priv_bytes = Zeroizing::new(provision.aci_identity_key_private.clone());
         let private = PrivateKey::deserialize(priv_bytes.as_slice())

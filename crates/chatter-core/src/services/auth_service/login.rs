@@ -164,13 +164,6 @@ impl AuthService {
             .as_ref()
             .map(|kp| kp.identity_key().serialize());
 
-        // The fresh trusted-device token for this device's next login. In
-        // the encrypted settings database, like the device auth token.
-        if !response.trusted_device_token.is_empty() {
-            self.settings_repo
-                .set_bytes(&token_key, &response.trusted_device_token)?;
-        }
-
         // Extract session and user profile
         let session = response
             .session
@@ -184,6 +177,32 @@ impl AuthService {
             .parse()
             .map_err(|_| AuthError::LoginFailed("invalid user_id format".to_string()))?;
         let device_id = session.device_id;
+
+        // Signing in on an install another device unlinked. The same account
+        // keeps this install's history, as Signal relinking to the same
+        // account deletes configuration only; a different account must not
+        // inherit it, so everything goes first (Signal-Desktop
+        // AccountManager.preload.ts createAccount: isRelinkingToSameAccount ->
+        // removeAllConfiguration, else removeAllData). Only this answer from
+        // the server can say which account it is.
+        let stored_profile_key = match self.unlinked_account() {
+            Some(former) if former == user_id => {
+                self.settings_repo.delete(keys::UNLINKED_ACCOUNT_ID)?;
+                stored_profile_key
+            }
+            Some(_) => {
+                super::wipe_unlinked_install(self.settings_repo.database())?;
+                None
+            }
+            None => stored_profile_key,
+        };
+
+        // The fresh trusted-device token for this device's next login. In
+        // the encrypted settings database, like the device auth token.
+        if !response.trusted_device_token.is_empty() {
+            self.settings_repo
+                .set_bytes(&token_key, &response.trusted_device_token)?;
+        }
 
         // LATENT BUG FIX (surfaced by validated.rs V51's fresh-install flow):
         // on a fresh device we generate credentials with a guessed device_id
