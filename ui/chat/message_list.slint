@@ -622,7 +622,10 @@ export component MessageList inherits Rectangle {
                     root.go-to-end();
                 } else {
                     self.read-position();
-                    if (root.load-more-armed && !root.at-end
+                    // Not while a jump is landing: the page it opened was grown
+                    // back to the target, so the target sits near the top, and
+                    // a prepend there would cancel the jump (`grown` above).
+                    if (root.load-more-armed && !root.at-end && root.jump-row < 0
                             && self.viewport-y > -self.height * 1.5) {
                         // Approaching the top, early enough that the page is
                         // in before row 0 is on screen: rows inserted above
