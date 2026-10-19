@@ -13,6 +13,7 @@ export struct SessionInfo {
     device-id: int,
     device-info: string,
     ip-address: string,
+    status-text: string,
     last-used: string,
     created-at: string,
     is-current: bool,
@@ -280,6 +281,11 @@ export component SessionsModal inherits Rectangle {
                                         }
                                     }
 
+                                    if session.status-text != "": Text {
+                                        text: session.status-text;
+                                        color: Colors.text-muted;
+                                        wrap: word-wrap;
+                                    }
                                     // The server does not store IPs; an empty
                                     // field is not shown.
                                     if session.ip-address != "": Text {

@@ -18,6 +18,7 @@ pub(crate) fn session_to_slint(s: Session) -> SessionInfo {
         device_id: s.device_id as i32,
         device_info: s.device_info.into(),
         ip_address: s.ip_address.into(),
+        status_text: s.status_text.into(),
         // Day precision: the server records a device's activity per day
         // (Signal's lastSeen), so a time of day would be invented.
         last_used: crate::bin_ui::converters::format_activity_day(s.last_used).into(),

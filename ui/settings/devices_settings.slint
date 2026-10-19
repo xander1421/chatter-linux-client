@@ -172,7 +172,7 @@ export component DevicesSettings inherits VerticalLayout {
                         }
                     }
                     Text {
-                        text: session.is-current ? "Active now" : "Last active: " + session.last-used;
+                        text: session.status-text != "" ? session.status-text : (session.is-current ? "Active now" : "Last active: " + session.last-used);
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         wrap: word-wrap;

@@ -22,6 +22,8 @@ pub struct Session {
     pub device_info: String,
     /// IP address of the last connection.
     pub ip_address: String,
+    /// Presentation copy for an authorization session that has ended.
+    pub status_text: String,
     /// When the session was created.
     pub created_at: DateTime<Utc>,
     /// When the session was last used.
@@ -181,7 +183,7 @@ impl SessionService {
         self.settings_repo.current_user_id().ok()
     }
 
-    /// List all active sessions for the current user.
+    /// List every linked device, including devices whose session has ended.
     ///
     /// Returns a list of sessions with device info, timestamps, and whether
     /// each session is the current one (as provided by the server).
@@ -214,6 +216,11 @@ impl SessionService {
                     is_mobile: is_mobile_device_name(&platform),
                     device_info: name.unwrap_or(platform),
                     ip_address: s.ip_address,
+                    status_text: if s.has_active_session {
+                        String::new()
+                    } else {
+                        "Signed out — sign in again on that device".to_string()
+                    },
                     // NANOSECONDS, not millis. auth.proto:371-372 says so
                     // ("Unix timestamp in nanoseconds") and the server sends
                     // UnixNano() (active_sessions.go:51-52). Parsing nanos as millis
