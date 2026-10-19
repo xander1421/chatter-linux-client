@@ -528,6 +528,8 @@ mod heartbeat_tests {
     #[tokio::test]
     async fn a_heartbeat_changes_nothing() {
         let db = crate::services::channel::membership_log::test_support::test_db();
+        let settings_repo =
+            crate::storage::repositories::settings_repo::SettingsRepository::new(db.clone());
         let user_repo = Arc::new(UserRepository::new(db));
         // Never reachable; a heartbeat must not make any request.
         let pool = Arc::new(GrpcClientPool::new("https://127.0.0.1:1").unwrap());
@@ -542,6 +544,7 @@ mod heartbeat_tests {
             &pool,
             &event_tx,
             &user_repo,
+            &settings_repo,
             None,
             Some(&domain_tx),
         )
