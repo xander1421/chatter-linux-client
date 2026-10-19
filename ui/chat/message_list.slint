@@ -596,13 +596,20 @@ export component MessageList inherits Rectangle {
                 } else if (root.jump-row >= 0) {
                     // The bootstrap timer or a fresh delegate measurement owns
                     // navigation; this callback's coordinates may be transient.
-                } else if ((root.at-end || root.following-tail)
+                } else if ((root.at-end || root.following-tail || root.is-at-bottom)
                         && !root.opening-on-unread && !root.scrolling
                         && self.viewport-height != root.seen-height && self.bottom-gap() > 1px) {
-                    // A content re-estimate (a row measured, a thumbnail
-                    // grown) can follow the opening seek's last retry. Keep
-                    // its tail intent through the first stable media layout.
-                    self.seek-end();
+                    // Content grew under a reader at the bottom: a row
+                    // measured, a thumbnail grown, a reaction added to the
+                    // last bubble, a row inserted above the tail (an
+                    // own-device sync copy whose sender clock runs behind).
+                    // `is-at-bottom` counts too: it is what hides the pill,
+                    // and a wheel stop a few px short of the end leaves it
+                    // true with neither `at-end` nor `following-tail`.
+                    // go-to-end, not one seek: the runtime re-estimates after
+                    // the seek, and only end-pending retries until the tail
+                    // is flush.
+                    root.go-to-end();
                 } else {
                     self.read-position();
                     if (root.load-more-armed && !root.at-end
