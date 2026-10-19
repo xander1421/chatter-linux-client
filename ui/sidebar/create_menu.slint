@@ -154,6 +154,9 @@ export component NewChatPicker inherits Rectangle {
         }
 
         if root.friends.length > 0: Flickable {
+            // The Modal sizes to its content; a Flickable has no preferred
+            // height of its own, so without this the list got 0px.
+            preferred-height: list.preferred-height;
             viewport-height: list.preferred-height;
             list := VerticalLayout {
                 alignment: start;
