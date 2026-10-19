@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 use tokio::sync::watch;
 
 use crate::domain::ids::UserId;
-use crate::domain::user::{FriendshipStatus, Profile};
+use crate::domain::user::FriendshipStatus;
 use crate::inbox::events::{FriendRequestInfo, InboxEvent};
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -346,31 +346,26 @@ fn apply_profile(
             crate::crypto::profile_crypto::decrypt_avatar(&key, &proto.encrypted_avatar).ok()
         });
 
-    let before = user_repo.get_profile(&profile.user_id).ok().flatten();
-
     // A profile push may arrive before the friends sync has created this
     // user. `profiles.user_id` has a foreign key to `users.id`.
     if let Err(e) = user_repo.ensure_user_exists(&profile.user_id) {
         tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to create profile user");
         return;
     }
-    if let Err(e) = user_repo.upsert_profile(&profile) {
-        tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
-        return;
-    }
+    let changed = match user_repo.upsert_profile(&profile) {
+        Ok(changed) => changed,
+        Err(e) => {
+            tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
+            return;
+        }
+    };
 
-    if !announce_unchanged && !profile_changed(before.as_ref(), &profile) {
+    if !announce_unchanged && !changed {
         return;
     }
 
     if let Some(tx) = domain_tx {
-        let _ = tx.send(DomainEvent::UserProfileUpdated {
-            user_id: profile.user_id,
-            display_name: profile.display_name.clone(),
-            status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
-            avatar_bytes: profile.avatar_bytes.clone(),
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-        });
+        let _ = tx.send(crate::services::user::profile_updated_event(&profile));
     }
 }
 
@@ -407,24 +402,8 @@ fn apply_own_profile(
         return;
     }
     if let Some(tx) = domain_tx {
-        let _ = tx.send(DomainEvent::UserProfileUpdated {
-            user_id: profile.user_id,
-            display_name: profile.display_name.clone(),
-            status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
-            avatar_bytes: profile.avatar_bytes.clone(),
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-        });
+        let _ = tx.send(crate::services::user::profile_updated_event(&profile));
     }
-}
-
-/// Did name, status or avatar change? Presence has its own event. An avatar of
-/// `None` means "not decrypted", and the upsert keeps the stored one.
-fn profile_changed(before: Option<&Profile>, after: &Profile) -> bool {
-    let Some(before) = before else { return true };
-    before.display_name != after.display_name
-        || before.status_message.as_ref().map(|s| &s.text)
-            != after.status_message.as_ref().map(|s| &s.text)
-        || (after.avatar_bytes.is_some() && before.avatar_bytes != after.avatar_bytes)
 }
 
 /// Refetch every accepted friend's profile and announce what changed.

@@ -245,6 +245,10 @@ impl SyncEngine {
                 duration_ms: result.duration_ms,
                 blocks_changed,
             });
+        for profile in &result.users.profiles_changed {
+            self.event_bus
+                .emit_domain(crate::services::user::profile_updated_event(profile));
+        }
         if let Some(friend_id) = result.users.new_friend_ids.first().copied() {
             let _ = self
                 .event_bus

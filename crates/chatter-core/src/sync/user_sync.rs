@@ -45,6 +45,11 @@ pub struct UserSyncResult {
     /// kept showing "User <id>" for us (OPEN-ITEMS §119). An inserted row is
     /// not one: the device that accepted already sent the key.
     pub accepted_requests: Vec<UserId>,
+    /// Friend profiles this pass changed in storage (name, status). The engine
+    /// announces each (`UserProfileUpdated`): a rename made while we were
+    /// offline is learned here, and the chat list painted from storage at
+    /// startup kept the old name because this write was silent.
+    pub profiles_changed: Vec<Profile>,
     /// A row failed. The pass returned what it could, but `last_synced_at`
     /// was not advanced and the engine must run this step again.
     pub incomplete: bool,
@@ -235,8 +240,11 @@ impl UserSync {
                 };
 
                 match self.user_repo.upsert_profile(&profile) {
-                    Ok(_) => {
+                    Ok(changed) => {
                         result.profiles_updated += 1;
+                        if changed {
+                            result.profiles_changed.push(profile);
+                        }
                     }
                     Err(e) => {
                         had_failure = true;

@@ -431,10 +431,9 @@ fn update_pending_anon_dm_avatar(w: &MainWindow, conversation_id: &str, bytes: &
 
 /// Handle server-managed user profile updated event.
 ///
-/// Mirrors `handle_anon_dm_profile_updated` but matches DM rows by
-/// `user_id` (server DMs are channel-scoped, but the row carries the
-/// peer user_id). Updates display name + status in sidebar, chat
-/// header, and profile modal in real-time. `own` (decided in core) also
+/// Updates display name + status in the open chat header, message rows,
+/// the channel member list and the profile modal in real time; the chat list
+/// is rebuilt from core by the caller. `own` (decided in core) also
 /// repaints this account's own name, initials and avatar — the sidebar footer,
 /// Profile tab and Settings account card all read `SidebarPane`.
 pub(super) fn handle_user_profile_updated(
@@ -467,10 +466,8 @@ pub(super) fn handle_user_profile_updated(
     let client = ui_ctx.clone();
 
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
-    // is built inside the event-loop closure below. This is the same in-place
-    // patch path the name already uses — the DM sidebar's own rebuild
-    // (refresh_chat_list) races the pre-decrypt build, so we set the avatar here
-    // where we know the decrypted bytes just arrived.
+    // is built inside the event-loop closure below, for the own-profile
+    // surfaces, the open header and the profile sheet.
     let avatar_decoded: Option<(u32, u32, Vec<u8>)> = avatar_bytes.as_ref().and_then(|b| {
         image::load_from_memory(b).ok().map(|img| {
             let rgba = img.to_rgba8();
@@ -499,22 +496,11 @@ pub(super) fn handle_user_profile_updated(
             }
         }
 
-        // 1. Sidebar DM rows — update display name + initials + avatar for matching peer.
-        let dms = w.global::<crate::SidebarPane>().get_chat_rows();
-        for i in 0..dms.row_count() {
-            if let Some(mut dm) = dms.row_data(i) {
-                if dm.user_id == user_id_str {
-                    dm.display_name = display_name_slint.clone();
-                    dm.initials = initials.clone().into();
-                    if let Some(img) = &avatar_img {
-                        dm.avatar_source = img.clone();
-                        dm.has_avatar = true;
-                    }
-                    dms.set_row_data(i, dm);
-                    break;
-                }
-            }
-        }
+        // 1. Chat-list rows are not patched here: the caller rebuilds them
+        // from core (`rebuild_chat_list`), which names a friend DM from the
+        // stored profile. Patching by `user_id` hit the first row for this
+        // peer — a secret chat with them carries the same `user_id` — so the
+        // secret chat took the friend name and the DM row kept the old one.
 
         // Message rows and a currently open channel roster are snapshots.
         // Resolve names from core, including after the app has been open for

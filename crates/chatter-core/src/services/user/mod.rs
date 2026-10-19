@@ -69,7 +69,17 @@ pub fn decrypt_friend_display_name(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encrypted_base64)
         .ok()?;
-    let name = crate::crypto::profile_crypto::decrypt_display_name(&key, &bytes).ok()?;
+    let name = match crate::crypto::profile_crypto::decrypt_display_name(&key, &bytes) {
+        Ok(name) => name,
+        Err(_) => {
+            // We hold a key and it does not open their current profile: the
+            // key is stale (they rotated it and the new one has not reached
+            // this device). Every catch-up path then keeps the old name, so
+            // say so — this is the one case a rename can never arrive.
+            tracing::warn!(%friend_id, "stored friend profile key does not decrypt their profile name");
+            return None;
+        }
+    };
     (!name.is_empty()).then_some(name)
 }
 
@@ -292,6 +302,23 @@ pub struct UserService {
     /// When each profile was last fetched from the server this session.
     /// In memory on purpose: a restart should refetch.
     profile_fetched_at: Arc<parking_lot::Mutex<HashMap<UserId, Instant>>>,
+    /// Announces a friend profile this service changed in storage
+    /// ([`profile_updated_event`]).
+    event_bus: crate::events::EventBus,
+}
+
+/// The `UserProfileUpdated` that tells every view — chat list, open header,
+/// member lists, profile sheet — that `profile` is what storage now holds.
+/// Every writer whose `UserRepository::upsert_profile` reports a change sends
+/// it; one that stayed silent left the chat list on the old name.
+pub(crate) fn profile_updated_event(profile: &Profile) -> crate::inbox::handlers::DomainEvent {
+    crate::inbox::handlers::DomainEvent::UserProfileUpdated {
+        user_id: profile.user_id,
+        display_name: profile.display_name.clone(),
+        status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+        avatar_bytes: profile.avatar_bytes.clone(),
+        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+    }
 }
 
 /// Signal-Desktop's `throttledGetProfiles` window: opening a conversation
@@ -313,6 +340,7 @@ impl UserService {
         user_repo: Arc<UserRepository>,
         anon_dm_repo: Arc<AnonDmRepository>,
         anon_group_repo: Arc<AnonGroupRepository>,
+        event_bus: crate::events::EventBus,
     ) -> Self {
         Self {
             grpc_pool,
@@ -321,6 +349,7 @@ impl UserService {
             anon_dm_repo,
             anon_group_repo,
             profile_fetched_at: Arc::default(),
+            event_bus,
         }
     }
 

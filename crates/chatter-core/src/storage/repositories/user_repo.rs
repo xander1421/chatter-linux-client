@@ -228,9 +228,28 @@ impl UserRepository {
         }
     }
 
-    /// Insert or update a user's profile.
-    pub fn upsert_profile(&self, profile: &Profile) -> Result<(), StorageError> {
+    /// Insert or update a user's profile. `true` when the write changed what
+    /// any screen shows for this user — name, status text, or avatar (an
+    /// avatar of `None` keeps the stored one, so it changes nothing) — or the
+    /// user had no profile yet. Every writer gets the answer, so a writer that
+    /// changes a friend's name can say so (`UserProfileUpdated`): a silent
+    /// write left rows painted earlier showing the old name.
+    pub fn upsert_profile(&self, profile: &Profile) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
+        let before: Option<(String, Option<String>, Option<Vec<u8>>)> = match conn.query_row(
+            "SELECT display_name, status_text, avatar_bytes FROM profiles WHERE user_id = ?1",
+            params![profile.user_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ) {
+            Ok(row) => Some(row),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(StorageError::Database(e)),
+        };
+        let changed = before.map_or(true, |(name, status, avatar)| {
+            name != profile.display_name
+                || status.as_deref() != profile.status_message.as_ref().map(|s| s.text.as_str())
+                || (profile.avatar_bytes.is_some() && avatar != profile.avatar_bytes)
+        });
         let (status_text, status_emoji, status_expires_at) = match &profile.status_message {
             Some(msg) => (
                 Some(msg.text.clone()),
@@ -262,7 +281,7 @@ impl UserRepository {
                 presence_to_i32(profile.presence),
             ],
         )?;
-        Ok(())
+        Ok(changed)
     }
 
     /// Update only a user's presence.

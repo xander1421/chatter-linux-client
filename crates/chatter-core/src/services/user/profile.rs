@@ -25,7 +25,9 @@ impl UserService {
                 &proto_profile,
             )?;
             self.user_repo.ensure_user_exists(user_id)?;
-            self.user_repo.upsert_profile(&profile)?;
+            if self.user_repo.upsert_profile(&profile)? {
+                self.event_bus.emit_domain(super::profile_updated_event(&profile));
+            }
             self.profile_fetched_at
                 .lock()
                 .insert(*user_id, Instant::now());
@@ -78,7 +80,9 @@ impl UserService {
             });
 
         self.user_repo.ensure_user_exists(user_id)?;
-        self.user_repo.upsert_profile(&profile)?;
+        if self.user_repo.upsert_profile(&profile)? {
+            self.event_bus.emit_domain(super::profile_updated_event(&profile));
+        }
         self.profile_fetched_at
             .lock()
             .insert(*user_id, Instant::now());
