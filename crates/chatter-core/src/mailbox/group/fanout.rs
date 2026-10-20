@@ -86,6 +86,8 @@ pub struct GroupPollResult {
 
 /// Results of one group polling pass, including mailboxes that did not finish.
 pub struct GroupPollBatch {
+    /// At least one anonymous-group mailbox was successfully fetched over Tor.
+    pub secret_healthy: bool,
     pub results: Vec<(ChannelId, GroupPollResult)>,
     pub mailbox_count: usize,
     pub timed_out: usize,
@@ -275,9 +277,7 @@ impl GroupFanout {
             .await
         {
             Ok(response) => {
-                tracing::info!(
-                    "[FANOUT_SEND] Success"
-                );
+                tracing::info!("[FANOUT_SEND] Success");
                 FanoutResult::success(member.user_id, response.message_id)
             }
             Err(e) => {
@@ -319,14 +319,13 @@ impl GroupFanout {
     /// # Returns
     ///
     /// Completed results and counts for all attempted mailboxes.
-    pub async fn poll_all_group_mailboxes(
-        &self,
-    ) -> Result<GroupPollBatch, MailboxError> {
+    pub async fn poll_all_group_mailboxes(&self) -> Result<GroupPollBatch, MailboxError> {
         // Get all active group mailboxes
         let group_mailboxes = self.mailbox_manager.get_all_group_mailboxes()?;
 
         if group_mailboxes.is_empty() {
             return Ok(GroupPollBatch {
+                secret_healthy: false,
                 results: Vec::new(),
                 mailbox_count: 0,
                 timed_out: 0,
@@ -371,7 +370,7 @@ impl GroupFanout {
                         .map_err(|_| ()),
                         Err(e) => Ok(Err(MailboxError::Network(e.to_string()))),
                     };
-                    (group_id, result)
+                    (group_id, secret, result)
                 }
             })
             .collect();
@@ -381,14 +380,18 @@ impl GroupFanout {
 
         // Filter to only successful results
         let mut batch = GroupPollBatch {
+            secret_healthy: false,
             results: Vec::new(),
             mailbox_count,
             timed_out: 0,
             failed: 0,
         };
-        for (group_id, result) in results {
+        for (group_id, secret, result) in results {
             match result {
-                Ok(Ok(poll_result)) => batch.results.push((group_id, poll_result)),
+                Ok(Ok(poll_result)) => {
+                    batch.secret_healthy |= secret;
+                    batch.results.push((group_id, poll_result));
+                }
                 Ok(Err(e)) => {
                     batch.failed += 1;
                     tracing::warn!(%group_id, error = %e, "Failed to poll group mailbox");

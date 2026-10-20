@@ -885,9 +885,12 @@ impl DeviceInboxProvider {
                 let retry_budget = retry_budget.clone();
                 let content_handoff = content_handoff.clone();
                 let timing = timing.clone();
+                let retry_database = database.clone();
+                let retry_pool = grpc_pool.clone();
+                let retry_owner = current_user_id;
                 group_polls.spawn(async move {
                     timing.delay_between_batch_items().await;
-                    poll_group_mailboxes(
+                    let healthy = poll_group_mailboxes(
                         &group_fanout,
                         &group_coordinator,
                         &message_gateway,
@@ -900,6 +903,18 @@ impl DeviceInboxProvider {
                         content_handoff.as_ref(),
                     )
                     .await;
+                    if healthy {
+                        if let Some(owner) = retry_owner {
+                            let _ = crate::services::gateway::submission::retry_pending(
+                                &retry_database,
+                                &retry_pool,
+                                &owner.to_string(),
+                                None,
+                                domain_tx.as_ref(),
+                            )
+                            .await;
+                        }
+                    }
                 });
             }
 
@@ -992,6 +1007,7 @@ impl DeviceInboxProvider {
                                 anon_poller.poll_all(&mut client),
                             ).await {
                                 Ok(Ok(results)) => {
+                                    let secret_healthy = !results.is_empty();
                                     if !results.is_empty() {
                                         // Create mpsc channel for events (process_anon_dm_results expects mpsc)
                                         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
@@ -1094,6 +1110,11 @@ impl DeviceInboxProvider {
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                    if secret_healthy {
+                                        if let Some(owner) = current_user_id {
+                                            let _ = crate::services::gateway::submission::retry_pending(&database,&grpc_pool,&owner.to_string(),None,domain_tx.as_ref()).await;
                                         }
                                     }
                                 }

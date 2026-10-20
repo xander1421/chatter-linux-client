@@ -221,15 +221,19 @@ export component MessageFooter inherits HorizontalLayout {
 
             // Submitted, but the transport died before the
             // server answered: it may well have arrived.
-            // One tick with a warning, never "failed" and
-            // never a retry (a resend could duplicate it).
+            // Core retries the retained sealed bytes without re-encryption.
             if root.is-own && !root.mesh-delivery && root.delivery-status == "unconfirmed": TooltipArea {
-                tooltip-text: "Delivery could not be confirmed";
+                tooltip-text: "Delivery could not be confirmed, tap to retry";
                 placement: "top";
                 width: 26px;
                 height: 12px;
-                accessible-role: text;
-                accessible-label: "Delivery could not be confirmed";
+                accessible-role: button;
+                accessible-label: "Delivery could not be confirmed, tap to retry";
+                accessible-action-default => { root.message-clicked(root.message-id); }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.message-clicked(root.message-id); }
+                }
 
                 Image {
                     source: Icons.check;

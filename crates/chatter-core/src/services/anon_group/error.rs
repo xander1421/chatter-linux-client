@@ -7,7 +7,7 @@ use crate::error::StorageError;
 /// Anon group service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum AnonGroupError {
-    #[error("Delivery unconfirmed; the original submission is retained and retry is disabled")]
+    #[error("Delivery unconfirmed; the original ciphertext is retained for retry")]
     DeliveryUnconfirmed,
     /// Not logged in.
     #[error("not logged in")]
