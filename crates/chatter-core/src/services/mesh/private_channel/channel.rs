@@ -215,9 +215,9 @@ impl PrivateChannel {
         if self.pending_invites.len() >= 32 {
             return Err(failure("too many pending private channel invites"));
         }
-        self.pending_invites.push(invite.clone());
-        let bytes = serde_json::to_vec(&invite).map_err(|_| failure("invalid invite"))?;
-        Ok(format!("{INVITE_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes)))
+        let text = invite.to_text().ok_or_else(|| failure("invalid invite"))?;
+        self.pending_invites.push(invite);
+        Ok(text)
     }
 
     pub fn rotate(

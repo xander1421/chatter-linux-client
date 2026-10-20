@@ -156,14 +156,61 @@ impl Invite {
         ))
         .map_err(|_| failure("invalid invite"))
     }
-    pub fn from_text(text: &str, now: u64) -> Option<Self> {
-        let data = URL_SAFE_NO_PAD
-            .decode(text.strip_prefix(INVITE_PREFIX)?)
-            .ok()?;
-        if data.len() > 1024 {
+    /// QR text: fixed-width binary fields, name last. The JSON form wrote each
+    /// key byte as a decimal number, turning ~184 bytes into a 975-character
+    /// QR that a phone camera could not read off another phone's screen.
+    pub fn to_text(&self) -> Option<String> {
+        let id = uuid::Uuid::parse_str(&self.channel_id).ok()?;
+        let creator = PeerId::from_str(&self.creator).to_routing_bytes()?;
+        let target = PeerId::from_str(&self.target).to_routing_bytes()?;
+        // Only canonical forms round-trip; anything else would decode to a
+        // different preimage and fail its signature.
+        if id.to_string() != self.channel_id
+            || PeerId::from_bytes(&creator).as_str() != self.creator
+            || PeerId::from_bytes(&target).as_str() != self.target
+            || self.creator_key.len() != 32
+            || self.creator_static.len() != 32
+            || self.nonce.len() != 16
+            || self.signature.len() != 64
+        {
             return None;
         }
-        let invite: Self = serde_json::from_slice(&data).ok()?;
+        let mut bytes = Vec::with_capacity(INVITE_FIXED_LEN + self.name.len());
+        bytes.extend_from_slice(id.as_bytes());
+        bytes.extend_from_slice(&creator);
+        bytes.extend_from_slice(&target);
+        bytes.extend_from_slice(&self.creator_key);
+        bytes.extend_from_slice(&self.creator_static);
+        bytes.extend_from_slice(&self.nonce);
+        bytes.extend_from_slice(&self.expires_at.to_be_bytes());
+        bytes.extend_from_slice(&self.signature);
+        bytes.extend_from_slice(self.name.as_bytes());
+        Some(format!("{INVITE_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes)))
+    }
+    pub fn from_text(text: &str, now: u64) -> Option<Self> {
+        let data = URL_SAFE_NO_PAD
+            .decode(text.trim().strip_prefix(INVITE_PREFIX)?)
+            .ok()?;
+        if data.len() <= INVITE_FIXED_LEN || data.len() > INVITE_FIXED_LEN + 32 {
+            return None;
+        }
+        let (fixed, name) = data.split_at(INVITE_FIXED_LEN);
+        let take = |at: usize, len: usize| fixed[at..at + len].to_vec();
+        let invite = Self {
+            channel_id: uuid::Uuid::from_slice(&fixed[..16]).ok()?.to_string(),
+            creator: PeerId::from_bytes(fixed[16..24].try_into().ok()?).as_str().to_owned(),
+            target: PeerId::from_bytes(fixed[24..32].try_into().ok()?).as_str().to_owned(),
+            creator_key: take(32, 32),
+            creator_static: take(64, 32),
+            nonce: take(96, 16),
+            expires_at: u64::from_be_bytes(fixed[112..120].try_into().ok()?),
+            signature: take(120, 64),
+            name: String::from_utf8(name.to_vec()).ok()?,
+        };
+        invite.validated(now)
+    }
+    fn validated(self, now: u64) -> Option<Self> {
+        let invite = self;
         if invite.creator_key.len() != 32
             || invite.creator_static.len() != 32
             || invite.signature.len() != 64
@@ -194,7 +241,6 @@ impl Invite {
         if !bytes.starts_with(b"CHTRPCR2") || bytes.len() > 1032 {
             return None;
         }
-        let text = format!("{INVITE_PREFIX}{}", URL_SAFE_NO_PAD.encode(&bytes[8..]));
-        Self::from_text(&text, now)
+        serde_json::from_slice::<Self>(&bytes[8..]).ok()?.validated(now)
     }
 }

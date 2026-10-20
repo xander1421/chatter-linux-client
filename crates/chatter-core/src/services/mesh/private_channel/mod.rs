@@ -26,7 +26,10 @@ use zeroize::Zeroizing;
 use super::MeshError;
 use crate::storage::Database;
 
-const INVITE_PREFIX: &str = "chatter-mesh-private-v2:";
+/// uuid 16, creator 8, target 8, creator key 32, creator static 32, nonce 16,
+/// expiry 8, signature 64; the name follows.
+const INVITE_FIXED_LEN: usize = 184;
+const INVITE_PREFIX: &str = "chatter-mesh-private-v3:";
 const UPDATE_MAGIC: &[u8; 8] = b"CHTRPCU3";
 const FRAME_MAGIC: &[u8; 8] = b"CHTRPSM3";
 const DISTRIBUTION_MAGIC: &[u8; 8] = b"CHTRPSD3";
