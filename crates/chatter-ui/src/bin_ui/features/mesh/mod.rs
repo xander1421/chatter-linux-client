@@ -114,6 +114,17 @@ pub fn clear_active(window: &MainWindow) {
     deselect_rows(window);
 }
 
+/// The open mesh conversation stopped existing (left, wiped): reset mesh state
+/// and close the pane. `clear_active` alone left its title, messages and a
+/// live composer on screen after Leave (desktop, ui151).
+fn close_mesh_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    if active().is_none() {
+        return;
+    }
+    clear_active(window);
+    crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
+}
+
 /// This device's mesh account id as a string, for "is this message mine?".
 pub(super) fn local_user_id(ui_ctx: &Arc<ChatterClient>) -> String {
     if let Some(cached) = LOCAL_USER.get() {
@@ -336,7 +347,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Err(error) = ui_ctx.mesh_leave_channel(name.as_str()) {
                 w.global::<MeshGlobal>().set_notice(format!("Could not leave channel: {error}").into());
             } else {
-                if matches!(active(), Some(MeshConversation::Channel(ref open)) if open == name.as_str()) { clear_active(&w); }
+                if matches!(active(), Some(MeshConversation::Channel(ref open)) if open == name.as_str()) { close_mesh_conversation(&w, &ui_ctx); }
                 refresh_rows(&w, &ui_ctx);
             }
         });
@@ -349,7 +360,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.mesh_leave_private_channel(id.as_str()) {
                 Ok(()) => {
                     if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if open == id.as_str()) {
-                        clear_active(&w);
+                        close_mesh_conversation(&w, &ui_ctx);
                     }
                     refresh_rows(&w, &ui_ctx);
                 }
@@ -575,7 +586,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             // The cell we were reading just went away.
             if matches!(active(), Some(MeshConversation::Geohash(ref open)) if *open == cell) {
-                clear_active(&w);
+                close_mesh_conversation(&w, &ui_ctx);
             }
             refresh_rows(&w, &ui_ctx);
         });
@@ -596,7 +607,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 ui_ctx.stop_mesh().await;
                 let wiped = core_api::panic_wipe(&ui_ctx);
                 run_ui!(weak, |w| {
-                    clear_active(&w);
+                    close_mesh_conversation(&w, &ui_ctx);
                     refresh_rows(&w, &ui_ctx);
                     w.global::<MeshGlobal>()
                         .set_nickname(ui_ctx.mesh_nickname().into());
