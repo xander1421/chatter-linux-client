@@ -72,12 +72,21 @@ impl ConversationHandle {
             // Groups don't track per-user delivery state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
-            ActiveConversation::Channel(channel) => self
-                .client
-                .messages()
-                .send_channel_receipt(*channel, timestamps, false)
-                .await
-                .map_err(ConversationError::Message),
+            // Bound inside the attempt, so initial sends AND pending recovery
+            // return a retryable error instead of monopolizing either queue.
+            ActiveConversation::Channel(channel) => tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.client
+                    .messages()
+                    .send_channel_receipt(*channel, timestamps, false),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(crate::services::MessageError::Network(
+                    crate::error::NetworkError::Timeout,
+                ))
+            })
+            .map_err(ConversationError::Message),
             _ => {
                 let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
                     timestamps.to_vec(),
@@ -104,6 +113,24 @@ impl ConversationHandle {
         }
         let auth = self.client.auth_state().get();
         let shield = self.client.anon_mode_enabled();
+        let delivery_owner = if !read && matches!(self.conversation, ActiveConversation::Channel(_))
+        {
+            auth.current_user_id
+        } else {
+            None
+        };
+        if delivery_owner.is_some() {
+            for entry in self.client.pending_receipts.lock().iter_mut() {
+                if entry.delivery_owner == delivery_owner {
+                    entry.revision = auth.session_revision;
+                }
+            }
+            for entry in self.client.sent_receipts.lock().iter_mut() {
+                if entry.delivery_owner == delivery_owner {
+                    entry.revision = auth.session_revision;
+                }
+            }
+        }
         // A chat reopen may load the same page while a failed receipt is
         // already queued. Let recovery own that timestamp instead of sending
         // another immediate deposit around its backoff.
@@ -145,7 +172,12 @@ impl ConversationHandle {
             self.send_delivery_receipt_once(&unsent).await
         };
         let current = self.client.auth_state().get();
-        if auth.current_user_id.is_none() || auth.session_revision != current.session_revision {
+        let same_delivery_owner = delivery_owner.is_some()
+            && delivery_owner == current.current_user_id
+            && !current.session_ended;
+        if auth.current_user_id.is_none()
+            || (auth.session_revision != current.session_revision && !same_delivery_owner)
+        {
             return result;
         }
         if result.is_ok() {
@@ -154,7 +186,8 @@ impl ConversationHandle {
                 &PendingReceipt {
                     conversation: self.conversation,
                     read,
-                    revision: auth.session_revision,
+                    revision: current.session_revision,
+                    delivery_owner,
                     shield,
                     timestamps: unsent.iter().copied().collect(),
                 },
@@ -164,7 +197,7 @@ impl ConversationHandle {
         if let Some(entry) = pending.iter_mut().find(|entry| {
             entry.conversation == self.conversation
                 && entry.read == read
-                && entry.revision == auth.session_revision
+                && entry.revision == current.session_revision
                 && entry.shield == shield
         }) {
             if result.as_ref().err().is_some_and(retryable_receipt_error) {
@@ -178,7 +211,8 @@ impl ConversationHandle {
             pending.push(PendingReceipt {
                 conversation: self.conversation,
                 read,
-                revision: auth.session_revision,
+                revision: current.session_revision,
+                delivery_owner,
                 shield,
                 timestamps: unsent.iter().copied().collect(),
             });

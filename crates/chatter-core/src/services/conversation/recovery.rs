@@ -42,6 +42,16 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
             };
             let entries = {
                 let mut pending = client.pending_receipts.lock();
+                // Publishing the same restored account must not discard a
+                // timed-out channel delivery. Other receipt scopes stay fenced.
+                for entry in pending.iter_mut() {
+                    if entry.delivery_owner.is_some()
+                        && entry.delivery_owner == auth.current_user_id
+                        && !auth.session_ended
+                    {
+                        entry.revision = auth.session_revision;
+                    }
+                }
                 pending.retain(|entry| {
                     entry.revision == auth.session_revision
                         && (!matches!(entry.conversation, ActiveConversation::ServerDm { .. })

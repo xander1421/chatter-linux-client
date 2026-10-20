@@ -56,6 +56,10 @@ impl MessageService {
                 }
             }
         }
+        if !read {
+            tracing::info!(channel_id = %channel, timestamp_count = timestamps.len(),
+                author_count = by_author.len(), "Channel delivery receipt authors resolved");
+        }
         let mut auth = self.auth_client();
         let mut client = self.message_client();
         for (author, stamps) in by_author {

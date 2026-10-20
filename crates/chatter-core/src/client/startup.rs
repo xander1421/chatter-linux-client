@@ -101,34 +101,69 @@ impl ChatterClient {
     fn spawn_channel_delivery_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let client = Arc::clone(self);
         let mut stored = self.services.database.subscribe_message_stores();
-        let auth = self.auth_state().get();
-        tokio::spawn(async move {
-            // Serial dispatch lets sent_receipts deduplicate overlapping receive
-            // paths before another deposit can start. Recovery owns failures.
-            while let Some(message) = stored.recv().await {
-                let current = client.auth_state().get();
-                if current.session_revision != auth.session_revision {
-                    break;
+        // A guard also reports cancellation/panic; shutdown marks the intentional abort.
+        struct ExitGuard(Arc<ChatterClient>);
+        impl Drop for ExitGuard {
+            fn drop(&mut self) {
+                if !self.0.channel_delivery_shutdown.load(Ordering::SeqCst) {
+                    tracing::warn!(
+                        "Channel delivery listener exited outside shutdown (receiver closed/replaced, cancellation or panic)"
+                    );
                 }
-                if message.conversation_type != crate::domain::message::ConversationType::Channel
-                    || auth.current_user_id.is_none()
-                    || message.sender_id.is_none()
-                    || message.sender_id == auth.current_user_id
-                    || matches!(
-                        message.content,
-                        crate::domain::message::MessageContent::System(_)
-                            | crate::domain::message::MessageContent::Call(_)
-                    )
-                {
+            }
+        }
+        self.channel_delivery_shutdown
+            .store(false, Ordering::SeqCst);
+        let guard = ExitGuard(Arc::clone(self));
+        tracing::info!("Channel delivery listener subscribed");
+        tokio::spawn(async move {
+            let _guard = guard;
+            // Recovery bounds each channel delivery attempt, including retries.
+            while let Some(message) = stored.recv().await {
+                if message.conversation_type != crate::domain::message::ConversationType::Channel {
                     continue;
                 }
+                let current = client.auth_state().get();
                 let channel_id = message.conversation_id;
                 let timestamp = message.sent_at;
-                if let Err(error) = client
+                let started = std::time::Instant::now();
+                let skip = if current.current_user_id.is_none() || current.session_ended {
+                    Some("signed_out")
+                } else if message.sender_id.is_none() {
+                    Some("no_sender")
+                } else if message.sender_id == current.current_user_id {
+                    Some("own_message")
+                } else if matches!(
+                    message.content,
+                    crate::domain::message::MessageContent::System(_)
+                        | crate::domain::message::MessageContent::Call(_)
+                ) {
+                    Some("control_message")
+                } else {
+                    None
+                };
+                if let Some(outcome) = skip {
+                    tracing::info!(%channel_id, message_id = %message.id, timestamp, outcome,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Channel delivery dispatch");
+                    continue;
+                }
+                tracing::info!(%channel_id, message_id = %message.id, timestamp,
+                    outcome = "started", elapsed_ms = 0u64, "Channel delivery dispatch");
+                let result = client
                     .conversation(ActiveConversation::Channel(channel_id))
                     .send_delivery_receipt(&[timestamp])
-                    .await
-                {
+                    .await;
+                let outcome = match &result {
+                    Ok(()) => "completed_or_deduplicated",
+                    Err(crate::services::conversation::ConversationError::Message(
+                        crate::services::MessageError::Network(crate::error::NetworkError::Timeout),
+                    )) => "timeout",
+                    Err(_) => "failed",
+                };
+                tracing::info!(%channel_id, message_id = %message.id, timestamp, outcome,
+                    elapsed_ms = started.elapsed().as_millis() as u64, "Channel delivery dispatch");
+                if let Err(error) = result {
                     tracing::warn!(%channel_id, message_id = %message.id, timestamp, %error,
                         "Failed to send channel delivery receipt");
                 }

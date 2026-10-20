@@ -251,6 +251,7 @@ impl ClientBuilder {
             pending_receipts: Mutex::new(Vec::new()),
             sent_receipts: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
+            channel_delivery_shutdown: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
             presence_controller: presence::PresenceController::new(),
             push_shutdown: Mutex::new(None),
@@ -455,6 +456,7 @@ pub struct ChatterClient {
     pub(crate) pending_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
     pub(crate) sent_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
     started: AtomicBool,
+    channel_delivery_shutdown: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
     last_activity_ms: AtomicU64,
     presence_controller: presence::PresenceController,

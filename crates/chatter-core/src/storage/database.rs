@@ -30,7 +30,8 @@ pub struct Database {
     /// Path to database file.
     path: PathBuf,
     /// One core consumer of committed message inserts, independent of UI events.
-    message_stores: Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::domain::message::Message>>>,
+    message_stores:
+        Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::domain::message::Message>>>,
 }
 
 /// Pool of read-only connections for concurrent database reads.
@@ -186,14 +187,21 @@ impl Database {
     ) -> tokio::sync::mpsc::UnboundedReceiver<crate::domain::message::Message> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         *self.message_stores.lock() = Some(tx);
+        tracing::info!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), "Committed message store consumer subscribed");
         rx
     }
 
     pub(crate) fn announce_message_store(&self, message: &crate::domain::message::Message) {
-        if let Some(tx) = self.message_stores.lock().as_ref()
-            && tx.send(message.clone()).is_err()
-        {
-            tracing::warn!(message_id = %message.id, "Committed message store consumer stopped");
+        match self.message_stores.lock().as_ref() {
+            Some(tx) if tx.send(message.clone()).is_err() => {
+                tracing::warn!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), message_id = %message.id,
+                    "Committed message store consumer stopped");
+            }
+            None => {
+                tracing::warn!(database = ?self.path, database_instance = ?std::ptr::from_ref(self), message_id = %message.id,
+                    "Committed message store has no consumer");
+            }
+            Some(_) => {}
         }
     }
 

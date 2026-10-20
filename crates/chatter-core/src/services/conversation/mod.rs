@@ -108,6 +108,8 @@ pub(crate) struct PendingReceipt {
     conversation: ActiveConversation,
     read: bool,
     revision: u64,
+    // Only channel delivery survives same-account publication revisions.
+    delivery_owner: Option<crate::domain::ids::UserId>,
     shield: bool,
     timestamps: BTreeSet<u64>,
 }

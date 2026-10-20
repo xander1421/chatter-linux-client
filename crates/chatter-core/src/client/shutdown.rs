@@ -24,6 +24,7 @@ impl ChatterClient {
             task.abort();
         }
 
+        self.channel_delivery_shutdown.store(true, Ordering::SeqCst);
         let handles = std::mem::take(&mut *self.tasks.lock());
         for handle in handles {
             handle.abort();
