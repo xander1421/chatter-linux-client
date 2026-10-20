@@ -41,6 +41,7 @@ async fn a_connect_timeout_earns_a_longer_ignore_than_an_ordinary_refusal() {
         stage: "subscribing for notifications".to_string(),
     }));
     runtime.dial(PEER).await;
+    runtime.settle_dial().await;
     let after = now_millis() + chatter_mesh_link::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS / 2;
     assert!(
         !state.with(|inner| inner.scheduler.should_connect(PEER, STRONG, 0, after)),
@@ -55,6 +56,7 @@ async fn a_connect_timeout_earns_a_longer_ignore_than_an_ordinary_refusal() {
         reason: "refused".to_string(),
     }));
     runtime.dial(PEER).await;
+    runtime.settle_dial().await;
     let soon = now_millis() + chatter_mesh_link::scheduler::TIMEOUT_DISCOVERY_IGNORE_MS / 2;
     assert!(
         state.with(|inner| inner.scheduler.should_connect(PEER, STRONG, 0, soon)),

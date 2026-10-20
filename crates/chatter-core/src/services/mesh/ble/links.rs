@@ -143,15 +143,42 @@ impl BleRuntime {
         }
     }
 
+    /// Start a connect without blocking the loop; [`finish_dial`] applies it.
     pub(super) async fn dial(&mut self, address: &str) {
         let now = now_millis();
         self.state.with(|state| {
             state.connecting.insert(address.to_string());
             state.scheduler.note_connect_attempt(now);
         });
-        match self.radio.connect(address).await {
+        let radio = Arc::clone(&self.radio);
+        let tx = self.dial_tx.clone();
+        let address = address.to_string();
+        tokio::spawn(async move {
+            let result = radio.connect(&address).await;
+            // A closed receiver means the runtime has stopped; nothing to apply.
+            let _ = tx.send(DialOutcome {
+                address,
+                started_ms: now,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn finish_dial(&mut self, outcome: DialOutcome) {
+        let DialOutcome {
+            address,
+            started_ms: now,
+            result,
+        } = outcome;
+        let address = address.as_str();
+        match result {
             Ok(link) => {
                 self.state.with(|state| {
+                    // `Connected` can now be handled before this result: the
+                    // link layer emits it from the connect itself.
+                    if state.links.is_writable(&link) {
+                        state.connecting.remove(address);
+                    }
                     state.address_of.insert(link, address.to_string());
                     state.scheduler.note_connected(address);
                 });
@@ -185,6 +212,19 @@ impl BleRuntime {
                 }
             }
         }
+    }
+
+    /// Tests drive the loop by hand: wait for the one dial in flight and apply it.
+    #[cfg(test)]
+    pub(super) async fn settle_dial(&mut self) {
+        let outcome = self
+            .dial_rx
+            .as_mut()
+            .expect("runtime not running")
+            .recv()
+            .await
+            .expect("a dial was started");
+        self.finish_dial(outcome);
     }
 
     async fn on_connected(&mut self, link: LinkId, role: LinkRole, max_write: usize) {

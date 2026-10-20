@@ -198,6 +198,19 @@ pub struct BleRuntime {
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     last_channel_presence_ms: u64,
     last_private_rekey_ms: u64,
+    /// Connect attempts run off the loop and report back here. Awaiting one
+    /// inline froze every radio event, command and tick for up to the twenty
+    /// second connect timeout; on the desktop a run of stale private addresses
+    /// kept the loop frozen long enough that Noise handshakes never finished.
+    dial_tx: tokio::sync::mpsc::UnboundedSender<DialOutcome>,
+    dial_rx: Option<tokio::sync::mpsc::UnboundedReceiver<DialOutcome>>,
+}
+
+/// The result of one connect attempt, delivered back to the loop.
+pub(super) struct DialOutcome {
+    address: String,
+    started_ms: u64,
+    result: Result<LinkId, chatter_mesh_link::LinkError>,
 }
 
 impl BleRuntime {
@@ -226,6 +239,7 @@ impl BleRuntime {
             now,
         );
         let couriers = CourierStore::new(storage.clone());
+        let (dial_tx, dial_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             binding_store,
             private_channels,
@@ -252,6 +266,8 @@ impl BleRuntime {
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
+            dial_tx,
+            dial_rx: Some(dial_rx),
             private_ingress: std::collections::HashMap::new(),
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
@@ -447,6 +463,10 @@ impl BleRuntime {
         self.announce().await;
 
         let radio = Arc::clone(&self.radio);
+        let mut dials = self
+            .dial_rx
+            .take()
+            .expect("BleRuntime::run is called once per runtime");
         let mut ticker = tokio::time::interval(TICK);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -462,6 +482,7 @@ impl BleRuntime {
                     Some(BleCommand::Stop) | None => break,
                     Some(command) => self.on_command(command).await,
                 },
+                Some(outcome) = dials.recv() => self.finish_dial(outcome),
                 _ = ticker.tick() => self.on_tick().await,
                 // Only armed while something is queued, so a quiet mesh still
                 // wakes twice a second and no faster.

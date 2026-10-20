@@ -233,6 +233,8 @@ async fn a_rotated_address_of_a_held_peer_is_not_dialled() {
     // after the advertisement, so `None` has to mean "unknown", never "not a
     // peer" — reading it the other way would make the mesh undiscoverable.
     runtime.on_discovered("70:E0:8F:D7:6B:84", -50, None).await;
+    // The connect runs on its own task; let it reach the radio.
+    runtime.settle_dial().await;
     assert_eq!(
         radio.connect_attempts(),
         vec!["70:E0:8F:D7:6B:84".to_string()],
