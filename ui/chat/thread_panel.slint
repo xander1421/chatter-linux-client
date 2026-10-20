@@ -16,6 +16,8 @@ import { ConversationKind } from "conversation_kind.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 
+export struct ThreadScrollAnchor { height: length, y: length }
+
 export component ThreadPanel inherits Rectangle {
     property <bool> entered: false;
     property <float> panel-progress: 0;
@@ -53,6 +55,12 @@ export component ThreadPanel inherits Rectangle {
 
     // State
     in property <bool> loading: false;
+    // Explicit intent for first-page replacement and a successfully sent reply.
+    in property <int> tail-serial: 0;
+    in-out property <ThreadScrollAnchor> scroll-anchor: {
+        height: replies-view.viewport-height, y: replies-view.viewport-y
+    };
+    in property <ThreadScrollAnchor> prepend-anchor;
 
     // Touch input / small screen. On a phone this panel takes the whole width
     // and the chat column behind it is hidden (app.slint `thread-panel-w`), so
@@ -340,7 +348,83 @@ export component ThreadPanel inherits Rectangle {
             }
 
             // Replies list
-            if !root.loading && root.replies.length > 0: Flickable {
+            replies-view := Flickable {
+                visible: !root.loading && root.replies.length > 0;
+                property <bool> following-tail: true;
+                property <bool> user-scrolling: false;
+                property <bool> preserving-anchor: false;
+                property <length> anchor-height: 0px;
+                property <length> anchor-y: 0px;
+                property <ThreadScrollAnchor> prepend-request: root.prepend-anchor;
+                changed prepend-request => {
+                    self.anchor-height = self.prepend-request.height;
+                    self.anchor-y = self.prepend-request.y;
+                    self.preserving-anchor = true;
+                    self.user-scrolling = false;
+                    self.following-tail = false;
+                    self.viewport-y = Math.min(0px, self.anchor-y - (self.viewport-height - self.anchor-height));
+                    anchor-settled.restart();
+                }
+                property <int> tail-request: root.tail-serial;
+                property <string> thread-id: root.root-message-id;
+                changed thread-id => {
+                    self.user-scrolling = false;
+                    self.preserving-anchor = false;
+                    self.following-tail = true;
+                    settle.restart();
+                }
+                changed tail-request => {
+                    self.user-scrolling = false;
+                    self.preserving-anchor = false;
+                    self.following-tail = true;
+                    settle.restart();
+                }
+                changed visible => {
+                    if (self.visible) { self.following-tail = true; settle.restart(); }
+                }
+                flicked => {
+                    self.following-tail = self.viewport-height + self.viewport-y <= self.height + 6px;
+                    self.preserving-anchor = false;
+                    self.user-scrolling = true;
+                    at-rest.restart();
+                }
+                changed viewport-y => {
+                    if (self.user-scrolling) { at-rest.restart(); }
+                }
+                changed viewport-height => {
+                    // Account for all layout passes, including the removed
+                    // load button and the newly grouped page seam.
+                    if (self.preserving-anchor) {
+                        self.viewport-y = Math.min(0px, self.anchor-y - (self.viewport-height - self.anchor-height));
+                        anchor-settled.restart();
+                    }
+                    if (self.following-tail) { settle.restart(); }
+                }
+                changed height => { if (self.following-tail) { settle.restart(); } }
+                at-rest := Timer {
+                    interval: 120ms;
+                    running: false;
+                    triggered => {
+                        if (replies-view.user-scrolling) {
+                            replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 6px;
+                            replies-view.user-scrolling = false;
+                        }
+                    }
+                }
+                anchor-settled := Timer {
+                    interval: 16ms;
+                    running: false;
+                    triggered => { replies-view.preserving-anchor = false; }
+                }
+                settle := Timer {
+                    interval: 1ms;
+                    running: false;
+                    triggered => {
+                        if (replies-view.following-tail) {
+                            replies-view.viewport-y = Math.min(0px, replies-view.height - replies-view.viewport-height);
+                        }
+                    }
+                }
                 width: 100%;
                 height: 100%;
                 viewport-height: replies-layout.preferred-height;

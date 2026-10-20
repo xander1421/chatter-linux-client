@@ -8,6 +8,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
 
+use super::chat::recompute_channel_continuations;
 use super::history_owner::HistoryOwner;
 use crate::bin_ui::converters::messages_to_display_batch;
 use crate::{MainWindow, MessageItemData};
@@ -268,8 +269,12 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                         .map(|d| d.to_slint_with_user(&current_user_id))
                         .collect();
                     rows.extend(current.iter());
+                    let model = VecModel::from(rows);
+                    recompute_channel_continuations(&model);
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_thread_prepend_anchor(pane.get_thread_scroll_anchor());
                     w.global::<crate::ChatPane>()
-                        .set_thread_replies(ModelRc::new(VecModel::from(rows)));
+                        .set_thread_replies(ModelRc::new(model));
                 });
             });
         });
@@ -291,14 +296,23 @@ pub fn apply_live_thread_reply(
         let replies = w.global::<crate::ChatPane>().get_thread_replies();
         let already_present = replies.iter().any(|m| m.message_id == reply.message_id);
         if !already_present {
+            let own_reply = reply.is_own;
             match replies.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                Some(model) => model.push(reply),
+                Some(model) => {
+                    model.push(reply);
+                    recompute_channel_continuations(model);
+                }
                 None => {
                     let mut all: Vec<MessageItemData> = replies.iter().collect();
                     all.push(reply);
+                    let model = VecModel::from(all);
+                    recompute_channel_continuations(&model);
                     w.global::<crate::ChatPane>()
-                        .set_thread_replies(ModelRc::new(VecModel::from(all)));
+                        .set_thread_replies(ModelRc::new(model));
                 }
+            }
+            if own_reply {
+                request_thread_tail(w);
             }
             w.global::<crate::ChatPane>()
                 .set_thread_reply_count(w.global::<crate::ChatPane>().get_thread_reply_count() + 1);
@@ -306,6 +320,12 @@ pub fn apply_live_thread_reply(
     }
 
     bump_root_reply_count(w, root_message_id);
+}
+
+/// Presentation intent survives both a model replacement and deferred row layout.
+fn request_thread_tail(w: &MainWindow) {
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_thread_tail_serial(pane.get_thread_tail_serial().wrapping_add(1));
 }
 
 /// Patch an edited message into the open thread panel (must run on the UI
@@ -505,8 +525,11 @@ pub fn load_thread_data(
                         .iter()
                         .map(|d| d.to_slint_with_user(&current_user_id))
                         .collect();
+                    let model = VecModel::from(slint_replies);
+                    recompute_channel_continuations(&model);
                     w.global::<crate::ChatPane>()
-                        .set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));
+                        .set_thread_replies(ModelRc::new(model));
+                    request_thread_tail(&w);
                 }
             });
         }
