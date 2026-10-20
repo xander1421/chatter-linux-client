@@ -45,7 +45,7 @@ use crate::storage::repositories::SettingsRepository;
 pub enum AnonDmError {
     #[error("message not submitted: {0}")]
     NotSubmitted(String),
-    #[error("Delivery unconfirmed; the original submission is retained and retry is disabled")]
+    #[error("Delivery unconfirmed; the original ciphertext is retained for retry")]
     DeliveryUnconfirmed,
     /// Not logged in.
     #[error("not logged in")]

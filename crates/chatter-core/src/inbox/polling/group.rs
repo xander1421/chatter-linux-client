@@ -72,6 +72,7 @@ use crate::storage::{AttachmentRepository, ChannelRepository};
 /// This method handles:
 /// - Sealed sender encrypted messages (sender revealed via SSDecVer)
 /// - GroupMailboxAddress announcements (member mailbox exchange)
+/// Returns whether at least one secret mailbox fetch succeeded.
 pub async fn poll_group_mailboxes(
     group_fanout: &Arc<GroupFanout>,
     group_coordinator: &Arc<GroupCoordinator>,
@@ -83,7 +84,7 @@ pub async fn poll_group_mailboxes(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &ack_policy::RetryBudget,
     content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
-) {
+) -> bool {
     if let Some(handoff) = content_handoff {
         handoff.replay(message_repo).await;
     }
@@ -228,9 +229,11 @@ pub async fn poll_group_mailboxes(
                     total_messages,
                 });
             }
+            batch.secret_healthy
         }
         Err(e) => {
             tracing::warn!(error = %e, "Group mailbox poll failed");
+            false
         }
     }
 }

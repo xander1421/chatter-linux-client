@@ -19,7 +19,7 @@ pub(crate) fn user_post(content: &crate::proto::content_v1::Content) -> bool {
     };
     matches!(
         inner.and_then(|c| c.content.as_ref()),
-        Some(Content::DataMessage(_))
+        Some(Content::DataMessage(data)) if data.delete.is_none() && !crate::services::disappearing::is_timer_update(data)
     )
 }
 
@@ -36,7 +36,7 @@ pub(crate) fn prepare(
     hash.update([0]);
     hash.update(plaintext);
     let key = format!("send.anonymous.v1:{}", hex::encode(hash.finalize()));
-    let value = serde_json::json!({"ciphertext":null,"confirmed":false}).to_string();
+    let value = serde_json::json!({"ciphertext":null,"confirmed":false,"owner":owner,"peer":peer,"next_attempt":0,"lease_until":0,"attempts":0}).to_string();
     let conn = db.connection()?;
     if conn.execute(
         "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES (?1,?2,?3)",
@@ -56,15 +56,218 @@ pub(crate) fn prepare(
         Admission::Unconfirmed
     })
 }
-pub(crate) fn ciphertext(db: &Database, key: &str, ciphertext: &[u8]) -> Result<(), StorageError> {
+/// Persist the destination and completion identity with the original sealed bytes.
+pub(crate) fn retain_deposit(
+    db: &Database,
+    key: &str,
+    ciphertext_bytes: &[u8],
+    mailbox: &[u8; 32],
+    content: &crate::proto::content_v1::Content,
+) -> Result<(), StorageError> {
+    use crate::proto::content_v1::content::Content;
+    let (conversation, kind, inner) = match content.content.as_ref() {
+        Some(Content::AnonDmMessage(m)) => (
+            uuid::Uuid::from_slice(&m.conversation_id),
+            "anon_dm",
+            m.inner_content.as_deref(),
+        ),
+        Some(Content::AnonGroupMessage(m)) => (
+            uuid::Uuid::from_slice(&m.group_id),
+            "anon_group",
+            m.inner_content.as_deref(),
+        ),
+        _ => return Err(StorageError::InvalidData("Invalid retained post".into())),
+    };
+    let conversation = conversation
+        .map_err(|_| StorageError::InvalidData("Invalid retained conversation".into()))?
+        .to_string();
+    let inner = inner.ok_or_else(|| StorageError::InvalidData("Missing retained post".into()))?;
+    let Some(Content::DataMessage(data)) = inner.content.as_ref() else {
+        return Err(StorageError::InvalidData(
+            "Invalid retained user post".into(),
+        ));
+    };
     let conn = db.connection()?;
-    let value = serde_json::to_string(ciphertext)
-        .map_err(|_| StorageError::InvalidData("Cannot retain anonymous ciphertext".into()))?;
-    conn.execute(
-        "UPDATE settings SET value=json_set(value,'$.ciphertext',json(?2)) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",
-        params![key, value],
+    let owner: String = conn.query_row(
+        "SELECT json_extract(value,'$.owner') FROM settings WHERE key=?1",
+        [key],
+        |r| r.get(0),
     )?;
+    let row: String = conn.query_row("SELECT id FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0", params![conversation,kind,owner,data.timestamp as i64], |r| r.get(0))?;
+    let ledger = (kind == "anon_group")
+        .then(|| crate::services::anon_group::send_ledger::key(&owner, &conversation, inner));
+    conn.execute("UPDATE settings SET value=json_set(value,'$.mailbox',json(?2),'$.row',?3,'$.ledger',?4,'$.conversation',?5,'$.kind',?6,'$.lease_until',?7) WHERE key=?1 AND json_extract(value,'$.ciphertext') IS NULL AND json_extract(value,'$.confirmed')=0", params![key,serde_json::to_string(mailbox).unwrap(),row,ledger,conversation,kind,chrono::Utc::now().timestamp()+90])?;
+    drop(conn);
+    // Destination first, bytes last: recovery never sees an envelope without
+    // the destination and completion identity needed to replay it.
+    ciphertext(db, key, ciphertext_bytes)
+}
+
+pub(crate) fn ciphertext(db: &Database, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
+    let value = serde_json::to_string(bytes)
+        .map_err(|_| StorageError::InvalidData("Cannot retain anonymous ciphertext".into()))?;
+    db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.ciphertext',json(?2)) WHERE key=?1 AND json_extract(value,'$.ciphertext') IS NULL AND json_extract(value,'$.confirmed')=0",params![key,value])?;
     Ok(())
+}
+
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RetainedKind {
+    AnonDm,
+    AnonGroup,
+}
+
+#[derive(serde::Deserialize)]
+struct RetainedDeposit {
+    ciphertext: Vec<u8>,
+    mailbox: [u8; 32],
+    peer: String,
+    conversation: String,
+    row: String,
+    kind: RetainedKind,
+    ledger: Option<String>,
+    attempts: u64,
+}
+
+/// Retry only durable sealed bytes. A persisted lease also bounds parallel taps,
+/// poll hooks, cancellation and process restarts; no crypto or token code runs.
+pub(crate) async fn retry_pending(
+    db: &std::sync::Arc<Database>,
+    pool: &std::sync::Arc<crate::network::grpc::client_pool::GrpcClientPool>,
+    owner: &str,
+    row: Option<&str>,
+    events: Option<&tokio::sync::broadcast::Sender<crate::inbox::handlers::DomainEvent>>,
+) -> Result<(), StorageError> {
+    let entries = {
+        let conn = db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT key FROM settings WHERE key LIKE 'send.anonymous.v1:%' AND json_extract(value,'$.owner')=?1 AND json_extract(value,'$.ciphertext') IS NOT NULL AND (?2 IS NULL OR json_extract(value,'$.row')=?2) AND (?2 IS NOT NULL OR json_extract(value,'$.next_attempt')<=?3) AND json_extract(value,'$.lease_until')<=?3 ORDER BY updated_at LIMIT 8")?;
+        let entries = stmt
+            .query_map(params![owner, row, chrono::Utc::now().timestamp()], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        entries
+    };
+    for key in entries {
+        // A poll belongs to its login session; never replay another account's
+        // retained traffic if that session was replaced while it was queued.
+        let current: Option<String> =
+            crate::storage::repositories::SettingsRepository::new(db.clone())
+                .get(crate::storage::settings_keys::CURRENT_USER_ID)?;
+        if current.as_deref() != Some(owner) {
+            break;
+        }
+        let raw: Option<String> = {
+            use rusqlite::OptionalExtension;
+            let conn = db.connection()?;
+            conn.query_row("UPDATE settings SET value=json_set(value,'$.lease_until',?2+90,'$.attempts',json_extract(value,'$.attempts')+1) WHERE key=?1 AND json_extract(value,'$.lease_until')<=?2 AND json_extract(value,'$.confirmed')=0 RETURNING value", params![key,chrono::Utc::now().timestamp()], |r|r.get(0)).optional()?
+        };
+        let Some(raw) = raw else { continue };
+        let record: RetainedDeposit = serde_json::from_str(&raw)
+            .map_err(|_| StorageError::InvalidData("Invalid retained submission".into()))?;
+        let mailbox = record.mailbox;
+        // Refuse deleted/blocked conversations or changed group membership/key.
+        let peer = record
+            .peer
+            .parse::<crate::domain::UserId>()
+            .map_err(|_| StorageError::InvalidData("Invalid retained peer".into()))?;
+        let conversation = record.conversation.as_str();
+        let id = record.row.as_str();
+        let valid = {
+            let conn = db.read_connection()?;
+            conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1 AND sender_id=?2 AND is_deleted=0)",params![id,owner],|r|r.get::<_,bool>(0))?
+        };
+        if !valid {
+            continue;
+        }
+        if matches!(record.kind, RetainedKind::AnonGroup) {
+            let group = conversation
+                .parse::<crate::domain::anon_group::AnonGroupId>()
+                .map_err(|_| StorageError::InvalidData("Invalid retained group".into()))?;
+            let repo = crate::storage::repositories::AnonGroupRepository::new(db.clone());
+            let me = owner
+                .parse::<crate::domain::UserId>()
+                .map_err(|_| StorageError::InvalidData("Invalid retained owner".into()))?;
+            if !repo
+                .get_group(&group)?
+                .is_some_and(|group| group.is_ready())
+                || !repo.is_member(&group, &me)?
+                || !repo.current_post_recipient(&group, &peer, &mailbox)?
+            {
+                continue;
+            }
+        } else {
+            let repo = crate::storage::repositories::AnonDmRepository::new(db.clone());
+            let dm = conversation
+                .parse::<crate::domain::anon_dm::AnonDmId>()
+                .map_err(|_| StorageError::InvalidData("Invalid retained chat".into()))?;
+            if repo.is_user_blocked(&peer)?
+                || !repo.get_conversation(&dm)?.is_some_and(|dm| {
+                    dm.is_ready() && dm.peer_id == peer && dm.peer_mailbox_pk == Some(mailbox)
+                })
+            {
+                continue;
+            }
+        }
+        if crate::services::mailbox_manager::MailboxManager::new(pool.clone())
+            .send_to_secret_mailbox(
+                &mailbox,
+                record.ciphertext,
+                crate::proto::mailbox_v1::EnvelopeType::SealedSender,
+            )
+            .await
+            .is_err()
+        {
+            let attempts = record.attempts.min(5);
+            db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.next_attempt',?2,'$.lease_until',0) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",params![key,chrono::Utc::now().timestamp()+ (10i64 << attempts)])?;
+            break; // one failing route per health notification, never a busy loop
+        }
+        // Commit recipient receipt and row settlement before pruning ciphertext.
+        let complete = match (record.kind, record.ledger.as_deref()) {
+            (RetainedKind::AnonGroup, Some(ledger)) => {
+                crate::services::anon_group::send_ledger::record(
+                    db,
+                    ledger,
+                    &peer.to_string(),
+                    "confirmed",
+                )?
+                .is_some()
+            }
+            (RetainedKind::AnonDm, None) => true,
+            _ => {
+                return Err(StorageError::InvalidData(
+                    "Invalid retained completion identity".into(),
+                ));
+            }
+        };
+        if complete {
+            db.connection()?.execute("UPDATE messages SET delivery_status=CASE WHEN delivery_status IN ('delivered','read') THEN delivery_status ELSE 'sent' END,failure_reason=NULL WHERE id=?1",[id])?;
+            if let (Some(events), Ok(message_id), Ok(channel_id)) =
+                (events, id.parse(), conversation.parse())
+            {
+                let _ = events.send(
+                    crate::inbox::handlers::DomainEvent::MessageDeliveryChanged {
+                        message_id,
+                        channel_id,
+                        status: "sent".into(),
+                    },
+                );
+            }
+        }
+        confirm(db, &key)?;
+    }
+    Ok(())
+}
+
+/// The original request completed without a receipt. Its ciphertext stays
+/// immutable, but a tap may now take the lease immediately.
+pub(crate) fn retry_later(db: &Database, key: &str) -> Result<(), StorageError> {
+    db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.lease_until',0,'$.next_attempt',?2) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",params![key,chrono::Utc::now().timestamp()+20])?;
+    Ok(())
+}
+
+pub(crate) fn retained_row(db: &Database, owner: &str, row: &str) -> bool {
+    db.read_connection().and_then(|conn|conn.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key LIKE 'send.anonymous.v1:%' AND json_extract(value,'$.owner')=?1 AND json_extract(value,'$.row')=?2 AND json_extract(value,'$.ciphertext') IS NOT NULL)",params![owner,row],|r|r.get(0)).map_err(Into::into)).unwrap_or(false)
 }
 pub(crate) fn confirm(db: &Database, key: &str) -> Result<(), StorageError> {
     let conn = db.connection()?;
@@ -85,16 +288,69 @@ mod tests {
         let db = Database::open(&path, "test-only").unwrap();
         db.run_migrations()
             .expect("migrate throwaway test database");
-        let Admission::First(key) =
-            prepare(&db, "owner", "peer", b"exact-padded-envelope").unwrap()
-        else {
+        let db = std::sync::Arc::new(db);
+        let owner = crate::domain::UserId::new();
+        let peer = crate::domain::UserId::new();
+        let conversation = crate::domain::anon_dm::AnonDmId::new();
+        let inner = crate::services::gateway::builders::build_text_content("post", 7);
+        let content = crate::proto::content_v1::Content {
+            content: Some(crate::proto::content_v1::content::Content::AnonDmMessage(
+                Box::new(crate::proto::content_v1::AnonDmMessage {
+                    conversation_id: conversation.to_vec(),
+                    inner_content: Some(Box::new(inner)),
+                }),
+            )),
+            timestamp: 8,
+            padding: vec![9],
+            ephemeral_reply_to: None,
+        };
+        assert!(user_post(&content));
+        let mut control = content.clone();
+        if let Some(crate::proto::content_v1::content::Content::AnonDmMessage(message)) =
+            control.content.as_mut()
+        {
+            if let Some(crate::proto::content_v1::content::Content::DataMessage(data)) =
+                message.inner_content.as_mut().unwrap().content.as_mut()
+            {
+                data.delete = Some(Default::default());
+            }
+        }
+        assert!(
+            !user_post(&control),
+            "delete controls have no outgoing post row"
+        );
+        let message = crate::domain::message::Message::new_text(
+            conversation.into(),
+            crate::domain::message::ConversationType::AnonDm,
+            Some(owner),
+            "post".into(),
+            7,
+        );
+        crate::storage::MessageRepository::new(db.clone())
+            .insert_outgoing(&message)
+            .unwrap();
+        let Admission::First(key) = prepare(
+            &db,
+            &owner.to_string(),
+            &peer.to_string(),
+            b"exact-padded-envelope",
+        )
+        .unwrap() else {
             panic!()
         };
-        ciphertext(&db, &key, b"original-signal-ciphertext").unwrap();
+        retain_deposit(&db, &key, b"original-signal-ciphertext", &[3; 32], &content).unwrap();
+        // A second retention call cannot replace bytes or destination.
+        retain_deposit(&db, &key, b"different-ciphertext", &[4; 32], &content).unwrap();
         // Server accepted the deposit, then the receipt was lost. A parked
         // plaintext retry is refused BEFORE another ratchet advance.
         assert!(matches!(
-            prepare(&db, "owner", "peer", b"exact-padded-envelope").unwrap(),
+            prepare(
+                &db,
+                &owner.to_string(),
+                &peer.to_string(),
+                b"exact-padded-envelope"
+            )
+            .unwrap(),
             Admission::Unconfirmed
         ));
         drop(db);
@@ -102,7 +358,13 @@ mod tests {
         db.run_migrations()
             .expect("migrate throwaway test database");
         assert!(matches!(
-            prepare(&db, "owner", "peer", b"exact-padded-envelope").unwrap(),
+            prepare(
+                &db,
+                &owner.to_string(),
+                &peer.to_string(),
+                b"exact-padded-envelope"
+            )
+            .unwrap(),
             Admission::Unconfirmed
         ));
         let raw: String = db
@@ -119,6 +381,8 @@ mod tests {
             stored["ciphertext"],
             serde_json::json!(b"original-signal-ciphertext".as_slice())
         );
+        assert_eq!(stored["mailbox"], serde_json::json!([3u8; 32].as_slice()));
+        assert_eq!(stored["row"], message.id.to_string());
         assert!(stored.get("plaintext").is_none());
         confirm(&db, &key).unwrap();
         let raw: String = db
@@ -135,7 +399,13 @@ mod tests {
         assert!(tombstone.get("ciphertext").is_none());
         assert_eq!(tombstone, serde_json::json!({"confirmed":true}));
         assert!(matches!(
-            prepare(&db, "owner", "peer", b"exact-padded-envelope").unwrap(),
+            prepare(
+                &db,
+                &owner.to_string(),
+                &peer.to_string(),
+                b"exact-padded-envelope"
+            )
+            .unwrap(),
             Admission::Confirmed
         ));
         assert!(matches!(
@@ -151,17 +421,6 @@ pub(crate) fn discard_before_encryption(db: &Database, key: &str) {
     if let Ok(conn) = db.connection() {
         let _=conn.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.ciphertext') IS NULL AND json_extract(value,'$.confirmed')=0",params![key]);
     }
-}
-
-/// A deposit preparation failure proves that no mailbox request was made.
-/// Release its retained ciphertext so the original row can be retried.
-pub(crate) fn discard_before_deposit(db: &Database, key: &str) -> Result<(), StorageError> {
-    let conn = db.connection()?;
-    conn.execute(
-        "DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.confirmed')=0",
-        params![key],
-    )?;
-    Ok(())
 }
 
 // Scoped to one original core future (not a global flag). Once any route can

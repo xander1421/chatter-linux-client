@@ -377,6 +377,16 @@ pub async fn process_anon_dm_results(
                         received.content,
                     )
                 }
+                Err(crate::error::ServiceError::Crypto(
+                    crate::error::CryptoError::DuplicateMessage { .. },
+                )) => {
+                    deduplicator.mark_processed(&message_id);
+                    processed
+                        .entry(conversation_id)
+                        .or_default()
+                        .push(message_id);
+                    continue;
+                }
                 Err(crate::error::ServiceError::Storage(_))
                 | Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Storage(_))) => {
                     tracing::warn!("Atomic anonymous receive storage failed; envelope retained");

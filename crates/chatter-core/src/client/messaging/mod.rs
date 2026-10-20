@@ -225,7 +225,7 @@ pub struct SendMessageUiResult {
     /// Local-time `HH:MM` string for message header rendering.
     pub timestamp_display: String,
     /// `"sent"` (delivered), `"sending"` (DM bootstrap in flight),
-    /// `"unconfirmed"` (submitted, outcome unknown, no retry), or
+    /// `"unconfirmed"` (submitted, outcome unknown; secret posts retry retained ciphertext), or
     /// `"failed"` (stored, not delivered — see `failure_notice`).
     pub delivery_status: &'static str,
     /// True when a DM bootstrap was kicked off — UI should show the

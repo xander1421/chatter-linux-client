@@ -146,7 +146,7 @@ pub enum SendError {
     #[error(transparent)]
     BeforeSubmission(Box<SendError>),
     #[error(
-        "Delivery is unconfirmed. The original attempt is retained; retry is disabled to avoid sending twice."
+        "Delivery is unconfirmed. The original attempt is retained; secret posts retry the original ciphertext."
     )]
     DeliveryUnconfirmed,
     #[error("An earlier message has unconfirmed delivery. This new draft has not been sent.")]

@@ -180,7 +180,7 @@ impl ChatterClient {
         self.messages().get_message_local(message_id).ok().flatten()
     }
 
-    /// Timestamp of an outgoing failed or parked message eligible for tap-to-retry.
+    /// Timestamp of an outgoing failed, parked, or retained secret post eligible for retry.
     pub fn retryable_message_timestamp(
         &self,
         message_id: &crate::domain::ids::MessageId,
@@ -191,6 +191,15 @@ impl ChatterClient {
             && match message.conversation_type {
                 ConversationType::Channel | ConversationType::ServerDm => {
                     matches!(message.delivery_status.as_str(), "failed" | "parked")
+                }
+                ConversationType::AnonDm | ConversationType::AnonGroup
+                    if crate::services::gateway::submission::retained_row(
+                        &self.services.database,
+                        &me.to_string(),
+                        &message.id.to_string(),
+                    ) =>
+                {
+                    true
                 }
                 ConversationType::AnonDm => {
                     message.delivery_status == "failed"

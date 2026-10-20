@@ -526,6 +526,44 @@ impl ChatterClient {
             &message.conversation_id.to_string(),
         )
         .ok_or(SendError::UnsupportedAction)?;
+        if matches!(
+            message.conversation_type,
+            crate::domain::message::ConversationType::AnonDm
+                | crate::domain::message::ConversationType::AnonGroup
+        ) {
+            let owner = self
+                .session_current_user_id()
+                .ok_or(SendError::UnsupportedAction)?;
+            if crate::services::gateway::submission::retained_row(
+                &self.services.database,
+                &owner.to_string(),
+                message_id,
+            ) {
+                if self.retryable_message_timestamp(&id).is_none() {
+                    return Err(SendError::UnsupportedAction);
+                }
+                crate::services::gateway::submission::retry_pending(
+                    &self.services.database,
+                    &self.services.grpc_pool,
+                    &owner.to_string(),
+                    Some(message_id),
+                    None,
+                )
+                .await
+                .map_err(MessageError::Storage)?;
+                let updated = service
+                    .get_message_local(&id)?
+                    .ok_or(MessageError::MessageNotFound(id))?;
+                return if matches!(
+                    updated.delivery_status.as_str(),
+                    "sent" | "delivered" | "read"
+                ) {
+                    Ok(updated)
+                } else {
+                    Err(SendError::DeliveryUnconfirmed)
+                };
+            }
+        }
         if message.conversation_type == crate::domain::message::ConversationType::AnonDm {
             if self.retryable_message_timestamp(&id).is_none() {
                 return Err(SendError::UnsupportedAction);

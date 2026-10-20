@@ -148,10 +148,12 @@ impl AnonGroupService {
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
         // 3. Send directly to anonymous mailbox
         if let Some(key) = retained.as_ref() {
-            crate::services::gateway::submission::ciphertext(
+            crate::services::gateway::submission::retain_deposit(
                 self.settings_repo.database(),
                 key,
                 &ciphertext,
+                mailbox_pk,
+                &content,
             )
             .map_err(|_| AnonGroupError::DeliveryUnconfirmed)?;
         }
@@ -159,7 +161,11 @@ impl AnonGroupService {
             .send_to_secret_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
             .await
             .map_err(|e| {
-                if retained.is_some() {
+                if let Some(key) = retained.as_ref() {
+                    let _ = crate::services::gateway::submission::retry_later(
+                        self.settings_repo.database(),
+                        key,
+                    );
                     AnonGroupError::DeliveryUnconfirmed
                 } else {
                     AnonGroupError::MessageError(e.to_string())

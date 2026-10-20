@@ -17,7 +17,7 @@ struct Ledger {
     held_content: Option<Vec<u8>>,
 }
 
-pub(super) fn key(owner: &str, group: &str, inner: &crate::proto::content_v1::Content) -> String {
+pub(crate) fn key(owner: &str, group: &str, inner: &crate::proto::content_v1::Content) -> String {
     let mut hash = Sha256::new();
     hash.update(owner.as_bytes());
     hash.update([0]);
@@ -125,7 +125,7 @@ pub(super) fn initialize(
     })
 }
 
-pub(super) fn record(
+pub(crate) fn record(
     db: &Database,
     key: &str,
     recipient: &str,
