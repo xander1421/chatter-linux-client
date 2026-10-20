@@ -525,7 +525,7 @@ export component MessageList inherits Rectangle {
                 root.end-pending = false;
                 root.jump-row = -1;
                 self.read-position();
-                at-rest.restart();
+                at-rest.start(); at-rest.restart();
             }
 
             // Carry out whatever root just recorded.
@@ -630,7 +630,7 @@ export component MessageList inherits Rectangle {
                 }
                 root.scroll-position = -self.viewport-y;
                 if (root.scrolling && self.viewport-y != root.seen-y) {
-                    at-rest.restart();
+                    at-rest.start(); at-rest.restart();
                 }
                 self.grown = root.seen-rows > 0 ? root.messages.length - root.seen-rows : 0;
                 self.prepended = self.grown > 0 && root.messages[0].message-id != root.seen-first;
@@ -717,13 +717,13 @@ export component MessageList inherits Rectangle {
             changed viewport-height => {
                 self.measured = true;
                 root.list-geometry(self.height / 1px, self.viewport-height / 1px, false);
-                if (root.following-tail) { follow-layout.restart(); }
+                if (root.following-tail) { follow-layout.start(); follow-layout.restart(); }
                 self.settle();
             }
 
             changed height => {
                 root.list-geometry(self.height / 1px, self.viewport-height / 1px, false);
-                if (root.following-tail) { follow-layout.restart(); }
+                if (root.following-tail) { follow-layout.start(); follow-layout.restart(); }
                 self.settle();
             }
 

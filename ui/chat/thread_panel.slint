@@ -365,7 +365,7 @@ export component ThreadPanel inherits Rectangle {
                     self.user-scrolling = false;
                     self.following-tail = false;
                     self.viewport-y = Math.min(0px, self.anchor-y - (self.viewport-height - self.anchor-height));
-                    anchor-settled.restart();
+                    anchor-settled.start(); anchor-settled.restart();
                 }
                 property <int> tail-request: root.tail-serial;
                 property <string> thread-id: root.root-message-id;
@@ -373,40 +373,41 @@ export component ThreadPanel inherits Rectangle {
                     self.user-scrolling = false;
                     self.preserving-anchor = false;
                     self.following-tail = true;
-                    settle.restart();
+                    settle.start(); settle.restart();
                 }
                 changed tail-request => {
                     self.user-scrolling = false;
                     self.preserving-anchor = false;
                     self.following-tail = true;
-                    settle.restart();
+                    settle.start(); settle.restart();
                 }
                 changed visible => {
-                    if (self.visible) { self.following-tail = true; settle.restart(); }
+                    if (self.visible) { self.following-tail = true; settle.start(); settle.restart(); }
                 }
                 flicked => {
                     self.following-tail = self.viewport-height + self.viewport-y <= self.height + 6px;
                     self.preserving-anchor = false;
                     self.user-scrolling = true;
-                    at-rest.restart();
+                    at-rest.start(); at-rest.restart();
                 }
                 changed viewport-y => {
-                    if (self.user-scrolling) { at-rest.restart(); }
+                    if (self.user-scrolling) { at-rest.start(); at-rest.restart(); }
                 }
                 changed viewport-height => {
                     // Account for all layout passes, including the removed
                     // load button and the newly grouped page seam.
                     if (self.preserving-anchor) {
                         self.viewport-y = Math.min(0px, self.anchor-y - (self.viewport-height - self.anchor-height));
-                        anchor-settled.restart();
+                        anchor-settled.start(); anchor-settled.restart();
                     }
-                    if (self.following-tail) { settle.restart(); }
+                    if (self.following-tail) { settle.start(); settle.restart(); }
                 }
-                changed height => { if (self.following-tail) { settle.restart(); } }
+                changed height => { if (self.following-tail) { settle.start(); settle.restart(); } }
                 at-rest := Timer {
                     interval: 120ms;
                     running: false;
                     triggered => {
+                        self.running = false;
                         if (replies-view.user-scrolling) {
                             replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 6px;
                             replies-view.user-scrolling = false;
@@ -416,12 +417,13 @@ export component ThreadPanel inherits Rectangle {
                 anchor-settled := Timer {
                     interval: 16ms;
                     running: false;
-                    triggered => { replies-view.preserving-anchor = false; }
+                    triggered => { self.running = false; replies-view.preserving-anchor = false; }
                 }
                 settle := Timer {
                     interval: 1ms;
                     running: false;
                     triggered => {
+                        self.running = false;
                         if (replies-view.following-tail) {
                             replies-view.viewport-y = Math.min(0px, replies-view.height - replies-view.viewport-height);
                         }

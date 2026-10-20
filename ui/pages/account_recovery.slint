@@ -33,7 +33,7 @@ export component AccountRecoveryPage inherits Rectangle {
     changed error => {
         if root.error != "" {
             root.error-nudge = -8px;
-            error-settle.restart();
+            error-settle.start(); error-settle.restart();
         }
     }
     error-settle := Timer {

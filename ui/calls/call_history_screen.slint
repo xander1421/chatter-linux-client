@@ -343,7 +343,7 @@ export component CallHistoryScreen inherits Rectangle {
 
                     flicked => {
                         root.scrolling = true;
-                        at-rest.restart();
+                        at-rest.start(); at-rest.restart();
                     }
 
                     changed viewport-y => {
@@ -355,7 +355,7 @@ export component CallHistoryScreen inherits Rectangle {
                             return;
                         }
                         if (root.scrolling) {
-                            at-rest.restart();
+                            at-rest.start(); at-rest.restart();
                         }
                         // Content below the bottom edge is
                         // viewport-y + viewport-height - height; under one
