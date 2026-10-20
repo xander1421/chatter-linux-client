@@ -16,7 +16,9 @@ use crate::error::StorageError;
 /// Everything [`MeshService`](super::MeshService) can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum MeshError {
-    #[error("mesh account binding: {0}")]
+    /// Shown verbatim in mesh notices; the message names its own subject
+    /// (private channels, prekeys, QR proofs), so no category prefix.
+    #[error("{0}")]
     Binding(String),
     /// An operation was attempted before `start()` or after `shutdown()`.
     #[error("mesh service is not running")]

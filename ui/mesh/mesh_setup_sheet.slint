@@ -199,6 +199,9 @@ export component MeshSetupSheet inherits Rectangle {
                             Button { text: "Scan QR"; variant: "secondary"; touch: root.touch;
                                 clicked => { MeshGlobal.open-private-scanner(); } }
                         }
+                        // Create/join results belong next to the controls that
+                        // produced them; at the sheet's end they were off-screen.
+                        if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                         SetupField { label: "Join geohash cell"; hint: "e.g. u4pruy"; value <=> root.cell-draft;
                             touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
                             submitted(value) => { MeshGlobal.join-geohash(value); root.cell-draft = ""; } }
@@ -230,7 +233,6 @@ export component MeshSetupSheet inherits Rectangle {
                         }
                     }
                 }
-                if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
             }
         }
     }
