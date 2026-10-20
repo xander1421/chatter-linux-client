@@ -281,6 +281,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let mesh = w.global::<MeshGlobal>();
                         mesh.set_private_invite_image(slint::Image::from_rgba8(pixels));
                         mesh.set_private_invite_visible(true);
+                        // The earlier "connecting securely" attempt succeeded now.
+                        mesh.set_notice("".into());
                     }
                     Err(error) => w
                         .global::<MeshGlobal>()
