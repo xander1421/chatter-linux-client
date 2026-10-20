@@ -204,6 +204,11 @@ pub struct BleRuntime {
     /// kept the loop frozen long enough that Noise handshakes never finished.
     dial_tx: tokio::sync::mpsc::UnboundedSender<DialOutcome>,
     dial_rx: Option<tokio::sync::mpsc::UnboundedReceiver<DialOutcome>>,
+    /// One connect at a time. BlueZ (and Android's GATT client) hold a single
+    /// pending LE connection; a second `Connect` aborts the first with
+    /// `le-connection-abort-by-local`. The blocking loop used to serialize this
+    /// by accident.
+    dial_in_flight: bool,
 }
 
 /// The result of one connect attempt, delivered back to the loop.
@@ -268,6 +273,7 @@ impl BleRuntime {
             channel_ingress: std::collections::HashMap::new(),
             dial_tx,
             dial_rx: Some(dial_rx),
+            dial_in_flight: false,
             private_ingress: std::collections::HashMap::new(),
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),

@@ -145,6 +145,12 @@ impl BleRuntime {
 
     /// Start a connect without blocking the loop; [`finish_dial`] applies it.
     pub(super) async fn dial(&mut self, address: &str) {
+        // Adverts repeat every few hundred ms, so a skipped dial is retried by
+        // the next discovery or queue drain rather than lost.
+        if self.dial_in_flight {
+            return;
+        }
+        self.dial_in_flight = true;
         let now = now_millis();
         self.state.with(|state| {
             state.connecting.insert(address.to_string());
@@ -165,6 +171,7 @@ impl BleRuntime {
     }
 
     pub(super) fn finish_dial(&mut self, outcome: DialOutcome) {
+        self.dial_in_flight = false;
         let DialOutcome {
             address,
             started_ms: now,
