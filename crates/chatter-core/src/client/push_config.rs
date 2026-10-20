@@ -251,10 +251,11 @@ impl ChatterClient {
                     break;
                 }
                 drop(owner);
-                let mut active: Vec<(String, bool)> =
+                use crate::network::streaming::push_listener::PushSubscription;
+                let mut active: Vec<(String, bool, PushSubscription)> =
                     crate::network::streaming::mailbox_wakes::active()
                         .into_iter()
-                        .map(|topic| (topic, true))
+                        .map(|topic| (topic, true, PushSubscription::Mailbox))
                         .collect();
                 let Some(owner) = client.upgrade() else { break };
                 if owner.push_wakeup_allowed(revision) {
@@ -289,7 +290,7 @@ impl ChatterClient {
                     }
                     if let Ok(Some(topic)) = settings.get_string(keys::DEVICE_WAKE_TOPIC) {
                         if !topic.is_empty() {
-                            active.push((topic, false));
+                            active.push((topic, false, PushSubscription::Device));
                         }
                     }
                     // A linked device may learn both capabilities after the
@@ -297,21 +298,21 @@ impl ChatterClient {
                     if owner.push_shutdown.lock().is_none() {
                         if let Ok(Some(topic)) = settings.get_string(keys::PUSH_TOPIC) {
                             if !topic.is_empty() {
-                                active.push((topic, false));
+                                active.push((topic, false, PushSubscription::Account));
                             }
                         }
                     }
                 }
                 drop(owner);
                 listeners.retain(|topic, task| {
-                    if active.iter().any(|(active, _)| active == topic) && !task.is_finished() {
+                    if active.iter().any(|(active, _, _)| active == topic) && !task.is_finished() {
                         true
                     } else {
                         task.abort();
                         false
                     }
                 });
-                for (topic, secret) in active {
+                for (topic, secret, subscription) in active {
                     if listeners.contains_key(&topic) {
                         continue;
                     }
@@ -323,6 +324,7 @@ impl ChatterClient {
                     let mut config =
                         crate::network::streaming::PushListenerConfig::new(endpoint, topic.clone());
                     config.force_tor = secret;
+                    config.subscription = subscription;
                     // A sleeping phone can lose its SSE socket. Retry promptly
                     // after network returns, with per-device jitter and the
                     // listener's bounded exponential backoff (including 429).

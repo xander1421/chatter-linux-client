@@ -23,6 +23,24 @@ use tokio::sync::broadcast;
 
 use crate::network::ReconnectConfig;
 
+/// Coarse subscription purpose; capabilities never enter transport diagnostics.
+#[derive(Clone, Copy, Debug)]
+pub enum PushSubscription {
+    Account,
+    Device,
+    Mailbox,
+}
+
+impl PushSubscription {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Account => "account",
+            Self::Device => "device",
+            Self::Mailbox => "mailbox",
+        }
+    }
+}
+
 /// Configuration for the ntfy push listener.
 #[derive(Clone)]
 pub struct PushListenerConfig {
@@ -32,6 +50,8 @@ pub struct PushListenerConfig {
 
     /// Anonymous mailbox subscriptions always use isolated Tor, including HTTPS.
     pub force_tor: bool,
+
+    pub subscription: PushSubscription,
 
     /// Opaque server-issued subscription capability. Never log it.
     pub topic: String,
@@ -186,6 +206,7 @@ impl PushListenerConfig {
         Self {
             ntfy_url,
             force_tor: false,
+            subscription: PushSubscription::Account,
             topic,
             auth_token: None,
             reconnect_delay: reconnect.initial_delay,
@@ -292,6 +313,10 @@ impl PushListener {
     ///
     /// This runs until the shutdown signal is received.
     /// On connection failure, it retries with exponential backoff.
+    #[tracing::instrument(skip_all, fields(
+        subscription = self.config.subscription.label(),
+        transport = self.transport_label(),
+    ))]
     pub async fn listen(&self, mut shutdown: broadcast::Receiver<()>) {
         tracing::info!("Starting ntfy push listener");
 
@@ -348,23 +373,12 @@ impl PushListener {
                                 return;
                             }
 
-                            if self.config.force_tor {
-                                // Anonymous mailbox SSE is an optional wake hint.
-                                // The foreground inbox remains the delivery path.
-                                tracing::debug!(
-                                    error = %e,
-                                    attempt,
-                                    retry_in = ?retry_delay,
-                                    "anonymous ntfy wake unavailable"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    error = %e,
-                                    attempt,
-                                    retry_in = ?retry_delay,
-                                    "ntfy SSE connection failed, retrying"
-                                );
-                            }
+                            tracing::warn!(
+                                error = %e,
+                                attempt,
+                                retry_in = ?retry_delay,
+                                "ntfy SSE connection failed, retrying"
+                            );
                         }
                     }
                 }
@@ -394,6 +408,19 @@ impl PushListener {
         }
     }
 
+    fn transport_label(&self) -> &'static str {
+        if self.config.force_tor
+            || url::Url::parse(&self.config.ntfy_url)
+                .ok()
+                .and_then(|url| url.host_str().map(|host| host.ends_with(".onion")))
+                .unwrap_or(false)
+        {
+            "tor"
+        } else {
+            "direct"
+        }
+    }
+
     /// Connect to ntfy SSE endpoint and process events.
     async fn connect_sse(&self) -> PushResult {
         let (url, transport) = endpoint(&self.config)?;
@@ -417,7 +444,14 @@ impl PushListener {
         if let Some(ref token) = self.config.auth_token {
             request = request.bearer_auth(token);
         }
-        let response = request.send().await.map_err(|_| PushError::Transport)?;
+        tracing::info!(phase = "sse_response", "ntfy wake connecting");
+        // Bound headers as well as TCP/TLS. A connected socket which never
+        // answers must produce a reconnect outcome, without timing out a
+        // healthy, indefinitely long SSE body.
+        let response = tokio::time::timeout(Duration::from_secs(15), request.send())
+            .await
+            .map_err(|_| PushError::Transport)?
+            .map_err(|_| PushError::Transport)?;
         if !response.status().is_success() {
             return Err(PushError::Status(response.status().as_u16()).into());
         }
@@ -443,11 +477,11 @@ impl PushListener {
             .tor
             .as_ref()
             .unwrap_or_else(|| TOR.get_or_init(|| Arc::new(tokio::sync::OnceCell::new())));
-        tracing::debug!(phase = "bootstrap_wait", "anonymous ntfy wake connecting");
+        tracing::info!(phase = "bootstrap_wait", "anonymous ntfy wake connecting");
         let base = shared_bootstrap(tor)
             .await
             .map_err(|_| PushError::Transport)?;
-        tracing::debug!(
+        tracing::info!(
             phase = "directory_refresh",
             "anonymous ntfy wake connecting"
         );
@@ -458,7 +492,7 @@ impl PushListener {
         let port = url.port_or_known_default().ok_or(PushError::Endpoint)?;
         let client = base.isolated_client();
         let dial_host = host.clone();
-        tracing::debug!(
+        tracing::info!(
             phase = "hidden_service_connect",
             "anonymous ntfy wake connecting"
         );
@@ -476,7 +510,7 @@ impl PushListener {
             .map_err(|_| PushError::Transport)?
             .map_err(|_| PushError::Transport)?
             .map_err(|_| PushError::Transport)?;
-        tracing::debug!(
+        tracing::info!(
             phase = "hidden_service_connected",
             "anonymous ntfy wake connecting"
         );
@@ -520,7 +554,7 @@ impl PushListener {
     {
         use futures::StreamExt;
         use http_body_util::{BodyExt, Full};
-        tracing::debug!(phase = "http_handshake", "anonymous ntfy wake connecting");
+        tracing::info!(phase = "http_handshake", "anonymous ntfy wake connecting");
         let (mut sender, connection) = tokio::time::timeout(
             Duration::from_secs(45),
             hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io)),
@@ -552,7 +586,7 @@ impl PushListener {
         let request = request
             .body(Full::new(bytes::Bytes::new()))
             .map_err(|_| PushError::Endpoint)?;
-        tracing::debug!(phase = "sse_response", "anonymous ntfy wake connecting");
+        tracing::info!(phase = "sse_response", "anonymous ntfy wake connecting");
         let response = tokio::time::timeout(Duration::from_secs(45), sender.send_request(request))
             .await
             .map_err(|_| PushError::Transport)?
