@@ -80,8 +80,8 @@ fn apply_anon_dm_header(
         .as_deref()
         .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
     w.global::<crate::ChatPane>().set_channel_name(name.into());
-    w.global::<crate::ChatPane>()
-        .set_topic("Private Chat".into());
+    // The "Secret chat" subtitle already says what this is; no topic line.
+    w.global::<crate::ChatPane>().set_topic("".into());
     w.global::<crate::ChatPane>()
         .set_channel_has_avatar(image.is_some());
     w.global::<crate::ChatPane>()
