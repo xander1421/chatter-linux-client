@@ -310,6 +310,9 @@ impl UnifiedMessageRepository {
             self.apply_held_reactions(&tx, message, &reactions)?;
         }
         tx.commit()?;
+        if rows > 0 {
+            self.db.announce_message_store(message);
+        }
         Ok(rows > 0)
     }
 

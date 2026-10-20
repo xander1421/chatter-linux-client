@@ -96,6 +96,46 @@ impl ChatterClient {
         })
     }
 
+    /// Receive transports share the repository's post-commit notification.
+    /// Unlike the UI broadcast, this queue cannot drop a burst of stored rows.
+    fn spawn_channel_delivery_listener(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let client = Arc::clone(self);
+        let mut stored = self.services.database.subscribe_message_stores();
+        let auth = self.auth_state().get();
+        tokio::spawn(async move {
+            // Serial dispatch lets sent_receipts deduplicate overlapping receive
+            // paths before another deposit can start. Recovery owns failures.
+            while let Some(message) = stored.recv().await {
+                let current = client.auth_state().get();
+                if current.session_revision != auth.session_revision {
+                    break;
+                }
+                if message.conversation_type != crate::domain::message::ConversationType::Channel
+                    || auth.current_user_id.is_none()
+                    || message.sender_id.is_none()
+                    || message.sender_id == auth.current_user_id
+                    || matches!(
+                        message.content,
+                        crate::domain::message::MessageContent::System(_)
+                            | crate::domain::message::MessageContent::Call(_)
+                    )
+                {
+                    continue;
+                }
+                let channel_id = message.conversation_id;
+                let timestamp = message.sent_at;
+                if let Err(error) = client
+                    .conversation(ActiveConversation::Channel(channel_id))
+                    .send_delivery_receipt(&[timestamp])
+                    .await
+                {
+                    tracing::warn!(%channel_id, message_id = %message.id, timestamp, %error,
+                        "Failed to send channel delivery receipt");
+                }
+            }
+        })
+    }
+
     /// Call-worker group-call key policy listener. In a channel-based group
     /// call the designated rotator rotates the encryption key on every
     /// membership change: on `ParticipantLeft` so the departed participant
@@ -261,6 +301,7 @@ impl ChatterClient {
 
         // ── Multi-device crypto maintenance listener ────────────────
         let h_skdm_retry = self.spawn_crypto_maintenance_listener();
+        let h_channel_delivery = self.spawn_channel_delivery_listener();
 
         // ── Call worker room-events policy listener ─────────────────
         #[cfg(feature = "media")]
@@ -454,6 +495,7 @@ impl ChatterClient {
             h_events,
             h_inbox,
             h_skdm_retry,
+            h_channel_delivery,
             h_channel_stream,
             h_delete_batch_retry,
             h_receipt_retry,

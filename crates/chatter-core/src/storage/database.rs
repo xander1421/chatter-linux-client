@@ -29,6 +29,8 @@ pub struct Database {
     readers: Arc<ReaderPool>,
     /// Path to database file.
     path: PathBuf,
+    /// One core consumer of committed message inserts, independent of UI events.
+    message_stores: Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::domain::message::Message>>>,
 }
 
 /// Pool of read-only connections for concurrent database reads.
@@ -178,6 +180,23 @@ impl Drop for PooledReader<'_> {
 }
 
 impl Database {
+    /// Replace the consumer when a new authenticated core session starts.
+    pub(crate) fn subscribe_message_stores(
+        &self,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<crate::domain::message::Message> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.message_stores.lock() = Some(tx);
+        rx
+    }
+
+    pub(crate) fn announce_message_store(&self, message: &crate::domain::message::Message) {
+        if let Some(tx) = self.message_stores.lock().as_ref()
+            && tx.send(message.clone()).is_err()
+        {
+            tracing::warn!(message_id = %message.id, "Committed message store consumer stopped");
+        }
+    }
+
     /// Open an encrypted SQLCipher database.
     ///
     /// Creates the database file if it doesn't exist. The passphrase is used
@@ -263,6 +282,7 @@ impl Database {
         ));
 
         Ok(Self {
+            message_stores: Mutex::new(None),
             writer: Arc::new(Mutex::new(conn)),
             readers,
             path: path.to_path_buf(),

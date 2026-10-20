@@ -375,7 +375,7 @@ fn process_decrypted_data_message(
                     let _ = event_tx.send(InboxEvent::ChannelMessageReceived {
                         channel_id,
                         sender_id: *sender_id,
-                        message_id: msg.message_guid.clone(),
+                        message_id: message.id.to_string(),
                         text: match &message.content {
                             crate::domain::message::MessageContent::Text(text) => text.clone(),
                             _ => data_message.body.clone(),

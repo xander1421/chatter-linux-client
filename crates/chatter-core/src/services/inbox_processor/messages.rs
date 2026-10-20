@@ -54,7 +54,6 @@ impl InboxEventProcessor {
             }
 
             InboxEvent::ChannelMessageReceived {
-                channel_id,
                 sender_id,
                 message_id,
                 timestamp,
@@ -76,7 +75,7 @@ impl InboxEventProcessor {
                     }
                 }
 
-                // Protocol: pre-fetch sender profile + send delivery receipt
+                // Protocol: pre-fetch sender profile
                 if self
                     .user_service
                     .get_user_local(sender_id)
@@ -114,20 +113,20 @@ impl InboxEventProcessor {
                     .map(|me| me == *sender_id)
                     .unwrap_or(false);
 
-                if !is_own_synced {
-                    let is_dm = matches!(
+                if !is_own_synced
+                    && matches!(
                         stored.as_ref().map(|m| &m.conversation_type),
                         Some(crate::domain::message::ConversationType::ServerDm)
-                    );
-                    let receipt_conversation = if is_dm {
+                    )
+                {
+                    // Channel receipts are owned by the shared post-commit
+                    // listener; this event also carries channel-free friend DMs.
+                    let handle = ConversationHandle::new(
                         ActiveConversation::ServerDm {
                             peer_id: *sender_id,
-                        }
-                    } else {
-                        ActiveConversation::Channel(*channel_id)
-                    };
-
-                    let handle = ConversationHandle::new(receipt_conversation, self.client.clone());
+                        },
+                        self.client.clone(),
+                    );
                     let ts = *timestamp;
                     tokio::spawn(async move {
                         if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
