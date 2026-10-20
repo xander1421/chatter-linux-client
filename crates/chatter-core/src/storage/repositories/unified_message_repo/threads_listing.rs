@@ -185,6 +185,26 @@ impl UnifiedMessageRepository {
         Ok(messages)
     }
 
+    /// The conversation's newest live thread reply. Replies stay out of the
+    /// main list, yet they order the chat list and count as unread, so the
+    /// row's preview and time must be able to show one.
+    pub fn latest_thread_reply(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages \
+             WHERE conversation_id = ?1 AND conversation_type = ?2 \
+               AND thread_id IS NOT NULL AND is_deleted = 0 \
+             ORDER BY sent_at DESC, sender_id DESC LIMIT 1",
+            message_columns("messages"),
+        ))?;
+        let mut rows = stmt.query(params![conversation_id.to_string(), conversation_type.as_str()])?;
+        Ok(collect_messages(&mut rows)?.pop())
+    }
+
     /// List messages for a conversation in chronological order (oldest first).
     /// Alias for `list_asc()` matching old MessageRepository API.
     pub fn list_for_conversation_asc(

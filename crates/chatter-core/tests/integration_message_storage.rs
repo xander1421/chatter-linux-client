@@ -2100,7 +2100,7 @@ fn test_thread_replies_excluded_from_channel_list() {
         [replies[1].id, replies[2].id]
     );
     let earlier = message_repo
-        .list_for_thread(&root.id, Some(latest[0].sent_at), 2)
+        .list_for_thread(&root.id, Some(&latest[0].id), 2)
         .unwrap();
     assert_eq!(
         earlier.iter().map(|m| m.id).collect::<Vec<_>>(),
@@ -2114,6 +2114,34 @@ fn test_thread_replies_excluded_from_channel_list() {
         .unwrap();
     assert_eq!(counts.get(&root.id), Some(&3));
     assert_eq!(counts.get(&plain.id), None);
+
+    // A second member's reply stamped the same millisecond as reply 1 must
+    // not fall between pages when the cursor lands on one of the pair.
+    let mut twin = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(UserId::new()),
+        "twin".to_string(),
+        replies[1].sent_at,
+    );
+    twin.thread_id = Some(root.id);
+    message_repo.insert(&twin).unwrap();
+    let all = message_repo.list_for_thread(&root.id, None, 100).unwrap();
+    let mut paged = message_repo.list_for_thread(&root.id, None, 1).unwrap();
+    while let Some(first) = paged.first().map(|m| m.id) {
+        let older = message_repo
+            .list_for_thread(&root.id, Some(&first), 1)
+            .unwrap();
+        if older.is_empty() {
+            break;
+        }
+        paged.splice(0..0, older);
+    }
+    assert_eq!(
+        paged.iter().map(|m| m.id).collect::<Vec<_>>(),
+        all.iter().map(|m| m.id).collect::<Vec<_>>()
+    );
+    assert_eq!(all.len(), 4);
 }
 
 // ============================================================================

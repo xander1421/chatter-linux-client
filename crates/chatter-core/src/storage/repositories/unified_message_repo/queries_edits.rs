@@ -75,24 +75,27 @@ impl UnifiedMessageRepository {
     pub fn list_for_thread(
         &self,
         thread_id: &MessageId,
-        before_sent_at: Option<u64>,
+        before: Option<&MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut page = if let Some(before) = before_sent_at {
+        // Same (sent_at, sender_id) cursor as the main list: two members'
+        // replies stamped the same millisecond must not straddle a page.
+        let mut page = if let Some(before_id) = before {
             let mut stmt = conn.prepare(&format!(
-                "SELECT {} FROM messages \
-                 WHERE thread_id = ?1 AND sent_at < ?2 AND is_deleted = 0 \
-                 ORDER BY sent_at DESC LIMIT ?3",
-                message_columns("messages")
+                "SELECT {} FROM messages m \
+                 WHERE m.thread_id = ?1 AND m.is_deleted = 0 \
+                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2) \
+                 ORDER BY m.sent_at DESC, m.sender_id DESC LIMIT ?3",
+                message_columns("m")
             ))?;
-            let mut rows = stmt.query(params![thread_id.to_string(), before as i64, limit])?;
+            let mut rows = stmt.query(params![thread_id.to_string(), before_id.to_string(), limit])?;
             collect_messages(&mut rows)?
         } else {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages \
                  WHERE thread_id = ?1 AND is_deleted = 0 \
-                 ORDER BY sent_at DESC LIMIT ?2",
+                 ORDER BY sent_at DESC, sender_id DESC LIMIT ?2",
                 message_columns("messages")
             ))?;
             let mut rows = stmt.query(params![thread_id.to_string(), limit])?;

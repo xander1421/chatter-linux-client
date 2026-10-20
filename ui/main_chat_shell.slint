@@ -142,8 +142,13 @@ export component MainChatShell inherits Rectangle {
             // exactly the row width — the layout solver never gets to give
             // the chat column 100% and push the panel past the clipped edge
             // (the "thread opens but never appears" bug, 2026-07-19).
+            // Beside a 320px panel the chat column needs room for its composer;
+            // a narrower row (the 800px default window with the sidebar open)
+            // gives the thread the whole row instead, as phones do.
+            property <bool> thread-covers-chat: ChatPane.thread-panel-visible
+                && (root.is-small-screen || self.width < 720px);
             property <length> thread-panel-w: !ChatPane.thread-panel-visible ? 0px
-                : root.is-small-screen ? self.width
+                : self.thread-covers-chat ? self.width
                 : 320px;
 
                 // Chat column: call dock (when active) on top of ChatLayout.
@@ -159,7 +164,7 @@ export component MainChatShell inherits Rectangle {
                     y: 0;
                     width: parent.width - chat-panel-area.thread-panel-w;
                     height: 100%;
-                    visible: !(root.is-small-screen && ChatPane.thread-panel-visible);
+                    visible: !chat-panel-area.thread-covers-chat;
 
                     AppCallDock {
                         active-call-data: CallView.active-call-data;
@@ -198,7 +203,7 @@ export component MainChatShell inherits Rectangle {
                 // inset on one of the two would misalign them.
                 if ChatPane.selection-mode
                     && !CallView.active-call-fullscreen
-                    && !(root.is-small-screen && ChatPane.thread-panel-visible): SelectionBar {
+                    && !chat-panel-area.thread-covers-chat: SelectionBar {
                     show: true;
                     backdrop-paused: ChatPane.chat-list-scrolling;
                     touch: root.is-mobile-platform;
@@ -220,7 +225,7 @@ export component MainChatShell inherits Rectangle {
                 }
 
                 if !CallView.active-call-fullscreen
-                    && !(root.is-small-screen && ChatPane.thread-panel-visible)
+                    && !chat-panel-area.thread-covers-chat
                     && (ChatPane.channel-name != "" || ChatPane.loading-messages): AppConversationLayout {
                     vertical-stretch: 1;
                     active-call-fullscreen: CallView.active-call-fullscreen;

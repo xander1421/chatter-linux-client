@@ -103,6 +103,17 @@ impl MessageService {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Get messages for a channel from local storage.
+    /// See `UnifiedMessageRepository::latest_thread_reply`.
+    pub fn latest_thread_reply(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Option<Message>, MessageError> {
+        self.message_repo
+            .latest_thread_reply(channel_id, conversation_type)
+            .map_err(MessageError::from)
+    }
+
     pub fn get_messages_local(
         &self,
         channel_id: &ChannelId,
@@ -289,14 +300,8 @@ impl MessageService {
         before: Option<&crate::domain::ids::MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
-        // Resolve cursor MessageId to sent_at timestamp for unified repo
-        let before_sent_at = if let Some(before_id) = before {
-            self.message_repo.get(before_id)?.map(|msg| msg.sent_at)
-        } else {
-            None
-        };
         self.message_repo
-            .list_for_thread(thread_root_id, before_sent_at, limit)
+            .list_for_thread(thread_root_id, before, limit)
             .map(|messages| self.resolve_stored_quotes(messages))
             .map_err(MessageError::from)
     }
