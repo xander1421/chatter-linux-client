@@ -128,9 +128,17 @@ impl ChatterClient {
     pub fn publish_restored_auth_state(&self) {
         if let Some((user_id, device_id)) = self.current_user() {
             let display_name = self.display_name(&user_id);
-            self.services
-                .auth_state
-                .set_logged_in(user_id, device_id, display_name);
+            let auth = &self.services.auth_state;
+            let live = auth.get();
+            if live.current_user_id == Some(user_id) && live.device_id == Some(device_id) {
+                // Android re-publishes the core's live session when the
+                // Activity attaches. That is not a new session: bumping the
+                // revision fenced off every task started at core startup
+                // (the device wake listener died silently).
+                auth.update_display_name_if_current(live.session_revision, user_id, display_name);
+            } else {
+                auth.set_logged_in(user_id, device_id, display_name);
+            }
         }
     }
 
