@@ -158,7 +158,9 @@ export component ThreadPanel inherits Rectangle {
             HorizontalLayout {
                 // Horizontal padding only: vertical padding squeezed the 48dp
                 // chevron below its box and pulled the title off its centre.
-                padding-left: Spacing.xs;
+                // The phone chevron brings its own inset; without it the title
+                // lines up with the root-message strip below.
+                padding-left: root.mobile ? Spacing.xs : Spacing.sm;
                 padding-right: Spacing.sm;
                 spacing: Spacing.sm;
 
