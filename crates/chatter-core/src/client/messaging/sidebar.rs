@@ -43,6 +43,25 @@ impl ChatterClient {
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Option<crate::domain::message::Message> {
+        let main = self.latest_main_message(conversation_id, conversation_type);
+        // A thread reply is channel activity: it already orders the row and
+        // counts as unread, and the sender's own row previews it on send.
+        let reply = self
+            .messages()
+            .latest_thread_reply(conversation_id, conversation_type)
+            .ok()
+            .flatten();
+        match (main, reply) {
+            (Some(main), Some(reply)) => Some(if reply.sent_at > main.sent_at { reply } else { main }),
+            (main, reply) => main.or(reply),
+        }
+    }
+
+    fn latest_main_message(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Option<crate::domain::message::Message> {
         // Bound the work even if a chat contains only timer-update notices.
         const PAGE: u32 = 32;
         const MAX_PAGES: usize = 8;
@@ -471,17 +490,6 @@ impl ChatterClient {
         use crate::ui::sidebar_data::ChatRowSendData;
         let id = channel.id.to_string();
         let latest = self.latest_message(&channel.id, &channel.conversation_type());
-        // A thread reply is channel activity: it already orders the row and
-        // counts as unread, and the sender's own row previews it on send.
-        let reply = self
-            .messages()
-            .latest_thread_reply(&channel.id, &channel.conversation_type())
-            .ok()
-            .flatten();
-        let latest = match (latest, reply) {
-            (Some(main), Some(reply)) => Some(if reply.sent_at > main.sent_at { reply } else { main }),
-            (main, reply) => main.or(reply),
-        };
         let (last_message, _) = self.sidebar_activity(latest.as_ref());
         // A channel with no messages yet orders (and is dated) by when it was
         // created, so a just-created channel leads the list instead of sinking

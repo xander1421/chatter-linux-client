@@ -271,8 +271,6 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                     rows.extend(current.iter());
                     let model = VecModel::from(rows);
                     recompute_channel_continuations(&model);
-                    let pane = w.global::<crate::ChatPane>();
-                    pane.set_thread_prepend_anchor(pane.get_thread_scroll_anchor());
                     w.global::<crate::ChatPane>()
                         .set_thread_replies(ModelRc::new(model));
                 });

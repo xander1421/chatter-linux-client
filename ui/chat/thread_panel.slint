@@ -16,8 +16,6 @@ import { ConversationKind } from "conversation_kind.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 
-export struct ThreadScrollAnchor { height: length, y: length }
-
 export component ThreadPanel inherits Rectangle {
     property <bool> entered: false;
     property <float> panel-progress: 0;
@@ -57,10 +55,6 @@ export component ThreadPanel inherits Rectangle {
     in property <bool> loading: false;
     // Explicit intent for first-page replacement and a successfully sent reply.
     in property <int> tail-serial: 0;
-    in-out property <ThreadScrollAnchor> scroll-anchor: {
-        height: replies-view.viewport-height, y: replies-view.viewport-y
-    };
-    in property <ThreadScrollAnchor> prepend-anchor;
 
     // Touch input / small screen. On a phone this panel takes the whole width
     // and the chat column behind it is hidden (app.slint `thread-panel-w`), so
@@ -357,16 +351,6 @@ export component ThreadPanel inherits Rectangle {
                 property <bool> preserving-anchor: false;
                 property <length> anchor-height: 0px;
                 property <length> anchor-y: 0px;
-                property <ThreadScrollAnchor> prepend-request: root.prepend-anchor;
-                changed prepend-request => {
-                    self.anchor-height = self.prepend-request.height;
-                    self.anchor-y = self.prepend-request.y;
-                    self.preserving-anchor = true;
-                    self.user-scrolling = false;
-                    self.following-tail = false;
-                    self.viewport-y = Math.min(0px, self.anchor-y - (self.viewport-height - self.anchor-height));
-                    anchor-settled.start(); anchor-settled.restart();
-                }
                 property <int> tail-request: root.tail-serial;
                 property <string> thread-id: root.root-message-id;
                 changed thread-id => {
@@ -451,7 +435,16 @@ export component ThreadPanel inherits Rectangle {
                         }
                         more-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.load-more-replies(); }
+                            // Pin what is on screen now; the older page grows
+                            // the content above it (`changed viewport-height`).
+                            clicked => {
+                                replies-view.anchor-height = replies-view.viewport-height;
+                                replies-view.anchor-y = replies-view.viewport-y;
+                                replies-view.preserving-anchor = true;
+                                replies-view.user-scrolling = false;
+                                replies-view.following-tail = false;
+                                root.load-more-replies();
+                            }
                         }
                     }
 

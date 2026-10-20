@@ -1,4 +1,3 @@
-import { ThreadScrollAnchor } from "chat/thread_panel.slint";
 import { Colors } from "theme/colors.slint";
 import { AvatarOption } from "components/avatar_picker.slint";
 import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
@@ -262,9 +261,6 @@ export global ChatPane {
     callback close-thread-clicked();
     callback send-thread-reply(string);
     callback load-more-thread-replies();
-    // Presentation measurements, captured synchronously before a page prepend.
-    in-out property <ThreadScrollAnchor> thread-scroll-anchor;
-    in property <ThreadScrollAnchor> thread-prepend-anchor;
     // ========== Chat callbacks ==========
     callback chat-settings-clicked();
     // Invite member to channel modal properties

@@ -39,8 +39,6 @@ export component AppThreadPanel inherits Rectangle {
         close-clicked => { ChatPane.close-thread-clicked(); }
         send-reply(text) => { ChatPane.send-thread-reply(text); }
         load-more-replies => { ChatPane.load-more-thread-replies(); }
-        scroll-anchor <=> ChatPane.thread-scroll-anchor;
-        prepend-anchor: ChatPane.thread-prepend-anchor;
         open-message-link(url) => { ChatPane.open-message-link(url); }
         message-clicked(id) => { ChatPane.message-clicked(id); }
         menu-open: ChatPane.context-menu-visible || ChatPane.reaction-picker-visible;
