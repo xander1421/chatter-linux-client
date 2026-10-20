@@ -346,6 +346,18 @@ impl PushListener {
                             first_failure_at = None;
                         }
                         Err(e) => {
+                            // Stream errors only follow an established stream:
+                            // a drop after a healthy connection (server restart,
+                            // network change) starts a fresh backoff instead of
+                            // continuing the previous outage's 60 s cadence.
+                            if matches!(
+                                e.downcast_ref::<PushError>(),
+                                Some(PushError::Stream)
+                            ) {
+                                retry_delay = self.config.reconnect_delay;
+                                attempt = 0;
+                                first_failure_at = None;
+                            }
                             if first_failure_at.is_none() {
                                 first_failure_at = Some(Instant::now());
                             }
