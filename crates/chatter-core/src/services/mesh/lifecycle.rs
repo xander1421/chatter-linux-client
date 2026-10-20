@@ -81,6 +81,7 @@ impl MeshService {
             relay_connector: deps.relay_connector,
             tasks: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
+            identity_wiped: AtomicBool::new(false),
             sealer_unavailable,
         })
     }
@@ -115,6 +116,9 @@ impl MeshService {
         if let Some(reason) = self.sealer_unavailable_reason() {
             self.running.store(false, Ordering::SeqCst);
             return Err(MeshError::SealerUnavailable(reason));
+        }
+        if self.identity_wiped.load(Ordering::SeqCst) {
+            return Err(MeshError::IdentityWiped);
         }
         if self.running.swap(true, Ordering::SeqCst) {
             return Ok(());

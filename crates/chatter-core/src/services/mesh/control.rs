@@ -83,6 +83,8 @@ impl MeshService {
     /// service could not describe itself.
     pub fn panic_wipe(&self) -> Result<(), MeshError> {
         let _signal_guard = self.signal_lock.lock();
+        self.identity_wiped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.config.set_nickname("anon".to_owned());
         self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;

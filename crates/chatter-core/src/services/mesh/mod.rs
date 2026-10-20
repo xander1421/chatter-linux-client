@@ -265,6 +265,10 @@ pub struct MeshService {
     relay_connector: Option<Arc<dyn RelayConnector>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     running: AtomicBool,
+    /// Set by a panic wipe. `identity` above is the erased keypair; announcing
+    /// it again would relink this device to everything the wipe was meant to
+    /// cut off, so the radio stays down until a restart loads a fresh one.
+    identity_wiped: AtomicBool,
     /// Set when the sealer holds no key — see [`MeshError::SealerUnavailable`].
     sealer_unavailable: Option<String>,
 }

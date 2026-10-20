@@ -98,6 +98,7 @@ fn service_with_radio_factory(
         relay_connector: connector,
         tasks: Mutex::new(Vec::new()),
         running: AtomicBool::new(false),
+        identity_wiped: AtomicBool::new(false),
     }
 }
 

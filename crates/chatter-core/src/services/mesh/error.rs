@@ -39,6 +39,11 @@ pub enum MeshError {
     #[error("the mesh cannot seal what it retains: {0}")]
     SealerUnavailable(String),
 
+    /// A panic wipe erased the stored identity, but this process still holds
+    /// the old keypair; only a restart generates the new one.
+    #[error("mesh identity erased; restart Chatter to start mesh with a new identity")]
+    IdentityWiped,
+
     /// Nostr was not configured — no [`RelayConnector`] was supplied, so there
     /// is no way to reach a relay.
     ///
