@@ -15,6 +15,7 @@ import { MessageItem } from "message_item.slint";
 import { ConversationKind } from "conversation_kind.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
+import { TextFormat } from "message_composer.slint";
 
 export component ThreadPanel inherits Rectangle {
     property <bool> entered: false;
@@ -64,6 +65,21 @@ export component ThreadPanel inherits Rectangle {
 
     // Composer text (two-way binding)
     in-out property <string> composer-text;
+
+    // As the main composer (`message_composer.slint` reset-after-send): send
+    // the text with the input method's in-flight word spliced in, then make
+    // the input method finish composing so that word cannot come back.
+    function send-composed() {
+        let text = TextFormat.replace(root.composer-text, composer-input.preedit-text,
+            composer-input.cursor-position-byte-offset, composer-input.cursor-position-byte-offset);
+        if text == "" { return; }
+        root.send-reply(text);
+        root.composer-text = "";
+        if composer-input.preedit-text != "" {
+            composer-input.clear-focus();
+            composer-input.focus();
+        }
+    }
 
     // Callbacks
     callback close-clicked;
@@ -577,12 +593,7 @@ export component ThreadPanel inherits Rectangle {
                             vertical-alignment: center;
                             text <=> root.composer-text;
 
-                            accepted => {
-                                if root.composer-text != "" {
-                                    root.send-reply(root.composer-text);
-                                    root.composer-text = "";
-                                }
-                            }
+                            accepted => { root.send-composed(); }
                         }
                     }
 
@@ -601,11 +612,8 @@ export component ThreadPanel inherits Rectangle {
                     icon: Icons.send;
                     label: "Send reply";
                     active: true;
-                    enabled: root.composer-text != "";
-                    clicked => {
-                        root.send-reply(root.composer-text);
-                        root.composer-text = "";
-                    }
+                    enabled: root.composer-text != "" || composer-input.preedit-text != "";
+                    clicked => { root.send-composed(); }
                 }
             }
         }
