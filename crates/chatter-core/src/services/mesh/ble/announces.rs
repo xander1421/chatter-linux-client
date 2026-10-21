@@ -1,5 +1,9 @@
 use super::*;
 
+/// How long a handshake with a known peer may sit unanswered before the next
+/// direct announce from that peer restarts it.
+const KNOWN_PEER_HANDSHAKE_STALL_MS: u64 = 10_000;
+
 impl BleRuntime {
     /// Returns whether the announce was accepted, which is also the answer to
     /// "may the gossip store keep this packet".
@@ -288,9 +292,16 @@ impl BleRuntime {
         // Strangers are left alone; Noise to them stays on demand.
         if direct.is_some()
             && self.state.with(|state| {
+                // A handshake whose reply was lost on a link that was still
+                // coming up never completes and was never retried; restart it
+                // once it is older than the stall window.
+                let stalled = state.sessions.is_handshaking(claimed)
+                    && now_millis().saturating_sub(
+                        *state.dm_handshake_at_ms.get(claimed).unwrap_or(&0),
+                    ) >= KNOWN_PEER_HANDSHAKE_STALL_MS;
                 state.peers.pinned(claimed).is_some()
                     && !state.sessions.has_session(claimed)
-                    && !state.sessions.is_handshaking(claimed)
+                    && (!state.sessions.is_handshaking(claimed) || stalled)
             })
             && self.state.can_write_to(claimed)
         {
