@@ -109,6 +109,13 @@ impl MeshService {
         let peers = self.peers();
         Ok(self.conversations()?.into_iter().filter_map(|row| {
             let conversation = self.conversation_for(&row.id)?;
+            // A timeline row outlives a group whose stored state no longer
+            // loads (abandoned pre-epoch rows); it has no key, so hide it.
+            if let MeshConversation::PrivateChannel(id) = &conversation
+                && !matches!(self.private_channels.load(id), Ok(Some(_)))
+            {
+                return None;
+            }
             let (kind, scope) = match &conversation {
                 MeshConversation::Room => ("room", String::new()),
                 MeshConversation::Geohash(cell) => ("geohash", cell.clone()),
