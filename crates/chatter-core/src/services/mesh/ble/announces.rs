@@ -280,6 +280,23 @@ impl BleRuntime {
         }
 
         self.retry_pending_dm_handshake(claimed).await;
+        // A peer we have authenticated before (pinned) and that is directly in
+        // range, with no session: re-open one now. After either side restarts
+        // its radio, the restarted side has no session and nothing else starts
+        // one until a DM, carried mail or a tap needs it, so private channel
+        // admissions, key updates and leave notices stalled indefinitely.
+        // Strangers are left alone; Noise to them stays on demand.
+        if direct.is_some()
+            && self.state.with(|state| {
+                state.peers.pinned(claimed).is_some()
+                    && !state.sessions.has_session(claimed)
+                    && !state.sessions.is_handshaking(claimed)
+            })
+            && self.state.can_write_to(claimed)
+        {
+            tracing::info!(target: "mesh::ble", peer = %claimed, "re-opening Noise with a known peer");
+            self.start_handshake(claimed).await;
+        }
         if is_new || newly_bound {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
