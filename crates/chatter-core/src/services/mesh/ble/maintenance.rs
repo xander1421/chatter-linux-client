@@ -79,23 +79,30 @@ impl BleRuntime {
         // Scan duty cycle. Scanning is the expensive half of BLE, so it runs
         // intermittently while advertising stays up continuously.
         let configured_duty = self.config.scan_duty_cycle;
-        let scan = self.state.with(|state| {
-            let connected = state.peers.connected_count();
-            let recent_traffic =
-                now_ms.saturating_sub(state.last_traffic_ms) < duty::RECENT_TRAFFIC_FORCE_SCAN_MS;
-            let duty_enabled = state.duty_enabled && configured_duty;
-            let command = state.duty.update(
-                duty_enabled,
-                state.app_is_active,
-                connected,
-                recent_traffic,
-                now_ms,
-            );
-            match command {
-                ScanCommand::Unchanged => state.duty.poll(now_ms),
-                other => other,
-            }
-        });
+        // Changing discovery while an LE connect is pending makes BlueZ abort
+        // the connect (`le-connection-abort-by-local`). Defer the duty cycle,
+        // state included, until the dial reports back; the next tick resumes it.
+        let scan = if self.dial_in_flight {
+            ScanCommand::Unchanged
+        } else {
+            self.state.with(|state| {
+                let connected = state.peers.connected_count();
+                let recent_traffic = now_ms.saturating_sub(state.last_traffic_ms)
+                    < duty::RECENT_TRAFFIC_FORCE_SCAN_MS;
+                let duty_enabled = state.duty_enabled && configured_duty;
+                let command = state.duty.update(
+                    duty_enabled,
+                    state.app_is_active,
+                    connected,
+                    recent_traffic,
+                    now_ms,
+                );
+                match command {
+                    ScanCommand::Unchanged => state.duty.poll(now_ms),
+                    other => other,
+                }
+            })
+        };
         // A refused scan toggle was discarded, and the two directions fail in
         // opposite ways: unable to *start* means we stop discovering peers
         // altogether — the mesh goes blind while looking perfectly healthy —
