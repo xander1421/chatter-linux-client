@@ -423,7 +423,13 @@ impl BleRuntime {
             self.degraded(format!("the radio would not start: {error}"));
             return;
         }
-        self.state.with(|state| state.radio_running = true);
+        self.state.with(|state| {
+            state.radio_running = true;
+            // Discovery backoff is about the previous radio session's links. A
+            // duplicate-peer note ignores an address for five minutes, so after
+            // a mesh off/on the S25 never dialled the S9 again (5+ min, ui159).
+            state.scheduler.reset();
+        });
         self.emit_status();
         // Our own ID, said once. Every packet on the wire names its sender by
         // this derivation, so without it an unfamiliar sender in the log cannot
