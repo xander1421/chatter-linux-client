@@ -1032,6 +1032,12 @@ object MeshBleBridge {
         }
         for (id in peripheralLinks.keys.toList()) {
             val link = peripheralLinks.remove(id) ?: continue
+            // Hang up the remote central too. Closing the GATT server alone
+            // left it connected to a server that no longer exists: a Chatter
+            // peer kept its subscription to the old service, our notifications
+            // after a mesh off/on never reached it, and Noise to it could not
+            // re-form (S25 -> S9, ui158).
+            closePeripheral(link)
             if (link.announced) emitDisconnected(id)
         }
     }
