@@ -57,7 +57,37 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool)
     }
 }
 
+/// The window the Android install-result receiver reports into.
+#[cfg(target_os = "android")]
+static INSTALL_WINDOW: std::sync::Mutex<Option<Weak<MainWindow>>> = std::sync::Mutex::new(None);
+
+/// PackageInstaller's final status for our session. Without it a refused
+/// install (e.g. a signer mismatch) left the pill on "Confirm system install"
+/// and the reason only in a toast.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_UpdateInstallReceiver_nativeOnInstallFailed(
+    mut env: jni::EnvUnowned<'_>,
+    _this: jni::objects::JObject,
+    reason: jni::objects::JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let reason: String = reason.try_to_string(&env)?.into();
+        let weak = INSTALL_WINDOW.lock().ok().and_then(|guard| guard.clone());
+        if let Some(weak) = weak {
+            let reason = if reason.is_empty() { "Update install failed".to_string() } else { reason };
+            show_error(weak, format!("System installer refused the update: {reason}"));
+        }
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
 pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
+    #[cfg(target_os = "android")]
+    if let Ok(mut guard) = INSTALL_WINDOW.lock() {
+        *guard = Some(window.as_weak());
+    }
     let global = window.global::<UpdateGlobal>();
     global.set_installed_version(update::installed_version_name().into());
     global.set_build_code(update::installed_version_code().to_string().into());

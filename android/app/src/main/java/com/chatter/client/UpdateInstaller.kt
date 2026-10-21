@@ -127,6 +127,10 @@ class UpdateInstallReceiver : BroadcastReceiver() {
         } else if (status != PackageInstaller.STATUS_SUCCESS) {
             val reason = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
             Toast.makeText(context, reason ?: "Update install failed", Toast.LENGTH_LONG).show()
+            // The library is loaded whenever an update was started from the app.
+            try { nativeOnInstallFailed(reason ?: "") } catch (_: UnsatisfiedLinkError) {}
         }
     }
+
+    private external fun nativeOnInstallFailed(reason: String)
 }
