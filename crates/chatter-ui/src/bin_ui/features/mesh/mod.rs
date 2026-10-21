@@ -302,7 +302,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.mesh_remove_private_channel_member(id.as_str(), peer.as_str()) {
                 Ok(()) => {
                     w.global::<MeshGlobal>().set_notice(
-                        "Member removed; waiting for remaining members to confirm the new key."
+                        "Member removed; the group key was rotated."
                             .into(),
                     );
                     refresh_rows(&w, &ui_ctx);
@@ -1039,6 +1039,17 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         | MeshEvent::PrivateChannelChanged => {
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| refresh_rows(&w, &ui_ctx));
+        }
+        MeshEvent::PrivateChannelClosed(id) => {
+            let ui_ctx = ui_ctx.clone();
+            run_ui!(weak, |w| {
+                if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if *open == id) {
+                    close_mesh_conversation(&w, &ui_ctx);
+                    w.global::<MeshGlobal>()
+                        .set_notice("The creator removed this device from the group.".into());
+                }
+                refresh_rows(&w, &ui_ctx);
+            });
         }
         MeshEvent::IdentityKeyChanged { peer } => {
             run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(

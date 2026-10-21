@@ -224,6 +224,9 @@ pub enum MeshEvent {
     ChannelObserved(String),
     /// A private roster was accepted or a new channel appeared locally.
     PrivateChannelChanged,
+    /// The creator removed this device from a private channel; its state and
+    /// sidebar row are gone, so an open pane must close.
+    PrivateChannelClosed(String),
     /// Something went wrong that the user should know about but that did not
     /// stop the service.
     Degraded(String),

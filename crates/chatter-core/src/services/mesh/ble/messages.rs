@@ -383,7 +383,8 @@ impl BleRuntime {
             if existing.is_some() {
                 let _ = self.private_channels.remove(&update.id);
                 self.events.close_private_channel(&update.id);
-                self.events.send(MeshEvent::PrivateChannelChanged);
+                self.events
+                    .send(MeshEvent::PrivateChannelClosed(update.id.clone()));
             }
             return;
         }
