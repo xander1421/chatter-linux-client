@@ -40,8 +40,8 @@ export component MeshContextBar inherits Rectangle {
                 : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
       : MeshGlobal.active-kind == "private-channel"
             ? (MeshGlobal.private-rekey-pending
-                ? "Waiting for keys from " + MeshGlobal.private-missing-keys + " members. Their messages become readable when they reconnect."
-                : "Invited devices only. Membership changes need the creator; messages use each sender's key.")
+                ? "Waiting for key update from creator. Sending pauses until the new group key arrives."
+                : "Invited devices only. The creator rotates the group key when membership changes.")
             : (MeshGlobal.peer-count == 0
                 ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
                 : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
@@ -130,7 +130,7 @@ export component MeshContextBar inherits Rectangle {
                     color: Colors.text-muted; font-size: Typography.xs; }
                 for member in MeshGlobal.private-removable-members: Rectangle {
                     height: Spacing.button-height;
-                    Text { text: MeshGlobal.private-remove-pending == member.peer-id ? "Tap again to remove " + member.display-name : (member.display-name + (member.awaiting-rekey ? " · Waiting for key update" : " · Rekeyed"));
+                    Text { text: MeshGlobal.private-remove-pending == member.peer-id ? "Tap again to remove " + member.display-name : (member.display-name + (member.awaiting-rekey ? " · Update pending" : " · Current epoch"));
                         color: Colors.text-secondary; font-size: Typography.xs;
                         vertical-alignment: center; overflow: elide; }
                     TouchArea { clicked => {
@@ -148,7 +148,7 @@ export component MeshContextBar inherits Rectangle {
                 Rectangle {
                     height: Spacing.button-height;
                     Text {
-                        text: MeshGlobal.private-leave-pending ? "Confirm leave channel and delete this device's key" : "Leave channel";
+                        text: MeshGlobal.private-leave-pending ? "Confirm leave group and delete this device's group key" : "Leave group";
                         color: Colors.warning;
                         font-size: Typography.xs;
                         vertical-alignment: center;

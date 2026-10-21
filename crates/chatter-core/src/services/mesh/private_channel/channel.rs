@@ -1,119 +1,144 @@
+use super::protocol::{
+    decode_hex, decode_roster, field, hex_lower, parse_tlv, put_tlv, truncate_utf8,
+};
 use super::*;
 
 impl PrivateChannel {
-    pub fn create(name: &str, identity: &MeshIdentity) -> Result<Self, MeshError> {
-        let name = valid_name(name)?;
-        let mut key = Zeroizing::new(vec![0; 32]);
+    pub fn create(name: &str, identity: &MeshIdentity, nickname: &str) -> Result<Self, MeshError> {
+        if name.trim().len() > 32 {
+            return Err(failure("QR group name must be at most 32 bytes"));
+        }
+        let mut key = Zeroizing::new(vec![0u8; 32]);
         OsRng
             .try_fill_bytes(&mut key)
             .map_err(|_| failure("randomness unavailable"))?;
+        let mut group_id = [0u8; 16];
+        OsRng
+            .try_fill_bytes(&mut group_id)
+            .map_err(|_| failure("randomness unavailable"))?;
         let mut state = Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            name,
+            id: uuid::Uuid::from_bytes(group_id).to_string(),
+            name: valid_name(name)?,
             creator: identity.peer_id().to_string(),
             creator_key: identity.signing_public().to_vec(),
             creator_static: identity.static_public().to_vec(),
             epoch: 1,
             members: vec![Member {
                 peer: identity.peer_id().to_string(),
+                fingerprint: identity.fingerprint(),
                 signing_key: identity.signing_public().to_vec(),
+                nickname: nickname.to_string(),
             }],
-            sender_keys: vec![SenderKey {
-                peer: identity.peer_id().to_string(),
-                generation: 1,
-                key,
-            }],
-            prior_sender_keys: vec![],
-            pending_distributions: vec![],
-            distribution_attempts: vec![],
-            replay: vec![],
-            previous_hash: vec![0; 32],
+            key,
             signature: vec![],
+            replay: vec![],
             pending_invites: vec![],
             awaiting_rekey: vec![],
             stale: false,
             stale_epoch: 0,
             departed: vec![],
+            hint_signature: vec![],
+            removed_members: vec![],
         };
         state.sign(identity)?;
         Ok(state)
     }
 
-    fn preimage(&self) -> Result<Vec<u8>, MeshError> {
-        serde_json::to_vec(&EpochPreimage {
-            domain: "chatter.mesh.private.roster.v2",
-            id: &self.id,
-            name: &self.name,
-            creator: &self.creator,
-            creator_static: &self.creator_static,
-            epoch: self.epoch,
-            members: &self.members,
-            previous_hash: &self.previous_hash,
-        })
-        .map_err(|_| failure("invalid channel roster"))
+    pub fn group_id(&self) -> Option<[u8; 16]> {
+        Some(*uuid::Uuid::parse_str(&self.id).ok()?.as_bytes())
     }
 
-    pub fn chain_hash(&self) -> Result<Vec<u8>, MeshError> {
-        Ok(Sha256::digest(self.preimage()?).to_vec())
+    pub fn roster_bytes(&self) -> Option<Vec<u8>> {
+        if self.members.len() > MAX_MEMBERS {
+            return None;
+        }
+        let mut out = vec![self.members.len() as u8];
+        for member in &self.members {
+            let fingerprint = decode_hex(&member.fingerprint)?;
+            if fingerprint.len() != 32 || member.signing_key.len() != 32 {
+                return None;
+            }
+            let nickname = truncate_utf8(&member.nickname, 64);
+            out.extend(fingerprint);
+            out.extend(&member.signing_key);
+            out.push(nickname.len() as u8);
+            out.extend(nickname);
+        }
+        Some(out)
+    }
+
+    fn signing_content(&self) -> Option<Vec<u8>> {
+        let mut out = b"bitchat-group-v1".to_vec();
+        out.extend(self.group_id()?);
+        out.extend(self.epoch.to_be_bytes());
+        out.extend(Sha256::digest(self.key.as_slice()));
+        out.extend(Sha256::digest(self.roster_bytes()?));
+        out.extend(Sha256::digest(self.name.as_bytes()));
+        Some(out)
+    }
+
+    fn hint_content(&self) -> Option<Vec<u8>> {
+        let mut out = b"chatter.mesh.group.epoch-hint.v1".to_vec();
+        out.extend(self.group_id()?);
+        out.extend(self.epoch.to_be_bytes());
+        Some(out)
     }
 
     fn sign(&mut self, identity: &MeshIdentity) -> Result<(), MeshError> {
         if self.creator != identity.peer_id().as_str() {
             return Err(failure("only the creator can change membership"));
         }
-        self.signature = sign_bytes(identity, &self.preimage()?).to_vec();
+        self.signature = sign_bytes(
+            identity,
+            &self
+                .signing_content()
+                .ok_or_else(|| failure("invalid group state"))?,
+        )
+        .to_vec();
+        self.hint_signature = sign_bytes(
+            identity,
+            &self
+                .hint_content()
+                .ok_or_else(|| failure("invalid epoch hint"))?,
+        )
+        .to_vec();
         Ok(())
     }
 
     pub fn verify(&self) -> bool {
         if self.epoch == 0
-            || uuid::Uuid::parse_str(&self.id).is_err()
+            || self.key.len() != 32
             || self.creator_key.len() != 32
-            || self.creator_static.len() != 32
-            || self.previous_hash.len() != 32
             || self.signature.len() != 64
             || self.members.is_empty()
             || self.members.len() > MAX_MEMBERS
+            || valid_name(&self.name).is_err()
+            || self.replay.len() > 512
+            || self.removed_members.len() > 64
             || self.members[0].peer != self.creator
             || self.members[0].signing_key != self.creator_key
+            || self.members[0].fingerprint.get(..16) != Some(PeerId::from_str(&self.creator).bare())
             || self.members.iter().any(|m| {
-                m.signing_key.len() != 32 || PeerId::from_str(&m.peer).to_routing_bytes().is_none()
+                m.signing_key.len() != 32
+                    || decode_hex(&m.fingerprint).is_none_or(|b| b.len() != 32)
+                    || m.fingerprint.get(..16) != Some(PeerId::from_str(&m.peer).bare())
             })
-            || self.sender_keys.len() > MAX_MEMBERS
-            || self.prior_sender_keys.len() > 32
-            || self.replay.len() > 512
-            || self.sender_keys.iter().any(|key| {
-                key.key.len() != 32
-                    || key.generation == 0
-                    || !self.members.iter().any(|member| member.peer == key.peer)
-            })
-            || self
-                .pending_distributions
-                .iter()
-                .any(|peer| !self.members.iter().any(|member| &member.peer == peer))
-            || self.distribution_attempts.len() > MAX_MEMBERS
-            || self.departed.len() > MAX_MEMBERS
-            || self
-                .departed
-                .iter()
-                .any(|notice| !self.verify_leave(notice))
             || self
                 .members
                 .iter()
                 .enumerate()
-                .any(|(i, m)| self.members[..i].iter().any(|before| before.peer == m.peer))
-            || valid_name(&self.name).is_err()
+                .any(|(i, m)| self.members[..i].iter().any(|x| x.peer == m.peer))
         {
             return false;
         }
-        let (Ok(key), Ok(sig), Ok(preimage)) = (
+        let (Some(content), Ok(key), Ok(sig)) = (
+            self.signing_content(),
             <[u8; 32]>::try_from(self.creator_key.as_slice()),
             <[u8; 64]>::try_from(self.signature.as_slice()),
-            self.preimage(),
         ) else {
             return false;
         };
-        verify_bytes(&sig, &preimage, &key)
+        verify_bytes(&sig, &content, &key)
     }
 
     pub fn member_key(&self, peer: &PeerId) -> Option<[u8; 32]> {
@@ -125,7 +150,7 @@ impl PrivateChannel {
 
     pub fn leave_notice(&self, identity: &MeshIdentity) -> Result<LeaveNotice, MeshError> {
         if self.member_key(&identity.peer_id()).is_none() {
-            return Err(failure("not a channel member"));
+            return Err(failure("not a group member"));
         }
         let mut notice = LeaveNotice {
             id: self.id.clone(),
@@ -144,31 +169,24 @@ impl PrivateChannel {
     }
 
     pub fn verify_leave(&self, notice: &LeaveNotice) -> bool {
-        if notice.id != self.id || notice.epoch != self.epoch || notice.signature.len() != 64 {
+        if notice.id != self.id || notice.epoch != self.epoch {
             return false;
         }
-        let Some(key) = self.member_key(&PeerId::from_str(&notice.peer)) else {
+        let (Some(key), Ok(sig), Some(content)) = (
+            self.member_key(&PeerId::from_str(&notice.peer)),
+            <[u8; 64]>::try_from(notice.signature.as_slice()),
+            notice.preimage(),
+        ) else {
             return false;
         };
-        let Ok(sig) = <[u8; 64]>::try_from(notice.signature.as_slice()) else {
-            return false;
-        };
-        notice
-            .preimage()
-            .is_some_and(|bytes| verify_bytes(&sig, &bytes, &key))
+        verify_bytes(&sig, &content, &key)
     }
 
     pub fn epoch_proof(&self) -> EpochProof {
         EpochProof {
-            domain: "chatter.mesh.private.roster.v2".into(),
             id: self.id.clone(),
-            name: self.name.clone(),
-            creator: self.creator.clone(),
-            creator_static: self.creator_static.clone(),
             epoch: self.epoch,
-            members: self.members.clone(),
-            previous_hash: self.previous_hash.clone(),
-            signature: self.signature.clone(),
+            signature: self.hint_signature.clone(),
         }
     }
 
@@ -179,20 +197,20 @@ impl PrivateChannel {
         creator_static: [u8; 32],
         now: u64,
     ) -> Result<String, MeshError> {
+        if self.name.len() > 32 {
+            return Err(failure("group name cannot fit compact QR"));
+        }
         if self.creator != identity.peer_id().as_str() {
             return Err(failure("only the creator can invite"));
         }
-        if self.creator_static.as_slice() != creator_static.as_slice() {
+        if self.creator_static != creator_static {
             return Err(failure("creator Noise identity changed"));
         }
         if self.members.len() >= MAX_MEMBERS {
-            return Err(failure("private channel is full (16 members)"));
+            return Err(failure("private group is full (16 members)"));
         }
-        if target.to_routing_bytes().is_none() {
-            return Err(failure("invite target is not a mesh device"));
-        }
-        if self.member_key(target).is_some() {
-            return Err(failure("peer is already a member"));
+        if target.to_routing_bytes().is_none() || self.member_key(target).is_some() {
+            return Err(failure("invalid or existing member"));
         }
         let mut nonce = vec![0; 16];
         OsRng
@@ -203,7 +221,7 @@ impl PrivateChannel {
             name: self.name.clone(),
             creator: self.creator.clone(),
             creator_key: self.creator_key.clone(),
-            creator_static: creator_static.to_vec(),
+            creator_static: self.creator_static.clone(),
             target: target.to_string(),
             nonce,
             expires_at: now.saturating_add(600),
@@ -213,7 +231,7 @@ impl PrivateChannel {
         self.pending_invites
             .retain(|i| i.expires_at >= now && i.target != target.as_str());
         if self.pending_invites.len() >= 32 {
-            return Err(failure("too many pending private channel invites"));
+            return Err(failure("too many pending invites"));
         }
         let text = invite.to_text().ok_or_else(|| failure("invalid invite"))?;
         self.pending_invites.push(invite);
@@ -227,90 +245,125 @@ impl PrivateChannel {
         remove: Option<&PeerId>,
     ) -> Result<(), MeshError> {
         if self.creator != identity.peer_id().as_str() {
-            return Err(failure("membership is frozen until the creator returns"));
+            return Err(failure("membership requires creator"));
         }
-        if let Some(ref member) = member {
+        if let Some(ref m) = member {
             if self.members.len() >= MAX_MEMBERS
-                || member.signing_key.len() != 32
-                || self.members.iter().any(|m| m.peer == member.peer)
+                || m.signing_key.len() != 32
+                || self.members.iter().any(|old| old.peer == m.peer)
             {
                 return Err(failure("invalid or full roster"));
             }
         }
-        if let Some(remove) = remove {
-            if remove.as_str() == self.creator {
-                return Err(failure("creator cannot leave"));
-            }
-            if !self.members.iter().any(|m| m.peer == remove.as_str()) {
-                return Err(failure("peer is not a member"));
+        if let Some(peer) = remove {
+            if peer.as_str() == self.creator || self.member_key(peer).is_none() {
+                return Err(failure("invalid removal"));
             }
         }
-        self.previous_hash = Sha256::digest(self.preimage()?).to_vec();
-        self.departed.clear();
-        self.remember_current();
-        if let Some(member) = member {
-            self.members.push(member);
+        if let Some(m) = member {
+            self.removed_members.retain(|peer| peer != &m.peer);
+            self.members.push(m);
         }
-        if let Some(remove) = remove {
-            self.members.retain(|m| m.peer != remove.as_str());
+        if let Some(peer) = remove {
+            self.members.retain(|m| m.peer != peer.as_str());
+            if !self.removed_members.iter().any(|old| old == peer.as_str()) {
+                self.removed_members.push(peer.to_string());
+            }
         }
+        self.epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or_else(|| failure("epoch exhausted"))?;
+        OsRng
+            .try_fill_bytes(&mut self.key)
+            .map_err(|_| failure("randomness unavailable"))?;
         self.awaiting_rekey = self
             .members
             .iter()
             .filter(|m| m.peer != self.creator)
             .map(|m| m.peer.clone())
             .collect();
-        self.epoch = self
-            .epoch
-            .checked_add(1)
-            .ok_or_else(|| failure("epoch exhausted"))?;
-        self.sender_keys
-            .retain(|key| self.members.iter().any(|m| m.peer == key.peer));
-        self.invalidate_other_sender_keys(&identity.peer_id());
-        self.pending_distributions = self
-            .members
-            .iter()
-            .filter(|m| m.peer != identity.peer_id().as_str())
-            .map(|m| m.peer.clone())
-            .collect();
-        self.distribution_attempts.clear();
+        self.departed.clear();
+        self.stale = false;
+        self.stale_epoch = 0;
         self.sign(identity)
     }
 
     pub fn update_bytes(&self) -> Result<Zeroizing<Vec<u8>>, MeshError> {
-        let mut out = Zeroizing::new(UPDATE_MAGIC.to_vec());
-        // Serialize only the signed current roster; local state never crosses Noise.
-        let wire = CurrentEpoch {
-            id: &self.id,
-            name: &self.name,
-            creator: &self.creator,
-            creator_key: &self.creator_key,
-            creator_static: &self.creator_static,
-            epoch: self.epoch,
-            members: &self.members,
-            previous_hash: &self.previous_hash,
-            signature: &self.signature,
-        };
-        out.extend(serde_json::to_vec(&wire).map_err(|_| failure("invalid roster"))?);
+        let mut out = Zeroizing::new(Vec::new());
+        put_tlv(
+            1,
+            &self.group_id().ok_or_else(|| failure("invalid group id"))?,
+            &mut out,
+        )?;
+        put_tlv(2, self.name.as_bytes(), &mut out)?;
+        put_tlv(3, &self.key, &mut out)?;
+        put_tlv(4, &self.epoch.to_be_bytes(), &mut out)?;
+        put_tlv(
+            5,
+            &self
+                .roster_bytes()
+                .ok_or_else(|| failure("invalid roster"))?,
+            &mut out,
+        )?;
+        put_tlv(
+            6,
+            &decode_hex(&self.members[0].fingerprint).ok_or_else(|| failure("invalid creator"))?,
+            &mut out,
+        )?;
+        put_tlv(7, &self.signature, &mut out)?;
         Ok(out)
     }
 
+    pub fn removed_update_bytes(
+        &self,
+        identity: &MeshIdentity,
+    ) -> Result<Zeroizing<Vec<u8>>, MeshError> {
+        let mut removed = self.clone();
+        removed.key.fill(0);
+        removed.sign(identity)?;
+        removed.update_bytes()
+    }
+
     pub fn decode_update(bytes: &[u8]) -> Option<Self> {
-        if !bytes.starts_with(UPDATE_MAGIC) || bytes.len() > 8192 {
+        let fields = parse_tlv(bytes)?;
+        let id = uuid::Uuid::from_slice(field(&fields, 1)?).ok()?.to_string();
+        let name = String::from_utf8(field(&fields, 2)?.to_vec()).ok()?;
+        let key = field(&fields, 3)?;
+        if key.len() != 32 {
             return None;
         }
-        let state: Self = serde_json::from_slice(&bytes[8..]).ok()?;
-        (state.pending_invites.is_empty()
-            && state.awaiting_rekey.is_empty()
-            && !state.stale
-            && state.stale_epoch == 0
-            && state.departed.is_empty()
-            && state.sender_keys.is_empty()
-            && state.prior_sender_keys.is_empty()
-            && state.pending_distributions.is_empty()
-            && state.distribution_attempts.is_empty()
-            && state.replay.is_empty()
-            && state.verify())
-        .then_some(state)
+        let epoch = u32::from_be_bytes(field(&fields, 4)?.try_into().ok()?);
+        let members = decode_roster(field(&fields, 5)?)?;
+        let creator_fingerprint = hex_lower(field(&fields, 6)?);
+        if creator_fingerprint.len() != 64 || members.first()?.fingerprint != creator_fingerprint {
+            return None;
+        }
+        let signature = field(&fields, 7)?.to_vec();
+        if signature.len() != 64 {
+            return None;
+        }
+        let creator = members.first()?.peer.clone();
+        let creator_key = members.first()?.signing_key.clone();
+        let state = Self {
+            id,
+            name,
+            creator,
+            creator_key,
+            creator_static: vec![],
+            epoch,
+            members,
+            key: Zeroizing::new(key.to_vec()),
+            signature,
+            replay: vec![],
+            pending_invites: vec![],
+            awaiting_rekey: vec![],
+            stale: false,
+            stale_epoch: 0,
+            departed: vec![],
+            hint_signature: vec![],
+            removed_members: vec![],
+        };
+        state.verify().then_some(state)
     }
 }

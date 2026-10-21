@@ -75,7 +75,6 @@ use super::file_stream::{
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::private_channel::{
     EpochProof, Invite, LeaveNotice, Member, PrivateChannel, PrivateChannelStore,
-    SenderDistribution,
 };
 use super::router::{RouterCommand, RouterHandle};
 use super::signal_mesh::{self, BundleFrame};

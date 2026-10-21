@@ -183,11 +183,8 @@ impl SyncSend {
 /// `&self` method would conflict.
 fn max_age_secs(config: &SyncConfig, msg_type: u8) -> u64 {
     match MessageType::from_u8(msg_type) {
-        // Group messages share the whole-message window: members off the mesh for a
-        // while should backfill their crew's history like public chat does.
-        Some(MessageType::Message | MessageType::GroupMessage) => {
-            config.public_message_max_age_secs
-        }
+        Some(MessageType::Message) => config.public_message_max_age_secs,
+        Some(MessageType::GroupMessage) => config.group_message_max_age_secs,
         Some(MessageType::PrekeyBundle) => config.prekey_bundle_max_age_secs,
         _ => config.max_message_age_secs,
     }

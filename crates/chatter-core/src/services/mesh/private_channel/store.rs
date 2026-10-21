@@ -44,7 +44,6 @@ impl PrivateChannelStore {
             return Ok(None);
         }
         state.rotate(identity, Some(member), None)?;
-        state.rotate_sender(identity)?;
         state
             .pending_invites
             .retain(|issued| issued.nonce != invite.nonce);
@@ -107,20 +106,18 @@ impl PrivateChannelStore {
             )
             .optional()
             .map_err(db_error)?;
-        bytes
-            .map(|b| {
-                let b = Zeroizing::new(b);
-                serde_json::from_slice::<PrivateChannel>(&b)
-                    .map_err(|_| failure("corrupt channel state"))
-            })
-            .transpose()
-            .and_then(|state| {
-                if state.as_ref().is_some_and(|s| !s.verify()) {
-                    Err(failure("invalid channel signature"))
-                } else {
-                    Ok(state)
-                }
-            })
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        let bytes = Zeroizing::new(bytes);
+        // Pre-release sender-key rows have no epoch key and are abandoned.
+        let Ok(state) = serde_json::from_slice::<PrivateChannel>(&bytes) else {
+            return Ok(None);
+        };
+        if !state.verify() {
+            return Err(failure("invalid group signature"));
+        }
+        Ok(Some(state))
     }
     pub fn list(&self) -> Result<Vec<PrivateChannel>, MeshError> {
         let conn = self.db.read_connection()?;
@@ -133,8 +130,9 @@ impl PrivateChannelStore {
         let mut out = Vec::new();
         for row in rows {
             let bytes = Zeroizing::new(row.map_err(db_error)?);
-            let state: PrivateChannel =
-                serde_json::from_slice(&bytes).map_err(|_| failure("corrupt channel state"))?;
+            let Ok(state) = serde_json::from_slice::<PrivateChannel>(&bytes) else {
+                continue;
+            };
             if !state.verify() {
                 return Err(failure("invalid channel signature"));
             }
@@ -209,7 +207,7 @@ impl PrivateChannelStore {
     pub fn clear_pending_leave(
         &self,
         id: &str,
-        epoch: u64,
+        epoch: u32,
         recipient: &PeerId,
     ) -> Result<(), MeshError> {
         for mut leave in self.pending_leaves_for(recipient)? {

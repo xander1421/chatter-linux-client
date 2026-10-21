@@ -27,35 +27,18 @@ impl BleRuntime {
                                 break;
                             }
                         }
-                        if channel.rotate_sender(&self.identity).is_err()
-                            || self.private_channels.save(&channel).is_err()
-                        {
+                        if self.private_channels.save(&channel).is_err() {
                             continue;
                         }
                         self.events.send(MeshEvent::PrivateChannelChanged);
                     }
                     if !channel.stale
-                        && channel.member_key(&self.identity.peer_id()).is_some()
+                        && channel.creator == self.identity.peer_id().as_str()
                         && !channel.awaiting_rekey.is_empty()
                         && let Ok(bytes) = channel.update_bytes()
                     {
                         for peer in &channel.awaiting_rekey {
-                            self.send_private_control(&PeerId::from_str(peer), &bytes)
-                                .await;
-                        }
-                    }
-                    if let Some(distribution) = channel
-                        .distribution(&self.identity)
-                        .and_then(|d| d.encode())
-                    {
-                        let peers = channel.pending_distributions.clone();
-                        for peer in peers {
-                            if !channel.mark_distribution_attempt(&peer)
-                                || self.private_channels.save(&channel).is_err()
-                            {
-                                continue;
-                            }
-                            self.send_private_control(&PeerId::from_str(&peer), &distribution)
+                            self.send_group_state(&PeerId::from_str(peer), &bytes, false)
                                 .await;
                         }
                     }
@@ -491,21 +474,23 @@ impl BleRuntime {
     /// Close central links that have delivered nothing for
     /// [`SILENT_CENTRAL_LINK_MS`]; the scheduler redials the peer afresh.
     async fn close_silent_central_links(&mut self, now_ms: u64) {
-        let silent: Vec<LinkId> = self.state.with(|state| {
-            state
-                .links
-                .links()
-                .filter(|(_, link)| link.role == LinkRole::Central)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>()
-        })
-        .into_iter()
-        .filter(|id| {
-            self.link_last_inbound_ms
-                .get(id)
-                .is_some_and(|at| now_ms.saturating_sub(*at) >= SILENT_CENTRAL_LINK_MS)
-        })
-        .collect();
+        let silent: Vec<LinkId> = self
+            .state
+            .with(|state| {
+                state
+                    .links
+                    .links()
+                    .filter(|(_, link)| link.role == LinkRole::Central)
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .into_iter()
+            .filter(|id| {
+                self.link_last_inbound_ms
+                    .get(id)
+                    .is_some_and(|at| now_ms.saturating_sub(*at) >= SILENT_CENTRAL_LINK_MS)
+            })
+            .collect();
         for link in silent {
             tracing::warn!(target: "mesh::ble", %link, "central link silent; closing to redial");
             self.link_last_inbound_ms.remove(&link);

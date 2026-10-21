@@ -46,7 +46,7 @@ impl MeshService {
 
     /// Create a local, creator-managed channel. No name or roster is broadcast.
     pub fn create_private_channel(&self, name: &str) -> Result<String, MeshError> {
-        let state = PrivateChannel::create(name, &self.identity)?;
+        let state = PrivateChannel::create(name, &self.identity, &self.config.nickname())?;
         self.private_channels.save(&state)?;
         self.timeline.open_private_channel(&state.id, &state.name);
         Ok(state.id)
@@ -146,8 +146,14 @@ impl MeshService {
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
         state.rotate(&self.identity, None, Some(peer))?;
-        state.rotate_sender(&self.identity)?;
         self.private_channels.save(&state)?;
+        let removed_state = state.removed_update_bytes(&self.identity)?;
+        self.ble
+            .send(BleCommand::PrivateEpoch {
+                peer: peer.clone(),
+                bytes: removed_state,
+            })
+            .map_err(|_| MeshError::NotRunning)?;
         let bytes = state.update_bytes()?;
         for member in &state.members {
             if member.peer != self.identity.peer_id().as_str() {
@@ -183,7 +189,7 @@ impl MeshService {
             acknowledged: vec![],
         })?;
         let encoded = notice.encode()?;
-        let broadcast = state.encrypt(&self.identity.peer_id(), &encoded)?;
+        let (_, broadcast) = state.encrypt(&self.identity, &encoded, &self.config.nickname())?;
         let notice = serde_json::to_vec(&notice)
             .map_err(|_| MeshError::Binding("invalid leave notice".into()))?;
         let mut control = b"CHTRPCL2".to_vec();
@@ -257,15 +263,7 @@ impl MeshService {
             .private_channels
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        Ok(state.missing_sender_keys(&self.identity.peer_id()) > 0)
-    }
-
-    pub fn private_channel_missing_keys(&self, id: &str) -> Result<usize, MeshError> {
-        let state = self
-            .private_channels
-            .load(id)?
-            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        Ok(state.missing_sender_keys(&self.identity.peer_id()))
+        Ok(state.stale)
     }
 
     pub fn send_private_channel(&self, id: &str, text: &str) -> Result<String, MeshError> {
@@ -275,12 +273,10 @@ impl MeshService {
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
         if state.stale {
             return Err(MeshError::Binding(
-                "Waiting for a verified membership update".into(),
+                "Waiting for key update from creator".into(),
             ));
         }
-        let bytes = state.encrypt(&self.identity.peer_id(), text)?;
-        let message_id =
-            uuid::Uuid::from_bytes(bytes[72..88].try_into().expect("fixed frame")).to_string();
+        let (message_id, bytes) = state.encrypt(&self.identity, text, &self.config.nickname())?;
         self.ble
             .send(BleCommand::PrivateChannelMessage {
                 channel_id: id.into(),

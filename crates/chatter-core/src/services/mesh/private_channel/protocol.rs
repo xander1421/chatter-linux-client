@@ -1,5 +1,95 @@
 use super::*;
 
+pub(super) fn put_tlv(kind: u8, value: &[u8], out: &mut Vec<u8>) -> Result<(), MeshError> {
+    let len = u16::try_from(value.len()).map_err(|_| failure("group field too large"))?;
+    out.push(kind);
+    out.extend(len.to_be_bytes());
+    out.extend(value);
+    Ok(())
+}
+
+pub(super) fn parse_tlv(bytes: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+    let mut fields = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes.len() - at < 3 {
+            return None;
+        }
+        let kind = bytes[at];
+        let len = u16::from_be_bytes(bytes[at + 1..at + 3].try_into().ok()?) as usize;
+        at += 3;
+        if bytes.len() - at < len {
+            return None;
+        }
+        fields.push((kind, bytes[at..at + len].to_vec()));
+        at += len;
+    }
+    Some(fields)
+}
+pub(super) fn field(fields: &[(u8, Vec<u8>)], kind: u8) -> Option<&[u8]> {
+    fields
+        .iter()
+        .rev()
+        .find(|(t, _)| *t == kind)
+        .map(|(_, v)| v.as_slice())
+}
+pub(super) fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 15) as usize] as char);
+    }
+    out
+}
+pub(super) fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+pub(super) fn truncate_utf8(s: &str, max: usize) -> Vec<u8> {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.as_bytes()[..end].to_vec()
+}
+pub(super) fn decode_roster(bytes: &[u8]) -> Option<Vec<Member>> {
+    let count = *bytes.first()? as usize;
+    if count == 0 || count > MAX_MEMBERS {
+        return None;
+    }
+    let mut at = 1;
+    let mut members = Vec::with_capacity(count);
+    for _ in 0..count {
+        if bytes.len().checked_sub(at)? < 65 {
+            return None;
+        }
+        let fingerprint = hex_lower(&bytes[at..at + 32]);
+        at += 32;
+        let signing_key = bytes[at..at + 32].to_vec();
+        at += 32;
+        let nick_len = bytes[at] as usize;
+        at += 1;
+        if nick_len > 64 || bytes.len().checked_sub(at)? < nick_len {
+            return None;
+        }
+        let nickname = String::from_utf8(bytes[at..at + nick_len].to_vec()).ok()?;
+        at += nick_len;
+        members.push(Member {
+            peer: fingerprint[..16].to_owned(),
+            fingerprint,
+            signing_key,
+            nickname,
+        });
+    }
+    (at == bytes.len()).then_some(members)
+}
+
 impl LeaveNotice {
     pub(super) fn preimage(&self) -> Option<Vec<u8>> {
         serde_json::to_vec(&LeavePreimage {
@@ -10,12 +100,10 @@ impl LeaveNotice {
         })
         .ok()
     }
-
     pub fn encode(&self) -> Result<String, MeshError> {
         let bytes = serde_json::to_vec(self).map_err(|_| failure("invalid leave notice"))?;
         Ok(format!("{LEAVE_MAGIC}{}", URL_SAFE_NO_PAD.encode(bytes)))
     }
-
     pub fn decode(text: &str) -> Option<Self> {
         let encoded = text.strip_prefix(LEAVE_MAGIC)?;
         if encoded.len() > 1024 {
@@ -29,115 +117,37 @@ impl EpochProof {
     pub fn channel_id(&self) -> &str {
         &self.id
     }
-
-    pub fn matches(&self, state: &PrivateChannel) -> bool {
-        self.epoch == state.epoch && self.signature == state.signature
-    }
-
-    pub fn encode(&self) -> Option<Vec<u8>> {
-        let mut bytes = b"CHTRPCH3".to_vec();
-        bytes.extend(serde_json::to_vec(self).ok()?);
-        (bytes.len() <= 4096).then_some(bytes)
-    }
-
-    pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if !bytes.starts_with(b"CHTRPCH3") || bytes.len() > 4096 {
-            return None;
-        }
-        serde_json::from_slice(&bytes[8..]).ok()
-    }
-
-    pub fn verified_for(&self, state: &PrivateChannel) -> bool {
-        if self.domain != "chatter.mesh.private.roster.v2"
-            || self.id != state.id
-            || self.creator != state.creator
-            || self.creator_static != state.creator_static
-            || self.epoch == 0
-            || self.previous_hash.len() != 32
-            || self.signature.len() != 64
-            || self.members.len() > MAX_MEMBERS
-            || self.members.is_empty()
-            || self.members[0].peer != state.creator
-            || self.members[0].signing_key != state.creator_key
-        {
-            return false;
-        }
-        let Ok(key) = <[u8; 32]>::try_from(state.creator_key.as_slice()) else {
-            return false;
-        };
-        let Ok(sig) = <[u8; 64]>::try_from(self.signature.as_slice()) else {
-            return false;
-        };
-        let preimage = EpochPreimage {
-            domain: "chatter.mesh.private.roster.v2",
-            id: &self.id,
-            name: &self.name,
-            creator: &self.creator,
-            creator_static: &self.creator_static,
-            epoch: self.epoch,
-            members: &self.members,
-            previous_hash: &self.previous_hash,
-        };
-        serde_json::to_vec(&preimage).is_ok_and(|bytes| verify_bytes(&sig, &bytes, &key))
-    }
-
-    pub fn epoch(&self) -> u64 {
+    pub fn epoch(&self) -> u32 {
         self.epoch
     }
-}
-
-impl SenderDistribution {
-    pub(super) fn preimage(&self) -> Option<Vec<u8>> {
-        serde_json::to_vec(&(
-            self.domain.as_str(),
-            &self.id,
-            &self.roster_hash,
-            &self.sender,
-            self.generation,
-            &self.key,
-            &self.removal_hash,
-        ))
-        .ok()
+    pub fn matches(&self, state: &PrivateChannel) -> bool {
+        self.epoch == state.epoch && self.signature == state.hint_signature
     }
-    pub fn encode(&self) -> Option<Zeroizing<Vec<u8>>> {
-        let mut out = Zeroizing::new(DISTRIBUTION_MAGIC.to_vec());
+    pub fn encode(&self) -> Option<Vec<u8>> {
+        let mut out = b"CHTRPCH4".to_vec();
         out.extend(serde_json::to_vec(self).ok()?);
-        (out.len() <= 4096).then_some(out)
+        (out.len() <= 512).then_some(out)
     }
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if !bytes.starts_with(DISTRIBUTION_MAGIC) || bytes.len() > 4096 {
-            return None;
-        }
-        serde_json::from_slice(&bytes[8..]).ok()
+        serde_json::from_slice(bytes.strip_prefix(b"CHTRPCH4")?).ok()
     }
-    pub fn verify(&self, state: &PrivateChannel, claimed: &PeerId) -> bool {
-        if self.domain != "chatter.mesh.private.sender.distribution.v1"
-            || self.id != state.id
-            || self.sender != claimed.as_str()
-            || self.roster_hash != state.chain_hash().unwrap_or_default()
-            || self.key.len() != 32
-            || self.generation == 0
-            || self.signature.len() != 64
-            || self.removal_hash != state.removal_hash()
-            || state.member_key(claimed).is_none()
-        {
+    pub fn verified_for(&self, state: &PrivateChannel) -> bool {
+        if self.id != state.id || self.epoch == 0 {
             return false;
         }
-        let Some(key) = state.member_key(claimed) else {
+        let mut content = b"chatter.mesh.group.epoch-hint.v1".to_vec();
+        let Some(id) = state.group_id() else {
             return false;
         };
-        let Ok(sig) = <[u8; 64]>::try_from(self.signature.as_slice()) else {
+        content.extend(id);
+        content.extend(self.epoch.to_be_bytes());
+        let (Ok(key), Ok(sig)) = (
+            <[u8; 32]>::try_from(state.creator_key.as_slice()),
+            <[u8; 64]>::try_from(self.signature.as_slice()),
+        ) else {
             return false;
         };
-        self.preimage()
-            .is_some_and(|bytes| verify_bytes(&sig, &bytes, &key))
-    }
-    pub fn ack(&self) -> Option<Vec<u8>> {
-        let mut out = DISTRIBUTION_ACK_MAGIC.to_vec();
-        out.extend(uuid::Uuid::parse_str(&self.id).ok()?.as_bytes());
-        out.extend(&self.roster_hash);
-        out.extend(&self.generation.to_be_bytes());
-        Some(out)
+        verify_bytes(&sig, &content, &key)
     }
 }
 
@@ -198,8 +208,12 @@ impl Invite {
         let take = |at: usize, len: usize| fixed[at..at + len].to_vec();
         let invite = Self {
             channel_id: uuid::Uuid::from_slice(&fixed[..16]).ok()?.to_string(),
-            creator: PeerId::from_bytes(fixed[16..24].try_into().ok()?).as_str().to_owned(),
-            target: PeerId::from_bytes(fixed[24..32].try_into().ok()?).as_str().to_owned(),
+            creator: PeerId::from_bytes(fixed[16..24].try_into().ok()?)
+                .as_str()
+                .to_owned(),
+            target: PeerId::from_bytes(fixed[24..32].try_into().ok()?)
+                .as_str()
+                .to_owned(),
             creator_key: take(32, 32),
             creator_static: take(64, 32),
             nonce: take(96, 16),
@@ -241,6 +255,8 @@ impl Invite {
         if !bytes.starts_with(b"CHTRPCR2") || bytes.len() > 1032 {
             return None;
         }
-        serde_json::from_slice::<Self>(&bytes[8..]).ok()?.validated(now)
+        serde_json::from_slice::<Self>(&bytes[8..])
+            .ok()?
+            .validated(now)
     }
 }

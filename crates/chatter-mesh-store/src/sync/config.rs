@@ -13,10 +13,12 @@ pub struct SyncConfig {
     pub gcs_target_fpr: f64,
     /// Freshness window for fragments, file transfers and announces.
     pub max_message_age_secs: u64,
-    /// Freshness window for whole public messages and group messages — the
-    /// town-crier window. Must not exceed the receive side's acceptance window, or
+    /// Freshness window for whole public messages — the town-crier window.
+    /// Must not exceed the receive side's acceptance window, or
     /// packets we serve would be dropped as stale by the peer that asked for them.
     pub public_message_max_age_secs: u64,
+    /// Bitchat private group gossip window (900 seconds).
+    pub group_message_max_age_secs: u64,
     /// Freshness window for prekey bundles.
     pub prekey_bundle_max_age_secs: u64,
     /// How often stale-announce cleanup runs, in seconds.
@@ -49,6 +51,7 @@ impl Default for SyncConfig {
             gcs_target_fpr: 0.01,
             max_message_age_secs: 15 * 60,
             public_message_max_age_secs: 6 * 60 * 60,
+            group_message_max_age_secs: 900,
             prekey_bundle_max_age_secs: 24 * 60 * 60,
             stale_peer_cleanup_interval_secs: 60,
             stale_peer_timeout_secs: STALE_PEER_TIMEOUT_SECS,

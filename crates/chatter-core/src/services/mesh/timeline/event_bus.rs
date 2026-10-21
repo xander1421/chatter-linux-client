@@ -18,6 +18,9 @@ impl MeshEvents {
     pub fn open_private_channel(&self, id: &str, name: &str) {
         self.timeline.open_private_channel(id, name);
     }
+    pub fn close_private_channel(&self, id: &str) {
+        self.timeline.close_private_channel(id);
+    }
     /// Signal receive must know the row reached SQLCipher before committing its
     /// ratchet and dedup marker. A failed insert leaves the receive journal for
     /// rollback/replay and never emits a delivery receipt.

@@ -399,14 +399,6 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
-    pub fn mesh_private_channel_missing_keys(
-        &self,
-        id: &str,
-    ) -> Result<usize, crate::services::mesh::MeshError> {
-        self.mesh().private_channel_missing_keys(id)
-    }
-
-    #[cfg(feature = "mesh")]
     pub fn mesh_join_channel(
         &self,
         name: &str,

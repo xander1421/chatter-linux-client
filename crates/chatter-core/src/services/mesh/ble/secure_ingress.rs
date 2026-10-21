@@ -66,8 +66,17 @@ impl BleRuntime {
                 }
             }
             if let Ok(states) = self.private_channels.list() {
-                for mut state in states {
-                    if state.member_key(&self.identity.peer_id()).is_some()
+                for state in states {
+                    if state.creator == self.identity.peer_id().as_str()
+                        && state
+                            .removed_members
+                            .iter()
+                            .any(|peer| peer == claimed.as_str())
+                        && let Ok(bytes) = state.removed_update_bytes(&self.identity)
+                    {
+                        self.send_group_state(claimed, &bytes, false).await;
+                    }
+                    if state.creator == self.identity.peer_id().as_str()
                         && state.member_key(claimed).is_some()
                     {
                         for notice in &state.departed {
@@ -86,21 +95,7 @@ impl BleRuntime {
                         if !state.stale
                             && let Ok(bytes) = state.update_bytes()
                         {
-                            self.send_private_control(claimed, &bytes).await;
-                        }
-                        if state
-                            .pending_distributions
-                            .iter()
-                            .any(|peer| peer == claimed.as_str())
-                            && let Some(distribution) =
-                                state.distribution(&self.identity).and_then(|d| d.encode())
-                        {
-                            state.reset_distribution_attempt(claimed.as_str());
-                            if state.mark_distribution_attempt(claimed.as_str())
-                                && self.private_channels.save(&state).is_ok()
-                            {
-                                self.send_private_control(claimed, &distribution).await;
-                            }
+                            self.send_group_state(claimed, &bytes, false).await;
                         }
                     }
                 }
@@ -284,44 +279,6 @@ impl BleRuntime {
             self.on_private_join_request(claimed, invite).await;
             return;
         }
-        if let Some(update) = PrivateChannel::decode_update(&plaintext) {
-            self.on_private_epoch(claimed, update).await;
-            return;
-        }
-        if let Some(distribution) = SenderDistribution::decode(&plaintext) {
-            if let Ok(Some(mut state)) = self.private_channels.load(&distribution.id) {
-                if distribution.verify(&state, claimed) {
-                    let changed = state.accept_distribution(&distribution, claimed);
-                    if changed && self.private_channels.save(&state).is_ok() {
-                        self.events.send(MeshEvent::PrivateChannelChanged);
-                    }
-                    if let Some(ack) = distribution.ack() {
-                        self.send_private_control(claimed, &ack).await;
-                    }
-                }
-            }
-            return;
-        }
-        if plaintext.len() == 64 && plaintext.starts_with(b"CHTRPSA3") {
-            if let Ok(id) = uuid::Uuid::from_slice(&plaintext[8..24]) {
-                if let Ok(Some(mut state)) = self.private_channels.load(&id.to_string()) {
-                    if state.member_key(claimed).is_some()
-                        && state.chain_hash().ok().as_deref() == Some(&plaintext[24..56])
-                        && state.sender_keys.iter().any(|key| {
-                            key.peer == self.identity.peer_id().as_str()
-                                && key.generation.to_be_bytes() == plaintext[56..64]
-                        })
-                    {
-                        state
-                            .pending_distributions
-                            .retain(|peer| peer != claimed.as_str());
-                        state.reset_distribution_attempt(claimed.as_str());
-                        let _ = self.private_channels.save(&state);
-                    }
-                }
-            }
-            return;
-        }
         if let Some(proof) = EpochProof::decode(&plaintext) {
             self.on_private_epoch_hint(claimed, proof).await;
             return;
@@ -341,9 +298,9 @@ impl BleRuntime {
             }
             return;
         }
-        if plaintext.len() == 32 && plaintext.starts_with(b"CHTRPLA1") {
+        if plaintext.len() == 28 && plaintext.starts_with(b"CHTRPLA1") {
             if let Ok(id) = uuid::Uuid::from_slice(&plaintext[8..24]) {
-                let epoch = u64::from_be_bytes(plaintext[24..32].try_into().expect("leave epoch"));
+                let epoch = u32::from_be_bytes(plaintext[24..28].try_into().expect("leave epoch"));
                 let _ = self
                     .private_channels
                     .clear_pending_leave(&id.to_string(), epoch, claimed);
@@ -359,6 +316,11 @@ impl BleRuntime {
             return;
         };
         match payload_type {
+            NoisePayloadType::GroupInvite | NoisePayloadType::GroupKeyUpdate => {
+                if let Some(update) = PrivateChannel::decode_update(body) {
+                    self.on_private_epoch(claimed, update).await;
+                }
+            }
             NoisePayloadType::PrivateMessage => {
                 let Ok(message) = PrivateMessagePacket::decode(body) else {
                     return;

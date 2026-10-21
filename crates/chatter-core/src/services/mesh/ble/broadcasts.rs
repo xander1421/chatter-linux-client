@@ -96,6 +96,19 @@ impl BleRuntime {
         self.transmit(&packet, Some(peer), None).await;
     }
 
+    pub(super) async fn send_group_state(&mut self, peer: &PeerId, bytes: &[u8], invite: bool) {
+        let kind = if invite {
+            NoisePayloadType::GroupInvite
+        } else {
+            NoisePayloadType::GroupKeyUpdate
+        };
+        self.send_private_control(
+            peer,
+            &chatter_mesh::packet::encode_noise_payload(kind, bytes),
+        )
+        .await;
+    }
+
     pub(super) async fn broadcast_private_channel(&mut self, id: &str, bytes: Vec<u8>) {
         let Ok(Some(state)) = self.private_channels.load(id) else {
             return;
@@ -104,17 +117,13 @@ impl BleRuntime {
             return;
         }
         let packet_sender = self.identity.peer_id();
-        let Some((message_id, content)) = state.decrypt(&packet_sender, &bytes) else {
+        let Some(opened) = state.decrypt(&bytes) else {
             return;
         };
+        let message_id = opened.id;
+        let content = opened.content;
         let sender = packet_sender.clone();
-        let packet = self.build_packet(
-            MessageType::ChatterPrivateChannel,
-            None,
-            bytes,
-            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-        );
-        let packet = self.maybe_sign(packet, true);
+        let packet = self.build_packet(MessageType::GroupMessage, None, bytes, 7);
         self.state
             .with(|s| s.self_broadcasts.record(&message_id, &packet, now_millis()));
         self.originate_broadcast(&packet).await;

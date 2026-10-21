@@ -120,7 +120,7 @@ impl BleRuntime {
                 self.send_private_control(&creator, &bytes).await
             }
             BleCommand::PrivateEpoch { peer, bytes } => {
-                self.send_private_control(&peer, &bytes).await
+                self.send_group_state(&peer, &bytes, false).await
             }
             BleCommand::PrivateChannelMessage { channel_id, bytes } => {
                 self.broadcast_private_channel(&channel_id, bytes).await
@@ -133,13 +133,7 @@ impl BleRuntime {
                 for peer in peers {
                     self.send_private_control(&peer, &notice).await;
                 }
-                let packet = self.build_packet(
-                    MessageType::ChatterPrivateChannel,
-                    None,
-                    broadcast,
-                    chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
-                );
-                let packet = self.maybe_sign(packet, true);
+                let packet = self.build_packet(MessageType::GroupMessage, None, broadcast, 7);
                 self.originate_broadcast(&packet).await;
             }
             BleCommand::FileTransfer { message_id, file } => {

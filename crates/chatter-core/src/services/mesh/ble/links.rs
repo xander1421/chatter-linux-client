@@ -370,17 +370,13 @@ impl BleRuntime {
         let private_fragment = if packet.message_type() == Some(MessageType::Fragment) {
             chatter_mesh::fragment::FragmentHeader::parse(&packet)
                 .ok()
-                .filter(|(header, _)| {
-                    header.original_type == MessageType::ChatterPrivateChannel.as_u8()
-                })
+                .filter(|(header, _)| header.original_type == MessageType::GroupMessage.as_u8())
         } else {
             None
         };
-        if packet.message_type() == Some(MessageType::ChatterPrivateChannel)
-            || private_fragment.is_some()
-        {
-            if packet.message_type() == Some(MessageType::ChatterPrivateChannel)
-                && packet.payload.len() > 1200
+        if packet.message_type() == Some(MessageType::GroupMessage) || private_fragment.is_some() {
+            if packet.message_type() == Some(MessageType::GroupMessage)
+                && packet.payload.len() > 4096
             {
                 return;
             }
@@ -667,7 +663,7 @@ impl BleRuntime {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => self.on_public_message(packet, claimed),
             Some(MessageType::ChannelMessage) => return self.on_channel_message(packet, claimed),
-            Some(MessageType::ChatterPrivateChannel) => {
+            Some(MessageType::GroupMessage) => {
                 return self.on_private_channel_message(packet, claimed);
             }
             Some(MessageType::Leave) => {
