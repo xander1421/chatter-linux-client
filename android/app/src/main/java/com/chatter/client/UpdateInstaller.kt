@@ -59,14 +59,26 @@ object UpdateInstaller {
                     val signatures = if (Build.VERSION.SDK_INT >= 28)
                         info.signingInfo?.apkContentsSigners?.toList() ?: emptyList()
                     else info.signatures?.toList() ?: emptyList()
-                    require(signatures.isNotEmpty()) { "APK signing certificate is missing" }
                     return signatures.map {
                         MessageDigest.getInstance("SHA-256").digest(it.toByteArray())
                             .joinToString("") { byte -> "%02x".format(byte) }
                     }.sorted()
                 }
-                require(signerDigests(archive) == signerDigests(installed)) {
-                    "Update APK signing certificate differs from installed app"
+                val installedSigners = signerDigests(installed)
+                require(installedSigners.isNotEmpty()) { "Installed app signing certificate is missing" }
+                val archiveSigners = signerDigests(archive)
+                if (archiveSigners.isEmpty()) {
+                    // Android 10 returns no signer info for a downloaded archive that
+                    // carries only a v2 signature (S9, ui161 -> ui162). The package
+                    // installer still refuses an update not signed by the installed
+                    // app's key (INSTALL_FAILED_UPDATE_INCOMPATIBLE), so continuity is
+                    // enforced there; this early check is the defence in depth.
+                    android.util.Log.w("UpdateInstaller",
+                        "archive signers unavailable on API ${Build.VERSION.SDK_INT}; relying on installer signer check")
+                } else {
+                    require(archiveSigners == installedSigners) {
+                        "Update APK signing certificate differs from installed app"
+                    }
                 }
                 val installer = manager.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
