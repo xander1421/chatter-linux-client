@@ -101,9 +101,11 @@ object UpdateInstaller {
                     throw error
                 }
             } catch (error: Exception) {
+                android.util.Log.w("UpdateInstaller", "update install refused before the system installer", error)
                 activity.runOnUiThread {
                     Toast.makeText(activity, error.message ?: "Update install failed", Toast.LENGTH_LONG).show()
                 }
+                UpdateInstallReceiver.reportFailure(error.message ?: "")
             }
         }
         return true
@@ -127,10 +129,19 @@ class UpdateInstallReceiver : BroadcastReceiver() {
         } else if (status != PackageInstaller.STATUS_SUCCESS) {
             val reason = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
             Toast.makeText(context, reason ?: "Update install failed", Toast.LENGTH_LONG).show()
-            // The library is loaded whenever an update was started from the app.
-            try { nativeOnInstallFailed(reason ?: "") } catch (_: UnsatisfiedLinkError) {}
+            android.util.Log.w("UpdateInstaller", "system installer status $status: $reason")
+            reportFailure(reason ?: "")
         }
     }
 
-    private external fun nativeOnInstallFailed(reason: String)
+    companion object {
+        /** Put the sidebar update pill into its error state with [reason]. */
+        fun reportFailure(reason: String) {
+            // The library is loaded whenever an update was started from the app.
+            try { nativeOnInstallFailed(reason) } catch (_: UnsatisfiedLinkError) {}
+        }
+
+        @JvmStatic
+        private external fun nativeOnInstallFailed(reason: String)
+    }
 }

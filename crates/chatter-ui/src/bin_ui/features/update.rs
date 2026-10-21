@@ -68,7 +68,7 @@ static INSTALL_WINDOW: std::sync::Mutex<Option<Weak<MainWindow>>> = std::sync::M
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_UpdateInstallReceiver_nativeOnInstallFailed(
     mut env: jni::EnvUnowned<'_>,
-    _this: jni::objects::JObject,
+    _class: jni::objects::JClass,
     reason: jni::objects::JString,
 ) {
     env.with_env(|env| -> jni::errors::Result<()> {
@@ -76,7 +76,7 @@ pub extern "system" fn Java_com_chatter_client_UpdateInstallReceiver_nativeOnIns
         let weak = INSTALL_WINDOW.lock().ok().and_then(|guard| guard.clone());
         if let Some(weak) = weak {
             let reason = if reason.is_empty() { "Update install failed".to_string() } else { reason };
-            show_error(weak, format!("System installer refused the update: {reason}"));
+            show_error(weak, format!("Update not installed: {reason}"));
         }
         Ok(())
     })
