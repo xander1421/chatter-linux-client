@@ -460,6 +460,22 @@ impl BleRuntime {
                     _ => None,
                 };
                 let Some(peer) = admitted else {
+                    // A packet addressed to us that we refuse is a conversation
+                    // that silently stops (a Noise opening from a restarted peer
+                    // never answered); debug is invisible on Android.
+                    let addressed_here = packet
+                        .recipient_id
+                        .is_some_and(|id| PeerId::from_bytes(&id) == local);
+                    if addressed_here {
+                        tracing::info!(
+                            target: "mesh::ble",
+                            %rejection,
+                            msg_type = packet.msg_type,
+                            claimed_sender = %claimed,
+                            bound_peer = ?bound,
+                            "directed packet rejected at ingress"
+                        );
+                    }
                     // `pending` is the whole of the RSR decision: a response is
                     // exempt from the freshness check only while we have an
                     // outstanding request to that peer. Printing the count next to
