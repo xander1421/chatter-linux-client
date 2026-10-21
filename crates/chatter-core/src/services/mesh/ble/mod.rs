@@ -209,7 +209,16 @@ pub struct BleRuntime {
     /// `le-connection-abort-by-local`. The blocking loop used to serialize this
     /// by accident.
     dial_in_flight: bool,
+    /// When each link last delivered a byte. A central link that hears
+    /// nothing is closed and redialled: after a peer restarted its mesh, Android
+    /// kept our GATT client attached to the peer's old server, the peer adopted
+    /// it, and nothing it notified ever arrived (S25 -> S9, ui160).
+    link_last_inbound_ms: std::collections::HashMap<LinkId, u64>,
 }
+
+/// Longer than two connected-announce periods (dense: 30 s + 8 s jitter), so a
+/// healthy idle link always hears from its peer within it.
+const SILENT_CENTRAL_LINK_MS: u64 = 90_000;
 
 /// The result of one connect attempt, delivered back to the loop.
 pub(super) struct DialOutcome {
@@ -274,6 +283,7 @@ impl BleRuntime {
             dial_tx,
             dial_rx: Some(dial_rx),
             dial_in_flight: false,
+            link_last_inbound_ms: std::collections::HashMap::new(),
             private_ingress: std::collections::HashMap::new(),
             private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),

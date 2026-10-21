@@ -235,6 +235,7 @@ impl BleRuntime {
     }
 
     async fn on_connected(&mut self, link: LinkId, role: LinkRole, max_write: usize) {
+        self.link_last_inbound_ms.insert(link.clone(), now_millis());
         self.state.with(|state| {
             state.links.link_up(link.clone(), role);
             // `Connected` means writable: the trait's contract is that an
@@ -255,6 +256,7 @@ impl BleRuntime {
 
     async fn on_disconnected(&mut self, link: &LinkId) {
         let now = now_millis();
+        self.link_last_inbound_ms.remove(link);
         let peer = self.state.with(|state| {
             let (moved, discarded) = rescue_link_writes(state, link, None);
             let peer = state.links.link_down(link);
@@ -286,6 +288,7 @@ impl BleRuntime {
 
     pub(super) async fn on_data(&mut self, link: &LinkId, bytes: Vec<u8>) {
         let now = now_millis();
+        self.link_last_inbound_ms.insert(link.clone(), now);
         let appended = self.state.with(|state| {
             let offset = state.assembler.buffered_bytes(link);
             state.last_traffic_ms = now;
