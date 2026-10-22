@@ -49,6 +49,11 @@ export struct PrivateChannelMemberData {
     status-label: string,
 }
 
+export struct PrivateChannelInviteData {
+    id: string,
+    name: string,
+}
+
 export global MeshGlobal {
     // The `mesh` Cargo feature is built in. Everything mesh hangs off this.
     in-out property <bool> enabled: false;
@@ -97,6 +102,7 @@ export global MeshGlobal {
     in-out property <image> private-invite-image;
     in-out property <bool> private-invite-visible: false;
     in-out property <[PrivateChannelMemberData]> private-removable-members: [];
+    in-out property <[PrivateChannelInviteData]> private-invitable-channels: [];
     in-out property <string> private-remove-pending: "";
     in-out property <bool> private-leave-pending: false;
     in-out property <bool> private-can-manage: false;
