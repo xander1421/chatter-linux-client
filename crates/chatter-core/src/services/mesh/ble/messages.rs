@@ -234,6 +234,8 @@ impl BleRuntime {
         };
         let author = opened.sender.clone();
         state.awaiting_rekey.retain(|peer| peer != author.as_str());
+        state.unanswered_direct_invites.remove(author.as_str());
+        state.unanswered_expired.retain(|peer| peer != author.as_str());
         if !state.record_message(&opened.id) || self.private_channels.save(&state).is_err() {
             return true;
         }
@@ -406,7 +408,10 @@ impl BleRuntime {
                 let name = update.name.clone();
                 let inserted = self.state.with(|s| {
                     s.pending_group_invites
-                        .retain(|_, pending| now.saturating_sub(pending.received_at) < 600);
+                        .retain(|_, pending| {
+                            now.saturating_sub(pending.received_at)
+                                < super::super::DIRECT_INVITE_LIFETIME_SECS
+                        });
                     let count = s
                         .pending_group_invites
                         .values()
@@ -501,6 +506,21 @@ impl BleRuntime {
         }
     }
 
+    pub(super) fn on_private_decline(&mut self, claimed: &PeerId, notice: LeaveNotice) {
+        let Ok(Some(mut state)) = self.private_channels.load(&notice.id) else {
+            return;
+        };
+        if state.creator != self.identity.peer_id().as_str()
+            || notice.peer != claimed.as_str()
+            || !state.verify_leave(&notice)
+            || state.rotate(&self.identity, None, Some(claimed)).is_err()
+            || self.private_channels.save(&state).is_err()
+        {
+            return;
+        }
+        self.events.send(MeshEvent::PrivateChannelChanged);
+    }
+
     pub(super) fn on_private_leave(&mut self, claimed: &PeerId, notice: LeaveNotice) -> bool {
         let Ok(Some(mut state)) = self.private_channels.load(&notice.id) else {
             return false;
@@ -566,6 +586,10 @@ impl BleRuntime {
             return;
         }
         state.awaiting_rekey.retain(|peer| peer != claimed.as_str());
+        state.unanswered_direct_invites.remove(claimed.as_str());
+        state
+            .unanswered_expired
+            .retain(|peer| peer != claimed.as_str());
         if self.private_channels.save(&state).is_ok() {
             self.events.send(MeshEvent::PrivateChannelChanged);
         }

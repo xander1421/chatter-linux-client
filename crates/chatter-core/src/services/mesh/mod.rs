@@ -126,12 +126,13 @@ use transport::{BleCommand, NostrCommand};
 /// Generous: a mesh in a crowded room produces bursts, and a UI that was busy
 /// rendering should not lose messages because of it.
 const EVENT_CAPACITY: usize = 512;
+const DIRECT_INVITE_LIFETIME_SECS: u64 = 600;
 
 /// A member the channel creator can remove, with the name shown in the roster.
 pub struct PrivateChannelMember {
     pub peer_id: String,
     pub display_name: String,
-    pub awaiting_rekey: bool,
+    pub status_label: &'static str,
 }
 
 /// Everything [`MeshService`] needs from the rest of the client.

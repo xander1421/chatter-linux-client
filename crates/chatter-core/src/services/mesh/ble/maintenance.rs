@@ -10,7 +10,10 @@ impl BleRuntime {
             let expired: Vec<_> = state
                 .pending_group_invites
                 .iter()
-                .filter(|(_, pending)| now_s.saturating_sub(pending.received_at) >= 600)
+                .filter(|(_, pending)| {
+                    now_s.saturating_sub(pending.received_at)
+                        >= super::super::DIRECT_INVITE_LIFETIME_SECS
+                })
                 .map(|(id, _)| id.clone())
                 .collect();
             for id in &expired {
@@ -48,12 +51,44 @@ impl BleRuntime {
                         }
                         self.events.send(MeshEvent::PrivateChannelChanged);
                     }
+                    if channel.creator == self.identity.peer_id().as_str() {
+                        let newly_expired: Vec<_> = channel
+                            .unanswered_direct_invites
+                            .iter()
+                            .filter(|(peer, at)| {
+                                now_s.saturating_sub(**at)
+                                    >= super::super::DIRECT_INVITE_LIFETIME_SECS
+                                    && !channel.unanswered_expired.contains(peer)
+                            })
+                            .map(|(peer, _)| (*peer).clone())
+                            .collect();
+                        if !newly_expired.is_empty() {
+                            for peer in &newly_expired {
+                                tracing::info!(target: "mesh::ble", group = %channel.id, %peer,
+                                    "private group invite unanswered; stopping epoch retries");
+                            }
+                            channel.unanswered_expired.extend(newly_expired);
+                            if self.private_channels.save(&channel).is_ok() {
+                                self.events.send(MeshEvent::PrivateChannelChanged);
+                            }
+                        }
+                    }
                     if !channel.stale
                         && channel.creator == self.identity.peer_id().as_str()
                         && !channel.awaiting_rekey.is_empty()
                         && let Ok(bytes) = channel.update_bytes()
                     {
                         for peer in &channel.awaiting_rekey {
+                            if channel
+                                .unanswered_direct_invites
+                                .get(peer)
+                                .is_some_and(|at| {
+                                    now_s.saturating_sub(*at)
+                                        >= super::super::DIRECT_INVITE_LIFETIME_SECS
+                                })
+                            {
+                                continue;
+                            }
                             self.send_group_state(&PeerId::from_str(peer), &bytes, false)
                                 .await;
                         }

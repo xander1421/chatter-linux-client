@@ -123,7 +123,9 @@ fn close_mesh_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
     clear_active(window);
     crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
-    window.global::<crate::SidebarPane>().set_active_tab("mesh".into());
+    window
+        .global::<crate::SidebarPane>()
+        .set_active_tab("mesh".into());
 }
 
 /// This device's mesh account id as a string, for "is this message mine?".
@@ -845,7 +847,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .map(|member| crate::PrivateChannelMemberData {
                         peer_id: member.peer_id.into(),
                         display_name: member.display_name.into(),
-                        awaiting_rekey: member.awaiting_rekey,
+                        status_label: member.status_label.into(),
                     })
                     .collect();
                 global.set_private_removable_members(ModelRc::new(VecModel::from(members)));

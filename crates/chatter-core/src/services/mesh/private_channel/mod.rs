@@ -48,6 +48,11 @@ pub struct PrivateChannel {
     pub pending_invites: Vec<Invite>,
     #[serde(default)]
     pub awaiting_rekey: Vec<String>,
+    /// Creator-local first invitations still waiting for their first epoch ack.
+    #[serde(default)]
+    pub unanswered_direct_invites: std::collections::HashMap<String, u64>,
+    #[serde(default)]
+    pub unanswered_expired: Vec<String>,
     #[serde(default)]
     pub stale: bool,
     #[serde(default)]
