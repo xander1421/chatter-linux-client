@@ -205,6 +205,10 @@ impl BleRuntime {
                     } else {
                         state.scheduler.note_connect_failed(address, now);
                     }
+                    // A queued advert predating this failure may name a rotated
+                    // private address that no longer exists. Only a fresh scan
+                    // result may put it back in the queue for another dial.
+                    state.scheduler.remove_candidate(address);
                 });
                 // A timeout is worth saying out loud; an outright failure is not.
                 // A peer that walked out of range is ordinary churn and would
