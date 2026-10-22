@@ -222,17 +222,6 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        // The media scrim is dark in both app themes; keep system-bar icons legible.
-        if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.setSystemBarsAppearance(
-                0,
-                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-            )
-        } else {
-            window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
-                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
-        }
         token = intent.getLongExtra("video-token", 0)
         if (!nativeVideoTokenIsCurrent(token)) { finish(); return }
         title = intent.getStringExtra("video-title") ?: "Video"
@@ -280,6 +269,19 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
         frame.addView(videoView, FrameLayout.LayoutParams(-1, -1, Gravity.TOP or Gravity.START))
         makeChrome(title.toString())
         setContentView(frame)
+        // After setContentView: before it the decor view does not exist and
+        // Window.getInsetsController() throws on Android 16.
+        // The media scrim is dark in both app themes; keep system-bar icons legible.
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.insetsController?.setSystemBarsAppearance(
+                0,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            )
+        } else {
+            window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
+                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+        }
         frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitSurface() }
         videoView.holder.addCallback(this)
         if (token <= 0 || nativeVideoSize(token) <= 0) fail(FailureStage.SOURCE_VALIDATION)
