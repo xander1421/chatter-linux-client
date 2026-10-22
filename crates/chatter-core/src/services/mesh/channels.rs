@@ -131,6 +131,14 @@ impl MeshService {
                     "peer identity differs from the group roster".into(),
                 ));
             }
+            if state.unanswered_direct_invites.contains_key(peer.as_str()) {
+                state
+                    .unanswered_direct_invites
+                    .insert(peer.to_string(), now_secs());
+                state.unanswered_expired.retain(|old| old != peer.as_str());
+                self.private_channels.save(&state)?;
+                self.events.send(MeshEvent::PrivateChannelChanged);
+            }
             return self
                 .ble
                 .send(BleCommand::PrivateInvite {
@@ -146,6 +154,9 @@ impl MeshService {
             nickname: nickname.unwrap_or_else(|| peer.to_string()),
         };
         state.rotate(&self.identity, Some(member), None)?;
+        state
+            .unanswered_direct_invites
+            .insert(peer.to_string(), now_secs());
         self.private_channels.save(&state)?;
         let bytes = state.update_bytes()?;
         self.ble
@@ -172,7 +183,7 @@ impl MeshService {
         let now = now_secs();
         self.state.with(|s| {
             s.pending_group_invites
-                .retain(|_, p| now.saturating_sub(p.received_at) < 600);
+                .retain(|_, p| now.saturating_sub(p.received_at) < DIRECT_INVITE_LIFETIME_SECS);
             s.pending_group_invites
                 .values()
                 .filter(|p| {
@@ -197,11 +208,35 @@ impl MeshService {
             return Err(MeshError::Binding("invitation expired".into()));
         };
         if !join {
+            let state = &pending.state;
+            let creator = PeerId::from_str(&state.creator);
+            if now_secs().saturating_sub(pending.received_at) < DIRECT_INVITE_LIFETIME_SECS
+                && state.verify()
+                && state.member_key(&self.identity.peer_id())
+                    == Some(self.identity.signing_public())
+                && self.state.with(|s| s.sessions.remote_static(&creator))
+                    == state.creator_static.as_slice().try_into().ok()
+            {
+                // The leave notice already signs group ID, epoch, and roster peer.
+                // A separate Chatter control prefix keeps the decline off the iOS wire format.
+                let notice = state.leave_notice(&self.identity)?;
+                let mut bytes = b"CHTRPCD1".to_vec();
+                bytes.extend(
+                    serde_json::to_vec(&notice)
+                        .map_err(|_| MeshError::Binding("invalid decline notice".into()))?,
+                );
+                self.ble
+                    .send(BleCommand::PrivateDecline {
+                        peer: creator,
+                        notice: bytes,
+                    })
+                    .map_err(|_| MeshError::NotRunning)?;
+            }
             return Ok(());
         }
         let state = pending.state;
         let creator = PeerId::from_str(&state.creator);
-        if now_secs().saturating_sub(pending.received_at) >= 600
+        if now_secs().saturating_sub(pending.received_at) >= DIRECT_INVITE_LIFETIME_SECS
             || self.events.peer_blocked(&creator)
             || !state.verify()
             || state.member_key(&self.identity.peer_id()) != Some(self.identity.signing_public())
@@ -369,7 +404,13 @@ impl MeshService {
                 PrivateChannelMember {
                     peer_id: member.peer.clone(),
                     display_name,
-                    awaiting_rekey: state.awaiting_rekey.contains(&member.peer),
+                    status_label: if state.unanswered_expired.contains(&member.peer) {
+                        "Invite not answered"
+                    } else if state.awaiting_rekey.contains(&member.peer) {
+                        "Update pending"
+                    } else {
+                        "Current epoch"
+                    },
                 }
             })
             .collect())

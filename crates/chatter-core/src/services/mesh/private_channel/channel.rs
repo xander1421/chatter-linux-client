@@ -34,6 +34,8 @@ impl PrivateChannel {
             replay: vec![],
             pending_invites: vec![],
             awaiting_rekey: vec![],
+            unanswered_direct_invites: Default::default(),
+            unanswered_expired: vec![],
             stale: false,
             stale_epoch: 0,
             departed: vec![],
@@ -265,6 +267,8 @@ impl PrivateChannel {
             self.members.push(m);
         }
         if let Some(peer) = remove {
+            self.unanswered_direct_invites.remove(peer.as_str());
+            self.unanswered_expired.retain(|old| old != peer.as_str());
             self.members.retain(|m| m.peer != peer.as_str());
             if !self.removed_members.iter().any(|old| old == peer.as_str()) {
                 self.removed_members.push(peer.to_string());
@@ -358,6 +362,8 @@ impl PrivateChannel {
             replay: vec![],
             pending_invites: vec![],
             awaiting_rekey: vec![],
+            unanswered_direct_invites: Default::default(),
+            unanswered_expired: vec![],
             stale: false,
             stale_epoch: 0,
             departed: vec![],

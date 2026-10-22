@@ -93,6 +93,8 @@ impl BleRuntime {
                             self.send_private_control(claimed, &hint).await;
                         }
                         if !state.stale
+                            && !state.unanswered_direct_invites.get(claimed.as_str())
+                                .is_some_and(|at| now_secs().saturating_sub(*at) >= 600)
                             && let Ok(bytes) = state.update_bytes()
                         {
                             self.send_group_state(claimed, &bytes, false).await;
@@ -281,6 +283,12 @@ impl BleRuntime {
         }
         if let Some(proof) = EpochProof::decode(&plaintext) {
             self.on_private_epoch_hint(claimed, proof).await;
+            return;
+        }
+        if let Some(bytes) = plaintext.strip_prefix(b"CHTRPCD1") {
+            if let Ok(notice) = serde_json::from_slice::<LeaveNotice>(bytes) {
+                self.on_private_decline(claimed, notice);
+            }
             return;
         }
         if let Some(bytes) = plaintext.strip_prefix(b"CHTRPCL2") {
