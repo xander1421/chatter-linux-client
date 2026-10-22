@@ -50,6 +50,9 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     // Reveal the message pane the way every other conversation does; on a
     // phone this is the only thing that leaves the chat list.
     crate::bin_ui::features::sidebar::show_chat_pane(&window.as_weak());
+    // The shared opener clears pushed screens; restore the mesh destination
+    // so Back from this conversation returns to its own list.
+    window.global::<crate::SidebarPane>().set_active_tab("mesh".into());
 
     // Give the None-backed mesh scope a distinct composer owner before any
     // header clear. This also parks a server quote before leaving its view.

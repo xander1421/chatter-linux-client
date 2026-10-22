@@ -13,7 +13,8 @@ export component SidebarFooter inherits GlassSurface {
     in property <length> panel-height;
     in property <bool> collapsed;
     in property <bool> touch;
-    in property <bool> rail-has-mesh;
+    in property <bool> mesh-available;
+    in property <string> active-tab;
     in property <int> rail-button-count;
     in property <length> rail-icon-size;
     in property <length> rail-slot-size;
@@ -30,6 +31,7 @@ export component SidebarFooter inherits GlassSurface {
     callback toggle-collapsed();
     callback anon-mode-clicked();
     callback channel-selected(string);
+    callback tab-selected(string);
 
             // Bound backdrop and shadow painting to this chrome silhouette.
             clip: true;
@@ -78,6 +80,26 @@ export component SidebarFooter inherits GlassSurface {
                             }
                         }
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                }
+                // The expanded desktop sidebar keeps both list destinations
+                // reachable without first collapsing to the rail.
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: root.active-tab == "chats" ? Colors.row-selected : chats-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Chats";
+                        Image { source: Icons.message-circle; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        chats-touch := TouchArea { clicked => { root.tab-selected("chats"); } }
+                    }
+                }
+                if root.mesh-available: VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: root.active-tab == "mesh" ? Colors.row-selected : mesh-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Mesh";
+                        Image { source: Icons.radio; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        mesh-touch := TouchArea { clicked => { root.tab-selected("mesh"); } }
                     }
                 }
                 // The gear opens the account menu (Settings is pushed from
@@ -145,11 +167,9 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.anon-mode-clicked(); } }
                     } }
                 }
-                // Bottom cluster, in order: AI, Mesh, expand, Settings.
+                // Bottom cluster, in order: AI, Chats, Mesh, expand, Settings.
                 // The expand chevron lives here rather than in the panel header
-                // so the three things reached most often on a phone — the AI
-                // channel, the mesh room, and the full conversation list — sit
-                // together under the thumb.
+                // so the list destinations stay beside the other shortcuts.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
@@ -161,23 +181,30 @@ export component SidebarFooter inherits GlassSurface {
                     } }
                 }
 
-                if root.rail-has-mesh: TooltipArea {
+                TooltipArea {
+                    height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
+                    tooltip-text: "Chats"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                        background: root.active-tab == "chats" ? Colors.row-selected : root.rail-slot-bg;
+                        Image { source: Icons.message-circle; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        TouchArea { clicked => { root.tab-selected("chats"); } }
+                    } }
+                }
+
+                if root.mesh-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.active-tab == "mesh" ? Colors.row-selected : root.rail-slot-bg;
                         Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: !MeshGlobal.radio-running ? Colors.warning
                                 : MeshGlobal.peer-count > 0 ? Colors.primary
                                 : Colors.text-secondary; }
-                        // First entry is the public room — the mesh list is
-                        // built with it at the head.
-                        TouchArea { clicked => { MeshGlobal.conversation-selected(MeshGlobal.conversations[0].id); } }
+                        TouchArea { clicked => { root.tab-selected("mesh"); } }
                     } }
                 }
 
-                // A visible seam between "situational shortcuts" (Anon Mode,
-                // AI, Mesh — above) and "always there" navigation (expand,
-                // Settings, Profile — below). Six identical unlabeled slots
+                // A visible seam between list destinations and the panel
+                // controls below. Several identical unlabeled slots
                 // in one unbroken stack read as one big undifferentiated
                 // block; a hairline plus extra breathing room lets the eye
                 // parse two small groups instead, without hiding anything.

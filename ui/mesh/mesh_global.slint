@@ -8,7 +8,7 @@
 // `chatter-core` produced. No mesh surface derives state of its own: the view
 // picks wording, never facts.
 
-// One row in the mesh section of the sidebar.
+// One row in the Mesh destination.
 //
 // Mirrors the Rust `MeshRow` in `bin_ui/features/mesh/core_api.rs`.
 export struct MeshConversationData {
@@ -52,6 +52,7 @@ export struct PrivateChannelMemberData {
 export global MeshGlobal {
     // The `mesh` Cargo feature is built in. Everything mesh hangs off this.
     in-out property <bool> enabled: false;
+    in-out property <int> unread-count: 0;
 
     // The user's own switch, distinct from `enabled` above and from `running`
     // below. `enabled` is what was compiled; this is what was asked for.

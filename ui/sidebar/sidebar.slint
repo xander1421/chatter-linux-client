@@ -49,6 +49,7 @@ export component Sidebar inherits Rectangle {
     // The overlay animates from this row; the row stays in layout but its
     // glass and label recede while the one native search input takes over.
     in property <bool> search-overlay-open: false;
+    in property <string> active-tab: "chats";
     // Compact (phone-width) layout: the panel IS the screen and the bottom tab
     // bar carries Contacts, Calls and Profile. Not "is a phone": a tablet
     // shows this panel beside the chat, with its own footer, like desktop.
@@ -82,7 +83,7 @@ export component Sidebar inherits Rectangle {
         if (now-visible != root.requests-row-was-visible) {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
-            if (central-scroll.viewport-y < -requests-anchor.y) {
+            if (root.active-tab == "chats" && central-scroll.viewport-y < -requests-anchor.y) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
             }
             root.requests-row-was-visible = now-visible;
@@ -107,6 +108,7 @@ export component Sidebar inherits Rectangle {
     callback toggle-collapsed();
     callback settings-clicked();
     callback mesh-setup-clicked();
+    callback tab-selected(string);
     callback anon-mode-clicked();
     callback create-section-clicked();
     // The two-pane '+' in the header row: opens New Chat / New Channel /
@@ -182,9 +184,8 @@ export component Sidebar inherits Rectangle {
     property <length> rail-slot-size: root.touch ? 44px : 32px;
     property <length> rail-slot-radius: 12px;
     property <brush> rail-slot-bg: Colors.surface-control;
-    property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
-    // AI, Mesh (conditional), expand, Settings, anon shield, profile.
-    property <int> rail-button-count: root.rail-has-mesh ? 6 : 5;
+    // Shield, AI, Chats, Mesh (when compiled), expand, Settings, profile.
+    property <int> rail-button-count: MeshGlobal.enabled ? 7 : 6;
 
     // Context menu state
     property <bool> ctx-menu-show: false;
@@ -284,6 +285,9 @@ export component Sidebar inherits Rectangle {
                     : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
                         + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md;
 
+                requests-anchor := Rectangle { height: 0px; }
+                if root.active-tab != "mesh": VerticalLayout {
+                    spacing: 0px;
                 // QUICK LINKS (top navigation)
 
                 // Search's rail slot. The expanded row is pinned above the
@@ -441,7 +445,6 @@ export component Sidebar inherits Rectangle {
                 // as tabs already built into the Friends modal's Requests
                 // tab (requests-sub-tab: received/sent/private/groups/
                 // channels) — nothing lost, just not all surfaced at once.
-                requests-anchor := Rectangle { height: 0px; }
                 if root.total-pending-requests > 0: Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
@@ -584,19 +587,7 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                // 6. MESH — the public room, every joined geohash cell, and mesh
-                // DMs. A peer of the sections above, not a mode: same list, same
-                // item shape, distinguished by `ConversationType` on the Rust
-                // side exactly as anon DMs are. Present in both normal and anon
-                // mode — the mesh needs no server either way.
-                if MeshGlobal.enabled: MeshList {
-                    vertical-stretch: 0;
-                    collapsed: root.collapsed;
-                    touch: root.touch;
-                    setup-requested => { root.mesh-setup-clicked(); }
-                }
-
-                // 6b. CUSTOM SECTIONS — user-created folders, below the chat list and mesh
+                // CUSTOM SECTIONS — user-created server conversation folders
                 CustomSectionList {
                     vertical-stretch: 0;
                     sections: root.custom-sections;
@@ -629,8 +620,17 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
+                }
+
+                if root.active-tab == "mesh" && MeshGlobal.enabled: MeshList {
+                    vertical-stretch: 0;
+                    collapsed: root.collapsed;
+                    touch: root.touch;
+                    setup-requested => { root.mesh-setup-clicked(); }
+                }
+
                 Rectangle { vertical-stretch: 1; }
-                // An actual scroll-content item keeps the final Mesh or folder
+                // An actual scroll-content item keeps the final row or folder
                 // control above the floating create button at the scroll limit.
                 if root.mobile-mode: Rectangle {
                     height: root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
@@ -638,7 +638,7 @@ export component Sidebar inherits Rectangle {
                 }
             }
         }
-        if !root.collapsed: SidebarHeader {
+        if !root.collapsed && root.active-tab != "mesh": SidebarHeader {
             panel-width: root.width;
             top-row-height: root.top-row-height;
             quick-link-inset: root.quick-link-inset;
@@ -657,12 +657,38 @@ export component Sidebar inherits Rectangle {
             anon-mode-clicked => { root.anon-mode-clicked(); }
         }
 
+        if !root.collapsed && root.active-tab == "mesh": Rectangle {
+            width: root.width;
+            height: root.top-row-height;
+            background: root.touch ? transparent : Colors.surface;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                Text {
+                    text: "Mesh";
+                    color: Colors.text-primary;
+                    font-size: Typography.lg;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: MeshGlobal.peer-count == 1 ? "1 nearby" : MeshGlobal.peer-count + " nearby";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
         if !root.mobile-mode: SidebarFooter {
             panel-width: root.width;
             panel-height: root.height;
             collapsed: root.collapsed;
             touch: root.touch;
-            rail-has-mesh: root.rail-has-mesh;
+            mesh-available: MeshGlobal.enabled;
+            active-tab: root.active-tab;
             rail-button-count: root.rail-button-count;
             rail-icon-size: root.rail-icon-size;
             rail-slot-size: root.rail-slot-size;
@@ -679,6 +705,7 @@ export component Sidebar inherits Rectangle {
             toggle-collapsed => { root.collapsed = !root.collapsed; root.toggle-collapsed(); }
             anon-mode-clicked => { root.anon-mode-clicked(); }
             channel-selected(id) => { root.channel-selected(id); }
+            tab-selected(tab) => { root.tab-selected(tab); }
         }
 
         // 7. BOTTOM UTILITY BAR — shared chrome material.
