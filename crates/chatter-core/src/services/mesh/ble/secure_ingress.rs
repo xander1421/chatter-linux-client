@@ -318,7 +318,8 @@ impl BleRuntime {
         match payload_type {
             NoisePayloadType::GroupInvite | NoisePayloadType::GroupKeyUpdate => {
                 if let Some(update) = PrivateChannel::decode_update(body) {
-                    self.on_private_epoch(claimed, update).await;
+                    let invite = payload_type == NoisePayloadType::GroupInvite;
+                    self.on_private_epoch(claimed, update, invite).await;
                 }
             }
             NoisePayloadType::PrivateMessage => {

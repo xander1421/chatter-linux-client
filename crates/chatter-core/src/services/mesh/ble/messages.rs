@@ -329,7 +329,14 @@ impl BleRuntime {
         self.events.send(MeshEvent::PrivateChannelChanged);
     }
 
-    pub(super) async fn on_private_epoch(&mut self, claimed: &PeerId, mut update: PrivateChannel) {
+    /// `invite` is a direct GroupInvite (0x06). Only that may raise a Join/Decline prompt; the creator's
+    /// 10 s GroupKeyUpdate (0x07) re-sends refresh a pending prompt but never re-raise a declined one.
+    pub(super) async fn on_private_epoch(
+        &mut self,
+        claimed: &PeerId,
+        mut update: PrivateChannel,
+        invite: bool,
+    ) {
         if self.events.peer_blocked(claimed) {
             return;
         }
@@ -405,7 +412,8 @@ impl BleRuntime {
                         .values()
                         .filter(|p| p.state.creator == claimed.as_str())
                         .count();
-                    if count >= 3 && !s.pending_group_invites.contains_key(&id) {
+                    let known = s.pending_group_invites.contains_key(&id);
+                    if !known && (!invite || count >= 3) {
                         return false;
                     }
                     if let Some(previous) = s.pending_group_invites.get(&id) {
@@ -430,7 +438,7 @@ impl BleRuntime {
                             received_at,
                         },
                     );
-                    true
+                    !known || invite
                 });
                 if inserted {
                     self.events.send(MeshEvent::PrivateChannelInvitation {
