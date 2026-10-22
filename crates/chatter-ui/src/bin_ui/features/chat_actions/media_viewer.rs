@@ -6,6 +6,8 @@ use std::sync::{Arc, OnceLock};
 static HAS_PREVIOUS: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "android")]
 static HAS_NEXT: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "android")]
+static POSITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::AttachmentId;
@@ -115,6 +117,10 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
             index.is_some_and(|i| i + 1 < items.len()),
             Ordering::Relaxed,
         );
+        POSITION.store(
+            index.map(|i| ((i as u64 + 1) << 32) | items.len() as u64).unwrap_or(0),
+            Ordering::Relaxed,
+        );
     }
     w.global::<crate::ChatPane>()
         .set_media_viewer_attachment_id(id.into());
@@ -204,11 +210,17 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                 {
                     HAS_PREVIOUS.store(index > 0, Ordering::Relaxed);
                     HAS_NEXT.store(index + 1 < all.len(), Ordering::Relaxed);
+                    POSITION.store(((index as u64 + 1) << 32) | all.len() as u64, Ordering::Relaxed);
                 }
             });
         });
     }
     request
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn native_position() -> u64 {
+    POSITION.load(Ordering::Relaxed)
 }
 
 fn navigate(w: &MainWindow, delta: i32) {

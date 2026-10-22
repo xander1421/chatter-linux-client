@@ -278,6 +278,20 @@ pub extern "system" fn Java_com_chatter_client_VideoPlaybackActivity_nativeViewe
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_VideoPlaybackActivity_nativeViewerPosition(
+    mut env: jni::EnvUnowned<'_>,
+    _this: JObject,
+    token: jlong,
+) -> jlong {
+    env.with_env(|_| -> jni::errors::Result<_> {
+        Ok(source_request(token)
+            .map(|_| crate::bin_ui::features::chat_actions::media_viewer::native_position() as jlong)
+            .unwrap_or(0))
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeVideoTokenIsCurrent(
     mut _env: jni::EnvUnowned<'_>,
     _this: JObject,
