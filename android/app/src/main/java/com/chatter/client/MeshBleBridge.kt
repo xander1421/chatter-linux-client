@@ -806,9 +806,12 @@ object MeshBleBridge {
             if (scanStarts.size >= 4) {
                 val delay = scanWindowMs - (now - scanStarts.first()) + 1
                 handler.removeCallbacks(scanRetry)
+                // The policy re-asks every tick while deferred; log the first ask only.
+                if (!scanDeferred) {
+                    Log.i(TAG, "scan deferred: $reason, starts30s=${scanStarts.size}, delayMs=$delay")
+                }
                 scanDeferred = true
                 handler.postDelayed(scanRetry, delay)
-                Log.i(TAG, "scan deferred: $reason, starts30s=${scanStarts.size}, delayMs=$delay")
                 return
             }
             handler.removeCallbacks(scanRetry)

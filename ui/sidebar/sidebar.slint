@@ -657,7 +657,10 @@ export component Sidebar inherits Rectangle {
             anon-mode-clicked => { root.anon-mode-clicked(); }
         }
 
+        // Pinned like SidebarHeader; without x/y a child of this Rectangle is centred.
         if !root.collapsed && root.active-tab == "mesh": Rectangle {
+            x: 0px;
+            y: 0px;
             width: root.width;
             height: root.top-row-height;
             background: root.touch ? transparent : Colors.surface;
@@ -672,12 +675,6 @@ export component Sidebar inherits Rectangle {
                     font-weight: 700;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
-                }
-                Text {
-                    text: MeshGlobal.peer-count == 1 ? "1 nearby" : MeshGlobal.peer-count + " nearby";
-                    color: Colors.text-secondary;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
                 }
             }
         }
