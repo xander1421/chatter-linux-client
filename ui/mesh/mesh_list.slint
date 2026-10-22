@@ -213,7 +213,10 @@ export component MeshList inherits Rectangle {
                     padding-left: Spacing.sm;
                     padding-right: Spacing.sm;
                     spacing: Spacing.sm;
-                    Image { source: Icons.radio; width: 18px; height: 18px; colorize: Colors.text-muted; }
+                    VerticalLayout {
+                        alignment: center;
+                        Image { source: Icons.radio; width: 18px; height: 18px; colorize: Colors.text-muted; }
+                    }
                     Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     Text { text: peer.binding-label; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; overflow: elide; }
                 }
