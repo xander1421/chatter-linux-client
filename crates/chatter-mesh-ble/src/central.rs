@@ -29,6 +29,7 @@
 //! less produces a link the mesh will happily plan writes onto and the stack will
 //! silently drop.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
@@ -189,6 +190,16 @@ pub(crate) async fn start_scan(
     let (ready_tx, ready_rx) = oneshot::channel();
 
     let task = tokio::spawn(async move {
+        // bluer replays every cached BlueZ device at the start of each scan.
+        // Its old RSSI can still be present after an Android private address
+        // rotates, so only a later property change proves a known address is
+        // being advertised now. Newly created device objects are not skipped.
+        let mut cached = adapter
+            .device_addresses()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
         let discovery = match adapter.discover_devices_with_changes().await {
             Ok(discovery) => {
                 if ready_tx.send(Ok(())).is_err() {
@@ -212,6 +223,9 @@ pub(crate) async fn start_scan(
             let AdapterEvent::DeviceAdded(address) = event else {
                 continue;
             };
+            if cached.remove(&address) {
+                continue;
+            }
             let Ok(device) = adapter.device(address) else {
                 continue;
             };
@@ -224,10 +238,9 @@ pub(crate) async fn start_scan(
                 continue;
             }
 
-            // `None` means BlueZ knows this device but is not currently seeing
-            // it — a stale object from a previous session, replayed to us when
-            // discovery started. Reporting it would send the scheduler chasing a
-            // peer that is not there.
+            // Even after discarding the initial cache replay, a device can
+            // lose its RSSI before we read it. Without one there is no useful
+            // signal measurement for the scheduler.
             let Ok(Some(rssi)) = device.rssi().await else {
                 continue;
             };

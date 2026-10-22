@@ -222,7 +222,6 @@ const SILENT_CENTRAL_LINK_MS: u64 = 90_000;
 /// The result of one connect attempt, delivered back to the loop.
 pub(super) struct DialOutcome {
     address: String,
-    started_ms: u64,
     result: Result<LinkId, chatter_mesh_link::LinkError>,
 }
 

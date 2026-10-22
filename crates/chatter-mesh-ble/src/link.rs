@@ -611,9 +611,30 @@ impl MeshLink for BlueZLink {
             let mut roles = self.roles.lock().await;
 
             if !on {
-                // Dropping the handle aborts the scan task, which drops the
-                // discovery session, which calls StopDiscovery.
-                roles.scan = None;
+                // Dropping the handle starts BlueZ's asynchronous StopDiscovery.
+                // A connect may follow this call immediately; wait for our
+                // discovery session to actually end before returning.
+                let was_scanning = roles.scan.take().is_some();
+                let adapter = roles.adapter.as_ref().map(|ble| ble.adapter().clone());
+                drop(roles);
+                if was_scanning && let Some(adapter) = adapter {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        async {
+                            loop {
+                                match adapter.is_discovering().await {
+                                    Ok(false) => return true,
+                                    Err(_) => return false,
+                                    Ok(true) => tokio::time::sleep(
+                                        std::time::Duration::from_millis(50),
+                                    )
+                                    .await,
+                                }
+                            }
+                        },
+                    )
+                    .await;
+                }
                 return Ok(());
             }
             if roles.scan.is_some() {
@@ -636,6 +657,10 @@ impl MeshLink for BlueZLink {
     fn connect(&self, address: &str) -> BoxFuture<'_, Result<LinkId, LinkError>> {
         let address = address.to_string();
         Box::pin(async move {
+            // The mesh runs a continuous scan while sparse. BlueZ can keep an
+            // outbound LE connect pending for that whole discovery session, so
+            // settle StopDiscovery before opening the ACL.
+            self.set_scanning(false).await?;
             let service = service_uuid()?;
             let characteristic = characteristic_uuid()?;
             let adapter = self.inner.adapter_handle().ok_or_else(|| {

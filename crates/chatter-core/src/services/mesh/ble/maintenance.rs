@@ -146,7 +146,17 @@ impl BleRuntime {
             )
         });
         if let QueueDecision::Connect(candidate) = next {
-            self.dial(&candidate.address.clone()).await;
+            // A private LE address can rotate while another dial spends twenty
+            // seconds waiting for GATT. BlueZ discovery is paused during that
+            // dial, so queued adverts are only useful if they are still fresh.
+            // The next scan will report the peer's current address again.
+            #[cfg(target_os = "linux")]
+            let fresh = now_ms.saturating_sub(candidate.discovered_at_ms) <= 5_000;
+            #[cfg(not(target_os = "linux"))]
+            let fresh = true;
+            if fresh {
+                self.dial(&candidate.address).await;
+            }
         }
 
         // Announce cadence, cleanup, and the directed spool.
