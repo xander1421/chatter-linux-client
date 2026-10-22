@@ -176,16 +176,28 @@ object MeshBleBridge {
                 if (!started) return
                 val now = SystemClock.elapsedRealtime()
                 val recentStarts = scanStarts.count { now - it < scanWindowMs }
+                var recoveredScan = false
                 if (now - lastSummaryAt >= scanSilenceMs) {
                     lastSummaryAt = now
                     Log.i(TAG, "radio summary: scanResults=${scanResults.get()} scanStarts30s=$recentStarts scanActive=$scanActive deferred=$scanDeferred centralLinks=${centralLinks.size} peripheralLinks=${peripheralLinks.size} advertising=$advertising")
+                    // A failed asynchronous start can leave a scan request
+                    // with neither a running scan nor a scheduled retry.
+                    if (scanRequested && !scanActive && !scanDeferred) {
+                        val adapter = context()?.let { adapterOf(it) }
+                        val radioUp = adapter?.let { guard("isEnabled", false) { it.isEnabled } } == true
+                        if (radioUp) {
+                            Log.w(TAG, "scan requested but neither active nor deferred; recovering")
+                            applyScanLocked("health recovery")
+                            recoveredScan = true
+                        }
+                    }
                 }
                 val lastResult = lastScanResultAt.get().takeIf { it > 0 } ?: radioUpAt
                 if (lastResult > silentRestartAt && silentRestartAt != 0L) {
                     silentRestartAt = 0L
                     silentWarningLogged = false
                 }
-                if (scanActive && !scanDeferred && now - lastResult >= scanSilenceMs) {
+                if (!recoveredScan && scanActive && !scanDeferred && now - lastResult >= scanSilenceMs) {
                     if (silentRestartAt == 0L) {
                         watchdogRestartPending = true
                         Log.w(TAG, "scanner silent for 60s; restarting once, scanResults=${scanResults.get()}")

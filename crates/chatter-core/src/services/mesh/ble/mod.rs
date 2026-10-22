@@ -434,6 +434,10 @@ impl BleRuntime {
         }
         self.state.with(|state| {
             state.radio_running = true;
+            // The state outlives this runtime, but the scanner does not. A
+            // previous on-phase must issue a fresh set_scanning(true) after a
+            // mesh off/on instead of returning Unchanged on the first tick.
+            state.duty.reset();
             // Discovery backoff is about the previous radio session's links. A
             // duplicate-peer note ignores an address for five minutes, so after
             // a mesh off/on the S25 never dialled the S9 again (5+ min, ui159).
