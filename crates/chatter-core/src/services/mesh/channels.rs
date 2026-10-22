@@ -63,11 +63,14 @@ impl MeshService {
             .list()?
             .into_iter()
             .filter(|channel| {
+                // An invitee who has not answered is already in the roster; a
+                // fresh direct invite is how the creator re-arms it.
                 channel.creator == creator.as_str()
-                    && !channel
-                        .members
-                        .iter()
-                        .any(|member| member.peer == peer.as_str())
+                    && (channel.unanswered_direct_invites.contains_key(peer.as_str())
+                        || !channel
+                            .members
+                            .iter()
+                            .any(|member| member.peer == peer.as_str()))
             })
             .map(|channel| (channel.id, channel.name))
             .collect())

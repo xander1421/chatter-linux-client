@@ -94,7 +94,7 @@ impl BleRuntime {
                         }
                         if !state.stale
                             && !state.unanswered_direct_invites.get(claimed.as_str())
-                                .is_some_and(|at| now_secs().saturating_sub(*at) >= 600)
+                                .is_some_and(|at| now_secs().saturating_sub(*at) >= super::super::DIRECT_INVITE_LIFETIME_SECS)
                             && let Ok(bytes) = state.update_bytes()
                         {
                             self.send_group_state(claimed, &bytes, false).await;
