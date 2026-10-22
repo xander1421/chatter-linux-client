@@ -39,7 +39,7 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { AiIntegrationGlobal } from "ai/ai_global.slint";
 import { TextFormat } from "chat/message_composer.slint";
 import { AnonMode, TorStatus } from "anon_mode/anon_mode_global.slint";
-import { MeshGlobal, MeshConversationData, MeshPeerData, PrivateChannelMemberData } from "mesh/mesh_global.slint";
+import { MeshGlobal, MeshConversationData, MeshPeerData, PrivateChannelMemberData, PrivateChannelInviteData } from "mesh/mesh_global.slint";
 import { Appearance } from "theme/appearance.slint";
 import { NotificationSound, NotificationDelivery } from "settings/notification_sound.slint";
 import { Haptics } from "components/haptics.slint";
@@ -60,7 +60,7 @@ export { AnonMode }
 export { TorStatus }
 // bitchat mesh: runtime feature flag + the sidebar row shape. Written from
 // `bin_ui::features::mesh`; inert when the `mesh` Cargo feature is off.
-export { MeshGlobal, MeshConversationData, MeshPeerData, PrivateChannelMemberData }
+export { MeshGlobal, MeshConversationData, MeshPeerData, PrivateChannelMemberData, PrivateChannelInviteData }
 // Touch feedback. Bound in `bin_ui::haptics`; unbound (and so a no-op) on desktop.
 export { Haptics }
 export { AvatarText }

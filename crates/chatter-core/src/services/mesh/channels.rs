@@ -52,6 +52,27 @@ impl MeshService {
         Ok(state.id)
     }
 
+    /// Groups this device can invite the selected peer into.
+    pub fn private_channels_invitable_for(
+        &self,
+        peer: &PeerId,
+    ) -> Result<Vec<(String, String)>, MeshError> {
+        let creator = self.identity.peer_id();
+        Ok(self
+            .private_channels
+            .list()?
+            .into_iter()
+            .filter(|channel| {
+                channel.creator == creator.as_str()
+                    && !channel
+                        .members
+                        .iter()
+                        .any(|member| member.peer == peer.as_str())
+            })
+            .map(|channel| (channel.id, channel.name))
+            .collect())
+    }
+
     /// Produce a short-lived QR for the selected nearby peer. It pins the
     /// creator device's full Noise key, and can be redeemed in any live Noise
     /// session to that device during its validity window.

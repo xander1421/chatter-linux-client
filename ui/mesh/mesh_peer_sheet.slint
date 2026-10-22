@@ -45,18 +45,26 @@ export component MeshPeerSheet inherits Rectangle {
                 disabled: MeshGlobal.sheet-peer-id == "";
                 clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); }
             }
-            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage: VerticalLayout {
+            if MeshGlobal.private-invitable-channels.length > 0: Text {
+                text: "Invite to a private group"; color: Colors.text-primary;
+                font-size: Typography.sm; font-weight: 600;
+            }
+            for channel in MeshGlobal.private-invitable-channels: VerticalLayout {
                 spacing: Spacing.xs;
-                Text { text: "Private channel: " + MeshGlobal.active-title; color: Colors.text-primary; font-size: Typography.sm; font-weight: 600; wrap: word-wrap; }
-                Text { text: "Channel ID: " + MeshGlobal.active-scope; color: Colors.text-muted; font-size: Typography.xs; wrap: char-wrap; }
-            }
-            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage: Button {
-                text: "Invite to " + MeshGlobal.active-title; variant: "secondary";
-                clicked => { MeshGlobal.invite-private-channel-direct(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); }
-            }
-            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage: Button {
-                text: "Show Chatter invite QR"; variant: "secondary";
-                clicked => { MeshGlobal.invite-private-channel(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); }
+                Text {
+                    text: channel.name; color: Colors.text-secondary;
+                    font-size: Typography.sm; wrap: word-wrap;
+                }
+                Button {
+                    text: "Invite to " + channel.name; variant: "secondary";
+                    touch: true;
+                    clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); }
+                }
+                Button {
+                    text: "Show Chatter invite QR"; variant: "secondary";
+                    touch: true;
+                    clicked => { MeshGlobal.invite-private-channel(channel.id, MeshGlobal.sheet-peer-id); }
+                }
             }
             for member in MeshGlobal.private-removable-members: Button {
                 visible: MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage && member.peer-id == MeshGlobal.sheet-peer-id;

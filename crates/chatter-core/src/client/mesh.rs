@@ -336,6 +336,15 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_private_channels_invitable_for(
+        &self,
+        peer: &str,
+    ) -> Result<Vec<(String, String)>, crate::services::mesh::MeshError> {
+        self.mesh()
+            .private_channels_invitable_for(&chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_private_channel_invite_png(
         &self,
         id: &str,

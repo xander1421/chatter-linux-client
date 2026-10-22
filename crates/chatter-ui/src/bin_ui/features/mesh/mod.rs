@@ -43,7 +43,9 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::mesh::{MeshConversation, MeshEvent};
 
-use crate::{MainWindow, MeshConversationData, MeshGlobal, MeshPeerData, run_ui};
+use crate::{
+    MainWindow, MeshConversationData, MeshGlobal, MeshPeerData, PrivateChannelInviteData, run_ui,
+};
 
 /// The mesh conversation currently open, if any.
 ///
@@ -123,7 +125,9 @@ fn close_mesh_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
     clear_active(window);
     crate::bin_ui::features::sidebar::close_open_conversation(window, ui_ctx);
-    window.global::<crate::SidebarPane>().set_active_tab("mesh".into());
+    window
+        .global::<crate::SidebarPane>()
+        .set_active_tab("mesh".into());
 }
 
 /// This device's mesh account id as a string, for "is this message mine?".
@@ -241,8 +245,16 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         global.on_create_private_channel(move |name| {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.mesh_create_private_channel(name.as_str()) {
-                Ok(_) => { w.global::<MeshGlobal>().set_notice("Private channel created. Open it, then select a nearby peer to invite by QR.".into()); refresh_rows(&w, &ui_ctx); }
-                Err(error) => w.global::<MeshGlobal>().set_notice(error.to_string().into()),
+                Ok(_) => {
+                    w.global::<MeshGlobal>().set_notice(
+                        "Private group created. Open a nearby person's peer sheet to invite them."
+                            .into(),
+                    );
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(error.to_string().into()),
             }
         });
     }
@@ -786,6 +798,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
     let sheet_peer = global.get_sheet_peer_id();
     if !sheet_peer.is_empty() {
+        refresh_invitable_channels(window, ui_ctx, sheet_peer.as_str());
         global.set_sheet_binding_label(
             ui_ctx
                 .mesh_binding_state(sheet_peer.as_str())
@@ -917,6 +930,9 @@ pub fn open_sender_sheet(
     } else {
         let global = window.global::<MeshGlobal>();
         global.set_sheet_peer_id("".into());
+        global.set_private_invitable_channels(ModelRc::new(VecModel::from(Vec::<
+            PrivateChannelInviteData,
+        >::new())));
         global.set_sheet_peer_name(
             ui_ctx
                 .mesh_sender_display_name(sender)
@@ -940,6 +956,7 @@ fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &s
     ui_ctx.mesh_open_session(peer_id);
     let global = window.global::<MeshGlobal>();
     global.set_sheet_peer_id(peer_id.into());
+    refresh_invitable_channels(window, ui_ctx, peer_id);
     global.set_sheet_peer_name(peer.nickname.into());
     global.set_sheet_binding_label(
         ui_ctx
@@ -960,6 +977,33 @@ fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &s
     global.set_binding_qr_visible(false);
     global.set_binding_scan_visible(false);
     crate::bin_ui::features::back::push(window, "mesh-peer");
+}
+
+fn refresh_invitable_channels(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &str) {
+    let global = window.global::<MeshGlobal>();
+    let active_scope = if global.get_active_kind().as_str() == "private-channel" {
+        global.get_active_scope().to_string()
+    } else {
+        String::new()
+    };
+    let mut channels = ui_ctx
+        .mesh_private_channels_invitable_for(peer_id)
+        .unwrap_or_default();
+    channels.sort_by(|a, b| {
+        (a.0.as_str() != active_scope.as_str(), a.1.to_lowercase(), &a.0).cmp(&(
+            b.0.as_str() != active_scope.as_str(),
+            b.1.to_lowercase(),
+            &b.0,
+        ))
+    });
+    let items = channels
+        .into_iter()
+        .map(|(id, name)| PrivateChannelInviteData {
+            id: id.into(),
+            name: name.into(),
+        })
+        .collect::<Vec<_>>();
+    global.set_private_invitable_channels(ModelRc::new(VecModel::from(items)));
 }
 
 /// Drop the selection highlight from every mesh row without asking core again.
