@@ -2,6 +2,7 @@ import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
 import { IconAction } from "icon_action.slint";
 import { GlassSurface } from "glass_surface.slint";
+import { MediaActions } from "image_viewer.slint";
 // Video player modal component
 //
 // Full-screen video player with controls for playback, seeking, and volume.
@@ -14,6 +15,9 @@ import { Typography } from "../theme/typography.slint";
 
 export component VideoPlayer inherits Rectangle {
     private property <bool> compact-layout: root.width < 600px;
+    // Touch platform: the media actions take the 48px Android minimum, as in the image viewer.
+    in property <bool> touch: false;
+    property <length> action-size: (root.touch ? Spacing.touch-target-min : Spacing.button-height) * Appearance.text-grow;
     // Properties
     in property <bool> show: false;
     property <float> arrival: 0.0;
@@ -80,9 +84,8 @@ export component VideoPlayer inherits Rectangle {
 
         // Header with filename and close button
         GlassSurface {
-            material-level: 3;
-            elevation: 3;
-
+            material-enabled: true;
+            border-radius: Spacing.radius-lg;
             height: 48px * Appearance.text-grow;
 
             // Block clicks on header from closing video
@@ -113,16 +116,6 @@ export component VideoPlayer inherits Rectangle {
                     clicked => { root.close(); }
                 }
             }
-        }
-
-        HorizontalLayout {
-            spacing: Spacing.xxs;
-            alignment: center;
-                IconAction { icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
-                Text { text: root.position-label; color: Colors.on-media-muted; vertical-alignment: center; }
-                IconAction { icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
-                IconAction { icon: Icons.download; label: "Download"; clicked => { root.download(); } }
-                IconAction { icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
         }
 
         // Video display area
@@ -336,8 +329,24 @@ export component VideoPlayer inherits Rectangle {
             }
         }
 
-        // Footer hint
-        Rectangle {
+        GlassSurface {
+            height: root.action-size;
+            border-radius: Spacing.radius-lg;
+            TouchArea {}
+            MediaActions {
+                action-size: root.action-size;
+                position-label: root.position-label;
+                has-previous: root.has-previous;
+                has-next: root.has-next;
+                download => { root.download(); }
+                open-downloads => { root.open-downloads(); }
+                previous => { root.previous(); }
+                next => { root.next(); }
+            }
+        }
+
+        // Footer hint (mouse wording; touch has no such gesture to explain)
+        if !root.touch: Rectangle {
             height: 24px;
 
             // Block clicks on footer from closing video

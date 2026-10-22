@@ -133,6 +133,7 @@ export component AppTopOverlays inherits Rectangle {
     // Video player overlay (rendered above modals)
     if ChatPane.video-player-visible: VideoPlayer {
         show: true;
+        touch: root.is-mobile-platform;
         frame: ChatPane.video-player-frame;
         filename: ChatPane.video-player-filename;
         position-label: ChatPane.media-viewer-position;

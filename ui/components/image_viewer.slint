@@ -24,6 +24,28 @@ export global ImageZoomMath {
     public pure function double-tap-scale(zoom: float) -> float { zoom > 1.0 ? 1.0 : 2.5 }
 }
 
+// The one action row both media viewers show, so image and video match.
+export component MediaActions inherits HorizontalLayout {
+    in property <length> action-size;
+    in property <bool> can-copy;
+    in property <string> position-label;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback download();
+    callback copy-image();
+    callback open-downloads();
+    callback previous();
+    callback next();
+    alignment: center;
+    spacing: Spacing.xxs;
+    IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
+    if root.can-copy: IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
+    IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
+    IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+    Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
+    IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+}
+
 export component ImageViewer inherits Rectangle {
     private property <bool> compact-layout: root.width < 600px;
     // Touch platform: the media actions take the 48px Android minimum.
@@ -332,8 +354,11 @@ export component ImageViewer inherits Rectangle {
         ? viewer-area.fit-width : min(viewer-area.width, viewer-area.height * root.target-image.width / root.target-image.height);
     property <length> target-fit-height: root.target-image.width <= 0 || root.target-image.height <= 0
         ? viewer-area.fit-height : min(viewer-area.height, viewer-area.width * root.target-image.height / root.target-image.width);
-    property <length> chrome-fit-width: viewer-area.fit-width + (root.target-fit-width - viewer-area.fit-width) * root.page-progress;
-    property <length> chrome-fit-height: viewer-area.fit-height + (root.target-fit-height - viewer-area.fit-height) * root.page-progress;
+    // Chrome follows the image as drawn: zoomed past the viewport it pins to the edges.
+    property <length> shown-width: min(viewer-area.width, viewer-area.fit-width * root.zoom);
+    property <length> shown-height: min(viewer-area.height, viewer-area.fit-height * root.zoom);
+    property <length> chrome-fit-width: root.shown-width + (root.target-fit-width - root.shown-width) * root.page-progress;
+    property <length> chrome-fit-height: root.shown-height + (root.target-fit-height - root.shown-height) * root.page-progress;
     property <length> chrome-width: min(viewer-area.width, max(300px, root.chrome-fit-width));
     property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2;
     property <length> chrome-top: (viewer-area.height - root.chrome-fit-height) / 2;
@@ -376,15 +401,18 @@ export component ImageViewer inherits Rectangle {
         visible: root.chrome-visible || self.opacity > 0;
         opacity: root.chrome-alpha * root.arrival;
         TouchArea { width: 100%; height: 100%; }
-        HorizontalLayout {
-            alignment: center;
-            spacing: Spacing.xxs;
-            IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
-            IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
-            IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
-            IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.move-page(-1); } }
-            Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
-            IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.move-page(1); } }
+        MediaActions {
+            action-size: root.action-size;
+            can-copy: true;
+            position-label: root.position-label;
+            has-previous: root.has-previous;
+            has-next: root.has-next;
+            download => { root.download(); }
+            copy-image => { root.copy-image(); }
+            open-downloads => { root.open-downloads(); }
+            previous => { root.move-page(-1); }
+            next => { root.move-page(1); }
         }
     }
 }
+
