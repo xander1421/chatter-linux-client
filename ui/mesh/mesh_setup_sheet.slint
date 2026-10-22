@@ -96,6 +96,21 @@ export component MeshSetupSheet inherits Rectangle {
                 spacing: Spacing.lg;
                 padding-bottom: Spacing.xl;
 
+                if MeshGlobal.pending-private-id != "": VerticalLayout {
+                    spacing: Spacing.sm;
+                    Text { text: MeshGlobal.pending-private-peer + " invited you to the private group " + MeshGlobal.pending-private-name;
+                        color: Colors.text-primary; font-size: Typography.base; wrap: word-wrap; }
+                    Text { text: "Peer names are self-asserted until you verify in person.";
+                        color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        Button { text: "Join"; variant: "primary";
+                            clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); } }
+                        Button { text: "Decline"; variant: "secondary";
+                            clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); } }
+                    }
+                }
+
                 Text {
                     text: "Talk nearby without a server or internet. Messages can wait for another device to carry them.";
                     color: Colors.text-secondary;

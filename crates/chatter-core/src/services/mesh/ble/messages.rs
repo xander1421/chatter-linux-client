@@ -330,6 +330,9 @@ impl BleRuntime {
     }
 
     pub(super) async fn on_private_epoch(&mut self, claimed: &PeerId, mut update: PrivateChannel) {
+        if self.events.peer_blocked(claimed) {
+            return;
+        }
         let Some(static_key) = self.state.with(|s| s.sessions.remote_static(claimed)) else {
             return;
         };
@@ -376,6 +379,67 @@ impl BleRuntime {
                         && invite.target == self.identity.peer_id().as_str()
                 });
             if !accepted {
+                if update.member_key(&self.identity.peer_id())
+                    != Some(self.identity.signing_public())
+                {
+                    return;
+                }
+                if !update.members.iter().any(|m| {
+                    m.peer == self.identity.peer_id().as_str()
+                        && m.fingerprint == self.identity.fingerprint()
+                }) {
+                    return;
+                }
+                let nickname = self
+                    .state
+                    .with(|s| s.peers.info(claimed).map(|p| p.nickname.clone()))
+                    .unwrap_or_else(|| claimed.to_string());
+                let now = now_secs();
+                let id = update.id.clone();
+                let name = update.name.clone();
+                let inserted = self.state.with(|s| {
+                    s.pending_group_invites
+                        .retain(|_, pending| now.saturating_sub(pending.received_at) < 600);
+                    let count = s
+                        .pending_group_invites
+                        .values()
+                        .filter(|p| p.state.creator == claimed.as_str())
+                        .count();
+                    if count >= 3 && !s.pending_group_invites.contains_key(&id) {
+                        return false;
+                    }
+                    if let Some(previous) = s.pending_group_invites.get(&id) {
+                        if previous.state.creator != update.creator
+                            || previous.state.creator_key != update.creator_key
+                            || previous.state.creator_static != update.creator_static
+                            || update.epoch < previous.state.epoch
+                            || (update.epoch == previous.state.epoch
+                                && update.signature != previous.state.signature)
+                        {
+                            return false;
+                        }
+                    }
+                    let received_at = s
+                        .pending_group_invites
+                        .get(&id)
+                        .map_or(now, |previous| previous.received_at);
+                    s.pending_group_invites.insert(
+                        id.clone(),
+                        super::super::state::PendingGroupInvite {
+                            state: update,
+                            received_at,
+                        },
+                    );
+                    true
+                });
+                if inserted {
+                    self.events.send(MeshEvent::PrivateChannelInvitation {
+                        id,
+                        name,
+                        peer: claimed.clone(),
+                        nickname,
+                    });
+                }
                 return;
             }
         }
@@ -455,7 +519,11 @@ impl BleRuntime {
         false
     }
 
-    async fn send_private_epoch_ack(&mut self, claimed: &PeerId, update: &PrivateChannel) {
+    pub(super) async fn send_private_epoch_ack(
+        &mut self,
+        claimed: &PeerId,
+        update: &PrivateChannel,
+    ) {
         use sha2_10::Digest;
         let mut ack = b"CHTRPCA1".to_vec();
         ack.extend_from_slice(

@@ -297,14 +297,62 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
+        global.on_invite_private_channel_direct(move |id, peer| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_invite_private_channel_direct(id.as_str(), peer.as_str()) {
+                Ok(()) => {
+                    w.global::<MeshGlobal>()
+                        .set_notice("Invitation sent over the encrypted mesh link.".into());
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(error.to_string().into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_decide_private_invitation(move |id, join| {
+            let Some(w) = weak.upgrade() else { return };
+            let result = ui_ctx.mesh_decide_private_invitation(id.as_str(), join);
+            let mesh = w.global::<MeshGlobal>();
+            mesh.set_pending_private_id("".into());
+            mesh.set_pending_private_name("".into());
+            mesh.set_pending_private_peer("".into());
+            match result {
+                Ok(()) => {
+                    mesh.set_notice(
+                        if join {
+                            "Private group joined."
+                        } else {
+                            "Invitation declined."
+                        }
+                        .into(),
+                    );
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => mesh.set_notice(error.to_string().into()),
+            }
+            if let Some((next_id, next_name, next_peer)) =
+                ui_ctx.mesh_pending_private_invitations().into_iter().next()
+            {
+                mesh.set_pending_private_id(next_id.into());
+                mesh.set_pending_private_name(next_name.into());
+                mesh.set_pending_private_peer(next_peer.into());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
         global.on_remove_private_member(move |id, peer| {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.mesh_remove_private_channel_member(id.as_str(), peer.as_str()) {
                 Ok(()) => {
-                    w.global::<MeshGlobal>().set_notice(
-                        "Member removed; the group key was rotated."
-                            .into(),
-                    );
+                    w.global::<MeshGlobal>()
+                        .set_notice("Member removed; the group key was rotated.".into());
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w
@@ -1043,12 +1091,51 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         MeshEvent::PrivateChannelClosed(id) => {
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| {
-                if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if *open == id) {
+                if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if *open == id)
+                {
                     close_mesh_conversation(&w, &ui_ctx);
                     w.global::<MeshGlobal>()
                         .set_notice("The creator removed this device from the group.".into());
                 }
                 refresh_rows(&w, &ui_ctx);
+            });
+        }
+        MeshEvent::PrivateChannelInvitation {
+            id,
+            name,
+            peer: _,
+            nickname,
+        } => {
+            run_ui!(weak, |w| {
+                let mesh = w.global::<MeshGlobal>();
+                let first = mesh.get_pending_private_id().is_empty();
+                if first || mesh.get_pending_private_id().as_str() == id {
+                    mesh.set_pending_private_id(id.into());
+                    mesh.set_pending_private_name(name.into());
+                    mesh.set_pending_private_peer(nickname.into());
+                    if first {
+                        w.global::<crate::ModalHostState>()
+                            .invoke_nav_push("mesh-setup".into());
+                    }
+                }
+            });
+        }
+        MeshEvent::PrivateChannelInvitationExpired(id) => {
+            let ui_ctx = ui_ctx.clone();
+            run_ui!(weak, |w| {
+                let mesh = w.global::<MeshGlobal>();
+                if mesh.get_pending_private_id().as_str() == id {
+                    mesh.set_pending_private_id("".into());
+                    mesh.set_pending_private_name("".into());
+                    mesh.set_pending_private_peer("".into());
+                    if let Some((next_id, next_name, next_peer)) =
+                        ui_ctx.mesh_pending_private_invitations().into_iter().next()
+                    {
+                        mesh.set_pending_private_id(next_id.into());
+                        mesh.set_pending_private_name(next_name.into());
+                        mesh.set_pending_private_peer(next_peer.into());
+                    }
+                }
             });
         }
         MeshEvent::IdentityKeyChanged { peer } => {

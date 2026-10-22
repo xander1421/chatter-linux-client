@@ -97,6 +97,139 @@ impl MeshService {
         Ok(bytes)
     }
 
+    /// Add a live Noise peer with bitchat's native 0x06 group invitation.
+    pub fn invite_private_channel_direct(&self, id: &str, peer: &PeerId) -> Result<(), MeshError> {
+        if self.events.peer_blocked(peer) || !self.state.with(|s| s.sessions.has_session(peer)) {
+            return Err(self.needs_session(peer));
+        }
+        let (static_key, signing_key, nickname) = self.state.with(|s| {
+            (
+                s.sessions.remote_static(peer),
+                s.peers
+                    .info(peer)
+                    .and_then(|p| p.signing_public_key.clone()),
+                s.peers.info(peer).map(|p| p.nickname.clone()),
+            )
+        });
+        let (Some(static_key), Some(signing_key)) = (static_key, signing_key) else {
+            return Err(MeshError::Binding(
+                "peer signing identity is not verified".into(),
+            ));
+        };
+        let mut state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        if state.creator != self.identity.peer_id().as_str() {
+            return Err(MeshError::Binding("only the creator can invite".into()));
+        }
+        if let Some(existing) = state.members.iter().find(|m| m.peer == peer.as_str()) {
+            if existing.fingerprint != chatter_mesh_noise::fingerprint_of(&static_key)
+                || existing.signing_key != signing_key
+            {
+                return Err(MeshError::Binding(
+                    "peer identity differs from the group roster".into(),
+                ));
+            }
+            return self
+                .ble
+                .send(BleCommand::PrivateInvite {
+                    peer: peer.clone(),
+                    bytes: state.update_bytes()?,
+                })
+                .map_err(|_| MeshError::NotRunning);
+        }
+        let member = Member {
+            peer: peer.to_string(),
+            fingerprint: chatter_mesh_noise::fingerprint_of(&static_key),
+            signing_key,
+            nickname: nickname.unwrap_or_else(|| peer.to_string()),
+        };
+        state.rotate(&self.identity, Some(member), None)?;
+        self.private_channels.save(&state)?;
+        let bytes = state.update_bytes()?;
+        self.ble
+            .send(BleCommand::PrivateInvite {
+                peer: peer.clone(),
+                bytes: bytes.clone(),
+            })
+            .map_err(|_| MeshError::NotRunning)?;
+        for member in &state.members {
+            if member.peer != self.identity.peer_id().as_str() && member.peer != peer.as_str() {
+                self.ble
+                    .send(BleCommand::PrivateEpoch {
+                        peer: PeerId::from_str(&member.peer),
+                        bytes: bytes.clone(),
+                    })
+                    .map_err(|_| MeshError::NotRunning)?;
+            }
+        }
+        self.events.send(MeshEvent::PrivateChannelChanged);
+        Ok(())
+    }
+
+    pub fn pending_private_invitations(&self) -> Vec<(String, String, String)> {
+        let now = now_secs();
+        self.state.with(|s| {
+            s.pending_group_invites
+                .retain(|_, p| now.saturating_sub(p.received_at) < 600);
+            s.pending_group_invites
+                .values()
+                .filter(|p| {
+                    !self
+                        .events
+                        .peer_blocked(&PeerId::from_str(&p.state.creator))
+                })
+                .map(|p| {
+                    (
+                        p.state.id.clone(),
+                        p.state.name.clone(),
+                        p.state.members[0].nickname.clone(),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    pub fn decide_private_invitation(&self, id: &str, join: bool) -> Result<(), MeshError> {
+        let pending = self.state.with(|s| s.pending_group_invites.remove(id));
+        let Some(pending) = pending else {
+            return Err(MeshError::Binding("invitation expired".into()));
+        };
+        if !join {
+            return Ok(());
+        }
+        let state = pending.state;
+        let creator = PeerId::from_str(&state.creator);
+        if now_secs().saturating_sub(pending.received_at) >= 600
+            || self.events.peer_blocked(&creator)
+            || !state.verify()
+            || state.member_key(&self.identity.peer_id()) != Some(self.identity.signing_public())
+            || !state.members.iter().any(|m| {
+                m.peer == self.identity.peer_id().as_str()
+                    && m.fingerprint == self.identity.fingerprint()
+            })
+            || self.state.with(|s| s.sessions.remote_static(&creator))
+                != Some(
+                    state
+                        .creator_static
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| MeshError::Binding("invalid creator identity".into()))?,
+                )
+        {
+            return Err(MeshError::Binding("invitation is no longer valid".into()));
+        }
+        self.private_channels.save(&state)?;
+        self.timeline.open_private_channel(&state.id, &state.name);
+        self.events.send(MeshEvent::PrivateChannelChanged);
+        let _ = self.ble.send(BleCommand::PrivateEpochAck {
+            peer: creator,
+            id: state.id,
+        });
+        Ok(())
+    }
+
     pub fn join_private_channel(&self, qr: &str) -> Result<(), MeshError> {
         let invite = private_channel::Invite::from_text(qr, now_secs())
             .ok_or_else(|| MeshError::Binding("invalid or expired private channel QR".into()))?;
