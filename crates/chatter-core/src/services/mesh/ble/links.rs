@@ -164,7 +164,6 @@ impl BleRuntime {
             // A closed receiver means the runtime has stopped; nothing to apply.
             let _ = tx.send(DialOutcome {
                 address,
-                started_ms: now,
                 result,
             });
         });
@@ -172,9 +171,12 @@ impl BleRuntime {
 
     pub(super) fn finish_dial(&mut self, outcome: DialOutcome) {
         self.dial_in_flight = false;
+        // BlueZ pauses its own discovery session for a dial. Its scan duty
+        // state must issue a fresh StartScanning on the next tick.
+        #[cfg(target_os = "linux")]
+        self.state.with(|state| state.duty.reset());
         let DialOutcome {
             address,
-            started_ms: now,
             result,
         } = outcome;
         let address = address.as_str();
@@ -200,10 +202,11 @@ impl BleRuntime {
                     // was never reachable from here, because the radio layer
                     // reported a timeout as an ordinary failure — so the window it
                     // documents had never once applied.
+                    let finished_ms = now_millis();
                     if timed_out {
-                        state.scheduler.note_connect_timeout(address, now);
+                        state.scheduler.note_connect_timeout(address, finished_ms);
                     } else {
-                        state.scheduler.note_connect_failed(address, now);
+                        state.scheduler.note_connect_failed(address, finished_ms);
                     }
                     // A queued advert predating this failure may name a rotated
                     // private address that no longer exists. Only a fresh scan
