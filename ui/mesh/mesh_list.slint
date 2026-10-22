@@ -1,4 +1,4 @@
-// Compact mesh conversations in the sidebar. Setup lives in MeshSetupSheet.
+// Mesh destination list. Setup lives in MeshSetupSheet.
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -48,7 +48,7 @@ export component MeshList inherits Rectangle {
                             }
                         }
                         Text {
-                            text: "Mesh";
+                            text: "Conversations";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             font-weight: 600;
@@ -192,6 +192,36 @@ export component MeshList inherits Rectangle {
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
+                }
+            }
+        }
+        if !root.collapsed && MeshGlobal.nearby-peers.length > 0: VerticalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+            spacing: Spacing.xxs;
+            Text {
+                text: "Nearby people";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                font-weight: 600;
+            }
+            for peer in MeshGlobal.nearby-peers: Rectangle {
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-md;
+                background: peer-touch.has-hover ? Colors.surface-hover : transparent;
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.sm;
+                    Image { source: Icons.radio; width: 18px; height: 18px; colorize: Colors.text-muted; }
+                    Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    Text { text: peer.binding-label; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; overflow: elide; }
+                }
+                peer-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Open nearby mesh peer " + peer.name;
+                    clicked => { MeshGlobal.open-peer(peer.id); }
                 }
             }
         }

@@ -1,7 +1,7 @@
 import { GlassSurface } from "glass_surface.slint";
 // Mobile bottom navigation bar
 //
-// Shows tab bar with Chats, Calls, Contacts, Profile on mobile screens.
+// Shows tab bar with Chats, Mesh, Calls, Contacts, Profile on mobile screens.
 // Hidden when keyboard is open (safe-area-bottom > nav bar threshold).
 
 import { Colors } from "../theme/colors.slint";
@@ -107,6 +107,8 @@ component NavTab inherits Rectangle {
         // Label
         Text {
             text: root.label;
+            width: parent.width;
+            overflow: elide;
             font-size: Typography.xs2;
             font-weight: root.active ? 600 : 400;
             color: Colors.text-primary;
@@ -124,6 +126,8 @@ export component MobileBottomNav inherits Rectangle {
     in property <string> active-tab: "chats";
     in property <image> user-avatar;
     in property <int> chats-badge: 0;
+    in property <bool> mesh-available: false;
+    in property <int> mesh-badge: 0;
     in property <int> calls-badge: 0;
     in property <int> contacts-badge: 0;
     // Extra padding at the bottom to extend behind the system gesture area
@@ -158,17 +162,18 @@ export component MobileBottomNav inherits Rectangle {
         border-radius: self.height / 2;
     }
 
-    // Four equal columns, positioned explicitly rather than by a
+    // Equal columns, positioned explicitly rather than by a
     // HorizontalLayout. `horizontal-stretch` on the tabs does not spread them
     // here — with or without an explicit width on the layout they stay packed
-    // against the left edge — so the widths are computed directly. Four tabs
-    // is a fixed set, so there is nothing a layout would buy us anyway.
+    // against the left edge — so the widths are computed directly.
     // No Shield tab: Shield is a mode of the chat list, toggled from its
     // header (sidebar.slint), not a destination. No Settings tab: it is
     // pushed from the Profile tab's account menu (owner decisions 2026-09-26).
-    property <length> tab-width: (root.width - root.side-inset * 2) / 4;
-    property <int> selected-index: root.active-tab == "calls" ? 1
-        : root.active-tab == "contacts" ? 2 : root.active-tab == "profile" ? 3 : 0;
+    property <length> tab-width: (root.width - root.side-inset * 2) / (root.mesh-available ? 5 : 4);
+    property <int> selected-index: root.active-tab == "mesh" && root.mesh-available ? 1
+        : root.active-tab == "calls" ? (root.mesh-available ? 2 : 1)
+        : root.active-tab == "contacts" ? (root.mesh-available ? 3 : 2)
+        : root.active-tab == "profile" ? (root.mesh-available ? 4 : 3) : 0;
     property <length> selected-x: root.side-inset + root.tab-width * root.selected-index
         + 5px;
     property <length> head-x: root.selected-x;
@@ -198,8 +203,19 @@ export component MobileBottomNav inherits Rectangle {
         clicked => { root.tab-selected("chats"); }
     }
 
-    NavTab {
+    if root.mesh-available: NavTab {
         x: root.side-inset + root.tab-width;
+        y: 0;
+        width: root.tab-width;
+        icon: Icons.radio;
+        label: "Mesh";
+        active: root.active-tab == "mesh";
+        badge-count: root.mesh-badge;
+        clicked => { root.tab-selected("mesh"); }
+    }
+
+    NavTab {
+        x: root.side-inset + root.tab-width * (root.mesh-available ? 2 : 1);
         y: 0;
         width: root.tab-width;
         icon: Icons.phone;
@@ -210,7 +226,7 @@ export component MobileBottomNav inherits Rectangle {
     }
 
     NavTab {
-        x: root.side-inset + root.tab-width * 2;
+        x: root.side-inset + root.tab-width * (root.mesh-available ? 3 : 2);
         y: 0;
         width: root.tab-width;
         icon: Icons.users;
@@ -221,7 +237,7 @@ export component MobileBottomNav inherits Rectangle {
     }
 
     NavTab {
-        x: root.side-inset + root.tab-width * 3;
+        x: root.side-inset + root.tab-width * (root.mesh-available ? 4 : 3);
         y: 0;
         width: root.tab-width;
         label: "Profile";

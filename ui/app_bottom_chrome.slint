@@ -5,6 +5,7 @@ import { Spacing } from "theme/spacing.slint";
 import { ReturnToCallBar, ActiveCallData } from "calls/mod.slint";
 import { ComposeFab } from "components/compose_fab.slint";
 import { AppBottomNavigation } from "components/app_bottom_navigation.slint";
+import { MeshGlobal } from "mesh/mesh_global.slint";
 
 // Inset content chrome shared by the call state and compact navigation.
 export component AppBottomChrome inherits Rectangle {
@@ -59,7 +60,7 @@ export component AppBottomChrome inherits Rectangle {
 
     // Mobile bottom navigation. Restored as the full multi-tab bar it was
     // designed to be — the previous removal was of a one-tab remnant,
-    // which is a different thing: a single tab is decoration, four tabs
+    // which is a different thing: a single tab is decoration, the tabs
     // are navigation, and the destinations (Calls, Contacts, Settings)
     // all existed already, just buried in the rail's bottom cluster
     // where they cost an expand-collapse round trip to reach.
@@ -98,6 +99,8 @@ export component AppBottomChrome inherits Rectangle {
         friends-modal-tab <=> ModalHostState.friends-modal-tab;
         user-avatar: SidebarPane.user-avatar-source;
         chats-badge: SidebarPane.total-unread-count;
+        mesh-available: MeshGlobal.enabled;
+        mesh-badge: MeshGlobal.unread-count;
         calls-badge: CallView.missed-call-count;
         contacts-badge: root.contacts-badge;
         safe-area-bottom: root.safe-area-bottom;

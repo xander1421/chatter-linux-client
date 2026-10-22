@@ -344,6 +344,20 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // A mesh conversation is pushed from the Mesh destination. Pop the
+    // conversation before leaving that destination.
+    if window.get_compact_layout()
+        && window.global::<crate::SidebarPane>().get_mobile_show_chat()
+        && window.global::<crate::SidebarPane>().get_active_tab().as_str() == "mesh"
+    {
+        if window.global::<crate::ChatPane>().get_thread_panel_visible() {
+            window.global::<crate::ChatPane>().invoke_close_thread_clicked();
+            return true;
+        }
+        window.global::<crate::SidebarPane>().set_mobile_show_chat(false);
+        return true;
+    }
+
     if window
         .global::<crate::SidebarPane>()
         .get_active_tab()

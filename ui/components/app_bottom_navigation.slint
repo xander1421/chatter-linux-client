@@ -18,6 +18,9 @@ export component AppBottomNavigation inherits MobileBottomNav {
             root.mobile-show-chat = false;
             root.sidebar-user-collapsed = false;
             root.sidebar-collapsed = false;
+        } else if (tab == "mesh") {
+            root.selected-tab = "mesh";
+            root.mobile-show-chat = false;
         } else if (tab == "calls") {
             root.selected-tab = "calls";
             root.calls-tab-clicked();
