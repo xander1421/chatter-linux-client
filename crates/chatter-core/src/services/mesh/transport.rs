@@ -123,6 +123,14 @@ pub enum BleCommand {
         peer: PeerId,
         bytes: zeroize::Zeroizing<Vec<u8>>,
     },
+    PrivateInvite {
+        peer: PeerId,
+        bytes: zeroize::Zeroizing<Vec<u8>>,
+    },
+    PrivateEpochAck {
+        peer: PeerId,
+        id: String,
+    },
     PrivateChannelMessage {
         channel_id: String,
         bytes: Vec<u8>,

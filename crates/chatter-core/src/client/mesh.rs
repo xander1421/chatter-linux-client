@@ -81,8 +81,10 @@ impl ChatterClient {
     pub fn mesh_sidebar_row_for(
         &self,
         id: &str,
-    ) -> Result<Option<crate::services::mesh::MeshSidebarRow>, crate::services::mesh::MeshError> {
-        self.mesh().sidebar_row_for(self.session_current_user_id(), id)
+    ) -> Result<Option<crate::services::mesh::MeshSidebarRow>, crate::services::mesh::MeshError>
+    {
+        self.mesh()
+            .sidebar_row_for(self.session_current_user_id(), id)
     }
 
     #[cfg(feature = "mesh")]
@@ -181,20 +183,21 @@ impl ChatterClient {
         &self,
         peer: &str,
         scanned_qr: Option<&str>,
-    ) -> Result<MeshBindingStatus, crate::services::mesh::MeshError>
-    {
+    ) -> Result<MeshBindingStatus, crate::services::mesh::MeshError> {
         let owner = self.session_current_user_id().ok_or_else(|| {
             crate::services::mesh::MeshError::Binding("sign in before verifying a contact".into())
         })?;
         let device = self.sessions().current_device_id().ok_or_else(|| {
             crate::services::mesh::MeshError::Binding("no account device is active".into())
         })?;
-        self.mesh().verify_binding(
-            owner,
-            device,
-            &chatter_mesh::ids::PeerId::from_str(peer),
-            scanned_qr,
-        ).map(Into::into)
+        self.mesh()
+            .verify_binding(
+                owner,
+                device,
+                &chatter_mesh::ids::PeerId::from_str(peer),
+                scanned_qr,
+            )
+            .map(Into::into)
     }
 
     #[cfg(feature = "mesh")]
@@ -207,8 +210,7 @@ impl ChatterClient {
     pub fn mesh_binding_state(
         &self,
         peer: &str,
-    ) -> Result<MeshBindingStatus, crate::services::mesh::MeshError>
-    {
+    ) -> Result<MeshBindingStatus, crate::services::mesh::MeshError> {
         let owner = self.session_current_user_id().ok_or_else(|| {
             crate::services::mesh::MeshError::Binding("sign in to view account bindings".into())
         })?;
@@ -352,6 +354,30 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_invite_private_channel_direct(
+        &self,
+        id: &str,
+        peer: &str,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh()
+            .invite_private_channel_direct(id, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_decide_private_invitation(
+        &self,
+        id: &str,
+        join: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().decide_private_invitation(id, join)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_pending_private_invitations(&self) -> Vec<(String, String, String)> {
+        self.mesh().pending_private_invitations()
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_remove_private_channel_member(
         &self,
         id: &str,
@@ -362,7 +388,10 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
-    pub fn mesh_leave_private_channel(&self, id: &str) -> Result<(), crate::services::mesh::MeshError> {
+    pub fn mesh_leave_private_channel(
+        &self,
+        id: &str,
+    ) -> Result<(), crate::services::mesh::MeshError> {
         self.mesh().leave_private_channel(id)
     }
 
@@ -370,7 +399,8 @@ impl ChatterClient {
     pub fn mesh_private_channel_removable_members(
         &self,
         id: &str,
-    ) -> Result<Vec<crate::services::mesh::PrivateChannelMember>, crate::services::mesh::MeshError> {
+    ) -> Result<Vec<crate::services::mesh::PrivateChannelMember>, crate::services::mesh::MeshError>
+    {
         self.mesh().private_channel_removable_members(id)
     }
 

@@ -7,8 +7,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use chatter_mesh::ids::PeerId;
-use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 use chatter_mesh_noise::MeshIdentity;
+use chatter_mesh_noise::sign::{sign_bytes, verify_bytes};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use rusqlite::params;
@@ -106,8 +106,12 @@ pub struct Invite {
 
 fn valid_name(name: &str) -> Result<String, MeshError> {
     let name = name.trim();
-    if name.is_empty() || name.len() > 40 || name.chars().any(char::is_control) {
-        return Err(failure("group name must be 1-40 bytes"));
+    if name.is_empty()
+        || name.len() > 160
+        || name.chars().count() > 40
+        || name.chars().any(char::is_control)
+    {
+        return Err(failure("group name must be at most 40 characters"));
     }
     Ok(name.to_owned())
 }

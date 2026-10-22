@@ -86,6 +86,11 @@ export global MeshGlobal {
     callback join-private-channel(string);
     callback open-private-scanner();
     callback invite-private-channel(string, string);
+    callback invite-private-channel-direct(string, string);
+    callback decide-private-invitation(string, bool);
+    in-out property <string> pending-private-id: "";
+    in-out property <string> pending-private-name: "";
+    in-out property <string> pending-private-peer: "";
     callback remove-private-member(string, string);
     callback leave-private-channel(string);
     in-out property <image> private-invite-image;

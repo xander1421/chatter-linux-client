@@ -29,7 +29,13 @@ use chatter_mesh_store::PeerSnapshot;
 use parking_lot::Mutex;
 
 use super::events::{MeshPeer, MeshStatus};
+use super::private_channel::PrivateChannel;
 use super::session::SessionManager;
+
+pub struct PendingGroupInvite {
+    pub state: PrivateChannel,
+    pub received_at: u64,
+}
 
 /// Milliseconds since the Unix epoch.
 ///
@@ -58,6 +64,8 @@ pub struct LinkStateInner {
     pub chatter_hello: super::chatter_hello::HelloPeers,
     /// Live transcript-bound proofs await an explicit trust decision in core.
     pub pending_bindings: BTreeMap<PeerId, super::account_binding::BindingV1>,
+    /// Verified group states awaiting local consent; never persisted.
+    pub pending_group_invites: BTreeMap<String, PendingGroupInvite>,
     pub binding_offers: BTreeSet<PeerId>,
     pub links: LinkStateStore,
     pub peers: PeerRegistry,
@@ -125,6 +133,7 @@ impl Default for LinkStateInner {
             sessions: SessionManager::new(),
             chatter_hello: super::chatter_hello::HelloPeers::default(),
             pending_bindings: BTreeMap::new(),
+            pending_group_invites: BTreeMap::new(),
             binding_offers: BTreeSet::new(),
             prekeys: super::prekeys::PrekeyState::default(),
             max_write: BTreeMap::new(),

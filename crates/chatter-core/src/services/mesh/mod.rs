@@ -89,7 +89,7 @@ use crate::storage::mesh_binding_store::{BindingMethod, MeshBindingStore, PeerBi
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
 use account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
-use private_channel::{PendingLeave, PrivateChannel, PrivateChannelStore};
+use private_channel::{Member, PendingLeave, PrivateChannel, PrivateChannelStore};
 
 /// A mesh conversation with its sidebar state resolved by the mesh service.
 pub struct MeshSidebarRow {

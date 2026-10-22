@@ -224,6 +224,14 @@ pub enum MeshEvent {
     ChannelObserved(String),
     /// A private roster was accepted or a new channel appeared locally.
     PrivateChannelChanged,
+    /// A creator-authenticated group state awaits explicit local consent.
+    PrivateChannelInvitation {
+        id: String,
+        name: String,
+        peer: PeerId,
+        nickname: String,
+    },
+    PrivateChannelInvitationExpired(String),
     /// The creator removed this device from a private channel; its state and
     /// sidebar row are gone, so an open pane must close.
     PrivateChannelClosed(String),

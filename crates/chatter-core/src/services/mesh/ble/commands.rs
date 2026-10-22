@@ -122,6 +122,14 @@ impl BleRuntime {
             BleCommand::PrivateEpoch { peer, bytes } => {
                 self.send_group_state(&peer, &bytes, false).await
             }
+            BleCommand::PrivateInvite { peer, bytes } => {
+                self.send_group_state(&peer, &bytes, true).await
+            }
+            BleCommand::PrivateEpochAck { peer, id } => {
+                if let Ok(Some(state)) = self.private_channels.load(&id) {
+                    self.send_private_epoch_ack(&peer, &state).await;
+                }
+            }
             BleCommand::PrivateChannelMessage { channel_id, bytes } => {
                 self.broadcast_private_channel(&channel_id, bytes).await
             }

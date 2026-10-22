@@ -6,6 +6,22 @@ impl BleRuntime {
     pub(super) async fn on_tick(&mut self) {
         let now_ms = now_millis();
         let now_s = now_secs();
+        let expired = self.state.with(|state| {
+            let expired: Vec<_> = state
+                .pending_group_invites
+                .iter()
+                .filter(|(_, pending)| now_s.saturating_sub(pending.received_at) >= 600)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &expired {
+                state.pending_group_invites.remove(id);
+            }
+            expired
+        });
+        for id in expired {
+            self.events
+                .send(MeshEvent::PrivateChannelInvitationExpired(id));
+        }
         self.close_silent_central_links(now_ms).await;
         if now_ms.saturating_sub(self.last_private_rekey_ms) >= 10_000 {
             self.last_private_rekey_ms = now_ms;
