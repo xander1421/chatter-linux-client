@@ -33,7 +33,9 @@ import android.os.SystemClock
 import android.util.Log
 import java.util.Locale
 import java.util.UUID
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The Bluetooth LE radio for the mesh transport — both roles, simultaneously.
@@ -154,6 +156,50 @@ object MeshBleBridge {
     /** Scanning as it actually is right now. */
     private var scanActive = false
     private var advertising = false
+    // Leave one start of headroom below Android's five-in-30s scan throttle.
+    // Keep timestamps across mesh off/on toggles within this process.
+    private val scanStarts = ArrayDeque<Long>()
+    private var scanDeferred = false
+    private val scanResults = AtomicLong(0)
+    private val lastScanResultAt = AtomicLong(0)
+    private var silentRestartAt = 0L
+    private var watchdogRestartPending = false
+    private var silentWarningLogged = false
+    private var radioUpAt = 0L
+    private var lastSummaryAt = 0L
+    private val scanWindowMs = 30_000L
+    private val scanSilenceMs = 60_000L
+    private val scanRetry = Runnable { synchronized(lock) { scanDeferred = false; applyScanLocked("deferred") } }
+    private val radioHealth = object : Runnable {
+        override fun run() {
+            synchronized(lock) {
+                if (!started) return
+                val now = SystemClock.elapsedRealtime()
+                val recentStarts = scanStarts.count { now - it < scanWindowMs }
+                if (now - lastSummaryAt >= scanSilenceMs) {
+                    lastSummaryAt = now
+                    Log.i(TAG, "radio summary: scanResults=${scanResults.get()} scanStarts30s=$recentStarts scanActive=$scanActive deferred=$scanDeferred centralLinks=${centralLinks.size} peripheralLinks=${peripheralLinks.size} advertising=$advertising")
+                }
+                val lastResult = lastScanResultAt.get().takeIf { it > 0 } ?: radioUpAt
+                if (lastResult > silentRestartAt && silentRestartAt != 0L) {
+                    silentRestartAt = 0L
+                    silentWarningLogged = false
+                }
+                if (scanActive && !scanDeferred && now - lastResult >= scanSilenceMs) {
+                    if (silentRestartAt == 0L) {
+                        watchdogRestartPending = true
+                        Log.w(TAG, "scanner silent for 60s; restarting once, scanResults=${scanResults.get()}")
+                        stopScanLocked("watchdog")
+                        applyScanLocked("watchdog")
+                    } else if (!silentWarningLogged && now - silentRestartAt >= scanSilenceMs) {
+                        silentWarningLogged = true
+                        Log.w(TAG, "scanner still silent after restart: scanResults=${scanResults.get()} scanStarts30s=$recentStarts links=${centralLinks.size + peripheralLinks.size}")
+                    }
+                }
+                handler.postDelayed(this, 5_000L)
+            }
+        }
+    }
     internal var serviceReady = false
 
     /** Our mesh peer id, advertised in the scan response. Set before [start]. */
@@ -328,6 +374,15 @@ object MeshBleBridge {
         }
         registerAdapterReceiverLocked(context)
         started = true
+        radioUpAt = SystemClock.elapsedRealtime()
+        lastSummaryAt = radioUpAt
+        scanResults.set(0)
+        lastScanResultAt.set(0)
+        silentRestartAt = 0L
+        watchdogRestartPending = false
+        silentWarningLogged = false
+        handler.removeCallbacks(radioHealth)
+        handler.postDelayed(radioHealth, 5_000L)
 
         // Advertising begins from onServiceAdded: a central that connects before
         // the GATT database is published finds an empty service list.
@@ -358,8 +413,9 @@ object MeshBleBridge {
         }
         scanRequested = on
         if (serviceReady) beginAdvertisingLocked()
-        applyScanLocked()
-        scanActive == on
+        applyScanLocked(if (on) "policy on" else "policy off")
+        // A deferred start is accepted and will run when the scan budget opens.
+        scanActive == on || (on && scanDeferred)
     }
 
     /**
@@ -594,11 +650,13 @@ object MeshBleBridge {
         val added = guard("addService", false) { server.addService(service) }
         if (!added) {
             guard("closeGattServer", Unit) { server.close() }
+            Log.i(TAG, "GATT server closed (addService refused)")
             Log.e(TAG, "addService refused")
             return false
         }
 
         gattServer = server
+        Log.i(TAG, "GATT server opened")
         notifyCharacteristic = characteristic
         return true
     }
@@ -646,11 +704,13 @@ object MeshBleBridge {
             .addServiceData(SERVICE_PARCEL_UUID, localPeer)
             .build()
 
+        Log.i(TAG, "advertising start requested")
         val issued = guard("startAdvertising", false) {
             advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
             true
         }
         advertising = issued
+        if (!issued) Log.e(TAG, "advertising start refused")
         return issued
     }
 
@@ -663,17 +723,18 @@ object MeshBleBridge {
             adapter.bluetoothLeAdvertiser
         } ?: return
         guard("stopAdvertising", Unit) { advertiser.stopAdvertising(advertiseCallback) }
+        Log.i(TAG, "advertising stopped")
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-            Log.i(TAG, "advertising")
+            Log.i(TAG, "advertising start succeeded")
         }
 
         override fun onStartFailure(errorCode: Int) {
             // Asynchronous, so start() has already returned true. Loud, because a
             // node that only scans is invisible to peers scanning for it.
-            Log.e(TAG, "advertising failed: ${advertiseError(errorCode)}")
+            Log.e(TAG, "advertising start failed: code=$errorCode (${advertiseError(errorCode)})")
             handler.post { synchronized(lock) { advertising = false } }
         }
     }
@@ -691,7 +752,27 @@ object MeshBleBridge {
 
     // --- Central role: scanner + GATT client ---------------------------------------
 
-    private fun applyScanLocked() {
+    private fun stopScanLocked(reason: String) {
+        if (!scanActive) return
+        val context = context()
+        val scanner = context?.let { ctx ->
+            adapterOf(ctx)?.let { adapter ->
+                guard("getBluetoothLeScanner", null as BluetoothLeScanner?) { adapter.bluetoothLeScanner }
+            }
+        }
+        if (scanner != null) guard("stopScan", Unit) { scanner.stopScan(scanCallback) }
+        scanActive = false
+        Log.i(TAG, "scan stopped: $reason")
+    }
+
+    private fun applyScanLocked(reason: String = "policy") {
+        if (!scanRequested) {
+            handler.removeCallbacks(scanRetry)
+            scanDeferred = false
+            stopScanLocked(reason)
+            return
+        }
+        if (!started || scanActive) return
         val context = context() ?: return
         val adapter = adapterOf(context) ?: return
         val enabled = guard("isEnabled", false) { adapter.isEnabled }
@@ -706,6 +787,20 @@ object MeshBleBridge {
         }
 
         if (scanRequested && !scanActive) {
+            val now = SystemClock.elapsedRealtime()
+            while (scanStarts.isNotEmpty() && now - scanStarts.first() >= scanWindowMs) {
+                scanStarts.removeFirst()
+            }
+            if (scanStarts.size >= 4) {
+                val delay = scanWindowMs - (now - scanStarts.first()) + 1
+                handler.removeCallbacks(scanRetry)
+                scanDeferred = true
+                handler.postDelayed(scanRetry, delay)
+                Log.i(TAG, "scan deferred: $reason, starts30s=${scanStarts.size}, delayMs=$delay")
+                return
+            }
+            handler.removeCallbacks(scanRetry)
+            scanDeferred = false
             val filters = listOf(
                 ScanFilter.Builder().setServiceUuid(SERVICE_PARCEL_UUID).build(),
             )
@@ -716,28 +811,32 @@ object MeshBleBridge {
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setReportDelay(0)
                 .build()
+            scanStarts.addLast(now)
             scanActive = guard("startScan", false) {
                 scanner.startScan(filters, settings, scanCallback)
                 true
             }
-        } else if (!scanRequested && scanActive) {
-            guard("stopScan", Unit) { scanner.stopScan(scanCallback) }
-            scanActive = false
+            if (scanActive && watchdogRestartPending) {
+                silentRestartAt = now
+                watchdogRestartPending = false
+            }
+            Log.i(TAG, "scan start: $reason, active=$scanActive, starts30s=${scanStarts.size}")
         }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             val scan = result ?: return
+            noteScanResult()
             emitDiscovered(scan.device.address, scan.rssi, scan.advertisedPeer())
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-            results?.forEach { emitDiscovered(it.device.address, it.rssi, it.advertisedPeer()) }
+            results?.forEach { noteScanResult(); emitDiscovered(it.device.address, it.rssi, it.advertisedPeer()) }
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e(TAG, "scan failed: ${scanError(errorCode)}")
+            Log.e(TAG, "scan failed: code=$errorCode (${scanError(errorCode)})")
             handler.post {
                 synchronized(lock) {
                     // ALREADY_STARTED means the stack kept the previous scan, so
@@ -746,6 +845,11 @@ object MeshBleBridge {
                 }
             }
         }
+    }
+
+    private fun noteScanResult() {
+        scanResults.incrementAndGet()
+        lastScanResultAt.set(SystemClock.elapsedRealtime())
     }
 
     private fun scanError(code: Int): String = when (code) {
@@ -995,6 +1099,15 @@ object MeshBleBridge {
     /** The adapter came back: rebuild the peripheral role and resume the duty cycle. */
     private fun onAdapterOn() = synchronized(lock) {
         if (started) {
+            radioUpAt = SystemClock.elapsedRealtime()
+            lastSummaryAt = radioUpAt
+            scanResults.set(0)
+            lastScanResultAt.set(0)
+            silentRestartAt = 0L
+            watchdogRestartPending = false
+            silentWarningLogged = false
+            handler.removeCallbacks(radioHealth)
+            handler.postDelayed(radioHealth, 5_000L)
             val context = context()
             if (context != null && gattServer == null) {
                 if (openGattServerLocked(context)) {
@@ -1011,10 +1124,18 @@ object MeshBleBridge {
 
     /** The adapter went away: every link died with it. */
     private fun onAdapterOff() = synchronized(lock) {
+        handler.removeCallbacks(radioHealth)
+        handler.removeCallbacks(scanRetry)
+        scanDeferred = false
+        watchdogRestartPending = false
         advertising = false
+        if (scanActive) Log.i(TAG, "scan stopped: adapter off")
         scanActive = false
         dropAllLinks()
-        gattServer?.let { server -> guard("closeGattServer", Unit) { server.close() } }
+        gattServer?.let { server ->
+            guard("closeGattServer", Unit) { server.close() }
+            Log.i(TAG, "GATT server closed (adapter off)")
+        }
         gattServer = null
         serviceReady = false
         notifyCharacteristic = null
@@ -1043,14 +1164,19 @@ object MeshBleBridge {
     }
 
     private fun teardownLocked() {
+        handler.removeCallbacks(radioHealth)
+        handler.removeCallbacks(scanRetry)
+        scanDeferred = false
+        watchdogRestartPending = false
         scanRequested = false
-        applyScanLocked()
+        applyScanLocked("radio stop")
         scanActive = false
         stopAdvertisingLocked()
         dropAllLinks()
 
         gattServer?.let { server ->
             guard("closeGattServer", Unit) { server.close() }
+            Log.i(TAG, "GATT server closed (radio stop)")
         }
         gattServer = null
         serviceReady = false
