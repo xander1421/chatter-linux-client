@@ -112,6 +112,9 @@ class MainActivity : GameActivity() {
     }
 
     @Suppress("unused")
+    fun isPlayInstalled(): Boolean = UpdateInstaller.isPlayInstalled(this)
+
+    @Suppress("unused")
     fun installVerifiedUpdate(path: String): Boolean = UpdateInstaller.start(this, path)
 
     @Suppress("unused")

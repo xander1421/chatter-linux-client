@@ -423,10 +423,13 @@ mod tor {
         if p.https {
             let name = ServerName::try_from(p.host.clone())
                 .map_err(|_| "storage TLS hostname invalid".to_string())?;
-            let tls = TlsConnector::from(Arc::new(tls_config()))
-                .connect(name, stream)
-                .await
-                .map_err(|_| "storage TLS handshake failed".to_string())?;
+            let tls = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                TlsConnector::from(Arc::new(tls_config())).connect(name, stream),
+            )
+            .await
+            .map_err(|_| "storage TLS handshake stalled".to_string())?
+            .map_err(|_| "storage TLS handshake failed".to_string())?;
             send_to_file(TokioIo::new(tls), req, file, limit, progress).await
         } else {
             send_to_file(TokioIo::new(stream), req, file, limit, progress).await
@@ -443,9 +446,13 @@ mod tor {
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let (mut sender, connection) = hyper::client::conn::http1::handshake(io)
-            .await
-            .map_err(|_| "storage HTTP handshake failed".to_string())?;
+        let (mut sender, connection) = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            hyper::client::conn::http1::handshake(io),
+        )
+        .await
+        .map_err(|_| "storage HTTP handshake stalled".to_string())?
+        .map_err(|_| "storage HTTP handshake failed".to_string())?;
         struct Driver(tokio::task::JoinHandle<()>);
         impl Drop for Driver {
             fn drop(&mut self) {
@@ -455,10 +462,11 @@ mod tor {
         let _driver = Driver(tokio::spawn(async move {
             let _ = connection.await;
         }));
-        let response = sender
-            .send_request(req)
-            .await
-            .map_err(|_| "storage request failed".to_string())?;
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(30), sender.send_request(req))
+                .await
+                .map_err(|_| "storage response stalled".to_string())?
+                .map_err(|_| "storage request failed".to_string())?;
         if !response.status().is_success() {
             return Err(format!("storage GET returned status {}", response.status()));
         }
@@ -473,7 +481,11 @@ mod tor {
         }
         let mut incoming = response.into_body();
         let mut total = 0;
-        while let Some(frame) = incoming.frame().await {
+        while let Some(frame) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), incoming.frame())
+                .await
+                .map_err(|_| "storage response stalled".to_string())?
+        {
             let frame = frame.map_err(|_| "storage response read failed".to_string())?;
             if let Ok(data) = frame.into_data() {
                 total = super::write_storage_chunk(file, total, &data, limit).await?;

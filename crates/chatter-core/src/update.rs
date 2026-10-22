@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const DOMAIN: &[u8] = b"chatter-release-update-v1\0";
 pub const MAX_MANIFEST_BYTES: usize = 16 * 1024;
@@ -244,6 +245,7 @@ pub async fn check_latest(
     channel: &str,
     installed_code: u64,
 ) -> Result<Option<UpdateManifest>, String> {
+    tracing::info!(platform, channel, installed_code, "update check started");
     if shield_requested && pool.transport_mode() != TransportMode::Onion {
         return Err("Shield requires Tor for update checks".into());
     }
@@ -281,10 +283,11 @@ pub async fn check_latest(
             return Err("update manifest is too large".into());
         }
         let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| "update manifest read failed")?
+        while let Some(chunk) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
+                .await
+                .map_err(|_| "update check stalled")?
+                .map_err(|_| "update manifest read failed")?
         {
             if body
                 .len()
@@ -301,6 +304,7 @@ pub async fn check_latest(
         return Err("network mode changed during update check".into());
     }
     let Some(bytes) = bytes else {
+        tracing::info!("update check found no release");
         return Ok(None);
     };
     let manifest = verify_manifest_inner(
@@ -312,9 +316,11 @@ pub async fn check_latest(
         false,
     )?;
     if manifest.version_code <= installed_code {
+        tracing::info!("update check found no newer release");
         return Ok(None);
     }
     validate_artifact_url(&origin, &manifest)?;
+    tracing::info!(version = %manifest.version_name, size = manifest.size, "update available");
     Ok(Some(manifest))
 }
 
@@ -327,6 +333,11 @@ pub(crate) async fn download_verified_with_progress(
     data_dir: &Path,
     progress: &(dyn Fn(u64) + Send + Sync),
 ) -> Result<PathBuf, String> {
+    let origin_host = url::Url::parse(&manifest.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    tracing::info!(version = %manifest.version_name, size = manifest.size, origin_host, "update download started");
     if shield_requested && pool.transport_mode() != TransportMode::Onion {
         return Err("Shield requires Tor for update downloads".into());
     }
@@ -340,14 +351,33 @@ pub(crate) async fn download_verified_with_progress(
         "{}-{}.download",
         manifest.platform, manifest.version_code
     ));
-    // App data is private; a stale interrupted download is always replaced.
-    let _ = tokio::fs::remove_file(&path).await;
+    // Keep a partial only when its length is plausible. The final digest is
+    // always checked over the entire file before this path is returned.
+    let partial = tokio::fs::metadata(&path)
+        .await
+        .ok()
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let resume = mode != TransportMode::Onion && partial > 0 && partial < manifest.size;
+    if !resume {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
-        .create_new(true)
+        .create(true)
+        .append(resume)
+        .truncate(!resume)
         .open(&path)
         .await
         .map_err(|_| "cannot create update staging file")?;
+    let logged_percent = AtomicU64::new(0);
+    let report_progress = |bytes: u64| {
+        progress(bytes);
+        let step = (bytes.saturating_mul(100) / manifest.size) / 10;
+        if step > logged_percent.fetch_max(step, Ordering::Relaxed) {
+            tracing::info!(percent = step * 10, "update download progress");
+        }
+    };
     let result = async {
         if mode == TransportMode::Onion {
             #[cfg(feature = "onion")]
@@ -357,7 +387,7 @@ pub(crate) async fn download_verified_with_progress(
                     &manifest.url,
                     &mut file,
                     manifest.size,
-                    progress,
+                    &report_progress,
                 )
                 .await?;
             }
@@ -366,19 +396,61 @@ pub(crate) async fn download_verified_with_progress(
                 return Err("Tor support is missing".into());
             }
         } else {
-            let mut response = crate::network::storage_http::storage_client()?
-                .get(&manifest.url)
-                .send()
-                .await
-                .map_err(|_| "update download failed")?;
+            let client = crate::network::storage_http::storage_client()?;
+            let request = if resume {
+                client
+                    .get(&manifest.url)
+                    .header(reqwest::header::RANGE, format!("bytes={partial}-"))
+            } else {
+                client.get(&manifest.url)
+            };
+            let mut response =
+                tokio::time::timeout(std::time::Duration::from_secs(30), request.send())
+                    .await
+                    .map_err(|_| "update download stalled")?
+                    .map_err(|_| "update download failed")?;
+            let mut total = if resume { partial } else { 0 };
+            if resume {
+                let expected = format!("bytes {partial}-{}/{}", manifest.size - 1, manifest.size);
+                if response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+                    || response
+                        .headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|v| v.to_str().ok())
+                        != Some(expected.as_str())
+                {
+                    tracing::info!(
+                        "update server did not support safe resume; restarting download"
+                    );
+                    file.set_len(0)
+                        .await
+                        .map_err(|_| "cannot reset update staging file")?;
+                    file = tokio::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&path)
+                        .await
+                        .map_err(|_| "cannot reopen update staging file")?;
+                    response = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        client.get(&manifest.url).send(),
+                    )
+                    .await
+                    .map_err(|_| "update download stalled")?
+                    .map_err(|_| "update download failed")?;
+                    total = 0;
+                } else {
+                    tracing::info!(bytes = partial, "update download resuming");
+                    report_progress(partial);
+                }
+            }
             if !response.status().is_success() {
                 return Err(format!("update download returned {}", response.status()));
             }
-            let mut total = 0;
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| "update download read failed")?
+            while let Some(chunk) =
+                tokio::time::timeout(std::time::Duration::from_secs(30), response.chunk())
+                    .await
+                    .map_err(|_| "update download stalled")?
+                    .map_err(|_| "update download read failed")?
             {
                 total = crate::network::anon_http::write_storage_chunk(
                     &mut file,
@@ -387,7 +459,7 @@ pub(crate) async fn download_verified_with_progress(
                     manifest.size,
                 )
                 .await?;
-                progress(total);
+                report_progress(total);
             }
         }
         if pool.transport_mode() != mode {
@@ -409,9 +481,13 @@ pub(crate) async fn download_verified_with_progress(
     .await;
     drop(file);
     if let Err(error) = result {
-        let _ = tokio::fs::remove_file(&path).await;
+        tracing::warn!(kind = %error, "update download failed");
+        if error.contains("size") || error.contains("SHA-256") || error.contains("network mode") {
+            let _ = tokio::fs::remove_file(&path).await;
+        }
         return Err(error);
     }
+    tracing::info!(version = %manifest.version_name, size = manifest.size, "update verified: size and SHA-256 match");
     Ok(path)
 }
 
@@ -530,6 +606,61 @@ pub fn stage_linux_archive(
         let _ = std::fs::remove_dir_all(&stage);
     }
     outcome
+}
+
+/// Point an existing per-user desktop launcher at the verified staged binary.
+/// Keep the first launcher as a manual rollback path to the previous executable.
+#[cfg(target_os = "linux")]
+pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .ok_or("cannot locate Linux desktop launcher")?;
+    let launcher = data_home.join("applications/chatter-linux.desktop");
+    if !launcher.is_file() {
+        return Ok(());
+    }
+    let current = std::env::current_exe().map_err(|_| "cannot locate running executable")?;
+    let old_exec = format!("Exec={}", current.display());
+    let contents =
+        std::fs::read_to_string(&launcher).map_err(|_| "cannot read Linux desktop launcher")?;
+    if !contents
+        .lines()
+        .any(|line| line == old_exec || line == "Exec=chatter-ui")
+    {
+        return Ok(());
+    }
+    let new_exec = format!("Exec={}", executable.display());
+    let updated = contents
+        .lines()
+        .map(|line| {
+            if line == old_exec || line == "Exec=chatter-ui" {
+                new_exec.as_str()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let backup = launcher.with_extension("desktop.rollback");
+    if !backup.exists() {
+        std::fs::copy(&launcher, &backup).map_err(|_| "cannot save Linux launcher rollback")?;
+    }
+    let temporary = launcher.with_extension("desktop.update-pending");
+    std::fs::write(&temporary, updated).map_err(|_| "cannot write Linux desktop launcher")?;
+    std::fs::set_permissions(
+        &temporary,
+        std::fs::metadata(&launcher)
+            .map_err(|_| "cannot read Linux launcher permissions")?
+            .permissions(),
+    )
+    .map_err(|_| "cannot preserve Linux launcher permissions")?;
+    std::fs::rename(temporary, launcher).map_err(|_| "cannot activate Linux desktop launcher")?;
+    tracing::info!(
+        "Linux desktop launcher points at verified update; original launcher saved for rollback"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

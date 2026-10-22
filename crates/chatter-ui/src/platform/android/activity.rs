@@ -73,6 +73,24 @@ pub fn update_network_metered() -> Result<bool, String> {
     })
 }
 
+pub fn is_play_installed() -> Result<bool, String> {
+    let act = activity()?;
+    with_jni_env(|env| {
+        let result = env.call_method(
+            act,
+            jni::jni_str!("isPlayInstalled"),
+            jni::jni_sig!("()Z"),
+            &[],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
+        result
+            .and_then(|value| value.z())
+            .map_err(|e| e.to_string())
+    })
+}
+
 pub fn open_play_store_update() -> Result<(), String> {
     let act = activity()?;
     with_jni_env(|env| {

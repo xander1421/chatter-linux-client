@@ -18,7 +18,22 @@ import java.util.concurrent.Executors
 object UpdateInstaller {
     private val worker = Executors.newSingleThreadExecutor()
 
+    fun isPlayInstalled(context: Context): Boolean = try {
+        val source = if (Build.VERSION.SDK_INT >= 30) {
+            context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getInstallerPackageName(context.packageName)
+        }
+        source == "com.android.vending"
+    } catch (error: Exception) {
+        android.util.Log.w("UpdateInstaller", "could not read install source", error)
+        true
+    }
+
     fun start(activity: MainActivity, path: String): Boolean {
+        if (isPlayInstalled(activity)) return false
+        android.util.Log.i("UpdateInstaller", "verified update installer handoff requested")
         if (!activity.packageManager.canRequestPackageInstalls()) {
             activity.runOnUiThread {
                 activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -95,6 +110,7 @@ object UpdateInstaller {
                         val pending = PendingIntent.getBroadcast(activity, sessionId, intent,
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
                         session.commit(pending.intentSender)
+                        android.util.Log.i("UpdateInstaller", "update handed to system installer")
                     }
                 } catch (error: Exception) {
                     installer.abandonSession(sessionId)
@@ -116,6 +132,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            android.util.Log.i("UpdateInstaller", "system installer needs user confirmation")
             val confirmation = if (Build.VERSION.SDK_INT >= 33) {
                 intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
             } else {
@@ -126,7 +143,9 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                 confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(confirmation)
             }
-        } else if (status != PackageInstaller.STATUS_SUCCESS) {
+        } else if (status == PackageInstaller.STATUS_SUCCESS) {
+            android.util.Log.i("UpdateInstaller", "system installer completed update")
+        } else {
             val reason = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
             Toast.makeText(context, reason ?: "Update install failed", Toast.LENGTH_LONG).show()
             android.util.Log.w("UpdateInstaller", "system installer status $status: $reason")

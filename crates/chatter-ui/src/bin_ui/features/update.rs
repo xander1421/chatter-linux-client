@@ -20,7 +20,17 @@ fn show_error(weak: Weak<MainWindow>, error: String) {
     });
 }
 
-async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool) {
+async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool, play: bool) {
+    if play {
+        #[cfg(target_os = "android")]
+        if manual {
+            if let Err(error) = crate::platform::android::activity::open_play_store_update() {
+                show_error(weak, error);
+            }
+        }
+        return;
+    }
+    tracing::info!(manual, "update check started");
     if manual {
         let loading = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -34,6 +44,7 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool)
     }
     match client.check_available_update().await {
         Ok(found) => {
+            tracing::info!(available = found.is_some(), "update check completed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
                     let global = window.global::<UpdateGlobal>();
@@ -50,6 +61,7 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool)
             });
         }
         Err(error) => {
+            tracing::warn!(kind = %error, "update check failed");
             if manual {
                 show_error(weak, error);
             }
@@ -75,7 +87,11 @@ pub extern "system" fn Java_com_chatter_client_UpdateInstallReceiver_nativeOnIns
         let reason: String = reason.try_to_string(&env)?.into();
         let weak = INSTALL_WINDOW.lock().ok().and_then(|guard| guard.clone());
         if let Some(weak) = weak {
-            let reason = if reason.is_empty() { "Update install failed".to_string() } else { reason };
+            let reason = if reason.is_empty() {
+                "Update install failed".to_string()
+            } else {
+                reason
+            };
             show_error(weak, format!("Update not installed: {reason}"));
         }
         Ok(())
@@ -92,12 +108,22 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     global.set_installed_version(update::installed_version_name().into());
     global.set_build_code(update::installed_version_code().to_string().into());
     global.set_build_commit(env!("CHATTER_BUILD_COMMIT").into());
-    global.set_play_distribution(update::channel() == "play");
+    #[cfg(target_os = "android")]
+    let play = update::channel() == "play"
+        || crate::platform::android::activity::is_play_installed().unwrap_or(true);
+    #[cfg(not(target_os = "android"))]
+    let play = false;
+    global.set_play_distribution(play);
 
     let manual_client = client.clone();
     let manual_window = window.as_weak();
     global.on_check(move || {
-        crate::rt_handle().spawn(check(manual_client.clone(), manual_window.clone(), true));
+        crate::rt_handle().spawn(check(
+            manual_client.clone(),
+            manual_window.clone(),
+            true,
+            play,
+        ));
     });
 
     let periodic_client = Arc::downgrade(client);
@@ -109,7 +135,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             let Some(client) = periodic_client.upgrade() else {
                 break;
             };
-            check(client, periodic_window.clone(), false).await;
+            check(client, periodic_window.clone(), false, play).await;
             let jitter = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|time| time.subsec_nanos() as u64 % 1800)
@@ -129,7 +155,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             return;
         };
         let global = window.global::<UpdateGlobal>();
-        if update::channel() == "play" {
+        if play {
             #[cfg(target_os = "android")]
             if let Err(error) = crate::platform::android::activity::open_play_store_update() {
                 show_error(weak, error);
@@ -141,6 +167,11 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             {
                 let path = staged.lock().ok().and_then(|guard| guard.clone());
                 if let Some(path) = path {
+                    if let Err(error) = update::activate_linux_launcher(&path) {
+                        show_error(weak, error);
+                        return;
+                    }
+                    tracing::info!("Linux update restart handoff");
                     match std::process::Command::new(path).spawn() {
                         Ok(_) => {
                             let _ = slint::quit_event_loop();
@@ -179,7 +210,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 }
             }
         }
+        let retry = global.get_state() == "error";
         global.set_state("downloading".into());
+        tracing::info!(version = %manifest_before_download.version_name, size = manifest_before_download.size, retry, "update download requested");
         global.set_error("".into());
         global.set_notice("".into());
         global.set_progress("Downloading and verifying…".into());
@@ -215,6 +248,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                         );
                         match install {
                             Ok(()) => {
+                                tracing::info!("Android update installer handoff");
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(window) = weak.upgrade() {
                                         window
@@ -223,7 +257,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                     }
                                 });
                             }
-                            Err(error) => show_error(weak, error),
+                            Err(error) => { tracing::warn!(kind = %error, "Android update installer handoff failed"); show_error(weak, error) },
                         }
                     }
                     #[cfg(target_os = "linux")]
@@ -244,12 +278,12 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                     }
                                 });
                             }
-                            Ok(Err(error)) => show_error(weak, error),
+                            Ok(Err(error)) => { tracing::warn!(kind = %error, "Linux update staging failed"); show_error(weak, error) },
                             Err(_) => show_error(weak, "Could not stage Linux update".into()),
                         }
                     }
                 }
-                Err(error) => show_error(weak, error),
+                Err(error) => { tracing::warn!(kind = %error, "update download failed"); show_error(weak, error) },
             }
         });
     });

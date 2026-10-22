@@ -39,7 +39,7 @@ export component UpdateBanner inherits GlassSurface {
             horizontal-stretch: 0;
             Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
                 disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
-                clicked => { if (UpdateGlobal.state == "error") { UpdateGlobal.check(); } else { UpdateGlobal.update(); } }
+                clicked => { UpdateGlobal.update(); }
             }
         }
     }
