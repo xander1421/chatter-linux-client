@@ -9,6 +9,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.PersistableBundle
 import android.provider.MediaStore
@@ -23,6 +25,8 @@ internal object ViewerMediaExport {
     private data class Pending(val uri: Uri?, val file: File?, val mime: String, val copy: Boolean, val pdf: Boolean)
     private val pending = ConcurrentHashMap<Long, Pending>()
     private val next = AtomicLong(1)
+    private const val PDF_LIFETIME_MS = 5 * 60 * 1000L
+    private val cleanupHandler = Handler(Looper.getMainLooper())
     @Volatile private var lastLegacyDownload: Pair<Uri, String>? = null
 
     @Synchronized fun begin(context: Context, name: String, mime: String, copy: Boolean, pdf: Boolean = false): LongArray? {
@@ -71,9 +75,8 @@ internal object ViewerMediaExport {
                     "image/tiff" -> ".tif"; "image/heic" -> ".heic"; "image/heif" -> ".heif"
                     else -> return null
                 } else ""
-                // Keep external-reader grants alive briefly, then prune only our
-                // own generated PDFs when the user next opens a PDF.
-                if (pdf) folder.listFiles()?.filter { it.isFile && System.currentTimeMillis() - it.lastModified() > 24 * 60 * 60 * 1000L }?.forEach {
+                // Expired exports are also pruned when a new PDF is opened.
+                if (pdf) folder.listFiles()?.filter { it.isFile && System.currentTimeMillis() - it.lastModified() > PDF_LIFETIME_MS }?.forEach {
                     try {
                         val oldUri = FileProvider.getUriForFile(context, "${context.packageName}.viewer-media", it)
                         context.revokeUriPermission(oldUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -86,6 +89,18 @@ internal object ViewerMediaExport {
                 descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE)
             }
             pending[token] = Pending(uri, file, mime, copy, pdf)
+            if (pdf && file != null) {
+                val exported = file ?: error("File unavailable")
+                val appContext = context.applicationContext
+                cleanupHandler.postDelayed({
+                    pending.remove(token)
+                    try {
+                        val grant = FileProvider.getUriForFile(appContext, "${appContext.packageName}.viewer-media", exported)
+                        appContext.revokeUriPermission(grant, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } catch (_: Exception) {}
+                    exported.delete()
+                }, PDF_LIFETIME_MS)
+            }
             descriptor.use { longArrayOf(token, it.detachFd().toLong()) }
         } catch (_: Exception) {
             pending.remove(token)

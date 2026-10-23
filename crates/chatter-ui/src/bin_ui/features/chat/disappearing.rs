@@ -207,6 +207,10 @@ pub fn hide_for_profile(w: &MainWindow) {
 /// The open conversation's timer onto the header.
 fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let state = ui_ctx.disappearing_state(ui_ctx.active_conversation());
+    apply_header_state(w, state);
+}
+
+fn apply_header_state(w: &MainWindow, state: disappearing::DmTimer) {
     let now = chatter_core::util::time::TimestampNanos::now().as_u64();
     let seconds = state.effective_seconds(now);
     let g = w.global::<DisappearingGlobal>();
@@ -277,29 +281,60 @@ fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         use tokio::sync::broadcast::error::RecvError;
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut expiration_sent = false;
+        let mut state = {
+            let ctx = ctx.clone();
+            match tokio::task::spawn_blocking(move || ctx.disappearing_state(ctx.active_conversation())).await {
+                Ok(state) => state,
+                Err(_) => return,
+            }
+        };
         loop {
-            tokio::select! {
-                _ = ticker.tick() => {},
+            let changed = tokio::select! {
+                _ = ticker.tick() => {
+                    let now = chatter_core::util::time::TimestampNanos::now().as_u64();
+                    if state.enabled_until == 0 || (now >= state.enabled_until && expiration_sent) { continue; }
+                    if now >= state.enabled_until { expiration_sent = true; }
+                    false
+                },
                 snap = switches.recv() => match snap {
                     Ok(snap) => {
                         let entering = key(&snap);
-                        if entering == current {
-                            continue;
-                        }
+                        if entering == current { continue; }
                         current = entering;
+                        true
                     }
-                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Lagged(_)) => true,
                     Err(RecvError::Closed) => break,
                 },
-                changed = changes.recv() => match changed {
-                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                event = changes.recv() => match event {
+                    Ok(_) | Err(RecvError::Lagged(_)) => true,
                     Err(RecvError::Closed) => break,
                 },
+            };
+            if changed {
+                let ctx_for_read = ctx.clone();
+                expiration_sent = false;
+                state = match tokio::task::spawn_blocking(move || {
+                    ctx_for_read.disappearing_state(ctx_for_read.active_conversation())
+                }).await {
+                    Ok(state) => state,
+                    Err(_) => break,
+                };
             }
-            let (weak, ctx) = (weak.clone(), ctx.clone());
+            let (weak, ctx, state) = (weak.clone(), ctx.clone(), state);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    refresh_all(&w, &ctx);
+                    apply_header_state(&w, state);
+                    if changed {
+                        if let Ok(peer) = w.global::<crate::ModalHostState>()
+                            .get_profile_user_id().parse::<UserId>()
+                        {
+                            if w.global::<DisappearingGlobal>().get_dm_can_set() {
+                                show_for_profile(&w, &ctx, &peer, true);
+                            }
+                        }
+                    }
                 }
             });
         }
