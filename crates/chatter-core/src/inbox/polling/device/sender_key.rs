@@ -5,11 +5,10 @@ use std::sync::LazyLock;
 #[derive(Clone)]
 enum PendingSenderKey {
     Data(Vec<u8>),
-    Announcement(ChannelId, crate::proto::content_v1::GroupMailboxAddress),
 }
 
-// The sender-key receive state can advance before the message or announcement
-// reaches its own table. Retry the authenticated plaintext on redelivery.
+// The sender-key receive state can advance before the message reaches its table.
+// Retry the authenticated plaintext on redelivery.
 static PENDING_SENDER_KEY: LazyLock<parking_lot::Mutex<HashMap<String, PendingSenderKey>>> =
     LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
@@ -48,12 +47,6 @@ pub(super) async fn process_sender_key_message(
     let routed = if let Some(cached) = cached {
         Ok(match cached {
             PendingSenderKey::Data(plaintext) => RouteResult::Decrypted(plaintext),
-            PendingSenderKey::Announcement(channel_id, announcement) => {
-                RouteResult::MailboxAnnouncement {
-                    channel_id,
-                    announcement,
-                }
-            }
         })
     } else {
         message_gateway
@@ -225,13 +218,6 @@ pub(super) async fn process_sender_key_message(
                     error = %e,
                     "Failed to process group mailbox announcement"
                 );
-                if !matches!(e, crate::error::MailboxError::InvalidServerKey(_)) {
-                    PENDING_SENDER_KEY.lock().insert(
-                        msg.message_guid.clone(),
-                        PendingSenderKey::Announcement(channel_id, announcement),
-                    );
-                    return AckDecision::Retain;
-                }
             } else {
                 tracing::info!(
                     channel_id = %channel_id,

@@ -1,4 +1,16 @@
 use super::*;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+type PendingAnnouncement = (
+    UserId,
+    ChannelId,
+    crate::proto::content_v1::GroupMailboxAddress,
+);
+
+// Sealed sender decryption can advance the ratchet before the mailbox save.
+static PENDING_ANNOUNCEMENTS: LazyLock<parking_lot::Mutex<HashMap<String, PendingAnnouncement>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Process a sealed sender message.
 #[allow(clippy::too_many_arguments)]
@@ -11,6 +23,7 @@ pub(super) async fn process_sealed_sender_message(
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
     anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
+    group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &crate::inbox::ack_policy::RetryBudget,
 ) -> crate::inbox::ack_policy::AckDecision {
@@ -21,10 +34,18 @@ pub(super) async fn process_sealed_sender_message(
         timestamp: msg.server_timestamp,
     };
 
-    match message_gateway
-        .process_incoming_message(sealed_sender_msg)
-        .await
-    {
+    let pending = PENDING_ANNOUNCEMENTS.lock().get(&msg.message_guid).cloned();
+    let result = if let Some((sender_id, channel_id, announcement)) = pending {
+        Ok(SealedSenderResult::MailboxAnnouncement {
+            sender_id,
+            channel_id,
+            announcement,
+        })
+    } else {
+        message_gateway.process_incoming_message(sealed_sender_msg).await
+    };
+
+    match result {
         // Blocked. This is the arm that matters most: on the sealed path the
         // sender certificate is the ONLY thing that ever names the sender —
         // `DeviceMessage.SourceUserID` is empty here — so the server could not
@@ -104,13 +125,29 @@ pub(super) async fn process_sealed_sender_message(
             channel_id,
             announcement,
         }) => {
+            match group_coordinator.process_announcement(sender_id, &announcement) {
+                Ok(()) => {
+                    PENDING_ANNOUNCEMENTS.lock().remove(&msg.message_guid);
+                }
+                Err(crate::error::MailboxError::InvalidServerKey(error)) => {
+                    tracing::warn!(%error, "Invalid group mailbox announcement");
+                    return AckDecision::Ack;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Group mailbox announcement awaits persistence");
+                    PENDING_ANNOUNCEMENTS.lock().insert(
+                        msg.message_guid.clone(),
+                        (sender_id, channel_id, announcement),
+                    );
+                    return AckDecision::Retain;
+                }
+            }
             tracing::info!(
                 message_id = %msg.message_guid,
                 sender_id = %sender_id,
                 channel_id = %channel_id,
-                "[INBOX] Received GroupMailboxAddress via sealed sender, emitting event"
+                "[INBOX] Stored GroupMailboxAddress via sealed sender"
             );
-            // Emit event for group mailbox handler to process
             let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
                 channel_id,
                 member_id: sender_id,
