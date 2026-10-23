@@ -1,4 +1,17 @@
 use super::*;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+#[derive(Clone)]
+enum PendingSenderKey {
+    Data(Vec<u8>),
+    Announcement(ChannelId, crate::proto::content_v1::GroupMailboxAddress),
+}
+
+// The sender-key receive state can advance before the message or announcement
+// reaches its own table. Retry the authenticated plaintext on redelivery.
+static PENDING_SENDER_KEY: LazyLock<parking_lot::Mutex<HashMap<String, PendingSenderKey>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Process a sender key encrypted message.
 #[allow(clippy::too_many_arguments)]
@@ -31,10 +44,23 @@ pub(super) async fn process_sender_key_message(
             .ok()
             .and_then(|ge| ge.channel_id.parse().ok());
 
-    match message_gateway
-        .route_encrypted_message(encrypted_data, sender_id, msg.source_device_id)
-        .await
-    {
+    let cached = PENDING_SENDER_KEY.lock().get(&msg.message_guid).cloned();
+    let routed = if let Some(cached) = cached {
+        Ok(match cached {
+            PendingSenderKey::Data(plaintext) => RouteResult::Decrypted(plaintext),
+            PendingSenderKey::Announcement(channel_id, announcement) => {
+                RouteResult::MailboxAnnouncement {
+                    channel_id,
+                    announcement,
+                }
+            }
+        })
+    } else {
+        message_gateway
+            .route_encrypted_message(encrypted_data, sender_id, msg.source_device_id)
+            .await
+    };
+    match routed {
         Ok(RouteResult::Decrypted(plaintext)) => {
             tracing::info!(
                 message_guid = %msg.message_guid,
@@ -42,7 +68,7 @@ pub(super) async fn process_sender_key_message(
                 plaintext_len = plaintext.len(),
                 "[INBOX_SK] Successfully decrypted, processing DataMessage"
             );
-            process_decrypted_data_message(
+            if !process_decrypted_data_message(
                 msg,
                 &plaintext,
                 sender_id,
@@ -52,7 +78,12 @@ pub(super) async fn process_sender_key_message(
                 channel_repo,
                 ephemeral_repo,
                 domain_tx,
-            );
+            ) {
+                PENDING_SENDER_KEY
+                    .lock()
+                    .insert(msg.message_guid.clone(), PendingSenderKey::Data(plaintext));
+                return AckDecision::Retain;
+            }
         }
         Ok(RouteResult::ControlContent(plaintext)) => {
             tracing::debug!(
@@ -194,6 +225,13 @@ pub(super) async fn process_sender_key_message(
                     error = %e,
                     "Failed to process group mailbox announcement"
                 );
+                if !matches!(e, crate::error::MailboxError::InvalidServerKey(_)) {
+                    PENDING_SENDER_KEY.lock().insert(
+                        msg.message_guid.clone(),
+                        PendingSenderKey::Announcement(channel_id, announcement),
+                    );
+                    return AckDecision::Retain;
+                }
             } else {
                 tracing::info!(
                     channel_id = %channel_id,
@@ -235,6 +273,7 @@ pub(super) async fn process_sender_key_message(
     }
 
     // Every other arm handled the message.
+    PENDING_SENDER_KEY.lock().remove(&msg.message_guid);
     retry_budget.forget(&msg.message_guid);
     AckDecision::Ack
 }
@@ -250,7 +289,7 @@ fn process_decrypted_data_message(
     channel_repo: &Arc<ChannelRepository>,
     ephemeral_repo: &Arc<EphemeralRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+) -> bool {
     tracing::debug!(
         message_guid = %msg.message_guid,
         sender_id = %sender_id,
@@ -285,7 +324,7 @@ fn process_decrypted_data_message(
                         error: format!("Invalid channel ID: {}", e),
                     });
                     stats.write().messages_failed += 1;
-                    return;
+                    return true;
                 }
             };
 
@@ -421,6 +460,7 @@ fn process_decrypted_data_message(
                         error = %e,
                         "Failed to store channel message"
                     );
+                    return false;
                 }
             }
         }
@@ -437,4 +477,5 @@ fn process_decrypted_data_message(
             stats.write().messages_failed += 1;
         }
     }
+    true
 }

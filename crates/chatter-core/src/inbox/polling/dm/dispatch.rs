@@ -17,7 +17,7 @@ pub(crate) fn dispatch_dm_content(
     user_repo: &Arc<UserRepository>,
     conversation_manager: &DmConversationManager,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
-) {
+) -> AckDecision {
     // Log the content type being dispatched
     let content_type = match &dm_content {
         DmContent::Text { .. } => "Text",
@@ -50,6 +50,7 @@ pub(crate) fn dispatch_dm_content(
             thread_id,
             ..
         } => {
+            let mut profile_key_save_failed = false;
             // Store sender's profile key if present (for decrypting their display_name)
             if let Some(ref key) = profile_key {
                 if key.len() == 32 {
@@ -73,6 +74,7 @@ pub(crate) fn dispatch_dm_content(
                                 }
                             }
                             Err(e) => {
+                                profile_key_save_failed = true;
                                 tracing::debug!(
                                     sender_id = %sender_id,
                                     error = %e,
@@ -80,6 +82,8 @@ pub(crate) fn dispatch_dm_content(
                                 );
                             }
                         }
+                    } else {
+                        profile_key_save_failed = true;
                     }
                 }
             }
@@ -89,7 +93,11 @@ pub(crate) fn dispatch_dm_content(
             // whole point — no message row, no bubble. Mirrors the ServerDm
             // inbound path (gateway `store_data_message`).
             if body.is_empty() && attachments.is_empty() {
-                return;
+                return if profile_key_save_failed {
+                    AckDecision::Retain
+                } else {
+                    AckDecision::Ack
+                };
             }
 
             // A friend DM is ONE conversation whichever transport carried it:
@@ -180,8 +188,12 @@ pub(crate) fn dispatch_dm_content(
                     }
                     Err(e) => {
                         tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store DM");
+                        return AckDecision::Retain;
                     }
                 }
+            } else {
+                tracing::warn!(peer_id = %peer_id, "Current user unavailable; retaining DM");
+                return AckDecision::Retain;
             }
 
             // Create attachment records from pointers (service layer responsibility)
@@ -377,7 +389,7 @@ pub(crate) fn dispatch_dm_content(
                         len = new_mailbox_pk.len(),
                         "MailboxRotation announce has invalid pk length (expected 32), ignoring"
                     );
-                    return;
+                    return AckDecision::Ack;
                 }
             };
             match conversation_manager.rotate_peer_mailbox(&peer_id, sender_device_id, pk) {
@@ -392,8 +404,9 @@ pub(crate) fn dispatch_dm_content(
                     tracing::warn!(
                         peer_id = %peer_id,
                         sender_device_id,
-                        "MailboxRotation announce from a device with no mailbox on record, ignoring"
+                        "MailboxRotation announce from a device with no mailbox on record, retaining"
                     );
+                    return AckDecision::Retain;
                 }
                 Err(e) => {
                     tracing::error!(
@@ -401,6 +414,7 @@ pub(crate) fn dispatch_dm_content(
                         error = %e,
                         "MailboxRotation: failed to save rotated peer mailbox"
                     );
+                    return AckDecision::Retain;
                 }
             }
         }
@@ -471,7 +485,7 @@ pub(crate) fn dispatch_dm_content(
             );
             let Ok(channel_id) = channel_id.parse::<ChannelId>() else {
                 tracing::warn!(peer_id = %peer_id, "Group call signal with invalid channel_id");
-                return;
+                return AckDecision::Ack;
             };
             let _ = event_tx.send(InboxEvent::GroupCallSignalReceived {
                 sender_id: *sender_id,
@@ -604,4 +618,5 @@ pub(crate) fn dispatch_dm_content(
         // the new one. Nothing to store, nothing for the UI — the poll loop acks.
         DmContent::NullMessage => {}
     }
+    AckDecision::Ack
 }

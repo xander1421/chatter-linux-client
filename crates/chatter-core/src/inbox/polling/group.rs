@@ -8,7 +8,9 @@
 //! cryptographically revealed during SSDecVer (sealed sender decryption), NOT
 //! from plaintext metadata.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use tokio::sync::broadcast;
 
@@ -59,6 +61,19 @@ use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
 use crate::services::gateway::{MessageGateway, SealedSenderResult};
 use crate::storage::{AttachmentRepository, ChannelRepository};
+
+static PENDING_ANNOUNCEMENTS: LazyLock<
+    parking_lot::Mutex<
+        HashMap<
+            String,
+            (
+                crate::domain::UserId,
+                ChannelId,
+                crate::proto::content_v1::GroupMailboxAddress,
+            ),
+        >,
+    >,
+> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Poll all group mailboxes for new messages.
 ///
@@ -259,6 +274,43 @@ async fn process_sealed_sender_group_message(
     retry_budget: &ack_policy::RetryBudget,
     content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
 ) -> AckDecision {
+    if let Some((sender_id, channel_id, announcement)) =
+        PENDING_ANNOUNCEMENTS.lock().get(message_id).cloned()
+    {
+        return match group_coordinator.process_announcement(sender_id, &announcement) {
+            Ok(()) => {
+                PENDING_ANNOUNCEMENTS.lock().remove(message_id);
+                let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
+                    channel_id,
+                    member_id: sender_id,
+                    mailbox_pk: announcement.mailbox_pk,
+                    timestamp: announcement.timestamp,
+                });
+                AckDecision::Ack
+            }
+            Err(e) => {
+                tracing::warn!(%e, "Group mailbox announcement still awaits persistence");
+                let decision = ack_policy::retain_within_budget(
+                    MarkerTarget {
+                        conversation_id: group_id,
+                        conversation_type: ConversationType::Channel,
+                        peer_id: Some(sender_id),
+                        envelope_ts_ns,
+                    },
+                    message_repo,
+                    domain_tx,
+                    message_id,
+                    retry_budget,
+                    ack_policy::now_ns(),
+                    "group mailbox announcement save failed",
+                );
+                if decision.should_ack() {
+                    PENDING_ANNOUNCEMENTS.lock().remove(message_id);
+                }
+                decision
+            }
+        };
+    }
     crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
     let key =
         match message_repo.reaction_receive_key("anon_group", group_id, message_id, envelope_ts_ns)
@@ -516,6 +568,13 @@ async fn process_sealed_sender_group_message(
                     error = %e,
                     "Failed to process group mailbox announcement"
                 );
+                if !matches!(e, crate::error::MailboxError::InvalidServerKey(_)) {
+                    PENDING_ANNOUNCEMENTS.lock().insert(
+                        message_id.to_string(),
+                        (sender_id, channel_id, announcement),
+                    );
+                    return AckDecision::Retain;
+                }
             } else {
                 tracing::info!(
                     channel_id = %channel_id,

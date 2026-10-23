@@ -1,4 +1,12 @@
 use super::*;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+// Signal's receive ratchet may already be advanced when storing the DM fails.
+// Keep the parsed content for the next offer of the still-queued envelope.
+static PENDING_DM_CONTENT: LazyLock<
+    parking_lot::Mutex<HashMap<(UserId, String), (UserId, u32, DmContent)>>,
+> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Poll all DM mailboxes and process received messages.
 ///
@@ -102,6 +110,7 @@ pub async fn poll_dm_mailboxes(
                 // Process each message through the gateway
                 for msg in result.messages {
                     total_messages += 1;
+                    let cache_key = (peer_id, msg.message_id.clone());
 
                     // Already handled earlier in this session — the server just
                     // re-delivered it because an `acknowledge` failed. Don't
@@ -120,6 +129,7 @@ pub async fn poll_dm_mailboxes(
                         message_ids.push(msg.message_id.clone());
                         continue;
                     }
+                    let cached = PENDING_DM_CONTENT.lock().get(&cache_key).cloned();
 
                     // A trial AEAD open picks the device's key; nothing opening
                     // is either a device's bootstrap RESPONSE (a different
@@ -131,7 +141,7 @@ pub async fn poll_dm_mailboxes(
                                 .is_ok()
                         })
                         .copied();
-                    let response = if opening.is_none() {
+                    let response = if opening.is_none() && cached.is_none() {
                         try_parse_bootstrap_response(
                             &msg.encrypted_envelope,
                             peer_id,
@@ -163,18 +173,25 @@ pub async fn poll_dm_mailboxes(
                         // Flushes what is queued, and what is owed to this device.
                         let _ = event_tx.send(InboxEvent::DmBootstrapCompleted { peer_id });
                         AckDecision::Ack
-                    } else if let Some((sender_device_id, secret)) =
-                        opening.or(recv_keys.first().copied())
+                    } else if let Some((sender_device_id, secret)) = cached
+                        .as_ref()
+                        .map(|(_, device_id, _)| (*device_id, [0; 32]))
+                        .or(opening)
+                        .or(recv_keys.first().copied())
                     {
                         // Decrypt with Signal Protocol (forward secrecy via Double Ratchet)
-                        match message_gateway
-                            .process_dm_message(
-                                &msg.encrypted_envelope,
-                                &secret,
-                                msg.server_timestamp,
-                            )
-                            .await
-                        {
+                        let decrypted = if let Some((sender, _, content)) = cached {
+                            Ok((sender, content))
+                        } else {
+                            message_gateway
+                                .process_dm_message(
+                                    &msg.encrypted_envelope,
+                                    &secret,
+                                    msg.server_timestamp,
+                                )
+                                .await
+                        };
+                        match decrypted {
                             // Blocked sender: the gateway authenticated them
                             // and refused before parsing, so there is nothing
                             // to dispatch. Ack anyway — an unacked envelope is
@@ -224,7 +241,8 @@ pub async fn poll_dm_mailboxes(
                                         }
                                     }
                                 }
-                                dispatch_dm_content(
+                                let replay_content = dm_content.clone();
+                                let dispatch = dispatch_dm_content(
                                     dm_content,
                                     &sender_id,
                                     sender_device_id,
@@ -239,19 +257,35 @@ pub async fn poll_dm_mailboxes(
                                     conversation_manager,
                                     domain_tx,
                                 );
-                                // Arm the copy just stored (filed under the
-                                // sender's (id, sent_at) key) so the reaper
-                                // removes it when the timer runs out.
-                                if let Some((_, sent_at, _, true, secs)) = disappearing {
-                                    if secs > 0 {
-                                        if let Ok(Some(stored)) = message_repo
-                                            .get_by_sender_timestamp(&sender_id, sent_at)
-                                        {
-                                            message_gateway.arm_disappearing(&stored.id, secs);
+                                if dispatch == AckDecision::Retain {
+                                    PENDING_DM_CONTENT.lock().insert(
+                                        cache_key.clone(),
+                                        (sender_id, sender_device_id, replay_content),
+                                    );
+                                    ack_policy::retain_within_budget(
+                                        ack_policy::dm_target(peer_id, msg.server_timestamp),
+                                        message_repo,
+                                        domain_tx,
+                                        &msg.message_id,
+                                        retry_budget,
+                                        ack_policy::now_ns(),
+                                        "decrypted DM awaits local persistence",
+                                    )
+                                } else {
+                                    // Arm the copy just stored (filed under the
+                                    // sender's (id, sent_at) key) so the reaper
+                                    // removes it when the timer runs out.
+                                    if let Some((_, sent_at, _, true, secs)) = disappearing {
+                                        if secs > 0 {
+                                            if let Ok(Some(stored)) = message_repo
+                                                .get_by_sender_timestamp(&sender_id, sent_at)
+                                            {
+                                                message_gateway.arm_disappearing(&stored.id, secs);
+                                            }
                                         }
                                     }
+                                    AckDecision::Ack
                                 }
-                                AckDecision::Ack
                             }
                             Err(e)
                                 if addressed_to_another_device(&e, local_recipient.as_deref()) =>
@@ -263,38 +297,67 @@ pub async fn poll_dm_mailboxes(
                                 )
                             }
                             Err(e) => {
-                                let error_str = e.to_string();
-                                // The session's ratchet state is gone and this
-                                // path sends no DecryptionErrorMessage, so the
-                                // session is reset instead (Signal's
-                                // lightSessionReset).
-                                let session_desync = matches!(
+                                // A restart drops the in-memory plaintext retry.
+                                // The ratchet may then report this envelope as a
+                                // duplicate. Only a committed message row makes
+                                // that safe to drain without a delivery marker.
+                                if matches!(
                                     e,
                                     crate::error::ServiceError::Crypto(
-                                        crate::error::CryptoError::SessionDesync { .. }
+                                        crate::error::CryptoError::DuplicateMessage { .. }
                                     )
-                                );
-                                tracing::error!(
-                                    peer_id = %peer_id,
-                                    message_id = %msg.message_id,
-                                    error = %e,
-                                    session_desync,
-                                    "DM decryption failed"
-                                );
-                                let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
-                                    peer_id,
-                                    error: error_str,
-                                    session_desync,
-                                });
-                                dm_failure_decision(
-                                    peer_id,
-                                    msg.server_timestamp,
-                                    &e,
-                                    message_repo,
-                                    domain_tx,
-                                    &msg.message_id,
-                                    retry_budget,
-                                )
+                                ) {
+                                    let stored = match msg.message_id.parse::<MessageId>() {
+                                        Ok(id) => message_repo.get(&id),
+                                        Err(_) => Ok(None),
+                                    };
+                                    match stored {
+                                        Ok(Some(_)) => AckDecision::Ack,
+                                        Ok(None) => ack_policy::record_marker_then_ack(
+                                            message_repo,
+                                            domain_tx,
+                                            ack_policy::dm_target(peer_id, msg.server_timestamp),
+                                            ack_policy::FailureMarker::DeliveryIssue,
+                                        ),
+                                        Err(error) => {
+                                            tracing::warn!(%error, "Cannot verify duplicate DM persistence");
+                                            AckDecision::Retain
+                                        }
+                                    }
+                                } else {
+                                    let error_str = e.to_string();
+                                    // The session's ratchet state is gone and this
+                                    // path sends no DecryptionErrorMessage, so the
+                                    // session is reset instead (Signal's
+                                    // lightSessionReset).
+                                    let session_desync = matches!(
+                                        e,
+                                        crate::error::ServiceError::Crypto(
+                                            crate::error::CryptoError::SessionDesync { .. }
+                                        )
+                                    );
+                                    tracing::error!(
+                                        peer_id = %peer_id,
+                                        message_id = %msg.message_id,
+                                        error = %e,
+                                        session_desync,
+                                        "DM decryption failed"
+                                    );
+                                    let _ = event_tx.send(InboxEvent::DmDecryptionFailed {
+                                        peer_id,
+                                        error: error_str,
+                                        session_desync,
+                                    });
+                                    dm_failure_decision(
+                                        peer_id,
+                                        msg.server_timestamp,
+                                        &e,
+                                        message_repo,
+                                        domain_tx,
+                                        &msg.message_id,
+                                        retry_budget,
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -334,6 +397,7 @@ pub async fn poll_dm_mailboxes(
                         // failed `acknowledge` does not make us decrypt it
                         // twice on the replay.
                         AckDecision::Ack => {
+                            PENDING_DM_CONTENT.lock().remove(&cache_key);
                             deduplicator.mark_processed(&msg.message_id);
                             retry_budget.forget(&msg.message_id);
                             message_ids.push(msg.message_id.clone());
