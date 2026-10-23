@@ -305,212 +305,151 @@ mod android_renderer {
 
 #[cfg(feature = "desktop")]
 mod pdf_renderer {
-    use std::cell::RefCell;
-    use std::sync::OnceLock;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock, mpsc};
 
     use pdfium_render::prelude::*;
+    use slint::ComponentHandle;
 
     use crate::MainWindow;
     use crate::bin_ui::slint_conversions::rgba_to_slint_image;
-    use slint::ComponentHandle;
 
-    /// Target render width in pixels. Height is calculated from page aspect ratio.
     const RENDER_WIDTH: u32 = 800;
+    const CACHE_BYTES: usize = 16 * 1024 * 1024;
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    static WORKER: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
+    static PAGE: Mutex<(i32, i32)> = Mutex::new((0, 0));
 
-    /// Lazily-initialized Pdfium binding.
-    static PDFIUM: OnceLock<Option<Pdfium>> = OnceLock::new();
-
-    /// Thread-local state for the currently-loaded PDF document.
-    struct PdfState {
-        /// Raw PDF bytes (kept alive for pdfium document lifetime).
-        _data: Vec<u8>,
-        /// Total page count.
-        page_count: u16,
-        /// Current page index (0-based).
-        current_page: u16,
-        /// Pre-rendered page images (lazily filled).
-        page_cache: Vec<Option<slint::Image>>,
+    enum Command {
+        Load(u64, Vec<u8>, slint::Weak<MainWindow>),
+        Render(u64, u16, slint::Weak<MainWindow>),
+        Clear,
     }
 
-    thread_local! {
-        static PDF_STATE: RefCell<Option<PdfState>> = const { RefCell::new(None) };
+    struct CachedPage {
+        index: u16,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
     }
 
-    /// Initialize PDFium library (once, lazily).
-    ///
-    /// Returns `None` if libpdfium is not installed on the system.
-    fn get_pdfium() -> Option<&'static Pdfium> {
-        PDFIUM
-            .get_or_init(|| {
-                // Try system library first, then common paths
-                match Pdfium::bind_to_system_library()
-                    .or_else(|_| Pdfium::bind_to_library("libpdfium.so"))
-                    .or_else(|_| Pdfium::bind_to_library("/usr/lib/libpdfium.so"))
-                    .or_else(|_| Pdfium::bind_to_library("/usr/local/lib/libpdfium.so"))
-                {
-                    Ok(bindings) => Some(Pdfium::new(bindings)),
-                    Err(e) => {
-                        tracing::warn!(
-                            "PDFium library not found: {}. Install libpdfium for in-app PDF viewing.",
-                            e
-                        );
-                        None
+    fn worker() -> &'static mpsc::Sender<Command> {
+        WORKER.get_or_init(|| {
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || run(rx));
+            tx
+        })
+    }
+
+    fn run(rx: mpsc::Receiver<Command>) {
+        let pdfium = Pdfium::bind_to_system_library()
+            .or_else(|_| Pdfium::bind_to_library("libpdfium.so"))
+            .or_else(|_| Pdfium::bind_to_library("/usr/lib/libpdfium.so"))
+            .or_else(|_| Pdfium::bind_to_library("/usr/local/lib/libpdfium.so"))
+            .ok()
+            .map(Pdfium::new);
+        // Pdfium owns the loaded bytes, and the document never leaves this worker.
+        let mut document = None;
+        let mut cache: VecDeque<CachedPage> = VecDeque::new();
+        let mut cache_bytes = 0usize;
+        while let Ok(command) = rx.recv() {
+            let (generation, page, weak, load_data) = match command {
+                Command::Clear => {
+                    document = None;
+                    cache.clear();
+                    cache_bytes = 0;
+                    continue;
+                }
+                Command::Load(generation, bytes, weak) => {
+                    document = None;
+                    cache.clear();
+                    cache_bytes = 0;
+                    (generation, 0, weak, Some(bytes))
+                }
+                Command::Render(generation, page, weak) => (generation, page, weak, None),
+            };
+            if GENERATION.load(Ordering::Acquire) != generation {
+                continue;
+            }
+            let result: Result<(u16, CachedPage), String> = (|| {
+                let pdfium = pdfium.as_ref().ok_or("PDF rendering unavailable. Install libpdfium for in-app viewing.")?;
+                if let Some(bytes) = load_data {
+                    document = Some(pdfium.load_pdf_from_byte_vec(bytes, None)
+                        .map_err(|e| format!("Failed to load PDF: {e}"))?);
+                }
+                let document = document.as_ref().ok_or("PDF is no longer loaded")?;
+                let count = document.pages().len();
+                if count == 0 { return Err("PDF has no pages".into()); }
+                if page >= count { return Err("PDF page is unavailable".into()); }
+                if let Some(position) = cache.iter().position(|entry| entry.index == page) {
+                    let cached = cache.remove(position).unwrap();
+                    let response = CachedPage { index: page, width: cached.width, height: cached.height, rgba: cached.rgba.clone() };
+                    cache.push_back(cached);
+                    return Ok((count, response));
+                }
+                let rendered = render_page(&document, page)?;
+                let size = rendered.rgba.len();
+                if size <= CACHE_BYTES {
+                    while cache_bytes + size > CACHE_BYTES {
+                        if let Some(old) = cache.pop_front() { cache_bytes -= old.rgba.len(); }
+                        else { break; }
                     }
+                    cache_bytes += size;
+                    cache.push_back(CachedPage { index: page, width: rendered.width, height: rendered.height, rgba: rendered.rgba.clone() });
                 }
-            })
-            .as_ref()
-    }
-
-    /// Load a PDF from bytes, render the first page, and update the UI.
-    pub fn load_and_render(window: &MainWindow, pdf_data: &[u8]) {
-        let Some(pdfium) = get_pdfium() else {
-            window.global::<crate::ChatPane>().set_pdf_preview_error(
-                "PDF rendering unavailable. Install libpdfium for in-app viewing.".into(),
-            );
-            return;
-        };
-
-        match pdfium.load_pdf_from_byte_slice(pdf_data, None) {
-            Ok(document) => {
-                let page_count = document.pages().len();
-                if page_count == 0 {
-                    window
-                        .global::<crate::ChatPane>()
-                        .set_pdf_preview_error("PDF has no pages".into());
-                    return;
+                Ok((count, rendered))
+            })();
+            if GENERATION.load(Ordering::Acquire) != generation { continue; }
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                if GENERATION.load(Ordering::Acquire) != generation
+                    || !window.global::<crate::ChatPane>().get_pdf_preview_visible() { return; }
+                let pane = window.global::<crate::ChatPane>();
+                match result {
+                    Ok((count, image)) => {
+                        *PAGE.lock().unwrap_or_else(|e| e.into_inner()) = (page as i32, count as i32);
+                        pane.set_pdf_preview_page_count(count as i32);
+                        pane.set_pdf_preview_current_page(page as i32 + 1);
+                        pane.set_pdf_preview_image(rgba_to_slint_image(&image.rgba, image.width, image.height));
+                        pane.set_pdf_preview_error("".into());
+                    }
+                    Err(error) => pane.set_pdf_preview_error(error.into()),
                 }
-
-                // Render first page
-                let first_page_image = render_page(&document, 0);
-
-                window
-                    .global::<crate::ChatPane>()
-                    .set_pdf_preview_page_count(page_count as i32);
-                window
-                    .global::<crate::ChatPane>()
-                    .set_pdf_preview_current_page(1);
-
-                if let Some(ref img) = first_page_image {
-                    window
-                        .global::<crate::ChatPane>()
-                        .set_pdf_preview_image(img.clone());
-                }
-
-                // Store state for page navigation
-                let mut cache = vec![None; page_count as usize];
-                cache[0] = first_page_image;
-
-                PDF_STATE.with(|state| {
-                    *state.borrow_mut() = Some(PdfState {
-                        _data: pdf_data.to_vec(),
-                        page_count: page_count as u16,
-                        current_page: 0,
-                        page_cache: cache,
-                    });
-                });
-            }
-            Err(e) => {
-                tracing::error!("Failed to load PDF: {:?}", e);
-                window
-                    .global::<crate::ChatPane>()
-                    .set_pdf_preview_error(format!("Failed to load PDF: {}", e).into());
-            }
+            });
         }
     }
 
-    /// Navigate to a different page (delta: -1 for prev, +1 for next).
+    pub fn load_and_render(window: &MainWindow, pdf_data: &[u8]) {
+        let generation = GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        *PAGE.lock().unwrap_or_else(|e| e.into_inner()) = (0, 0);
+        window.global::<crate::ChatPane>().set_pdf_preview_image(slint::Image::default());
+        let _ = worker().send(Command::Load(generation, pdf_data.to_vec(), window.as_weak()));
+    }
+
     pub fn navigate(window: &MainWindow, delta: i32) {
-        PDF_STATE.with(|state_cell| {
-            let mut state_opt = state_cell.borrow_mut();
-            let Some(state) = state_opt.as_mut() else {
-                return;
-            };
-
-            let new_page = state.current_page as i32 + delta;
-            if new_page < 0 || new_page >= state.page_count as i32 {
-                return;
-            }
-
-            let new_page = new_page as u16;
-            state.current_page = new_page;
-
-            // Check cache first
-            if let Some(Some(cached)) = state.page_cache.get(new_page as usize) {
-                window
-                    .global::<crate::ChatPane>()
-                    .set_pdf_preview_image(cached.clone());
-                window
-                    .global::<crate::ChatPane>()
-                    .set_pdf_preview_current_page(new_page as i32 + 1);
-                return;
-            }
-
-            // Need to render — reload document from stored data
-            let pdfium = match get_pdfium() {
-                Some(p) => p,
-                None => return,
-            };
-
-            // We need the raw data to reload the document
-            let data = &state._data;
-            match pdfium.load_pdf_from_byte_slice(data, None) {
-                Ok(document) => {
-                    let image = render_page(&document, new_page);
-                    if let Some(ref img) = image {
-                        window
-                            .global::<crate::ChatPane>()
-                            .set_pdf_preview_image(img.clone());
-                    }
-                    state.page_cache[new_page as usize] = image;
-                    window
-                        .global::<crate::ChatPane>()
-                        .set_pdf_preview_current_page(new_page as i32 + 1);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to reload PDF for page {}: {:?}", new_page, e);
-                }
-            }
-        });
+        let mut page = PAGE.lock().unwrap_or_else(|e| e.into_inner());
+        let next = page.0 + delta;
+        if page.1 == 0 || next < 0 || next >= page.1 { return; }
+        page.0 = next;
+        let generation = GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let _ = worker().send(Command::Render(generation, next as u16, window.as_weak()));
     }
 
-    /// Clear the PDF state.
     pub fn clear() {
-        PDF_STATE.with(|state| {
-            *state.borrow_mut() = None;
-        });
+        GENERATION.fetch_add(1, Ordering::AcqRel);
+        *PAGE.lock().unwrap_or_else(|e| e.into_inner()) = (0, 0);
+        let _ = worker().send(Command::Clear);
     }
 
-    /// Render a single page to a Slint Image.
-    fn render_page(document: &PdfDocument, page_index: u16) -> Option<slint::Image> {
-        let page = match document.pages().get(page_index as i32) {
-            Ok(page) => page,
-            Err(e) => {
-                tracing::error!("Failed to get page {}: {:?}", page_index, e);
-                return None;
-            }
-        };
-
+    fn render_page(document: &PdfDocument, page_index: u16) -> Result<CachedPage, String> {
+        let page = document.pages().get(page_index as i32)
+            .map_err(|e| format!("Failed to get PDF page: {e}"))?;
         let config = PdfRenderConfig::new()
             .set_target_width(RENDER_WIDTH as Pixels)
-            .set_maximum_height((RENDER_WIDTH * 2) as i32); // Prevent absurdly tall pages
-
-        match page.render_with_config(&config) {
-            Ok(bitmap) => {
-                let img = bitmap.as_image();
-                let Ok(img) = img else {
-                    tracing::error!("Failed to convert page {} to image", page_index);
-                    return None;
-                };
-                let rgba = img.to_rgba8();
-                let width = rgba.width();
-                let height = rgba.height();
-                let data = rgba.into_raw();
-                Some(rgba_to_slint_image(&data, width, height))
-            }
-            Err(e) => {
-                tracing::error!("Failed to render page {}: {:?}", page_index, e);
-                None
-            }
-        }
+            .set_maximum_height((RENDER_WIDTH * 2) as i32);
+        let bitmap = page.render_with_config(&config)
+            .map_err(|e| format!("Failed to render PDF page: {e}"))?;
+        let image = bitmap.as_image().map_err(|e| format!("Failed to convert PDF page: {e}"))?.to_rgba8();
+        Ok(CachedPage { index: page_index, width: image.width(), height: image.height(), rgba: image.into_raw() })
     }
 }
