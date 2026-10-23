@@ -54,10 +54,6 @@ import java.util.concurrent.Executors
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
-    companion object {
-        private const val PENDING_SCREEN_SHARE_TOKEN = "pending-screen-share-token"
-    }
-
     private var pendingScreenShareToken = 0L
     private external fun nativeOnScreenShareDenied(token: Long)
     private val screenShareConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -194,7 +190,6 @@ class MainActivity : GameActivity() {
     private external fun nativeReleasePendingVideo(token: Long)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        pendingScreenShareToken = savedInstanceState?.getLong(PENDING_SCREEN_SHARE_TOKEN) ?: 0L
         // Samsung may prelaunch this Activity before BOOT_COMPLETED without
         // creating a usable window. Preserve the durable account marker until
         // Rust restores the session; the default Kotlin false is not sign-out.
@@ -246,15 +241,11 @@ class MainActivity : GameActivity() {
         nativeInitWebrtc()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        outState.putLong(PENDING_SCREEN_SHARE_TOKEN, pendingScreenShareToken)
-        super.onSaveInstanceState(outState)
-    }
-
     override fun onDestroy() {
-        if (!isChangingConfigurations && pendingScreenShareToken != 0L) {
-            nativeOnScreenShareDenied(pendingScreenShareToken)
+        if (pendingScreenShareToken != 0L) {
+            val token = pendingScreenShareToken
             pendingScreenShareToken = 0L
+            nativeOnScreenShareDenied(token)
         }
         cameraAnalysis?.let { analysis ->
             analysis.clearAnalyzer()
