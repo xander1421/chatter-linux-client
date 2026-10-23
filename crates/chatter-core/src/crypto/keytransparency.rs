@@ -66,6 +66,9 @@ const LOG_INTERIOR_PREFIX: u8 = 0x03;
 pub enum KtError {
     /// The proof or tree head was missing/structurally malformed.
     Malformed(&'static str),
+    /// The local tree-head pin could not be read or decoded. Its absence cannot
+    /// be assumed, so no offered head may be accepted.
+    PinUnreadable,
     /// `inclusion_proof.key` != `VRF_sk(user_id)`: the server answered with a
     /// proof for a *different* leaf than the user we asked about.
     WrongLeafKey,
@@ -111,6 +114,10 @@ impl std::fmt::Display for KtError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             KtError::Malformed(w) => write!(f, "KT proof malformed: {w}"),
+            KtError::PinUnreadable => write!(
+                f,
+                "KT pinned tree head could not be read or decoded; refusing to trust the offered head"
+            ),
             KtError::WrongLeafKey => {
                 write!(
                     f,

@@ -637,7 +637,7 @@ pub(crate) mod tests {
         let ((), result) = tokio::join!(other_check, fetch);
         assert_eq!(result.unwrap().1.key_id, "vector-current");
         assert!(fetched.load(Ordering::SeqCst));
-        assert!(kt_anchor::pinned_head(&settings).is_some());
+        assert!(kt_anchor::pinned_head(&settings).unwrap().is_some());
     }
 
     #[test]

@@ -79,12 +79,11 @@ fn root_of(sth: &SignedTreeHead) -> Result<[u8; 32], KtError> {
         .map_err(|_| KtError::Malformed("tree head root is not 32 bytes"))
 }
 
-/// Read the pinned head, if any.
-pub fn pinned_head(settings: &SettingsRepository) -> Option<PinnedTreeHead> {
+/// Read the pinned head. Only a missing setting is a first contact.
+pub fn pinned_head(settings: &SettingsRepository) -> Result<Option<PinnedTreeHead>, KtError> {
     settings
         .get::<PinnedTreeHead>(KT_PINNED_TREE_HEAD)
-        .ok()
-        .flatten()
+        .map_err(|_| KtError::PinUnreadable)
 }
 
 /// What the caller must do about an offered tree head.
@@ -125,7 +124,7 @@ pub fn classify_head(
         return Err(KtError::Malformed("tree head epoch is not its log size"));
     }
 
-    let Some(pin) = pinned_head(settings) else {
+    let Some(pin) = pinned_head(settings)? else {
         store(settings, offered_epoch, offered_root)?;
         return Ok(AnchorAction::Settled(AnchorOutcome::FirstPin));
     };
@@ -161,7 +160,7 @@ pub fn accept_advance(
     resp: &GetConsistencyProofResponse,
 ) -> Result<AnchorOutcome, KtError> {
     let offered_root = root_of(sth)?;
-    let pin = pinned_head(settings).ok_or(KtError::Malformed("pin vanished mid-advance"))?;
+    let pin = pinned_head(settings)?.ok_or(KtError::Malformed("pin vanished mid-advance"))?;
 
     verify_consistency_proof(resp)?;
     bind_proof_to_pin(resp, pin, sth.epoch, offered_root)?;
@@ -336,7 +335,7 @@ mod tests {
         let a = classify_head(&s, &sth(7, [1u8; 32])).unwrap();
         assert_eq!(a, AnchorAction::Settled(AnchorOutcome::FirstPin));
         assert_eq!(
-            pinned_head(&s).unwrap(),
+            pinned_head(&s).unwrap().unwrap(),
             PinnedTreeHead {
                 epoch: 7,
                 root: [1u8; 32]
@@ -365,7 +364,7 @@ mod tests {
             KtError::ConsistencyRootMismatch
         );
         assert_eq!(
-            pinned_head(&s).unwrap().root,
+            pinned_head(&s).unwrap().unwrap().root,
             [1u8; 32],
             "a rejected head must not overwrite the pin"
         );
@@ -381,7 +380,7 @@ mod tests {
             classify_head(&s, &sth(6, [9u8; 32])).unwrap_err(),
             KtError::ConsistencyEpochOrder
         );
-        assert_eq!(pinned_head(&s).unwrap().epoch, 7);
+        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 7);
     }
 
     /// A newer head must not be silently accepted; it must demand a proof for
@@ -399,7 +398,7 @@ mod tests {
             }
         );
         assert_eq!(
-            pinned_head(&s).unwrap().epoch,
+            pinned_head(&s).unwrap().unwrap().epoch,
             7,
             "classify must not advance the pin before the proof is checked"
         );
@@ -444,7 +443,7 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, AnchorOutcome::FirstPin);
         assert_eq!(
-            pinned_head(&s).unwrap(),
+            pinned_head(&s).unwrap().unwrap(),
             PinnedTreeHead {
                 epoch: 7,
                 root: [1u8; 32]
@@ -471,7 +470,7 @@ mod tests {
             Some((3, 5)),
             "the proof is fetched for exactly pinned->offered"
         );
-        assert_eq!(pinned_head(&s).unwrap().epoch, 5);
+        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 5);
     }
 
     /// Two concurrent checks of the same new head (V34: a new friend's prewarm
@@ -523,7 +522,7 @@ mod tests {
             outcomes,
             [AnchorOutcome::Unchanged, AnchorOutcome::Advanced]
         );
-        assert_eq!(pinned_head(&s).unwrap().epoch, 5);
+        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 5);
     }
 
     /// A newer head whose proof does not start at the root this device
@@ -544,7 +543,7 @@ mod tests {
             KtError::ConsistencyRootMismatch
         );
         assert_eq!(
-            pinned_head(&s).unwrap(),
+            pinned_head(&s).unwrap().unwrap(),
             PinnedTreeHead {
                 epoch: 3,
                 root: [9u8; 32]
@@ -560,7 +559,7 @@ mod tests {
             .unwrap_err(),
             KtError::ConsistencyUnavailable
         );
-        assert_eq!(pinned_head(&s).unwrap().epoch, 3);
+        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 3);
     }
 
     /// F3: the server's epoch is its log size, so a head at epoch 0 or with
@@ -578,7 +577,7 @@ mod tests {
         let mut skewed = sth(7, [1u8; 32]);
         skewed.tree_size = 9;
         assert!(classify_head(&s, &skewed).is_err());
-        assert!(pinned_head(&s).is_none());
+        assert!(pinned_head(&s).unwrap().is_none());
     }
 
     /// F3: a pin already at epoch 0 (from a build that stored one) no longer
@@ -606,7 +605,7 @@ mod tests {
             KtError::ConsistencyUnavailable
         );
         assert_eq!(
-            pinned_head(&s).unwrap(),
+            pinned_head(&s).unwrap().unwrap(),
             PinnedTreeHead {
                 epoch: 0,
                 root: [9u8; 32]
@@ -624,7 +623,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(pinned_head(&s).unwrap().epoch, 0);
+        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 0);
     }
 
     /// A bad proof must leave the pin where it was.
@@ -635,7 +634,7 @@ mod tests {
 
         let bogus = GetConsistencyProofResponse::default();
         assert!(accept_advance(&s, &sth(8, [2u8; 32]), &bogus).is_err());
-        assert_eq!(pinned_head(&s).unwrap().epoch, 7);
+        assert_eq!(pinned_head(&s).unwrap().unwrap().epoch, 7);
     }
 
     /// The binding this module exists to add, tested directly: a consistency
