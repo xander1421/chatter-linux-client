@@ -221,6 +221,10 @@ impl BleRuntime {
         let Some(group_id) = PrivateChannel::envelope_group_id(&packet.payload) else {
             return true;
         };
+        // A relayed group packet can arrive as fragments. The outer fragments
+        // are retained by ingress, but the reassembled packet only reaches this
+        // handler. Keep it so an epoch key arriving later can open it.
+        self.gossip.on_public_packet_seen(packet, now_secs());
         let id = uuid::Uuid::from_bytes(group_id).to_string();
         let Ok(Some(mut state)) = self.private_channels.load(&id) else {
             // Nonmembers still relay sealed group packets.
@@ -479,6 +483,16 @@ impl BleRuntime {
         self.events.open_private_channel(&update.id, &update.name);
         self.events.send(MeshEvent::PrivateChannelChanged);
         self.send_private_epoch_ack(claimed, &update).await;
+        // Sync may have delivered ciphertext before the Noise key update. It is
+        // already in our GCS filter, so a later round will never request it again.
+        // Replay the bounded retained window now that this epoch can decrypt it.
+        for packet in self.gossip.group_message_packets(now_secs()) {
+            if PrivateChannel::envelope_group_id(&packet.payload) == update.group_id()
+                && PrivateChannel::envelope_epoch(&packet.payload) == Some(update.epoch)
+            {
+                self.on_private_channel_message(&packet, claimed);
+            }
+        }
     }
 
     pub(super) async fn on_private_epoch_hint(&mut self, claimed: &PeerId, proof: EpochProof) {

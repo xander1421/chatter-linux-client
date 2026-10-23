@@ -39,6 +39,27 @@ impl BleRuntime {
             .gossip
             .handle_request_sync(claimed, &request, now_secs());
         for send in sends {
+            if send.packet.message_type() == Some(MessageType::GroupMessage) {
+                // The store carries opaque ciphertext from any group. Only a
+                // current member of this exact epoch may receive a sync copy.
+                let Some(group_id) = PrivateChannel::envelope_group_id(&send.packet.payload) else {
+                    continue;
+                };
+                let Some(epoch) = PrivateChannel::envelope_epoch(&send.packet.payload) else {
+                    continue;
+                };
+                let id = uuid::Uuid::from_bytes(group_id).to_string();
+                let Ok(Some(channel)) = self.private_channels.load(&id) else {
+                    continue;
+                };
+                if channel.stale
+                    || channel.epoch != epoch
+                    || channel.member_key(claimed).is_none()
+                    || channel.departed.iter().any(|member| member.peer == claimed.as_str())
+                {
+                    continue;
+                }
+            }
             self.dispatch_sync(send).await;
         }
     }
