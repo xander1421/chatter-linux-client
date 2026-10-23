@@ -34,15 +34,18 @@ pub fn activity() -> Result<&'static Global<JObject<'static>>, String> {
 }
 
 /// Handoff only a digest-verified APK in app-private staging to PackageInstaller.
-pub fn install_verified_update(path: &str) -> Result<(), String> {
+pub fn install_verified_update(path: &str, version_code: i64) -> Result<(), String> {
     let act = activity()?;
     with_jni_env(|env| {
         let jpath = env.new_string(path).map_err(|e| e.to_string())?;
         let result = env.call_method(
             act,
             jni::jni_str!("installVerifiedUpdate"),
-            jni::jni_sig!("(Ljava/lang/String;)Z"),
-            &[jni::objects::JValue::Object(&jpath)],
+            jni::jni_sig!("(Ljava/lang/String;J)Z"),
+            &[
+                jni::objects::JValue::Object(&jpath),
+                jni::objects::JValue::Long(version_code),
+            ],
         );
         if result.is_err() {
             clear_exception(env);

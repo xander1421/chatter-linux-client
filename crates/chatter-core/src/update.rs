@@ -193,6 +193,20 @@ pub fn verify_artifact(mut reader: impl Read, manifest: &UpdateManifest) -> Resu
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+pub fn android_handoff_version_code(
+    path: &Path,
+    manifest: &UpdateManifest,
+) -> Result<i64, String> {
+    if manifest.platform != "android"
+        || path.file_name().and_then(|name| name.to_str())
+            != Some(format!("android-{}.download", manifest.version_code).as_str())
+    {
+        return Err("verified Android update does not match the downloaded artifact".into());
+    }
+    i64::try_from(manifest.version_code).map_err(|_| "Android update version code is invalid".into())
+}
+
 fn update_url(origin: &str, path: &str) -> Result<String, String> {
     let base = url::Url::parse(origin).map_err(|_| "update server URL is invalid")?;
     if base.scheme() != "https"
@@ -522,6 +536,7 @@ pub fn stage_linux_archive(
         let decoder = flate2::read::GzDecoder::new(input);
         let mut archive = tar::Archive::new(decoder);
         let mut saw_binary = false;
+        let mut saw_build = false;
         let mut extracted = 0u64;
         for entry in archive.entries().map_err(|_| "update tar is invalid")? {
             let mut entry = entry.map_err(|_| "update tar entry is invalid")?;
@@ -547,6 +562,9 @@ pub fn stage_linux_archive(
             let ty = entry.header().entry_type();
             if !ty.is_file() && !ty.is_dir() {
                 return Err("update tar contains a link or special file".into());
+            }
+            if relative == Path::new("BUILD.txt") && entry.size() > 4096 {
+                return Err("update build metadata is too large".into());
             }
             extracted = extracted
                 .checked_add(entry.size())
@@ -574,11 +592,28 @@ pub fn stage_linux_archive(
                     .map_err(|_| "update archive sync failed")?;
                 if relative == Path::new("bin/chatter-ui") {
                     saw_binary = true;
+                } else if relative == Path::new("BUILD.txt") {
+                    saw_build = true;
                 }
             }
         }
         if !saw_binary {
             return Err("update archive has no client executable".into());
+        }
+        if !saw_build {
+            return Err("update archive has no build metadata".into());
+        }
+        let build = std::fs::read_to_string(stage.join("BUILD.txt"))
+            .map_err(|_| "update build metadata is invalid")?;
+        let fields: Vec<_> = build.lines().collect();
+        let expected_name = format!("version={}", manifest.version_name);
+        let expected_code = format!("version_code={}", manifest.version_code);
+        if fields.iter().filter(|line| line.starts_with("version=")).count() != 1
+            || fields.iter().filter(|line| line.starts_with("version_code=")).count() != 1
+            || !fields.contains(&expected_name.as_str())
+            || !fields.contains(&expected_code.as_str())
+        {
+            return Err("update build version differs from signed manifest".into());
         }
         #[cfg(unix)]
         {
@@ -660,6 +695,33 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
     tracing::info!(
         "Linux desktop launcher points at verified update; original launcher saved for rollback"
     );
+    Ok(())
+}
+
+/// Start the staged binary and keep the current launcher until it survives
+/// the bounded startup window. The caller exits only after this succeeds.
+#[cfg(target_os = "linux")]
+pub fn restart_into_linux_update(executable: &Path) -> Result<(), String> {
+    let mut child = std::process::Command::new(executable)
+        .spawn()
+        .map_err(|_| "Could not restart into the verified update")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return Err("Verified update exited during startup".into()),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Could not check verified update startup".into());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+    if let Err(error) = activate_linux_launcher(executable) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -809,6 +871,13 @@ mod tests {
             &checker[..],
         )
         .unwrap();
+        let build = b"version=0.1.0-rc122\nversion_code=122\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(build.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "chatter-122/BUILD.txt", &build[..])
+            .unwrap();
         tar.into_inner().unwrap().finish().unwrap();
         let contents = std::fs::read(&archive_path).unwrap();
         let mut manifest = fixture().0;

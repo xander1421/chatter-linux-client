@@ -167,19 +167,22 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             {
                 let path = staged.lock().ok().and_then(|guard| guard.clone());
                 if let Some(path) = path {
-                    if let Err(error) = update::activate_linux_launcher(&path) {
-                        show_error(weak, error);
-                        return;
-                    }
-                    tracing::info!("Linux update restart handoff");
-                    match std::process::Command::new(path).spawn() {
-                        Ok(_) => {
-                            let _ = slint::quit_event_loop();
+                    global.set_state("downloading".into());
+                    global.set_progress("Starting verified update…".into());
+                    crate::rt_handle().spawn(async move {
+                        match tokio::task::spawn_blocking(move ||
+                            update::restart_into_linux_update(&path)).await
+                        {
+                            Ok(Ok(())) => {
+                                tracing::info!("Linux update restart handoff");
+                                let _ = slint::invoke_from_event_loop(|| {
+                                    let _ = slint::quit_event_loop();
+                                });
+                            }
+                            Ok(Err(error)) => show_error(weak, error),
+                            Err(_) => show_error(weak, "Could not restart into the verified update".into()),
                         }
-                        Err(_) => {
-                            show_error(weak, "Could not restart into the verified update".into())
-                        }
-                    }
+                    });
                 }
             }
             return;
@@ -243,9 +246,10 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 Ok(path) => {
                     #[cfg(target_os = "android")]
                     {
-                        let install = crate::platform::android::activity::install_verified_update(
-                            &path.to_string_lossy(),
-                        );
+                        let install = update::android_handoff_version_code(&path, &download_manifest)
+                            .and_then(|code| crate::platform::android::activity::install_verified_update(
+                                &path.to_string_lossy(), code,
+                            ));
                         match install {
                             Ok(()) => {
                                 tracing::info!("Android update installer handoff");
