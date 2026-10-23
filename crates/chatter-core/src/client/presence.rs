@@ -8,6 +8,7 @@ use crate::domain::user::PresenceStatus;
 
 pub(super) struct PresenceController {
     state: Mutex<PresenceState>,
+    pub(super) publication_lock: Mutex<()>,
     idle_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -24,6 +25,7 @@ impl PresenceController {
                 current: PresenceStatus::Offline, manual: None,
                 last_activity: Instant::now(),
             }),
+            publication_lock: Mutex::new(()),
             idle_task: Mutex::new(None),
         }
     }
@@ -95,8 +97,13 @@ impl ChatterClient {
     pub async fn notify_presence_chat_opened(
         &self, conversation_id: &crate::domain::anon_dm::AnonDmId,
     ) {
-        let current = self.presence_controller.state.lock().await.current;
+        let state = self.presence_controller.state.lock().await;
+        let current = state.current;
         if current == PresenceStatus::Offline { return; }
+        let revision = self.auth_state().get().session_revision;
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.auth_state().get().session_revision != revision { return; }
+        let _publication = self.presence_controller.publication_lock.lock().await;
         if let Err(e) = self.send_anon_dm_presence_update(conversation_id, current).await {
             tracing::debug!("Failed to send presence on chat open: {}", e);
         }

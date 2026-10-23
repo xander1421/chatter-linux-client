@@ -10,6 +10,7 @@ impl ChatterClient {
         if self.auth_state().get().session_revision != revision {
             return;
         }
+        let _publication = self.presence_controller.publication_lock.lock().await;
         self.send_presence_updates(presence).await;
     }
 
@@ -19,6 +20,7 @@ impl ChatterClient {
         &self,
         presence: crate::domain::user::PresenceStatus,
     ) {
+        let _publication = self.presence_controller.publication_lock.lock().await;
         self.send_presence_updates(presence).await;
     }
 

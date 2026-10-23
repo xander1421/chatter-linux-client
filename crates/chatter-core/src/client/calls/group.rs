@@ -151,6 +151,12 @@ impl ChatterClient {
     /// asking until a newer key is installed ([`await_group_call_key`]).
     #[cfg(feature = "media")]
     pub(crate) fn resync_group_call_key(&self) {
+        struct AbortWait(tokio::task::AbortHandle);
+        impl Drop for AbortWait {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
         let Some(worker) = self.call_service().get().cloned() else {
             return;
         };
@@ -159,7 +165,7 @@ impl ChatterClient {
         };
         let signaling = self.call_signaling().clone();
         let inbox = self.device_inbox_provider().get().cloned();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             use crate::services::call_worker::OrchestratedCallKind;
             // Channel group calls only: a 1:1 call has no key
             // authority to ask.
@@ -177,7 +183,7 @@ impl ChatterClient {
                 return;
             };
             tracing::info!(call_id = %call.id, "Group call signals may have been lost; requesting a fresh key");
-            spawn_group_key_wait(
+            if let Some(handle) = spawn_group_key_wait(
                 inbox,
                 worker,
                 signaling,
@@ -186,8 +192,12 @@ impl ChatterClient {
                 call.channel_id,
                 status.anchor,
                 std::time::Duration::ZERO,
-            );
+            ) {
+                let _abort = AbortWait(handle.abort_handle());
+                let _ = handle.await;
+            }
         });
+        self.tasks.lock().push(handle);
     }
 
     /// Install a participant's `(key, epoch)` into the active call `call`,
@@ -472,7 +482,7 @@ impl ChatterClient {
             )
             .await;
         }
-        spawn_group_key_wait(
+        if let Some(handle) = spawn_group_key_wait(
             self.device_inbox_provider().get().cloned(),
             worker.clone(),
             self.call_signaling().clone(),
@@ -481,7 +491,9 @@ impl ChatterClient {
             joined.channel_id,
             0,
             KEY_REQUEST_AFTER,
-        );
+        ) {
+            self.tasks.lock().push(handle);
+        }
 
         Ok(crate::domain::call::CallSetupResult {
             call_id: call,
@@ -751,12 +763,12 @@ pub(super) fn spawn_group_key_wait(
     channel: crate::domain::ids::ChannelId,
     min_anchor: u32,
     first_delay: std::time::Duration,
-) {
+) -> Option<tokio::task::JoinHandle<()>> {
     let call_id = call.to_string();
     let Some(guard) = signaling.begin_group_key_wait(&call_id) else {
-        return;
+        return None;
     };
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let _guard = guard;
         let _poll_guard = inbox.as_ref().map(|provider| provider.responsive_polling());
         let mut delay = first_delay;
@@ -783,7 +795,7 @@ pub(super) fn spawn_group_key_wait(
             call_id,
             "Still no group call key after {KEY_REQUEST_ATTEMPTS} requests"
         );
-    });
+    }))
 }
 
 /// Hold a key from `sender` — in the room, not (yet) the key authority in

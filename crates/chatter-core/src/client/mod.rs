@@ -673,22 +673,29 @@ const CALL_KEY_TASKS: usize = 8;
 /// (that run reads the roster afresh), so a burst of joins costs at most two
 /// rotations and none is missed (§124 1k device check, 2026-10-05).
 #[cfg(feature = "media")]
-fn schedule_join_rotation(client: &Arc<ChatterClient>, gate: &Arc<calls::JoinRotationGate>) {
+fn schedule_join_rotation(
+    client: &Arc<ChatterClient>,
+    gate: &Arc<calls::JoinRotationGate>,
+    children: &mut tokio::task::JoinSet<()>,
+) {
     if !gate.request() {
         return;
     }
     let client = Arc::clone(client);
     let gate = Arc::clone(gate);
-    tokio::spawn(async move {
-        loop {
-            if let Err(e) = client.handle_participants_joined().await {
-                tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
-            }
-            if !gate.finish() {
-                break;
-            }
+    children.spawn(run_join_rotation(client, gate));
+}
+
+#[cfg(feature = "media")]
+async fn run_join_rotation(client: Arc<ChatterClient>, gate: Arc<calls::JoinRotationGate>) {
+    loop {
+        if let Err(e) = client.handle_participants_joined().await {
+            tracing::error!(error = %e, "Failed to rotate the group call key for joiners");
         }
-    });
+        if !gate.finish() {
+            break;
+        }
+    }
 }
 
 /// Who left and who joined between two views of a call's room.
