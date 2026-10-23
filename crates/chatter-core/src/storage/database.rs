@@ -407,6 +407,11 @@ impl Database {
     pub fn run_migrations(&self) -> Result<(), StorageError> {
         let conn = self.connection()?;
         let runner = default_migrations();
-        runner.run(&conn)
+        runner.run(&conn)?;
+        drop(conn);
+        if let Err(error) = crate::storage::repositories::attachment_repo::AttachmentRepository::retry_pending_cleanup(self) {
+            tracing::warn!(%error, "pending attachment cleanup will be retried");
+        }
+        Ok(())
     }
 }

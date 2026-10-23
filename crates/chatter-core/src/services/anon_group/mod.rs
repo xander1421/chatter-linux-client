@@ -106,9 +106,8 @@ impl AnonGroupService {
         group_id: crate::domain::anon_group::AnonGroupId,
     ) -> Result<crate::domain::anon_group::AnonGroup, AnonGroupError> {
         let invite = self
-            .list_pending_invites()?
-            .into_iter()
-            .find(|i| i.group_id == group_id)
+            .anon_group_repo
+            .get_pending_invite(&group_id)?
             .ok_or_else(|| AnonGroupError::InvalidData("Invitation no longer pending".into()))?;
         let group = self
             .accept_invite(
