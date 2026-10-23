@@ -21,6 +21,7 @@ component MenuItem inherits Rectangle {
     in property <bool> destructive: false;
     in property <bool> selected: false;
     in property <bool> mobile-mode: false;
+    in property <bool> initial-focus: false;
     // The icon set has no up/down chevron; the right-facing one is rotated.
     in property <angle> icon-rotation: 0deg;
     callback clicked();
@@ -28,6 +29,27 @@ component MenuItem inherits Rectangle {
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    border-width: menu-keys.has-focus ? 2px : 0px;
+    border-color: Colors.focus-ring;
+
+    changed initial-focus => {
+        if root.initial-focus { menu-keys.focus(); }
+    }
+
+    menu-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     HorizontalLayout {
         padding-left: Spacing.md;
@@ -139,6 +161,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 icon-rotation: -90deg;
                 label: "Move up";
                 mobile-mode: root.mobile-mode;
+                initial-focus: root.show && !root.mobile-mode;
                 clicked => {
                     root.move-section(root.section-id, -1);
                     root.close();

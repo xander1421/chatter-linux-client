@@ -249,20 +249,18 @@ export component SessionsModal inherits Rectangle {
                                     alignment: center;
                                     spacing: Spacing.xxs;
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
+                                    Text {
+                                        text: session.device-info;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        wrap: word-wrap;
+                                    }
 
-                                        Text {
-                                            text: session.device-info;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
-                                            horizontal-stretch: 1;
-                                        }
-
-                                        // Current session badge
-                                        if session.is-current: Rectangle {
+                                    // Keep the badge below the full device name on narrow cards.
+                                    if session.is-current: HorizontalLayout {
+                                        alignment: start;
+                                        Rectangle {
                                             width: current-text.preferred-width + Spacing.sm * 2;
                                             height: 20px;
                                             border-radius: Spacing.radius-sm;

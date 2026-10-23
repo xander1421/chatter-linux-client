@@ -46,6 +46,29 @@ component CustomSectionHeader inherits Rectangle {
     callback context-menu-requested(/* x */ length, /* y */ length);
 
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-description: root.is-expanded ? "Expanded section. Press Shift+F10 or Menu for section options." : "Collapsed section. Press Shift+F10 or Menu for section options.";
+    accessible-action-default => { root.toggle-expanded(); }
+    border-width: header-keys.has-focus ? 2px : 0px;
+    border-color: Colors.focus-ring;
+
+    header-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.toggle-expanded();
+                return accept;
+            }
+            if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                root.context-menu-requested(root.absolute-position.x + root.width / 2,
+                    root.absolute-position.y + root.height);
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     // The header's ONE pointer surface: tap toggles, hold (or right-click)
     // opens the menu. There used to be a second TouchArea over the name inside
@@ -132,11 +155,12 @@ component CustomSectionHeader inherits Rectangle {
             }
         }
 
-        // Hover-reveal action buttons — DESKTOP ONLY. There is no hover on a
+        // Section actions stay visible on desktop so keyboard focus can reach
+        // them. There is no hover on a
         // touch screen, and press-and-hold already opens a menu carrying
         // Rename and Remove; a 24px button here would be an unhittable
         // duplicate of a control the user already has.
-        if !root.mobile-mode && header-hover.has-hover: HorizontalLayout {
+        if !root.mobile-mode: HorizontalLayout {
             spacing: Spacing.xxs;
             alignment: end;
 
@@ -146,6 +170,18 @@ component CustomSectionHeader inherits Rectangle {
                 height: Spacing.button-height;
                 border-radius: Spacing.radius-sm;
                 background: rename-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Rename " + root.name;
+                accessible-action-default => { root.rename-clicked(); }
+                border-width: rename-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                rename-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.rename-clicked(); return accept; }
+                        return reject;
+                    }
+                }
 
                 Image {
                     source: Icons.edit;
@@ -168,6 +204,18 @@ component CustomSectionHeader inherits Rectangle {
                 height: Spacing.button-height;
                 border-radius: Spacing.radius-sm;
                 background: delete-touch.has-hover ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Remove " + root.name;
+                accessible-action-default => { root.delete-clicked(); }
+                border-width: delete-keys.has-focus ? 2px : 0px;
+                border-color: Colors.focus-ring;
+                delete-keys := FocusScope {
+                    width: 0px; height: 0px;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return { root.delete-clicked(); return accept; }
+                        return reject;
+                    }
+                }
 
                 Image {
                     source: Icons.trash;

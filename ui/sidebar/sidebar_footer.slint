@@ -68,10 +68,15 @@ export component SidebarFooter inherits GlassSurface {
                 // where it carries the user's avatar — a name-and-avatar strip
                 // wedged between the last conversation and the tab bar was
                 // neither a list row nor navigation, and read as leftover.
-                if !false: TouchArea {
+                if !false: Rectangle {
                     horizontal-stretch: 1;
-                    mouse-cursor: pointer;
-                    clicked => { root.profile-clicked(); }
+                    accessible-role: button; accessible-label: "Profile";
+                    accessible-action-default => { root.profile-clicked(); }
+                    border-width: profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                    profile-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
+                    }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.profile-clicked(); } }
                     HorizontalLayout {
                         spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
@@ -89,6 +94,11 @@ export component SidebarFooter inherits GlassSurface {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: root.active-tab == "chats" ? Colors.row-selected : chats-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button; accessible-label: "Chats";
+                        accessible-action-default => { root.tab-selected("chats"); }
+                        border-width: chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        chats-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
+                        }
                         Image { source: Icons.message-circle; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         chats-touch := TouchArea { clicked => { root.tab-selected("chats"); } }
                     }
@@ -98,6 +108,11 @@ export component SidebarFooter inherits GlassSurface {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: root.active-tab == "mesh" ? Colors.row-selected : mesh-touch.has-hover ? Colors.surface-hover : transparent;
                         accessible-role: button; accessible-label: "Mesh";
+                        accessible-action-default => { root.tab-selected("mesh"); }
+                        border-width: mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        mesh-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
+                        }
                         Image { source: Icons.radio; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         mesh-touch := TouchArea { clicked => { root.tab-selected("mesh"); } }
                     }
@@ -109,6 +124,13 @@ export component SidebarFooter inherits GlassSurface {
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: sett-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button; accessible-label: "Settings";
+                        accessible-action-default => { root.settings-clicked(); }
+                        border-width: sett-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        sett-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
+                        }
+
                         Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
                         if root.server-unreachable: Rectangle {
                             x: parent.width - self.width - 1px; y: 1px;
@@ -132,8 +154,12 @@ export component SidebarFooter inherits GlassSurface {
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
                         background: collapse-touch.has-hover ? Colors.surface-hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Collapse sidebar";
+                        accessible-role: button; accessible-label: "Collapse sidebar";
+                        accessible-action-default => { root.toggle-collapsed(); }
+                        border-width: collapse-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        collapse-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
+                        }
                         Image { source: Icons.chevron-left; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
                         collapse-touch := TouchArea { clicked => { root.toggle-collapsed(); } }
                     }
@@ -148,7 +174,14 @@ export component SidebarFooter inherits GlassSurface {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
                     tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Anon Mode";
+                        accessible-action-default => { root.anon-mode-clicked(); }
+                        border-width: rail-anon-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-anon-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.anon-mode-clicked(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                         background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
                         Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
@@ -173,7 +206,14 @@ export component SidebarFooter inherits GlassSurface {
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "AI"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "AI";
+                        accessible-action-default => { root.channel-selected("00000000-0000-0000-0000-000000000000"); }
+                        border-width: rail-ai-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-ai-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.channel-selected("00000000-0000-0000-0000-000000000000"); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         // The local AI channel's fixed id is the nil UUID
                         // (chatter-core client/jarvis.rs jarvis_channel_id).
@@ -184,7 +224,14 @@ export component SidebarFooter inherits GlassSurface {
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "Chats"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Chats";
+                        accessible-action-default => { root.tab-selected("chats"); }
+                        border-width: rail-chats-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-chats-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("chats"); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                         background: root.active-tab == "chats" ? Colors.row-selected : root.rail-slot-bg;
                         Image { source: Icons.message-circle; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         TouchArea { clicked => { root.tab-selected("chats"); } }
@@ -194,7 +241,14 @@ export component SidebarFooter inherits GlassSurface {
                 if root.mesh-available: TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: "Mesh"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.active-tab == "mesh" ? Colors.row-selected : root.rail-slot-bg;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Mesh";
+                        accessible-action-default => { root.tab-selected("mesh"); }
+                        border-width: rail-mesh-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-mesh-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.tab-selected("mesh"); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.active-tab == "mesh" ? Colors.row-selected : root.rail-slot-bg;
                         Image { source: Icons.radio; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                             colorize: !MeshGlobal.radio-running ? Colors.warning
                                 : MeshGlobal.peer-count > 0 ? Colors.primary
@@ -222,7 +276,14 @@ export component SidebarFooter inherits GlassSurface {
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
                     tooltip-text: root.collapsed ? "Expand sidebar" : "Collapse sidebar"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Expand sidebar";
+                        accessible-action-default => { root.toggle-collapsed(); }
+                        border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-expand-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: root.collapsed ? Icons.chevron-right : Icons.chevron-left; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
                         TouchArea { clicked => { root.toggle-collapsed(); } }
                     } }
@@ -230,7 +291,14 @@ export component SidebarFooter inherits GlassSurface {
 
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
-                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
+                    HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
+                        accessible-role: button; accessible-label: "Settings";
+                        accessible-action-default => { root.settings-clicked(); }
+                        border-width: rail-settings-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        rail-settings-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }
+                        }
+                        height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                         Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
                         if root.server-unreachable: Rectangle {
                             x: parent.width - self.width - 1px; y: 1px;
@@ -243,8 +311,15 @@ export component SidebarFooter inherits GlassSurface {
                         TouchArea { clicked => { root.settings-clicked(); } }
                     } }
                 }
-                TouchArea {
-                    height: root.rail-icon-size; clicked => { root.profile-clicked(); }
+                Rectangle {
+                    height: root.rail-icon-size;
+                    accessible-role: button; accessible-label: "Profile";
+                    accessible-action-default => { root.profile-clicked(); }
+                    border-width: rail-profile-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                    rail-profile-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.profile-clicked(); return accept; } return reject; }
+                    }
+                    TouchArea { clicked => { root.profile-clicked(); } }
                     HorizontalLayout { alignment: center;
                         Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
                             presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
