@@ -14,4 +14,11 @@
              light-mode launch doesn't flash black. Matches Colors.background. -->
         <item name="android:windowBackground">@color/window_background</item>
     </style>
+
+    <!-- Video viewer: its Materials.scrim-media backdrop lies over the chat, as the
+         Slint image viewer's does, instead of over an opaque window. -->
+    <style name="Theme.Chatter.Translucent">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
 </resources>

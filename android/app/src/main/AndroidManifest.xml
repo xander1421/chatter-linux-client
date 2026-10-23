@@ -95,7 +95,7 @@
 
         <activity android:name=".VideoPlaybackActivity" android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:theme="@style/Theme.Chatter" />
+            android:theme="@style/Theme.Chatter.Translucent" />
 
         <!-- Accept/Decline buttons on the incoming-call notification. Explicit
              broadcasts from PendingIntents; not exported. -->
