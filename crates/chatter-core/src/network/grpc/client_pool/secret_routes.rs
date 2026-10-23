@@ -1,6 +1,25 @@
 use super::*;
 
 impl GrpcClientPool {
+    /// Storage transfers for secret chats share the secret channel's isolation group.
+    #[cfg(feature = "onion")]
+    pub async fn secret_storage_tor(
+        &self,
+    ) -> Result<super::super::onion_transport::SharedTorClient, NetworkError> {
+        if !self.secret_route_available() {
+            return Err(NetworkError::SecretChatNeedsTor(
+                "no server .onion address is pinned",
+            ));
+        }
+        let base = super::super::onion_transport::shared_bootstrap(&self.onion_tor)
+            .await
+            .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
+        self.secret_onion_tor
+            .get_or_init(|| async { base.isolated_client() })
+            .await;
+        Ok(self.secret_onion_tor.clone())
+    }
+
     /// Isolated onion connector for the secret-chat channel (its own circuit).
     #[cfg(feature = "onion")]
     pub(super) fn secret_onion_connector(&self) -> super::super::onion_transport::OnionConnector {
