@@ -5,26 +5,41 @@ impl ChatterClient {
 
     /// Set presence status and broadcast to all anon DM conversations.
     pub async fn set_presence(&self, presence: crate::domain::user::PresenceStatus) {
+        let revision = self.auth_state().get().session_revision;
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.auth_state().get().session_revision != revision {
+            return;
+        }
+        self.send_presence_updates(presence).await;
+    }
+
+    /// Shutdown already owns the lifecycle lock and sends the final status
+    /// after all session tasks have stopped.
+    pub(super) async fn set_presence_for_shutdown(
+        &self,
+        presence: crate::domain::user::PresenceStatus,
+    ) {
+        self.send_presence_updates(presence).await;
+    }
+
+    async fn send_presence_updates(&self, presence: crate::domain::user::PresenceStatus) {
         let conversations = match self.anon_dms().list_conversations() {
             Ok(convs) => convs,
             Err(e) => {
                 tracing::warn!("Failed to list conversations for presence: {}", e);
-                return;
+                Vec::new()
             }
         };
 
-        for conv in &conversations {
-            if !conv.is_ready() {
-                continue;
-            }
+        let sends = conversations.iter().filter(|conv| conv.is_ready()).map(|conv| {
             let service = self.anon_dms().clone();
             let conv_id = conv.id;
-            tokio::spawn(async move {
+            async move {
                 if let Err(e) = service.send_presence_update(&conv_id, presence).await {
                     tracing::debug!("Failed to send presence update: {}", e);
                 }
-            });
-        }
+            }
+        });
 
         // ── Identified presence ──────────────────────────────────────────
         // Publish our REAL online/offline status to the server via the
@@ -35,9 +50,14 @@ impl ChatterClient {
         // during shutdown, before the gRPC connection is torn down.
         let mut user_client = self.services.grpc_pool.user_client();
         let proto = crate::services::presence_service::domain_presence_to_proto(presence);
-        if let Err(e) = user_client.update_presence(proto).await {
-            tracing::warn!("Failed to publish identified presence to server: {}", e);
-        }
+        let identified = async {
+            if let Err(e) = user_client.update_presence(proto).await {
+                tracing::warn!("Failed to publish identified presence to server: {}", e);
+            }
+        };
+        // Both sends belong to this publication future. Canceling it drops
+        // every in-flight send before shutdown publishes Offline.
+        tokio::join!(futures::future::join_all(sends), identified);
 
         // Our own presence never comes back to us on the user-events stream —
         // the server fans it out to our friends, not to the sender. Emit it
