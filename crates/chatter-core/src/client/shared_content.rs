@@ -239,21 +239,9 @@ impl ChatterClient {
                 Ok(rows) => rows.iter().map(|row| {
                     let mut item = SharedContentItemData::from(row);
                     if let Ok(id) = row.attachment_id.parse() {
-                        item.is_video = client.get_attachment_metadata(&id).is_some_and(|attachment| {
-                            matches!(
-                                crate::domain::attachment::FileCategory::from_mime_and_filename(
-                                    &attachment.metadata.mime_type,
-                                    &attachment.metadata.name,
-                                ),
-                                crate::domain::attachment::FileCategory::Video
-                            )
-                        });
-                        #[cfg(target_os = "android")]
-                        if item.is_video && item.thumbnail.is_empty() {
-                            if let Ok(result) = client.decrypt_and_extract_video_thumbnail(&id) {
-                                item.thumbnail = result.image_bytes;
-                            }
-                        }
+                        item.is_video = client
+                            .get_attachment_metadata(&id)
+                            .is_some_and(|attachment| attachment.metadata.is_video());
                     }
                     item
                 }).collect(),
@@ -265,6 +253,21 @@ impl ChatterClient {
         })
         .await
         .unwrap_or_default()
+    }
+
+    /// Select at most `max` missing video previews from a page. The caller
+    /// performs the blocking extraction only for these attachment IDs.
+    #[cfg(target_os = "android")]
+    pub fn shared_content_video_thumbnail_candidates(
+        page: &[SharedContentItemData],
+        max: usize,
+    ) -> Vec<(usize, crate::domain::ids::AttachmentId)> {
+        page.iter()
+            .enumerate()
+            .filter(|(_, item)| item.is_video && item.thumbnail.is_empty())
+            .filter_map(|(index, item)| item.attachment_id.parse().ok().map(|id| (index, id)))
+            .take(max)
+            .collect()
     }
 
     /// The tab strip for a conversation: label + count per non-empty category,
