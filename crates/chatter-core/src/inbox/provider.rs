@@ -690,6 +690,8 @@ impl DeviceInboxProvider {
         let mut anon_polls = tokio::task::JoinSet::new();
         let mut group_polls = tokio::task::JoinSet::new();
         let mut poll_cycle: u64 = 0;
+        let mut pending_device_acks: Vec<String> = Vec::new();
+        let mut catch_up_pages = 0u8;
         loop {
             poll_cycle += 1;
             let cycle_started = tokio::time::Instant::now();
@@ -699,8 +701,23 @@ impl DeviceInboxProvider {
 
             // 1. Poll device inbox for regular messages
             tracing::info!(cycle = poll_cycle, "Polling device inbox...");
-            match poller.run_once().await {
-                Ok(Some(messages)) => {
+            if !pending_device_acks.is_empty() {
+                if let Err(error) = poller.acknowledge(pending_device_acks.clone()).await {
+                    tracing::warn!(cycle = poll_cycle, %error, pending = pending_device_acks.len(),
+                        "Device inbox: pending acknowledgements still await retry");
+                } else {
+                    pending_device_acks.clear();
+                }
+            }
+            // Stop paging while a failed ACK batch is outstanding. This bounds
+            // the retry journal and avoids re-decrypting already handled mail.
+            let poll_result = if pending_device_acks.is_empty() {
+                poller.run_once().await
+            } else {
+                Ok(Some((Vec::new(), false)))
+            };
+            match poll_result {
+                Ok(Some((messages, has_more))) => {
                     let count = messages.len();
                     if count > 0 {
                         tracing::info!(
@@ -762,6 +779,12 @@ impl DeviceInboxProvider {
                     if count > 0 {
                         poller.advance_after_id(batch_max, lowest_retained);
                     }
+                    catch_up_pages = if has_more && lowest_retained.is_none() && catch_up_pages < 20
+                    {
+                        catch_up_pages + 1
+                    } else {
+                        0
+                    };
 
                     // Drain the server queue. `AcknowledgeMessages` is documented in
                     // the proto as "Acknowledge receipt of messages (deletes from
@@ -771,8 +794,7 @@ impl DeviceInboxProvider {
                     // every launch, each start re-fetched and re-decrypted the whole
                     // history: 100 messages a page with `has_more=true`.
                     //
-                    // Acked whatever the outcome, not only on success. An undecryptable
-                    // message cannot be recovered by handing it to us again — the
+                    // An undecryptable message cannot be recovered by handing it to us again — the
                     // ciphertext is dead. Keeping it queued instead means replaying it
                     // at every start and reporting it again each time, which is
                     // precisely the storm this produced: 201 inbound reports and 12
@@ -791,21 +813,18 @@ impl DeviceInboxProvider {
                     // does not stack duplicates. The user sees where the gap is and
                     // that the fix is to ask the peer to send it again.
                     if !handled.is_empty()
-                        && let Err(error) = poller.acknowledge(handled).await
+                        && let Err(error) = poller.acknowledge(handled.clone()).await
                     {
-                        // Not fatal. The cursor has advanced past these (they
-                        // were decided ackable, so nothing is retaining them),
-                        // which means the next poll skips them; they come back
-                        // on the next start, when the cursor begins at 0 again,
-                        // and processing is idempotent. Loud because a
-                        // persistent failure here is invisible except as a
-                        // queue that never shrinks.
+                        // Keep the GUIDs and retry before another fetch. The
+                        // cursor can stay advanced because no envelope is
+                        // discarded from this retry journal on RPC failure.
                         tracing::warn!(
                             cycle = poll_cycle,
                             %error,
-                            "Device inbox: acknowledge failed; these stay queued on \
-                             the server and are reprocessed at the next start"
+                        "Device inbox: acknowledge failed; retrying this batch next cycle"
                         );
+                        pending_device_acks = handled;
+                        catch_up_pages = 0;
                     }
                 }
                 Ok(None) => {
@@ -814,6 +833,7 @@ impl DeviceInboxProvider {
                 }
                 Err(e) => {
                     tracing::warn!(cycle = poll_cycle, error = %e, "Device inbox: poll failed");
+                    catch_up_pages = 0;
                 }
             }
 
@@ -1132,11 +1152,13 @@ impl DeviceInboxProvider {
                 }
             }
 
-            // Foreground uses the configured active/idle cadence. Background
-            // uses a 30s fallback even if no push wake arrives. Jitter only
-            // shortens that deadline; elapsed mailbox work counts toward it.
-            // The pre-poll delay above still decorrelates each request.
-            let base = poll_hints.cycle_interval(poller.current_interval());
+            // Drain up to twenty more pages at a cooperative cadence when the
+            // server reports backlog; then give other work a normal interval.
+            let base = if catch_up_pages > 0 {
+                std::time::Duration::from_millis(250)
+            } else {
+                poll_hints.cycle_interval(poller.current_interval())
+            };
             let wait = timing
                 .jitter_interval(base)
                 .min(base)

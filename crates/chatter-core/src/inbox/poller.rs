@@ -134,10 +134,10 @@ impl InboxPoller {
     /// Execute a single poll cycle.
     ///
     /// Returns:
-    /// - `Ok(Some(messages))` - Poll succeeded, messages received
+    /// - `Ok(Some((messages, has_more)))` - Poll succeeded, with page hint
     /// - `Ok(None)` - Shutdown requested, should exit loop
     /// - `Err(e)` - Poll failed, should retry
-    pub async fn run_once(&self) -> Result<Option<Vec<DeviceMessage>>, InboxError> {
+    pub async fn run_once(&self) -> Result<Option<(Vec<DeviceMessage>, bool)>, InboxError> {
         // Check for shutdown
         if *self.shutdown_rx.borrow() {
             return Ok(None);
@@ -179,7 +179,7 @@ impl InboxPoller {
                 }
 
                 self.set_state(InboxState::Idle);
-                Ok(Some(messages))
+                Ok(Some((messages, has_more)))
             }
             Err(e) => {
                 // Emit poll failed event

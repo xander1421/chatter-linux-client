@@ -165,6 +165,7 @@ pub async fn process_device_message(
         message_repo,
         channel_repo,
         anon_group_repo,
+        group_coordinator,
         domain_tx,
         retry_budget,
     )
