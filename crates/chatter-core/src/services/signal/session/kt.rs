@@ -80,8 +80,7 @@ impl SignalService {
                     recipient = %recipient_id,
                     offered_epoch = sth.epoch,
                     error = %e,
-                    "KT REJECT: the offered tree head is not consistent with the head this \
-                     device pinned — fork, rollback, split view or rewritten log"
+                    "KT REJECT: could not establish continuity with the pinned tree head"
                 );
                 Err(ServiceError::Validation(format!(
                     "Key Transparency consistency check failed for {recipient_id}: {e}"
@@ -318,7 +317,10 @@ mod kt_pin_tests {
             err.to_string().contains("consistency check failed"),
             "{err}"
         );
-        assert_eq!(kt_anchor::pinned_head(&settings).unwrap().root, [1u8; 32]);
+        assert_eq!(
+            kt_anchor::pinned_head(&settings).unwrap().unwrap().root,
+            [1u8; 32]
+        );
     }
 
     /// Both KT gates hand their fetch result to `judge_kt_proof`. A server
@@ -356,6 +358,6 @@ mod kt_pin_tests {
                 "{path}: {err}"
             );
         }
-        assert!(kt_anchor::pinned_head(&settings).is_none());
+        assert!(kt_anchor::pinned_head(&settings).unwrap().is_none());
     }
 }
