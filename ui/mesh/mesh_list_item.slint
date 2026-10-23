@@ -1,21 +1,13 @@
-// One mesh conversation in the sidebar — Neo 2.0.
-//
-// Deliberately the same shape as `ChannelListItem`: a mesh conversation is a
-// peer of the other conversation types, not a mode. The only things it says
-// extra are the two facts a server chat never has to carry: whether anything
-// can move a message right now (a clock, not a warning), and — for a geohash
-// cell — that the scope is public and location-bound (a globe).
-
 import { Colors } from "../theme/colors.slint";
-import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { TooltipArea } from "../components/tooltip.slint";
+import { HoldArea } from "../components/hold_area.slint";
 
 export component MeshListItem inherits Rectangle {
     in property <string> title: "";
-    in property <string> kind: "room";        // "room" | "geohash" | "dm"
+    in property <string> kind: "room";
     in property <string> scope: "";
     in property <string> timestamp: "";
     in property <int> unread-count: 0;
@@ -27,262 +19,133 @@ export component MeshListItem inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <bool> touch: false;
-
     callback clicked();
     callback leave();
     callback toggle-mute();
+    property <bool> menu-open: false;
 
-    // Secondary line: what this scope actually is. More useful than a message
-    // preview would be, because the answer to "what am I speaking into" is the
-    // thing a mesh conversation has to keep answering.
-    property <string> secondary:
-        root.kind == "geohash" ? "public · " + root.scope
-      : root.kind == "room" ? "everyone in radio range"
-      : root.kind == "channel" ? "public to nearby listeners"
-      : root.kind == "private-channel" ? "invited devices · encrypted"
-      : root.binding-label == "Verified Chatter contact" ? "Verified Chatter contact"
-      : root.reachable ? "encrypted · self-asserted name"
-      : "no route now — sends wait for a carrier";
-
+    property <string> secondary: root.kind == "geohash" ? "Public · " + root.scope
+        : root.kind == "room" ? "Everyone in radio range"
+        : root.kind == "channel" ? "Public to nearby listeners"
+        : root.kind == "private-channel" ? "Invited devices · encrypted"
+        : root.binding-label == "Verified Chatter contact" ? "Verified Chatter contact"
+        : root.reachable ? "Encrypted · nearby" : "Waiting for a carrier";
     property <image> glyph: root.kind == "private-channel" ? Icons.lock
-                          : root.kind == "geohash" || root.kind == "channel" ? Icons.hash
-                          : root.kind == "dm" ? Icons.message-circle
-                          : Icons.radio;
+        : root.kind == "geohash" || root.kind == "channel" ? Icons.hash
+        : root.kind == "dm" ? Icons.user : Icons.radio;
 
-    property <bool> press-active: false;
-    property <length> press-x: 0px;
-    property <length> press-y: 0px;
-    height: root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop;
-    border-radius: Spacing.radius-sm;
-    clip: true;
-    transform-scale-x: root.press-active ? 98% : 100%;
-    transform-scale-y: root.press-active ? 96% : 100%;
-    animate transform-scale-x { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-    animate transform-scale-y { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-    animate background { duration: Materials.motion-standard; easing: Materials.glide; }
-    background: root.selected ? Colors.inset
-              : root.press-active ? Colors.surface-control-hover
-              : (!root.touch && touch.has-hover) ? Colors.surface-hover
-              : transparent;
-
+    height: (root.collapsed ? Spacing.touch-target-min : root.touch ? Spacing.row-height-touch : max(56px, Spacing.row-height-desktop))
+        + (root.menu-open ? Spacing.button-height : 0px);
+    background: root.selected ? Colors.row-selected : row-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
     accessible-role: button;
-    accessible-label: root.kind == "geohash"
-        ? root.title + ", public geohash channel, location-scoped"
-        : root.kind == "room"
-        ? root.title + ", public mesh room, everyone in radio range"
-        : root.kind == "channel"
-        ? root.title + ", public mesh channel, anyone nearby can read"
-        : root.kind == "private-channel"
-        ? root.title + ", private mesh channel, invited devices only"
-        : root.reachable
-        ? root.title + ", mesh direct message, " + root.binding-label
-        : root.title + ", mesh direct message, no route right now, " + root.binding-label;
-
-    touch := TouchArea {
+    accessible-label: root.title + ", " + root.secondary;
+    accessible-action-default => { root.clicked(); }
+    row-touch := HoldArea {
         mouse-cursor: pointer;
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down) {
-                root.press-x = self.mouse-x;
-                root.press-y = self.mouse-y;
-                root.press-active = true;
-            } else if (event.kind == PointerEventKind.move
-                && (abs(self.mouse-x - root.press-x) > Spacing.sm
-                    || abs(self.mouse-y - root.press-y) > Spacing.sm)) {
-                root.press-active = false;
-            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                root.press-active = false;
-            }
+        enabled-for-touch: root.touch;
+        clicked => { if !self.hold-fired { root.clicked(); } }
+        held => { if root.kind == "channel" { root.menu-open = true; } }
+    }
+    keys := FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return { root.clicked(); return accept; }
+            return reject;
         }
-        clicked => { root.clicked(); }
     }
 
     if !root.collapsed: HorizontalLayout {
-        padding-left: Spacing.sm;
-        padding-right: Spacing.sm;
-        spacing: Spacing.sm;
-        alignment: stretch;
-
-        // Kind glyph
+        height: root.height - (root.menu-open ? Spacing.button-height : 0px);
+        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md; alignment: center;
         Rectangle {
-            width: 24px;
-            height: parent.height;
+            width: 40px; height: 40px;
+            border-radius: root.kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
+            background: root.kind == "private-channel" ? Colors.group-accent
+                : root.kind == "dm" ? Colors.avatar-blue : Colors.tint-strong;
             Image {
-                source: root.glyph;
-                width: 16px;
-                height: 16px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.primary : Colors.text-secondary;
+                source: root.glyph; width: 20px; height: 20px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                colorize: root.kind == "private-channel" || root.kind == "dm" ? Colors.on-action : Colors.primary;
+            }
+            if root.kind == "dm" && root.reachable: Rectangle {
+                width: 10px; height: 10px; x: parent.width - self.width; y: parent.height - self.height;
+                border-radius: Spacing.radius-full; background: Colors.online;
+                border-width: 2px; border-color: Colors.surface-section;
             }
         }
-
-        // Keep moderation at the leading edge on phones. The floating create
-        // button occupies the trailing edge of the last visible row. Peers are
-        // blocked from their sheet, not from a bare word on every row.
-        if root.kind == "channel": Rectangle {
-            width: root.touch ? 54px : 48px;
-            Text {
-                text: root.muted ? "Unmute" : "Mute";
-                color: Colors.text-muted;
-                font-size: Typography.xxs;
-                vertical-alignment: center;
-            }
-            TouchArea {
-                clicked => { root.toggle-mute(); }
-            }
-        }
-
         VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: Spacing.xxs;
-
+            horizontal-stretch: 1; alignment: center; spacing: Spacing.xxs;
             HorizontalLayout {
                 spacing: Spacing.xs;
                 Text {
-                    text: root.title;
-                    wrap: no-wrap;
-                    color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: root.unread-count > 0 ? 600 : 400;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
+                    text: root.title; color: Colors.text-primary; font-size: Typography.base;
+                    font-weight: Typography.semibold; overflow: elide;
+                    horizontal-stretch: 1; vertical-alignment: center;
                 }
-                // Account verification requires a pinned Signal key or a
-                // live, in-person QR check; an announce signature is weaker.
-                if root.kind == "dm" && root.binding-label == "Verified Chatter contact": VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    Image {
-                        source: Icons.lock;
-                        width: 11px;
-                        height: 11px;
-                        colorize: Colors.success;
-                    }
+                if root.kind == "dm" && (root.verified || root.binding-label == "Verified Chatter contact"): Image {
+                    source: Icons.shield; width: 14px; height: 14px; colorize: Colors.success;
                 }
-                // Geohash cells are public and location-scoped. The glyph says
-                // so on every row, because the cell travels with every message.
-                if root.kind == "geohash": VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    Image {
-                        source: Icons.globe;
-                        width: 11px;
-                        height: 11px;
-                        colorize: Colors.text-muted;
-                    }
-                }
-                if root.timestamp != "": Text {
-                    text: root.timestamp;
-                    wrap: no-wrap;
-                    color: Colors.text-muted;
-                    font-size: Typography.xxs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
+                if root.muted: Image { source: Icons.bell-off; width: 14px; height: 14px; colorize: Colors.text-muted; }
             }
-
-            Rectangle {
-                horizontal-stretch: 1;
-                height: Typography.xs * 1.4;
-                clip: true;
-                Text {
-                    width: parent.width;
-                    height: parent.height;
-                    text: root.secondary;
-                    wrap: no-wrap;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    overflow: elide;
-                }
-            }
+            Text { text: root.secondary; color: Colors.text-muted; font-size: Typography.sm; overflow: elide; wrap: no-wrap; }
         }
-
-        // Nothing can carry to this peer at the moment. A clock rather than a
-        if root.kind == "channel": Rectangle {
-            width: 28px;
-            Text { text: "×"; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
-            TouchArea { clicked => { root.leave(); } }
-        }
-
-        // Nothing can carry to this peer at the moment. A clock rather than a
-        // warning colour: what you send is still sent, it just waits. Only for
-        // DMs — a broadcast scope has no single peer to be out of reach.
-        if root.kind == "dm" && !root.reachable: VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Image {
-                source: Icons.clock;
-                width: 12px;
-                height: 12px;
-                colorize: Colors.text-muted;
-            }
-        }
-
         VerticalLayout {
-            visible: root.unread-count > 0 || self.opacity > 0;
-            opacity: root.unread-count > 0 ? 1 : 0;
-            transform-scale-x: root.unread-count > 0 ? 100% : 55%;
-            transform-scale-y: root.unread-count > 0 ? 100% : 55%;
-            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
-            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-            alignment: center;
-            horizontal-stretch: 0;
-            Rectangle {
-                width: max(20px, badge-text.preferred-width + 12px);
-                height: 20px;
-                border-radius: Spacing.radius-full;
-                background: Colors.action-fill;
-                badge-text := Text {
+            alignment: center; spacing: Spacing.xs;
+            if root.timestamp != "": Text {
+                text: root.timestamp; color: Colors.text-muted; font-size: Typography.xs; horizontal-alignment: right;
+            }
+            if root.unread-count > 0: Rectangle {
+                width: max(20px, unread-label.preferred-width + 12px); height: 20px;
+                border-radius: Spacing.radius-full; background: Colors.action-fill;
+                unread-label := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.on-action;
-                    font-size: Typography.xs2;
-                    font-weight: 600;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
+                    color: Colors.on-action; font-size: Typography.xs; font-weight: Typography.bold;
+                    horizontal-alignment: center; vertical-alignment: center;
                 }
             }
         }
     }
-
     if root.collapsed: TooltipArea {
-        width: 100%;
-        height: 100%;
-        tooltip-text: root.kind == "geohash" ? root.title + " — public, location-scoped" : root.title;
-        tooltip-enabled: true;
-        placement: "right";
-
+        width: 100%; height: 100%; tooltip-text: root.title; tooltip-enabled: true; placement: "right";
         Image {
-            source: root.glyph;
-            width: 20px;
-            height: 20px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
+            source: root.glyph; width: 20px; height: 20px;
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             colorize: root.selected ? Colors.primary : Colors.text-secondary;
         }
-
         if root.unread-count > 0: Rectangle {
-            x: parent.width / 2 + 4px;
-            y: parent.height / 2 - 16px;
-            width: max(self.height, collapsed-badge.preferred-width + 8px);
-            height: Spacing.badge-sm;
-            border-radius: Spacing.radius-full;
-            background: Colors.action-fill;
-            collapsed-badge := Text {
-                text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.on-action;
-                font-size: Typography.xxs;
-                font-weight: 600;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                width: 100%;
-                height: 100%;
+            width: Spacing.badge-sm; height: Spacing.badge-sm;
+            x: parent.width / 2 + Spacing.xs; y: Spacing.xs;
+            border-radius: Spacing.radius-full; background: Colors.action-fill;
+        }
+    }
+    if root.menu-open: HorizontalLayout {
+        y: root.height - Spacing.button-height;
+        height: Spacing.button-height;
+        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
+        Rectangle {
+            horizontal-stretch: 1; border-radius: Spacing.radius-md;
+            background: mute-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+            Text { text: root.muted ? "Unmute" : "Mute"; color: Colors.primary;
+                font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+            mute-touch := TouchArea {
+                mouse-cursor: pointer; accessible-role: button;
+                accessible-label: root.muted ? "Unmute channel" : "Mute channel";
+                clicked => { root.menu-open = false; root.toggle-mute(); }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1; border-radius: Spacing.radius-md;
+            background: leave-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+            Text { text: "Leave"; color: Colors.danger; font-size: Typography.sm;
+                horizontal-alignment: center; vertical-alignment: center; }
+            leave-touch := TouchArea {
+                mouse-cursor: pointer; accessible-role: button; accessible-label: "Leave channel";
+                clicked => { root.menu-open = false; root.leave(); }
             }
         }
     }
-
+    if !root.collapsed: Rectangle {
+        x: 64px; y: root.height - 1px; width: root.width - 64px; height: 1px;
+        background: Colors.divider;
+    }
 }
