@@ -1,60 +1,50 @@
-// Mesh controls live in one place; the conversation list remains a list.
-import { Modal } from "../components/modal.slint";
+import { ModalContainer } from "../components/modal_container.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
-import { NeoActionToggle } from "../components/neo_action_toggle.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
-component SetupField inherits VerticalLayout {
-    in property <string> label: "";
-    in property <string> hint: "";
-    in-out property <string> value: "";
+component NearbyPeerRow inherits Rectangle {
+    in property <string> name;
+    in property <string> detail;
     in property <bool> touch: false;
-    callback submitted(string);
-    callback dragged(length);
-    spacing: Spacing.xs;
-    Text { text: root.label; color: Colors.text-secondary; font-size: Typography.sm; font-weight: 600; }
-    Rectangle {
-        height: Spacing.touch-target-min;
-        field := Input {
-            width: 100%;
-            control-height: Spacing.touch-target-min;
-            placeholder: root.hint;
-            text <=> root.value;
-            accepted(text) => { root.submitted(text); }
-        }
-        // A single-line TextInput owns drags that begin over its text, so the
-        // enclosing Flickable never sees them. On touch, this layer gives a
-        // tap back to the input and a vertical drag to the sheet.
-        if root.touch: TouchArea {
-            property <length> last-y: 0px;
-            property <length> down-y: 0px;
-            property <bool> tracking: false;
-            property <bool> panned: false;
-            pointer-event(event) => {
-                if event.kind == PointerEventKind.down {
-                    self.last-y = self.mouse-y + self.absolute-position.y;
-                    self.down-y = self.last-y;
-                    self.tracking = true;
-                    self.panned = false;
-                } else if event.kind == PointerEventKind.move && self.tracking {
-                    let pointer-y = self.mouse-y + self.absolute-position.y;
-                    if abs(pointer-y - self.down-y) > Spacing.xs {
-                        self.panned = true;
-                    }
-                    if self.panned { root.dragged(pointer-y - self.last-y); }
-                    self.last-y = pointer-y;
-                } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
-                    self.tracking = false;
-                }
-            }
-            clicked => { if !self.panned { field.focus(); } }
+    callback clicked();
+    height: root.touch ? Spacing.list-row-height-touch : 56px;
+    background: row-touch.pressed ? Colors.surface-control-hover : row-touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-description: root.detail;
+    accessible-action-default => { root.clicked(); }
+    FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return { root.clicked(); return accept; }
+            return reject;
         }
     }
+    HorizontalLayout { padding-left: Spacing.md; padding-right: Spacing.md;
+        spacing: Spacing.md; alignment: center;
+        Rectangle { width: 40px; height: 40px; border-radius: Spacing.radius-full;
+            background: Colors.tint-strong;
+            Image { source: Icons.user; width: Spacing.button-icon; height: Spacing.button-icon;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                colorize: Colors.primary; }
+        }
+        VerticalLayout { horizontal-stretch: 1; alignment: center;
+            Text { text: root.name; color: Colors.text-primary; font-size: Typography.base;
+                font-weight: Typography.semibold; overflow: elide; }
+            Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
+        }
+        Image { source: Icons.chevron-right; width: Spacing.button-icon; height: Spacing.button-icon;
+            colorize: Colors.text-muted; }
+    }
+    row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 export component MeshSetupSheet inherits Rectangle {
@@ -62,192 +52,130 @@ export component MeshSetupSheet inherits Rectangle {
     in property <bool> touch: false;
     callback close();
     property <string> name-draft: MeshGlobal.nickname;
-    property <string> public-draft: "";
-    property <string> private-draft: "";
-    property <string> invite-draft: "";
-    property <string> cell-draft: "";
     property <bool> confirming-wipe: false;
-    function scroll-field(delta: length) {
-        sheet-scroll.viewport-y = min(0px, max(sheet-scroll.height - sheet-scroll.viewport-height,
-            sheet-scroll.viewport-y + delta));
-    }
-    function create-private-once() {
-        if root.private-draft != "" {
-            let name = root.private-draft;
-            root.private-draft = "";
-            MeshGlobal.create-private-channel(name);
-        }
-    }
 
-    Modal {
+    ModalContainer {
         show: root.show-modal;
-        title: "Mesh";
+        accessible-title: "Mesh Settings";
         modal-width: 540px;
         max-modal-height: 760px;
-        // A sheet, not a full-screen page: fields in this full-screen page
-        // never took focus on Android (cause not traced; sheets work).
         fill-height: true;
         close => { root.close(); }
-        sheet-scroll := Flickable {
-            width: 100%; height: 100%;
-            viewport-height: setup-content.preferred-height;
-            setup-content := VerticalLayout {
-                width: parent.width;
-                spacing: Spacing.lg;
-                padding-bottom: Spacing.xl;
-
-                if MeshGlobal.pending-private-id != "": VerticalLayout {
-                    spacing: Spacing.sm;
-                    Text { text: MeshGlobal.pending-private-peer + " invited you to the private group " + MeshGlobal.pending-private-name;
-                        color: Colors.text-primary; font-size: Typography.base; wrap: word-wrap; }
-                    Text { text: "Peer names are self-asserted until you verify in person.";
-                        color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
-                    HorizontalLayout {
+        VerticalLayout {
+            padding-left: Spacing.lg; padding-right: Spacing.lg;
+            padding-top: Spacing.md; padding-bottom: Spacing.xl;
+            spacing: Spacing.md;
+            HorizontalLayout {
+                height: Spacing.touch-target-min;
+                alignment: center;
+                Text { text: "Mesh Settings"; color: Colors.text-primary; font-size: Typography.lg;
+                    font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
+                Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+            }
+            Flickable {
+                width: 100%; vertical-stretch: 1;
+                viewport-height: setup-content.preferred-height;
+                setup-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.lg;
+                    padding-bottom: Spacing.xl;
+                    if MeshGlobal.pending-private-id != "": VerticalLayout {
                         spacing: Spacing.sm;
-                        Button { text: "Join"; variant: "primary";
-                            clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); } }
-                        Button { text: "Decline"; variant: "secondary";
-                            clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); } }
+                        Text { text: "INVITATION"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout { padding: Spacing.md; spacing: Spacing.sm;
+                                Text { text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+                                    color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
+                                Text { text: "Peer names are self-asserted until you verify in person.";
+                                    color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                                HorizontalLayout { spacing: Spacing.sm;
+                                    Button { text: "Decline"; variant: "secondary"; touch: root.touch;
+                                        clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); } }
+                                    Button { text: "Join"; variant: "primary"; touch: root.touch;
+                                        clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); } }
+                                }
+                            }
+                        }
                     }
-                }
-
-                Text {
-                    text: "Talk nearby without a server or internet. Messages can wait for another device to carry them.";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    wrap: word-wrap;
-                }
-
-                Rectangle {
-                    border-radius: Spacing.radius-lg;
-                    background: Colors.surface-section;
                     VerticalLayout {
-                        padding: Spacing.lg;
                         spacing: Spacing.sm;
-                        Text { text: "RADIO"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
+                        Text { text: "RADIO"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
-                                horizontal-stretch: 1;
-                                Text { text: "Mesh radio"; color: Colors.text-primary; font-size: Typography.base; font-weight: 600; }
-                                Text {
-                                    text: !MeshGlobal.mesh-on ? "Off" : !MeshGlobal.radio-running
+                                ToggleRow {
+                                    checked <=> MeshGlobal.mesh-on;
+                                    accessible-text: "Mesh";
+                                    row-padding: Spacing.md;
+                                    label-spacing: Spacing.xs;
+                                    Text { text: "Mesh"; color: Colors.text-primary; font-size: Typography.base;
+                                        font-weight: Typography.semibold; }
+                                    Text { text: !MeshGlobal.mesh-on ? "Off" : !MeshGlobal.radio-running
                                         ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off" : "Radio unavailable")
                                         : MeshGlobal.peer-count == 0 ? "On · nobody nearby"
                                         : MeshGlobal.peer-count == 1 ? "On · 1 nearby" : "On · " + MeshGlobal.peer-count + " nearby";
-                                    color: MeshGlobal.mesh-on && !MeshGlobal.radio-running ? Colors.warning : Colors.text-secondary;
-                                    font-size: Typography.sm;
+                                        color: Colors.text-secondary; font-size: Typography.sm; }
+                                    toggled(value) => { MeshGlobal.set-mesh-on(value); }
                                 }
-                            }
-                            NeoActionToggle {
-                                checked: MeshGlobal.mesh-on;
-                                accessible-text: "Mesh radio";
-                                toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                                if MeshGlobal.nearby-peers.length > 0: Rectangle { height: 1px; background: Colors.divider; }
+                                for peer in MeshGlobal.nearby-peers: NearbyPeerRow {
+                                    name: peer.name; detail: peer.binding-label;
+                                    touch: root.touch; clicked => { MeshGlobal.open-peer(peer.id); }
+                                }
                             }
                         }
                         if MeshGlobal.nearby-peers.length == 0: Text {
                             text: "Nearby devices will appear here when discovered.";
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                         }
-                        for peer in MeshGlobal.nearby-peers: Rectangle {
-                            height: Spacing.touch-target-min;
-                            border-radius: Spacing.radius-md;
-                            background: peer-touch.has-hover ? Colors.surface-hover : Colors.surface-control;
-                            transform-scale-x: peer-touch.pressed ? 98% : 100%;
-                            transform-scale-y: peer-touch.pressed ? 96% : 100%;
-                            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-                            HorizontalLayout {
-                                padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
-                                Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                                Text { text: "View"; color: Colors.primary; font-size: Typography.xs; vertical-alignment: center; }
-                            }
-                            peer-touch := TouchArea { mouse-cursor: pointer; clicked => { MeshGlobal.open-peer(peer.id); } }
-                        }
                     }
-                }
-
-                Rectangle {
-                    border-radius: Spacing.radius-lg;
-                    background: Colors.surface-section;
                     VerticalLayout {
-                        padding: Spacing.lg;
                         spacing: Spacing.sm;
-                        Text { text: "IDENTITY"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
-                        Text { text: "Your mesh name is public to anyone nearby. Names are self-asserted."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                        SetupField { label: "Mesh name"; hint: "Name shown nearby"; value <=> root.name-draft;
-                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
-                            submitted(value) => { MeshGlobal.set-nickname(value); } }
-                        Button { text: "Save mesh name"; variant: "secondary"; touch: root.touch; clicked => { MeshGlobal.set-nickname(root.name-draft); } }
-                    }
-                }
-
-                Rectangle {
-                    border-radius: Spacing.radius-lg;
-                    background: Colors.surface-section;
-                    VerticalLayout {
-                        padding: Spacing.lg;
-                        spacing: Spacing.md;
-                        Text { text: "CHANNELS"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
-                        SetupField { label: "Join public #channel"; hint: "Channel name"; value <=> root.public-draft;
-                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
-                            submitted(value) => { MeshGlobal.join-channel(value); root.public-draft = ""; } }
-                        Button { text: "Join public channel"; variant: "secondary"; touch: root.touch;
-                            clicked => { MeshGlobal.join-channel(root.public-draft); root.public-draft = ""; } }
-                        for name in MeshGlobal.nearby-channels: Button {
-                            text: "Join #" + name + " · seen nearby"; variant: "ghost"; touch: root.touch;
-                            clicked => { MeshGlobal.join-channel(name); }
-                        }
-                        SetupField { label: "Create private channel"; hint: "Private channel name"; value <=> root.private-draft;
-                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
-                            submitted(value) => { root.create-private-once(); } }
-                        Button { text: "Create private channel"; variant: "secondary"; touch: root.touch;
-                            disabled: root.private-draft == "";
-                            clicked => { root.create-private-once(); } }
-                        SetupField { label: "Join private channel"; hint: "Paste private invite"; value <=> root.invite-draft;
-                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
-                            submitted(value) => { MeshGlobal.join-private-channel(value); root.invite-draft = ""; } }
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-                            Button { text: "Join invite"; variant: "secondary"; touch: root.touch;
-                                clicked => { MeshGlobal.join-private-channel(root.invite-draft); root.invite-draft = ""; } }
-                            Button { text: "Scan QR"; variant: "secondary"; touch: root.touch;
-                                clicked => { MeshGlobal.open-private-scanner(); } }
-                        }
-                        // Create/join results belong next to the controls that
-                        // produced them; at the sheet's end they were off-screen.
-                        if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                        SetupField { label: "Join geohash cell"; hint: "e.g. u4pruy"; value <=> root.cell-draft;
-                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
-                            submitted(value) => { MeshGlobal.join-geohash(value); root.cell-draft = ""; } }
-                        Button { text: "Join cell"; variant: "secondary"; touch: root.touch;
-                            clicked => { MeshGlobal.join-geohash(root.cell-draft); root.cell-draft = ""; } }
-                    }
-                }
-
-                Rectangle {
-                    border-radius: Spacing.radius-lg;
-                    background: Colors.surface-section;
-                    VerticalLayout {
-                        padding: Spacing.lg;
-                        spacing: Spacing.sm;
-                        Text { text: "DANGER ZONE"; color: Colors.danger; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
-                        Text { text: "Erase this device's mesh identity, messages, carried mail and favourites. Your Chatter account stays intact.";
-                            color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                        if !root.confirming-wipe: Button { text: "Wipe mesh data…"; variant: "secondary"; touch: root.touch;
-                            clicked => { root.confirming-wipe = true; } }
-                        if root.confirming-wipe: VerticalLayout {
-                            spacing: Spacing.sm;
-                            Text { text: "This cannot be undone."; color: Colors.danger; font-size: Typography.sm; font-weight: 600; }
-                            HorizontalLayout {
-                                spacing: Spacing.sm;
-                                Button { text: "Cancel"; variant: "secondary"; touch: root.touch; clicked => { root.confirming-wipe = false; } }
-                                Button { text: "Wipe mesh data"; variant: "destructive"; touch: root.touch;
-                                    clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
+                        Text { text: "PROFILE"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
+                                Input { placeholder: "Nickname"; text <=> root.name-draft;
+                                    control-height: Spacing.touch-target-min; horizontal-stretch: 1;
+                                    accepted(value) => { MeshGlobal.set-nickname(value); } }
+                                Button { text: "Done"; variant: "ghost"; touch: root.touch;
+                                    clicked => { MeshGlobal.set-nickname(root.name-draft); } }
                             }
                         }
+                        Text { text: "Visible to anyone nearby. Names are self-asserted.";
+                            color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                    }
+                    if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary;
+                        font-size: Typography.sm; wrap: word-wrap; }
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            SettingsRow { icon: Icons.trash; title: "Erase Mesh Data…"; destructive: true;
+                                touch: root.touch; show-chevron: false; clicked => { root.confirming-wipe = true; } }
+                        }
                     }
                 }
+            }
+        }
+    }
+    if root.confirming-wipe: Rectangle {
+        z: 10; background: Materials.scrim;
+        TouchArea { clicked => { root.confirming-wipe = false; } }
+        Rectangle {
+            x: Spacing.lg; width: parent.width - Spacing.lg * 2;
+            y: parent.height - self.height - Spacing.lg;
+            height: confirm-content.preferred-height;
+            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+            confirm-content := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
+                Text { text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
+                    color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
+                Button { text: "Erase Mesh Data"; variant: "destructive"; touch: root.touch;
+                    clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
+                Button { text: "Cancel"; variant: "secondary"; touch: root.touch;
+                    clicked => { root.confirming-wipe = false; } }
             }
         }
     }
