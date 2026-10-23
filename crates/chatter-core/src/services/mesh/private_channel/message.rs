@@ -26,6 +26,11 @@ impl PrivateChannel {
         field(&fields, 1)?.try_into().ok()
     }
 
+    pub fn envelope_epoch(bytes: &[u8]) -> Option<u32> {
+        let fields = parse_tlv(bytes)?;
+        Some(u32::from_be_bytes(field(&fields, 2)?.try_into().ok()?))
+    }
+
     pub fn encrypt(
         &self,
         identity: &MeshIdentity,

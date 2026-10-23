@@ -400,6 +400,16 @@ impl GossipSyncManager {
                 if !is_broadcast_recipient(packet) {
                     return;
                 }
+                // Once reassembled, group ciphertext is retained as a whole
+                // packet by the runtime. Individual group fragments cannot be
+                // checked for epoch membership when answering a sync request.
+                if chatter_mesh::fragment::FragmentHeader::parse(packet)
+                    .is_ok_and(|(header, _)| {
+                        header.original_type == MessageType::GroupMessage.as_u8()
+                    })
+                {
+                    return;
+                }
                 let capacity = self.config.fragment_capacity.max(1);
                 self.fragments
                     .insert(packet.packet_id(), packet.clone(), capacity);
@@ -413,8 +423,8 @@ impl GossipSyncManager {
                     .insert(packet.packet_id(), packet.clone(), capacity);
             }
             MessageType::GroupMessage => {
-                // Opaque ciphertext to non-members; carried and served like any
-                // other broadcast so members get backfill from any relay.
+                // Opaque ciphertext to non-members. The runtime checks the
+                // requester's epoch membership before serving a sync copy.
                 if !is_broadcast_recipient(packet) {
                     return;
                 }
@@ -708,6 +718,16 @@ impl GossipSyncManager {
     pub fn public_message_packets(&self, now_unix_secs: u64) -> Vec<BitchatPacket> {
         let config = &self.config;
         self.messages
+            .all_packets(|packet| packet_is_fresh(config, packet, now_unix_secs))
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Retained sealed group packets for a caller that has just received an epoch key.
+    pub fn group_message_packets(&self, now_unix_secs: u64) -> Vec<BitchatPacket> {
+        let config = &self.config;
+        self.group_messages
             .all_packets(|packet| packet_is_fresh(config, packet, now_unix_secs))
             .into_iter()
             .cloned()
