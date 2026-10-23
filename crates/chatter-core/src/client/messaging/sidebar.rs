@@ -364,9 +364,9 @@ impl ChatterClient {
     }
 
     fn extend_anon_dm_ids(&self, ids: &mut Vec<crate::domain::ids::ChannelId>) {
-        ids.extend(self.list_anon_dm_conversations().into_iter().map(|dm| dm.id.into()));
-        ids.extend(self.list_anon_dm_message_requests().into_iter().map(|dm| dm.id.into()));
-        ids.extend(self.list_anon_dm_outgoing_requests().into_iter().map(|dm| dm.id.into()));
+        ids.extend(self.list_anon_dm_conversations().into_iter().map(|dm| crate::domain::ids::ChannelId::from(dm.id)));
+        ids.extend(self.list_anon_dm_message_requests().into_iter().map(|dm| crate::domain::ids::ChannelId::from(dm.id)));
+        ids.extend(self.list_anon_dm_outgoing_requests().into_iter().map(|dm| crate::domain::ids::ChannelId::from(dm.id)));
     }
 
     fn dm_sidebar_with_projection(
@@ -501,7 +501,7 @@ impl ChatterClient {
         let mut ids = self.dm_peers().into_iter().map(Into::into).collect::<Vec<_>>();
         self.extend_anon_dm_ids(&mut ids);
         ids.extend(channels.iter().map(|c| c.id));
-        ids.extend(groups.iter().map(|g| g.id.into()));
+        ids.extend(groups.iter().map(|g| crate::domain::ids::ChannelId::from(g.id)));
         let projection = self.sidebar_projection(&ids);
         let mut rows = self.dm_sidebar_with_projection(&projection);
         rows.extend(channels.iter().map(|c| self.channel_row(c, &projection)));
