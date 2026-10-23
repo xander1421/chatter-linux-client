@@ -174,12 +174,13 @@ class MainActivity : GameActivity() {
 
     private external fun nativeVideoTokenIsCurrent(token: Long): Boolean
 
-    fun playVideo(token: Long, label: String) {
+    fun playVideo(token: Long, label: String, secure: Boolean) {
         runOnUiThread {
             try {
                 if (!nativeVideoTokenIsCurrent(token)) return@runOnUiThread
                 startActivity(Intent(this, VideoPlaybackActivity::class.java)
-                    .putExtra("video-token", token).putExtra("video-title", label))
+                    .putExtra("video-token", token).putExtra("video-title", label)
+                    .putExtra("video-secure", secure))
             } catch (_: Exception) {
                 nativeReleasePendingVideo(token)
                 android.widget.Toast.makeText(this, "Unable to open video player", android.widget.Toast.LENGTH_SHORT).show()

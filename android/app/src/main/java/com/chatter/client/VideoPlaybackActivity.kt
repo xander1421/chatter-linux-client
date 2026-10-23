@@ -221,7 +221,8 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        // Secure unless a debug QA build asked to allow capture (activity.rs qa_allows_capture).
+        if (intent.getBooleanExtra("video-secure", true)) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         token = intent.getLongExtra("video-token", 0)
         if (!nativeVideoTokenIsCurrent(token)) { finish(); return }
         title = intent.getStringExtra("video-title") ?: "Video"

@@ -89,8 +89,12 @@ pub fn play_video_guarded(source: VideoSource, title: &str, request: u64) -> Res
             let result = env.call_method(
                 activity.as_obj(),
                 jni::jni_str!("playVideo"),
-                jni::jni_sig!("(JLjava/lang/String;)V"),
-                &[JValue::Long(token), JValue::Object(title.as_ref())],
+                jni::jni_sig!("(JLjava/lang/String;Z)V"),
+                &[
+                    JValue::Long(token),
+                    JValue::Object(title.as_ref()),
+                    JValue::Bool((!activity::qa_allows_capture()).into()),
+                ],
             );
             let failed = result.is_err() || env.exception_check();
             let _ = env.exception_clear();
