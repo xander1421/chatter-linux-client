@@ -1,352 +1,90 @@
-// What is left of the strip above a mesh conversation.
-//
-// It used to carry four things: no server and no internet, the peer count, the
-// geohash cell, and what "sent" means over couriers. Three of them fit on one
-// line, and now sit in the header next to the conversation name — three stacked
-// lines above the first message was most of the screen on a phone.
-//
-// What stays is the fourth, because it is the one that cannot be shortened
-// without changing what it says: an empty mesh room is *normal*, and a message
-// sent into one waits for a carrier rather than failing. Elided to one line it
-// reads "Nobody is in range" and drops the part that explains that is expected.
-//
-// So it is now conditional as well as short. It appears when there is something
-// the user could act on or would otherwise misread — nobody in range, no route
-// to a peer, the radio off, a failed send — and not at all when the mesh is
-// simply working, which is when a permanent explanation is just furniture.
-//
-// Every value here comes from `MeshGlobal`, which Rust fills from
-// `chatter-core`. The bar chooses wording, never facts.
-
+// A compact action or status notice above the open mesh conversation.
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "mesh_global.slint";
-import { Materials } from "../theme/materials.slint";
 
 export component MeshContextBar inherits Rectangle {
-    property <bool> radio-down: !MeshGlobal.radio-running;
-
-    // What "sent" means here, which is not what it means anywhere else.
-    property <string> delivery-line:
-        !MeshGlobal.mesh-on
-            ? "The mesh is switched off, so nothing is sent or received over Bluetooth. Earlier messages are still here."
-      : MeshGlobal.active-kind == "dm" && MeshGlobal.active-signal-enabled
-            ? "Signal setup needs a live key exchange. Queued stays here; relayed means a sealed copy entered a courier link, which may fail; delivered needs an encrypted receipt."
-      : MeshGlobal.active-kind == "dm"
-            ? (MeshGlobal.active-reachable
-                ? "Best-effort: sent means handed on, not arrived."
-                : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
-      : MeshGlobal.active-kind == "private-channel"
-            ? (MeshGlobal.private-rekey-pending
-                ? "Waiting for key update from creator. Sending pauses until the new group key arrives."
-                : "Invited devices only. The creator rotates the group key when membership changes.")
-            : (MeshGlobal.peer-count == 0
-                ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
-                : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
-
-    // Still not a fixed height, and still for the original reason: the sentence
-    // wraps to two lines on a narrow screen, and cutting it in half leaves
-    // "Nobody is in range" without the part that says so is expected. What has
-    // changed is that it is one paragraph rather than three stacked rows, so the
-    // floor is a single line instead of three.
-    min-height: 24px;
-    // Opaque: the list scrolls under this strip.
+    property <bool> can-turn-on: !MeshGlobal.mesh-on;
+    property <string> message:
+        MeshGlobal.notice != "" ? MeshGlobal.notice
+      : !MeshGlobal.mesh-on ? "Mesh is off"
+      : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off"
+      : MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-rekey-pending
+            ? "Waiting for the creator to rotate the group key"
+      : MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable
+            ? "No route to this person · waiting for a carrier"
+      : "";
+    height: 40px;
     background: Colors.surface;
 
-    // Bottom hairline, matching the other in-chat strips.
     Rectangle {
-        y: parent.height - 1px;
-        width: 100%;
-        height: 1px;
-        background: Colors.divider;
-    }
-
-    HorizontalLayout {
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        padding-top: Spacing.xs;
-        padding-bottom: Spacing.xs;
-        spacing: Spacing.sm;
-
-        // Top-aligned: the column beside it grows with the member and settings rows.
-        VerticalLayout {
-            alignment: start;
-            horizontal-stretch: 0;
+        x: Spacing.md;
+        y: Spacing.xs;
+        width: parent.width - Spacing.md * 2;
+        height: parent.height - Spacing.xs * 2;
+        border-radius: Spacing.radius-full;
+        background: Colors.primary.with-alpha(0.10);
+        HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            spacing: Spacing.sm;
             Image {
                 source: Icons.radio;
-                width: 16px;
-                height: 16px;
-                colorize: root.radio-down ? Colors.warning
-                    : MeshGlobal.peer-count > 0 ? Colors.primary
-                    : Colors.text-muted;
+                width: 15px;
+                height: 15px;
+                colorize: Colors.primary;
+                vertical-alignment: center;
             }
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: Spacing.xxs;
-
             Text {
-                text: root.delivery-line;
-                color: Colors.text-muted;
+                text: root.message;
+                color: Colors.text-secondary;
                 font-size: Typography.xs;
-                wrap: word-wrap;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                accessible-role: text;
+                accessible-label: root.message;
             }
-
-            // Send failures and informational identity-key warnings. This is the only place they can be
-            // seen on a phone: the sidebar copy renders inside the expanded
-            // sidebar, which is collapsed by default on a narrow screen — so a
-            // failed send was reported to nobody. Tap to dismiss.
-            if MeshGlobal.notice != "": Rectangle {
-                height: max(Spacing.button-height, notice-text.preferred-height + Spacing.sm);
-                border-radius: Spacing.radius-sm;
-                background: notice-touch.has-hover
-                    ? Colors.warning.with-alpha(0.16)
-                    : Colors.warning.with-alpha(0.10);
-                notice-text := Text {
-                    x: Spacing.sm;
-                    y: (parent.height - self.height) / 2;
-                    width: parent.width - Spacing.sm * 2;
-                    text: MeshGlobal.notice;
-                    color: Colors.warning;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                    accessible-role: text;
-                    accessible-label: MeshGlobal.notice;
-                }
-                notice-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        MeshGlobal.notice = "";
-                    }
-                }
-            }
-
-            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-removable-members.length > 0: VerticalLayout {
-                spacing: Spacing.xxs;
-                Text { text: "Creator controls membership · tap to remove and rotate key";
-                    color: Colors.text-muted; font-size: Typography.xs; }
-                for member in MeshGlobal.private-removable-members: Rectangle {
-                    height: Spacing.button-height;
-                    Text { text: MeshGlobal.private-remove-pending == member.peer-id ? "Tap again to remove " + member.display-name : (member.display-name + " · " + member.status-label);
-                        width: 100%; color: Colors.text-secondary; font-size: Typography.xs;
-                        vertical-alignment: center; overflow: elide; }
-                    TouchArea { clicked => {
-                        if MeshGlobal.private-remove-pending == member.peer-id {
-                            MeshGlobal.private-remove-pending = "";
-                            MeshGlobal.remove-private-member(MeshGlobal.active-scope, member.peer-id);
-                        } else { MeshGlobal.private-remove-pending = member.peer-id; }
-                    } }
-                }
-            }
-
-            if MeshGlobal.active-kind == "private-channel": VerticalLayout {
-                spacing: Spacing.xxs;
-                Text { text: "Channel settings"; color: Colors.text-muted; font-size: Typography.xs; }
-                Rectangle {
-                    height: Spacing.button-height;
-                    Text {
-                        width: 100%;
-                        text: MeshGlobal.private-leave-pending ? "Confirm leave group and delete this device's group key" : "Leave group";
-                        color: Colors.warning;
-                        font-size: Typography.xs;
-                        vertical-alignment: center;
-                    }
-                    TouchArea { clicked => {
-                        if MeshGlobal.private-leave-pending {
-                            MeshGlobal.private-leave-pending = false;
-                            MeshGlobal.leave-private-channel(MeshGlobal.active-scope);
-                        } else { MeshGlobal.private-leave-pending = true; }
-                    } }
-                }
-                if MeshGlobal.private-leave-pending: Text {
-                    text: "Reachable members will pause sending until the creator rotates the key. Offline members may still have the old key.";
-                    color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
-                }
-            }
-
-            if MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open): VerticalLayout {
-                spacing: Spacing.xs;
-                HorizontalLayout {
-                    if !MeshGlobal.active-verified || MeshGlobal.identity-panel-open: Text {
-                        text: MeshGlobal.active-binding-label;
-                        color: MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-stretch: 1;
-                    }
-                    if !MeshGlobal.active-verified: Rectangle {
-                        width: 72px;
-                        height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-sm;
-                        background: identity-touch.has-hover ? Colors.surface-hover : transparent;
-                        transform-scale-x: identity-touch.pressed ? 94% : 100%;
-                        transform-scale-y: identity-touch.pressed ? 94% : 100%;
-                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-                        Text { text: MeshGlobal.identity-panel-open ? "Close" : "Identity";
-                            color: Colors.text-primary; font-size: Typography.xs;
-                            horizontal-alignment: center; vertical-alignment: center; }
-                        identity-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { MeshGlobal.identity-panel-open = !MeshGlobal.identity-panel-open; }
-                        }
-                    }
-                }
+            if root.can-turn-on: Rectangle {
+                width: 62px;
+                height: parent.height;
                 Text {
-                    text: MeshGlobal.active-protection-label;
-                    color: MeshGlobal.active-signal-enabled ? Colors.success : Colors.text-muted;
-                    font-size: Typography.xs;
-                }
-                if MeshGlobal.active-verified: Rectangle {
-                    width: 190px;
-                    height: Spacing.touch-target-min;
-                    border-radius: Spacing.radius-sm;
-                    background: signal-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                    Text {
-                        text: MeshGlobal.active-signal-enabled ? "Use Noise (bitchat)" : "Use Signal on this mesh DM";
-                        color: Colors.text-primary;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                    signal-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { MeshGlobal.toggle-signal-mesh(MeshGlobal.active-scope); }
-                    }
-                }
-                if MeshGlobal.identity-panel-open: Text {
-                    text: "Sharing links your mesh presence to your Chatter account for this person only.";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                }
-                if MeshGlobal.identity-panel-open && MeshGlobal.active-comparison-code != "": Text {
-                    text: "Compare this live code on both screens: " + MeshGlobal.active-comparison-code;
-                    color: Colors.text-primary;
+                    text: "Turn On";
+                    color: Colors.primary;
                     font-size: Typography.xs;
                     font-weight: 600;
-                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
-                if MeshGlobal.identity-panel-open: HorizontalLayout {
-                    spacing: Spacing.sm;
-                    Rectangle {
-                        width: 130px;
-                        height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-sm;
-                        background: share-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                        Text { text: "Share my identity"; color: Colors.text-primary; font-size: Typography.xs;
-                            horizontal-alignment: center; vertical-alignment: center; }
-                        share-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { MeshGlobal.share-identity(MeshGlobal.active-scope); }
-                        }
-                    }
-                    Rectangle {
-                        width: 70px;
-                        height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-sm;
-                        background: qr-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                        Text { text: "My QR"; color: Colors.text-primary; font-size: Typography.xs;
-                            horizontal-alignment: center; vertical-alignment: center; }
-                        qr-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { MeshGlobal.show-binding-qr(MeshGlobal.active-scope); }
-                        }
-                    }
-                    Rectangle {
-                        width: 80px;
-                        height: Spacing.touch-target-min;
-                        border-radius: Spacing.radius-sm;
-                        background: scan-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                        Text { text: "Scan QR"; color: Colors.text-primary; font-size: Typography.xs;
-                            horizontal-alignment: center; vertical-alignment: center; }
-                        scan-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                MeshGlobal.binding-scan-visible = true;
-                                MeshGlobal.open-binding-scanner(MeshGlobal.active-scope);
-                            }
-                        }
-                    }
-                }
-                if MeshGlobal.identity-panel-open: Rectangle {
-                    width: 175px;
-                    height: Spacing.touch-target-min;
-                    border-radius: Spacing.radius-sm;
-                    background: contact-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                    Text { text: "Verify known contact"; color: Colors.text-primary;
-                        font-size: Typography.xs; horizontal-alignment: center; vertical-alignment: center; }
-                    contact-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { MeshGlobal.verify-known-contact(MeshGlobal.active-scope); }
-                    }
-                }
-                if MeshGlobal.identity-panel-open && MeshGlobal.binding-qr-visible: VerticalLayout {
-                    spacing: Spacing.xs;
-                    Image { source: MeshGlobal.binding-qr-image; width: 180px; height: 180px; image-fit: contain; }
-                    Text { text: "Ask this person to scan this QR while both devices are connected nearby.";
-                        color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
-                }
-                if MeshGlobal.identity-panel-open && MeshGlobal.binding-scan-visible: Rectangle {
-                    height: Spacing.touch-target-min;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-sm;
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        spacing: Spacing.xs;
-                        qr-input := TextInput {
-                            horizontal-stretch: 1;
-                            single-line: true;
-                            color: Colors.text-primary;
-                            accepted => {
-                                MeshGlobal.scan-binding-qr(MeshGlobal.active-scope, self.text);
-                                self.text = "";
-                            }
-                        }
-                        Rectangle {
-                            width: 56px;
-                            Text { text: "Verify"; color: Colors.text-primary; font-size: Typography.xs;
-                                horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    MeshGlobal.scan-binding-qr(MeshGlobal.active-scope, qr-input.text);
-                                    qr-input.text = "";
-                                }
-                            }
-                        }
-                    }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    accessible-role: button;
+                    accessible-label: "Turn on mesh";
+                    y: -Spacing.xs;
+                    height: Spacing.button-height;
+                    clicked => { MeshGlobal.set-mesh-on(true); }
                 }
             }
-        }
-
-        // Leaving a cell belongs next to the cell name, where it is
-        // unambiguous which one is being left.
-        if MeshGlobal.active-kind == "geohash": VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Rectangle {
-                width: leave-label.preferred-width + Spacing.md;
-                // The control that stops you broadcasting your location should
-                // not be the hardest thing on the screen to hit.
-                height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-sm;
-                background: leave-touch.has-hover ? Colors.surface-hover : transparent;
-                leave-label := Text {
-                    text: "Leave cell";
-                    color: leave-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                    font-size: Typography.xxs;
-                    horizontal-alignment: center;
+            if MeshGlobal.notice != "" && !root.can-turn-on: Rectangle {
+                width: 24px;
+                height: parent.height;
+                Text {
+                    text: "×";
+                    color: Colors.text-muted;
+                    font-size: Typography.base;
                     vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
+                    horizontal-alignment: center;
                 }
-                leave-touch := TouchArea {
+                TouchArea {
                     mouse-cursor: pointer;
-                    clicked => { MeshGlobal.leave-geohash(MeshGlobal.active-scope); }
+                    accessible-role: button;
+                    accessible-label: "Dismiss mesh notice";
+                    y: -Spacing.xs;
+                    height: Spacing.button-height;
+                    clicked => { MeshGlobal.notice = ""; }
                 }
             }
         }
