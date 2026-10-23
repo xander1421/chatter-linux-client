@@ -15,12 +15,13 @@ export component RequestTabs inherits Flickable {
     height: max(Spacing.touch-target-min, 36px * Appearance.text-grow);
     viewport-width: request-tabs.preferred-width;
     viewport-height: self.height;
+    // A partial trailing tab hints that this row scrolls horizontally.
 
     request-tabs := HorizontalLayout {
         spacing: Spacing.xs;
 
         Rectangle {
-            width: 112px * Appearance.text-grow;
+            width: 104px * Appearance.text-grow;
             background: recv-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -53,7 +54,7 @@ export component RequestTabs inherits Flickable {
         }
 
         Rectangle {
-            width: 112px * Appearance.text-grow;
+            width: 88px * Appearance.text-grow;
             background: sent-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -86,7 +87,7 @@ export component RequestTabs inherits Flickable {
         }
 
         Rectangle {
-            width: 112px * Appearance.text-grow;
+            width: 96px * Appearance.text-grow;
             background: priv-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -119,7 +120,7 @@ export component RequestTabs inherits Flickable {
         }
 
         Rectangle {
-            width: 112px * Appearance.text-grow;
+            width: 96px * Appearance.text-grow;
             background: groups-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
@@ -152,7 +153,7 @@ export component RequestTabs inherits Flickable {
         }
 
         Rectangle {
-            width: 128px * Appearance.text-grow;
+            width: 112px * Appearance.text-grow;
             background: channels-tab-touch.has-hover ? Materials.hover : transparent;
 
             VerticalLayout {
