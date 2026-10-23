@@ -4,14 +4,22 @@
 //! Activity — fine for framework calls (NotificationManager etc.) but it has no
 //! `MainActivity` methods (`launchFilePicker`, `requestPermissions`). So the
 //! Activity registers itself with us in `onCreate` via `nativeRegisterActivity`,
-//! and we keep a process-lifetime `Global<JObject<'static>>` to call back into it.
+//! and we keep a replaceable global reference to call back into the current one.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use jni::objects::{Global, JObject};
 use jni::{Env, JavaVM};
 
-static ACTIVITY: OnceLock<Global<JObject<'static>>> = OnceLock::new();
+struct ActivityState {
+    current: Option<Global<JObject<'static>>>,
+    secure: bool,
+}
+
+static ACTIVITY: Mutex<ActivityState> = Mutex::new(ActivityState {
+    current: None,
+    secure: false,
+});
 
 /// Run a JNI operation inside a managed thread attachment and local frame.
 pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> Result<T, String> {
@@ -27,10 +35,10 @@ pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> 
 }
 
 /// The registered `MainActivity`, or an error if `onCreate` hasn't run yet.
-pub fn activity() -> Result<&'static Global<JObject<'static>>, String> {
-    ACTIVITY
-        .get()
-        .ok_or_else(|| "MainActivity not registered yet".to_string())
+pub fn activity() -> Result<Global<JObject<'static>>, String> {
+    let state = ACTIVITY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let current = state.current.as_ref().ok_or("MainActivity not registered yet")?;
+    with_jni_env(|env| env.new_global_ref(current).map_err(|error| error.to_string()))
 }
 
 /// Handoff only a digest-verified APK in app-private staging to PackageInstaller.
@@ -128,7 +136,22 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeRegisterActivi
     env.with_env(|env| -> jni::errors::Result<_> {
         Ok((|| match env.new_global_ref(&this) {
             Ok(gref) => {
-                let _ = ACTIVITY.set(gref);
+                let secure = {
+                    let mut state = ACTIVITY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state.current = Some(gref);
+                    state.secure
+                };
+                // Registration runs on the UI thread, before the new window draws.
+                let result = env.call_method(
+                    &this,
+                    jni::jni_str!("setSecure"),
+                    jni::jni_sig!("(Z)V"),
+                    &[jni::objects::JValue::Bool(secure.into())],
+                );
+                if let Err(error) = result {
+                    clear_exception(env);
+                    tracing::error!("Android: restoring secure window failed: {error}");
+                }
                 chatter_core::system::messaging_background::register_platform(
                     set_messaging_signed_in,
                 );
@@ -136,6 +159,24 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeRegisterActivi
             }
             Err(e) => tracing::error!("Android: failed to hold MainActivity ref: {e}"),
         })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// Drop the reference only if the Activity being destroyed is still current.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeClearActivity(
+    mut env: jni::EnvUnowned<'_>,
+    this: JObject,
+) {
+    env.with_env(|env| -> jni::errors::Result<_> {
+        let mut state = ACTIVITY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(current) = state.current.as_ref() {
+            if env.is_same_object(current, &this)? {
+                state.current = None;
+            }
+        }
+        Ok(())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
@@ -180,6 +221,10 @@ pub fn qa_allows_capture() -> bool {
 /// transitions and when the Activity resumes.
 pub fn set_secure(secure: bool) {
     let secure = secure && !qa_allows_capture();
+    {
+        let mut state = ACTIVITY.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.secure = secure;
+    }
     let result = (|| -> Result<(), String> {
         let act = activity()?;
         with_jni_env(|env| {

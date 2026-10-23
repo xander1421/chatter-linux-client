@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -113,14 +114,14 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
     private fun iconButton(icon: Int, label: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
         setImageResource(icon)
         setColorFilter(ink)
-        background = GradientDrawable().apply {
+        background = InsetDrawable(GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(Color.parseColor(if (icon == R.drawable.ic_video_close) {
                 if (dark) "#521a2635" else "#61ffffff" // Materials.thin
             } else {
                 if (dark) "#263444" else "#dfe6ed" // Colors.fill-secondary
             }))
-        }
+        }, dp(4))
         contentDescription = label
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         val inset = if (icon == R.drawable.ic_video_close) 11 else 15
@@ -140,7 +141,7 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = chromeBackground()
-            setPadding(dp(12), 0, dp(4), 0)
+            setPadding(dp(12), dp(4), dp(4), dp(4))
         }
         val name = TextView(this).apply {
             text = filename
@@ -153,7 +154,7 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
         }
         header.addView(name, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(iconButton(R.drawable.ic_video_close, "Close") { finish() }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        frame.addView(header, FrameLayout.LayoutParams(dp(300), dp(48), Gravity.TOP or Gravity.START))
+        frame.addView(header, FrameLayout.LayoutParams(dp(300), dp(56), Gravity.TOP or Gravity.START))
 
         footer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -189,7 +190,7 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
         playback.addView(duration, LinearLayout.LayoutParams(-2, dp(48)))
         muteButton = iconButton(R.drawable.ic_video_volume, "Mute video") { toggleMute() }
         playback.addView(muteButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-        footer.addView(playback, LinearLayout.LayoutParams(-1, dp(48)))
+        footer.addView(playback, LinearLayout.LayoutParams(-1, dp(56)))
 
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER }
         fun action(icon: Int, label: String, code: Int, enabled: Boolean = true): ImageButton {
@@ -215,8 +216,8 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
         }
         actions.addView(position, LinearLayout.LayoutParams(-2, dp(48)))
         nextButton = action(R.drawable.ic_video_chevron_right, "Next media", 1, nativeViewerCanNavigate(token, 1))
-        footer.addView(actions, LinearLayout.LayoutParams(-1, dp(48)))
-        frame.addView(footer, FrameLayout.LayoutParams(dp(300), dp(96), Gravity.TOP or Gravity.START))
+        footer.addView(actions, LinearLayout.LayoutParams(-1, dp(56)))
+        frame.addView(footer, FrameLayout.LayoutParams(dp(300), dp(112), Gravity.TOP or Gravity.START))
     }
 
     override fun onCreate(state: Bundle?) {
@@ -387,13 +388,13 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
         val chromeWidth = minOf(widthAvailable, maxOf(dp(300), mediaWidth))
         val chromeX = margin + (widthAvailable - chromeWidth) / 2f
         if (header.layoutParams.width != chromeWidth)
-            header.layoutParams = FrameLayout.LayoutParams(chromeWidth, dp(48), Gravity.TOP or Gravity.START)
+            header.layoutParams = FrameLayout.LayoutParams(chromeWidth, dp(56), Gravity.TOP or Gravity.START)
         if (footer.layoutParams.width != chromeWidth)
-            footer.layoutParams = FrameLayout.LayoutParams(chromeWidth, dp(96), Gravity.TOP or Gravity.START)
+            footer.layoutParams = FrameLayout.LayoutParams(chromeWidth, dp(112), Gravity.TOP or Gravity.START)
         header.translationX = chromeX
-        header.translationY = maxOf(margin, mediaY - dp(48) - dp(8)).toFloat()
+        header.translationY = maxOf(margin, mediaY - dp(56) - dp(8)).toFloat()
         footer.translationX = chromeX
-        footer.translationY = minOf(margin + heightAvailable - dp(96), mediaY + mediaHeight + dp(8)).coerceAtLeast(margin).toFloat()
+        footer.translationY = minOf(margin + heightAvailable - dp(112), mediaY + mediaHeight + dp(8)).coerceAtLeast(margin).toFloat()
     }
 
     private fun formatTime(ms: Int): String {
