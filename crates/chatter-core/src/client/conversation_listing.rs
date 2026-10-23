@@ -75,11 +75,9 @@ impl ChatterClient {
             if st.unread_count == 0 {
                 continue;
             }
-            let (id, kind) = key;
-            // mesh rows are desktop-only and keyed by the mesh repo;
-            // they count whenever the mode shows them, as before.
-            let mesh = matches!(kind, ConversationType::Mesh | ConversationType::MeshDm);
-            if rows.contains(key) || (mesh && self.visible_in_mode(kind)) {
+            let (id, _) = key;
+            // Mesh conversations are not Chats rows: they have their own tab and badge.
+            if rows.contains(key) {
                 badges.total += 1;
             }
             if id.parse().is_ok_and(|cid| conversation.is_for_channel(cid)) {
