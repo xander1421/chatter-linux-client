@@ -275,24 +275,43 @@ mod tor {
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-            .await
-            .map_err(|e| format!("HTTP handshake failed: {e}"))?;
+        let (mut sender, conn) = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            hyper::client::conn::http1::handshake(io),
+        )
+        .await
+        .map_err(|_| "storage HTTP handshake stalled".to_string())?
+        .map_err(|e| format!("HTTP handshake failed: {e}"))?;
         // The connection must be driven concurrently with sending the request.
-        tokio::spawn(async move {
+        struct Driver(tokio::task::JoinHandle<()>);
+        impl Drop for Driver {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _driver = Driver(tokio::spawn(async move {
             if let Err(e) = conn.await {
                 tracing::debug!(error = %e, "anon_http: connection closed with error");
             }
-        });
-        let resp = sender
-            .send_request(req)
-            .await
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
+        }));
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            sender.send_request(req),
+        )
+        .await
+        .map_err(|_| "storage response stalled".to_string())?
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
         let mut incoming = resp.into_body();
         let mut body = Vec::new();
-        while let Some(frame) = incoming.frame().await {
+        while let Some(frame) = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            incoming.frame(),
+        )
+        .await
+        .map_err(|_| "storage response stalled".to_string())?
+        {
             let frame = frame.map_err(|e| format!("reading response body failed: {e}"))?;
             if let Ok(data) = frame.into_data() {
                 super::append_storage_chunk(&mut body, &data, limit)?;
@@ -319,10 +338,13 @@ mod tor {
                 .map_err(|e| format!("invalid SNI host {}: {e}", p.host))?;
             let connector = TlsConnector::from(Arc::new(tls_config()));
             let tls_start = std::time::Instant::now();
-            let tls = connector
-                .connect(server_name, stream)
-                .await
-                .map_err(|e| format!("TLS handshake to {} failed: {e}", p.host))?;
+            let tls = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                connector.connect(server_name, stream),
+            )
+            .await
+            .map_err(|_| "storage TLS handshake stalled".to_string())?
+            .map_err(|e| format!("TLS handshake to {} failed: {e}", p.host))?;
             tracing::info!(
                 elapsed_ms = tls_start.elapsed().as_millis(),
                 "storage TLS handshake complete"

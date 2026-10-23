@@ -124,17 +124,27 @@ impl GrpcClientPool {
     ) -> Result<(GrpcTransport, bool), tonic::transport::Error> {
         // QUIC target for this dial, when its probe is still in flight.
         #[cfg(feature = "quic")]
-        let mut racing_quic: Option<http::Uri> = None;
+        let mut racing_quic: Option<(http::Uri, u64)> = None;
 
         #[cfg(feature = "quic")]
         {
             let direct = mode == TransportMode::Direct;
-            let probe_state = *self.quic_probe.read();
-            let server_url = self.direct_url.read().clone();
-            let uri = server_url
-                .starts_with("https://")
-                .then(|| server_url.parse::<http::Uri>().ok())
-                .flatten();
+            let (probe_state, uri, probe_generation) = {
+                let mut state = self.quic_probe.write();
+                let server_url = self.direct_url.read().clone();
+                let uri = server_url
+                    .starts_with("https://")
+                    .then(|| server_url.parse::<http::Uri>().ok())
+                    .flatten();
+                let generation = self
+                    .quic_probe_generation
+                    .load(std::sync::atomic::Ordering::Acquire);
+                let current = *state;
+                if direct && uri.is_some() && current == QuicProbeState::Untried {
+                    *state = QuicProbeState::Probing;
+                }
+                (current, uri, generation)
+            };
             if let (true, Some(uri)) = (direct, uri) {
                 match probe_state {
                     // Already proven reachable — build the channel, no probe.
@@ -151,8 +161,8 @@ impl GrpcClientPool {
                     // TCP tunnel) cost QUIC_PROBE_TIMEOUT — 3s of black screen
                     // — on every cold start before anything rendered.
                     QuicProbeState::Untried => {
-                        *self.quic_probe.write() = QuicProbeState::Probing;
                         let state = self.quic_probe.clone();
+                        let generation = self.quic_probe_generation.clone();
                         let probe_uri = uri.clone();
                         tokio::spawn(async move {
                             let outcome = tokio::time::timeout(
@@ -171,14 +181,15 @@ impl GrpcClientPool {
                                     QuicProbeState::Failed
                                 }
                             };
-                            // A server-URL change resets to Untried meanwhile;
-                            // this verdict is about the old URL then, so drop it.
                             let mut current = state.write();
-                            if *current == QuicProbeState::Probing {
+                            if *current == QuicProbeState::Probing
+                                && generation.load(std::sync::atomic::Ordering::Acquire)
+                                    == probe_generation
+                            {
                                 *current = verdict;
                             }
                         });
-                        racing_quic = Some(uri);
+                        racing_quic = Some((uri, probe_generation));
                     }
                     QuicProbeState::Probing | QuicProbeState::Failed => {}
                 }
@@ -203,8 +214,14 @@ impl GrpcClientPool {
 
         // The probe won the race: prefer QUIC now rather than at the next dial.
         #[cfg(feature = "quic")]
-        if let Some(uri) = racing_quic {
-            if *self.quic_probe.read() == QuicProbeState::Working {
+        if let Some((uri, probe_generation)) = racing_quic {
+            let probe = self.quic_probe.read();
+            if *probe == QuicProbeState::Working
+                && self
+                    .quic_probe_generation
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    == probe_generation
+            {
                 if let Ok(transport) = super::super::transport::build_quic(uri) {
                     tracing::info!("transport: QUIC (probe succeeded)");
                     return Ok((transport, true));

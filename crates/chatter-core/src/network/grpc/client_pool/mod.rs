@@ -124,6 +124,9 @@ pub struct GrpcClientPool {
     /// QUIC needs TLS 1.3 to negotiate ALPN.
     #[cfg(feature = "quic")]
     quic_probe: Arc<RwLock<QuicProbeState>>,
+    /// Incremented whenever the direct URL changes; fences background probes.
+    #[cfg(feature = "quic")]
+    quic_probe_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Lazily-bootstrapped, pool-wide Tor client for the onion transport.
     /// Bootstrap is deferred to the first onion dial and cached thereafter.
     #[cfg(feature = "onion")]

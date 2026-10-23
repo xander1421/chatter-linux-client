@@ -331,6 +331,20 @@ impl AttachmentService {
         }))
     }
 
+    #[cfg(feature = "onion")]
+    async fn storage_tor(
+        &self,
+    ) -> Result<crate::network::grpc::onion_transport::SharedTorClient, AttachmentError> {
+        let pool = self.grpc_pool()?;
+        if self.secret_chat {
+            pool.secret_storage_tor()
+                .await
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()))
+        } else {
+            Ok(pool.onion_tor())
+        }
+    }
+
     /// GET a presigned/CDN URL, over Tor when [`Self::cdn_over_tor`] and
     /// direct otherwise.
     ///
@@ -342,7 +356,7 @@ impl AttachmentService {
         if self.cdn_over_tor()? {
             #[cfg(feature = "onion")]
             {
-                let tor = self.grpc_pool()?.onion_tor();
+                let tor = self.storage_tor().await?;
                 return crate::network::anon_http::get(&tor, url)
                     .await
                     .map_err(AttachmentError::NetworkError);
@@ -391,7 +405,7 @@ impl AttachmentService {
         if self.cdn_over_tor()? {
             #[cfg(feature = "onion")]
             {
-                let tor = self.grpc_pool()?.onion_tor();
+                let tor = self.storage_tor().await?;
                 return crate::network::anon_http::get_to_file(&tor, url, file, limit)
                     .await
                     .map_err(AttachmentError::NetworkError);
@@ -444,7 +458,7 @@ impl AttachmentService {
         if self.cdn_over_tor()? {
             #[cfg(feature = "onion")]
             {
-                let tor = self.grpc_pool()?.onion_tor();
+                let tor = self.storage_tor().await?;
                 let resp = crate::network::anon_http::put(&tor, url, body, content_type)
                     .await
                     .map_err(AttachmentError::NetworkError)?;

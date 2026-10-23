@@ -71,6 +71,8 @@ impl GrpcClientPool {
             secret_health: Arc::new(RwLock::new(None)),
             #[cfg(feature = "quic")]
             quic_probe: Arc::new(RwLock::new(QuicProbeState::Untried)),
+            #[cfg(feature = "quic")]
+            quic_probe_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(feature = "onion")]
             onion_tor: Arc::new(tokio::sync::OnceCell::new()),
             #[cfg(feature = "onion")]
@@ -163,7 +165,18 @@ impl GrpcClientPool {
         Self::validate_direct_url(server_url)?;
         let new_endpoint = Self::create_endpoint(server_url, self.timeout)?;
 
-        *self.direct_url.write() = server_url.to_string();
+        #[cfg(feature = "quic")]
+        {
+            let mut probe = self.quic_probe.write();
+            *self.direct_url.write() = server_url.to_string();
+            self.quic_probe_generation
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            *probe = QuicProbeState::Untried;
+        }
+        #[cfg(not(feature = "quic"))]
+        {
+            *self.direct_url.write() = server_url.to_string();
+        }
         if self.transport_mode() == TransportMode::Onion {
             // On onion the direct URL is only remembered for the switch back.
             // Installing it as the endpoint would leave an onion-mode pool
@@ -172,18 +185,6 @@ impl GrpcClientPool {
             return Ok(());
         }
         self.swap_endpoint(new_endpoint, TransportMode::Direct);
-        // quic_probe caches a verdict about the OLD server_url specifically
-        // (reachable-over-QUIC or not) -- carrying it over to a genuinely
-        // different destination is wrong in both directions: a stale
-        // Working would skip probing a server that's never actually been
-        // tried, and a stale Failed would give up on QUIC for a server that
-        // might well support it. A new URL is a fair, cheap reason to
-        // re-probe from scratch.
-        #[cfg(feature = "quic")]
-        {
-            *self.quic_probe.write() = QuicProbeState::Untried;
-        }
-
         tracing::info!("gRPC pool URL updated to: {}", server_url);
         Ok(())
     }
