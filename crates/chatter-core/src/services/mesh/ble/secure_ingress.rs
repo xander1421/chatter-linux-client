@@ -10,20 +10,31 @@ impl BleRuntime {
         let local = self.identity.peer_id();
         let identity = Arc::clone(&self.identity);
         let step = self.state.with(|state| {
-            state
+            if !state
                 .sessions
-                .on_handshake(claimed, &local, &identity, &packet.payload)
+                .admit_inbound(claimed, &local, &link.to_string(), &packet.payload)
+            {
+                return None;
+            }
+            let step = state
+                .sessions
+                .on_handshake(claimed, &local, &identity, &packet.payload);
+            if step.as_ref().map_or(true, |step| step.established.is_some()) {
+                state.sessions.release_inbound(claimed);
+            }
+            Some(step)
         });
 
         let step = match step {
-            Ok(step) => step,
-            Err(error) => {
+            Some(Ok(step)) => step,
+            Some(Err(error)) => {
                 // Warn: no session means no direct message with this peer will
                 // ever open, and nothing retries on a schedule. Silence here reads
                 // as "they never wrote", which is the opposite of what happened.
                 tracing::warn!(target: "mesh::ble", peer = %claimed, %error, "handshake failed");
                 return;
             }
+            None => return,
         };
 
         if let Some(reply) = step.reply {

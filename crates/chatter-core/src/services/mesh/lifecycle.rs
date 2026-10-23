@@ -160,9 +160,15 @@ impl MeshService {
         }
 
         if let Some(connector) = self.relay_connector.clone() {
-            // `RelayPool::new` spawns its dispatcher, so it has to be built
+            // The pool spawns its dispatcher, so it has to be built
             // inside the runtime rather than at construction time.
-            let (pool, relay_events) = RelayPool::new(connector);
+            let (pool, relay_events) = RelayPool::with_config(
+                connector,
+                chatter_mesh_nostr::relay::RelayPoolConfig {
+                    verifier: Some(Arc::new(chatter_mesh_nostr::event::verify_event)),
+                    ..Default::default()
+                },
+            );
             let runtime = NostrRuntime::new(
                 pool,
                 Arc::clone(&self.nostr_state),

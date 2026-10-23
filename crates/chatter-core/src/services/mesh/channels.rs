@@ -56,9 +56,10 @@ impl MeshService {
     pub fn private_channels_invitable_for(
         &self,
         peer: &PeerId,
+        active_scope: &str,
     ) -> Result<Vec<(String, String)>, MeshError> {
         let creator = self.identity.peer_id();
-        Ok(self
+        let mut channels: Vec<_> = self
             .private_channels
             .list()?
             .into_iter()
@@ -73,7 +74,15 @@ impl MeshService {
                             .any(|member| member.peer == peer.as_str()))
             })
             .map(|channel| (channel.id, channel.name))
-            .collect())
+            .collect();
+        channels.sort_by(|a, b| {
+            (a.0.as_str() != active_scope, a.1.to_lowercase(), &a.0).cmp(&(
+                b.0.as_str() != active_scope,
+                b.1.to_lowercase(),
+                &b.0,
+            ))
+        });
+        Ok(channels)
     }
 
     /// Produce a short-lived QR for the selected nearby peer. It pins the

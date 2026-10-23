@@ -30,6 +30,9 @@ use chatter_mesh_noise::{NoiseError, fingerprint_of};
 /// empty payloads we send. A wrong guess here costs a handshake round trip, not
 /// correctness: the handshake state machine rejects anything it cannot read.
 const OPENING_MESSAGE_LEN: usize = 32;
+const MAX_PENDING_INBOUND_HANDSHAKES: usize = 32;
+const MAX_PENDING_HANDSHAKES_PER_LINK: usize = 4;
+const PENDING_HANDSHAKE_LIFETIME: Duration = Duration::from_secs(30);
 
 /// A session unused this long is renegotiated on its next use (bitchat
 /// `NoiseSecurityConstants.sessionTimeout`, the idle half of
@@ -52,6 +55,7 @@ pub struct HandshakeStep {
 #[derive(Default)]
 pub struct SessionManager {
     handshakes: BTreeMap<PeerId, (NoiseHandshake, HandshakeRole)>,
+    pending_inbound: BTreeMap<PeerId, (String, Instant)>,
     sessions: BTreeMap<PeerId, NoiseSession>,
     handshake_hashes: BTreeMap<PeerId, [u8; 32]>,
     /// Per session: when it last carried a message, and whether a use found
@@ -75,6 +79,59 @@ impl SessionManager {
     #[must_use]
     pub fn is_handshaking(&self, peer: &PeerId) -> bool {
         self.handshakes.contains_key(peer)
+    }
+
+    /// Reserve space for an unauthenticated XX opening on its physical link.
+    /// A restart by the same claimed peer on the same link reuses its slot.
+    pub fn admit_inbound(
+        &mut self,
+        peer: &PeerId,
+        local_peer: &PeerId,
+        link: &str,
+        message: &[u8],
+    ) -> bool {
+        if message.len() != OPENING_MESSAGE_LEN {
+            return self.handshakes.contains_key(peer);
+        }
+        if matches!(self.handshakes.get(peer), Some((_, HandshakeRole::Initiator)))
+            && local_peer < peer
+        {
+            return true;
+        }
+        if let Some((owner, _)) = self.pending_inbound.get(peer) {
+            return owner.as_str() == link;
+        }
+        if self.pending_inbound.len() >= MAX_PENDING_INBOUND_HANDSHAKES
+            || self
+                .pending_inbound
+                .values()
+                .filter(|entry| entry.0.as_str() == link)
+                .count()
+                >= MAX_PENDING_HANDSHAKES_PER_LINK
+        {
+            return false;
+        }
+        self.pending_inbound
+            .insert(peer.clone(), (link.to_owned(), Instant::now()));
+        true
+    }
+
+    pub fn release_inbound(&mut self, peer: &PeerId) {
+        self.pending_inbound.remove(peer);
+    }
+
+    pub fn expire_pending_handshakes(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<_> = self
+            .pending_inbound
+            .iter()
+            .filter(|(_, (_, started))| now.duration_since(*started) >= PENDING_HANDSHAKE_LIFETIME)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        for peer in expired {
+            self.pending_inbound.remove(&peer);
+            self.handshakes.remove(&peer);
+        }
     }
 
     /// The peer's Noise static key, once a session exists.
@@ -114,6 +171,7 @@ impl SessionManager {
     ) -> Result<Vec<u8>, NoiseError> {
         let mut handshake = NoiseHandshake::new(HandshakeRole::Initiator, identity)?;
         let message = handshake.write_message(&[])?;
+        self.pending_inbound.remove(peer);
         self.handshakes
             .insert(peer.clone(), (handshake, HandshakeRole::Initiator));
         Ok(message)
@@ -310,6 +368,7 @@ impl SessionManager {
     /// Forget everything about one peer.
     pub fn forget(&mut self, peer: &PeerId) {
         self.handshakes.remove(peer);
+        self.pending_inbound.remove(peer);
         self.sessions.remove(peer);
         self.handshake_hashes.remove(peer);
         self.activity.remove(peer);
@@ -318,6 +377,7 @@ impl SessionManager {
     /// Forget every session. Used by the panic wipe and on shutdown.
     pub fn clear(&mut self) {
         self.handshakes.clear();
+        self.pending_inbound.clear();
         self.sessions.clear();
         self.handshake_hashes.clear();
         self.activity.clear();

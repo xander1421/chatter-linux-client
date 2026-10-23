@@ -986,16 +986,9 @@ fn refresh_invitable_channels(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, 
     } else {
         String::new()
     };
-    let mut channels = ui_ctx
-        .mesh_private_channels_invitable_for(peer_id)
+    let channels = ui_ctx
+        .mesh_private_channels_invitable_for(peer_id, &active_scope)
         .unwrap_or_default();
-    channels.sort_by(|a, b| {
-        (a.0.as_str() != active_scope.as_str(), a.1.to_lowercase(), &a.0).cmp(&(
-            b.0.as_str() != active_scope.as_str(),
-            b.1.to_lowercase(),
-            &b.0,
-        ))
-    });
     let items = channels
         .into_iter()
         .map(|(id, name)| PrivateChannelInviteData {

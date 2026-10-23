@@ -8,9 +8,9 @@
 //! completed reassembly hands the caller a buffer to feed straight back into
 //! [`crate::codec::decode`], flags and compression intact.
 //!
-//! The assembler is deliberately bounded in three directions — concurrent
-//! streams, bytes per stream, and stream lifetime — because every one of those
-//! is attacker-controlled: fragments bypass the packet deduplicator, and a peer
+//! The assembler is deliberately bounded in four directions — concurrent
+//! streams, bytes per stream, total held bytes, and stream lifetime — because
+//! every one of those is attacker-controlled: fragments bypass the packet deduplicator, and a peer
 //! can open a stream by sending one piece of a message it never finishes.
 
 use std::collections::{BTreeMap, HashMap};
@@ -24,6 +24,8 @@ pub const DEFAULT_FRAGMENT_SIZE: usize = 469;
 
 /// `TransportConfig.bleMaxInFlightAssemblies`.
 pub const MAX_IN_FLIGHT_ASSEMBLIES: usize = 128;
+/// Device-wide ceiling for incomplete fragment payloads.
+pub const MAX_IN_FLIGHT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Recently completed streams retained so a late relayed fragment cannot open
 /// a new, doomed assembly for a packet already delivered.
@@ -239,6 +241,7 @@ pub struct ExpiredStream {
 pub struct FragmentAssembler {
     streams: HashMap<StreamKey, Assembly>,
     completed: HashMap<StreamKey, u64>,
+    held_bytes: usize,
 }
 
 impl FragmentAssembler {
@@ -259,6 +262,7 @@ impl FragmentAssembler {
     pub fn clear(&mut self) {
         self.streams.clear();
         self.completed.clear();
+        self.held_bytes = 0;
     }
 
     /// Takes one fragment, returning the reassembled original bytes once the
@@ -321,11 +325,29 @@ impl FragmentAssembler {
             .unwrap_or((0, 0));
         let projected = held.saturating_sub(replaced).saturating_add(chunk.len());
         if projected > limit {
-            self.streams.remove(&key);
+            self.remove_stream(&key);
             return Err(MeshError::LengthExceeded {
                 declared: projected,
                 max: limit,
             });
+        }
+
+        let added = chunk.len().saturating_sub(replaced);
+        while self.held_bytes.saturating_add(added) > MAX_IN_FLIGHT_BYTES {
+            let oldest = self
+                .streams
+                .iter()
+                .filter(|(candidate, _)| **candidate != key)
+                .min_by_key(|(_, assembly)| assembly.started_at)
+                .map(|(candidate, _)| *candidate);
+            let Some(oldest) = oldest else {
+                self.remove_stream(&key);
+                return Err(MeshError::LengthExceeded {
+                    declared: projected,
+                    max: MAX_IN_FLIGHT_BYTES,
+                });
+            };
+            self.remove_stream(&oldest);
         }
 
         let Some(assembly) = self.streams.get_mut(&key) else {
@@ -341,6 +363,10 @@ impl FragmentAssembler {
             .chunks
             .insert(header.index, chunk.to_vec())
             .is_none();
+        self.held_bytes = self
+            .held_bytes
+            .saturating_sub(replaced)
+            .saturating_add(chunk.len());
         if is_new_index {
             assembly.last_fragment_at = now_unix_secs;
         }
@@ -357,7 +383,7 @@ impl FragmentAssembler {
                 reassembled.extend_from_slice(piece);
             }
         }
-        self.streams.remove(&key);
+        self.remove_stream(&key);
         self.completed.insert(key, now_unix_secs);
         if self.completed.len() > MAX_COMPLETED_STREAMS
             && let Some(oldest) = self
@@ -416,7 +442,20 @@ impl FragmentAssembler {
             });
             false
         });
+        self.held_bytes = self
+            .streams
+            .values()
+            .flat_map(|assembly| assembly.chunks.values())
+            .map(Vec::len)
+            .sum();
         expired
+    }
+
+    fn remove_stream(&mut self, key: &StreamKey) {
+        if let Some(assembly) = self.streams.remove(key) {
+            let removed: usize = assembly.chunks.values().map(Vec::len).sum();
+            self.held_bytes = self.held_bytes.saturating_sub(removed);
+        }
     }
 
     /// Evicts the oldest reassembly when the in-flight cap is already reached.
@@ -430,7 +469,7 @@ impl FragmentAssembler {
             .map(|(key, assembly)| (assembly.started_at, *key))
             .min();
         if let Some((_, key)) = oldest {
-            self.streams.remove(&key);
+            self.remove_stream(&key);
         }
     }
 }

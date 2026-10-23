@@ -295,6 +295,7 @@ impl BleRuntime {
 
     pub(super) fn cleanup(&mut self, now_ms: u64, now_s: u64) {
         self.state.with(|state| {
+            state.sessions.expire_pending_handshakes();
             state.dedup.cleanup(now_s);
             for expired in state.fragments.evict_expired(now_s) {
                 tracing::warn!(
