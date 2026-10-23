@@ -140,7 +140,7 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = chromeBackground()
-            setPadding(dp(12), 0, 0, 0)
+            setPadding(dp(12), 0, dp(4), 0)
         }
         val name = TextView(this).apply {
             text = filename
@@ -162,7 +162,7 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
         val playback = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, dp(8), 0)
+            setPadding(dp(4), 0, dp(4), 0)
         }
         playButton = iconButton(R.drawable.ic_video_pause, "Pause video") { togglePlayback() }
         playback.addView(playButton, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -370,28 +370,30 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback {
 
     private fun fitSurface() {
         if (!::frame.isInitialized || !::videoView.isInitialized || frame.width <= 0 || frame.height <= 0) return
-        val widthAvailable = frame.width - frame.paddingLeft - frame.paddingRight
-        val heightAvailable = frame.height - frame.paddingTop - frame.paddingBottom
+        // Same outer margin as the image viewer's viewer-area (Spacing.sm compact, Spacing.xl from 600 dp).
+        val margin = dp(if (frame.width / resources.displayMetrics.density >= 600f) 24 else 8)
+        val widthAvailable = frame.width - frame.paddingLeft - frame.paddingRight - 2 * margin
+        val heightAvailable = frame.height - frame.paddingTop - frame.paddingBottom - 2 * margin
         if (widthAvailable <= 0 || heightAvailable <= 0) return
         val aspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toDouble() / videoHeight else 16.0 / 9.0
         val mediaWidth = minOf(widthAvailable.toDouble(), heightAvailable * aspect).toInt().coerceAtLeast(1)
         val mediaHeight = (mediaWidth / aspect).toInt().coerceAtMost(heightAvailable).coerceAtLeast(1)
-        val mediaX = (widthAvailable - mediaWidth) / 2
-        val mediaY = (heightAvailable - mediaHeight) / 2
+        val mediaX = margin + (widthAvailable - mediaWidth) / 2
+        val mediaY = margin + (heightAvailable - mediaHeight) / 2
         if (videoView.layoutParams.width != mediaWidth || videoView.layoutParams.height != mediaHeight)
             videoView.layoutParams = FrameLayout.LayoutParams(mediaWidth, mediaHeight, Gravity.TOP or Gravity.START)
         videoView.translationX = mediaX.toFloat()
         videoView.translationY = mediaY.toFloat()
         val chromeWidth = minOf(widthAvailable, maxOf(dp(300), mediaWidth))
-        val chromeX = (widthAvailable - chromeWidth) / 2f
+        val chromeX = margin + (widthAvailable - chromeWidth) / 2f
         if (header.layoutParams.width != chromeWidth)
             header.layoutParams = FrameLayout.LayoutParams(chromeWidth, dp(48), Gravity.TOP or Gravity.START)
         if (footer.layoutParams.width != chromeWidth)
             footer.layoutParams = FrameLayout.LayoutParams(chromeWidth, dp(96), Gravity.TOP or Gravity.START)
         header.translationX = chromeX
-        header.translationY = maxOf(0, mediaY - dp(48) - dp(8)).toFloat()
+        header.translationY = maxOf(margin, mediaY - dp(48) - dp(8)).toFloat()
         footer.translationX = chromeX
-        footer.translationY = minOf(heightAvailable - dp(96), mediaY + mediaHeight + dp(8)).coerceAtLeast(0).toFloat()
+        footer.translationY = minOf(margin + heightAvailable - dp(96), mediaY + mediaHeight + dp(8)).coerceAtLeast(margin).toFloat()
     }
 
     private fun formatTime(ms: Int): String {
