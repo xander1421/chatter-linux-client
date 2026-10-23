@@ -21,6 +21,8 @@ pub struct SharedContentItemData {
     /// Decrypted thumbnail JPEG bytes. Empty when there is none — the UI
     /// paints a category glyph on a flat tile instead.
     pub thumbnail: Vec<u8>,
+    /// Classified from stored attachment metadata by the core facade.
+    pub is_video: bool,
 }
 
 impl From<&SharedContentRow> for SharedContentItemData {
@@ -34,6 +36,7 @@ impl From<&SharedContentRow> for SharedContentItemData {
             size_bytes: row.size_bytes,
             sent_at: row.sent_at,
             thumbnail,
+            is_video: false,
         }
     }
 }

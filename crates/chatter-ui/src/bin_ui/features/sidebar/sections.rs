@@ -406,48 +406,42 @@ fn apply_sections(window: &MainWindow, sections: Vec<CustomSectionData>) {
         return;
     };
     let target_len = sections.len();
+    let mut keys = (0..vec.row_count()).filter_map(|i| vec.row_data(i)
+        .map(|section| section.section_id.to_string())).collect::<Vec<_>>();
+    let mut positions = keys.iter().enumerate()
+        .map(|(i, key)| (key.clone(), i)).collect::<std::collections::HashMap<_, _>>();
     for (target, mut section) in sections.into_iter().enumerate() {
-        let existing = (target..vec.row_count()).find(|&i| {
-            vec.row_data(i)
-                .is_some_and(|old| old.section_id == section.section_id)
-        });
+        let key = section.section_id.to_string();
+        let existing = positions.get(&key).copied().filter(|&i| i >= target);
         if let Some(from) = existing {
             let old = vec.row_data(from).expect("located section");
             let rows = old.conversations.clone();
             if let Some(row_vec) = rows.as_any().downcast_ref::<VecModel<ChatRowData>>() {
-                let new_rows: Vec<_> = section.conversations.iter().collect();
-                let row_len = new_rows.len();
-                for (slot, row) in new_rows.into_iter().enumerate() {
-                    if row_vec.row_data(slot).is_some_and(|old| {
-                        old.conversation_id == row.conversation_id
-                            && old.conversation_type == row.conversation_type
-                    }) {
-                        row_vec.set_row_data(slot, row);
-                    } else if let Some(from) = (slot + 1..row_vec.row_count()).find(|&i| {
-                        row_vec.row_data(i).is_some_and(|old| {
                             old.conversation_id == row.conversation_id
-                                && old.conversation_type == row.conversation_type
-                        })
-                    }) {
-                        row_vec.remove(from);
-                        row_vec.insert(slot, row);
-                    } else {
-                        row_vec.insert(slot, row);
-                    }
-                }
-                while row_vec.row_count() > row_len {
-                    row_vec.remove(row_vec.row_count() - 1);
-                }
+                let new_rows: Vec<_> = section.conversations.iter().collect();
+                super::reconcile_chat_rows(row_vec, new_rows, false);
                 section.conversations = rows;
             }
             if from == target {
-                vec.set_row_data(target, section);
+                if old.name != section.name || old.icon_emoji != section.icon_emoji
+                    || old.is_expanded != section.is_expanded
+                    || old.unread_count != section.unread_count
+                    || old.sort_mode != section.sort_mode
+                {
+                    vec.set_row_data(target, section);
+                }
             } else {
                 vec.remove(from);
                 vec.insert(target, section);
+                keys.remove(from);
+                keys.insert(target, key.clone());
             }
         } else {
             vec.insert(target, section);
+            keys.insert(target, key.clone());
+        }
+        for i in target..keys.len() {
+            positions.insert(keys[i].clone(), i);
         }
     }
     while vec.row_count() > target_len {

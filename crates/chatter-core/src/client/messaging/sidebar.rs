@@ -1,5 +1,10 @@
 use super::*;
 
+struct SidebarProjection {
+    latest: std::collections::HashMap<(String, crate::domain::message::ConversationType), crate::domain::message::Message>,
+    unread: std::collections::HashMap<(String, crate::domain::message::ConversationType), u32>,
+}
+
 impl ChatterClient {
     pub fn get_channel_local(
         &self,
@@ -257,6 +262,23 @@ impl ChatterClient {
     /// `list_dm_sidebar` and the initial-load sidebar builder use it, so
     /// the UI never iterates channels to find DMs.
     pub fn list_regular_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
+        let ids = self.dm_peers().into_iter().map(Into::into).collect::<Vec<_>>();
+        let projection = self.sidebar_projection(&ids);
+        self.regular_dm_sidebar_with_projection(&projection)
+    }
+
+    fn sidebar_projection(&self, ids: &[crate::domain::ids::ChannelId]) -> SidebarProjection {
+        let latest = self.messages().message_repo.sidebar_latest_batch(ids).unwrap_or_default();
+        let unread = self.services.conversation_repo.conversation_stats()
+            .unwrap_or_default().into_iter()
+            .map(|(key, stats)| (key, stats.unread_count)).collect();
+        SidebarProjection { latest, unread }
+    }
+
+    fn regular_dm_sidebar_with_projection(
+        &self,
+        projection: &SidebarProjection,
+    ) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::message::ConversationType;
         use crate::ui::sidebar_data::ChatRowSendData;
 
@@ -282,14 +304,11 @@ impl ChatterClient {
             // Preview + timestamp from local DM history (empty if none). This
             // used to hand-roll the text-only case, so a DM whose last message
             // was a file rendered blank until the next live message arrived.
-            let latest = self.latest_message(&conversation_id, &ConversationType::ServerDm);
+            let key = (conversation_id.to_string(), ConversationType::ServerDm);
+            let latest = projection.latest.get(&key).cloned();
             let (last_message, timestamp_at) = self.sidebar_activity(latest.as_ref());
 
-            let unread_count = self
-                .messages()
-                .message_repo
-                .get_unread_count(&conversation_id, &ConversationType::ServerDm)
-                .unwrap_or(0) as u32;
+            let unread_count = projection.unread.get(&key).copied().unwrap_or(0);
 
             out.push(ChatRowSendData {
                 user_id: peer_id.to_string(),
@@ -338,6 +357,22 @@ impl ChatterClient {
     /// the single source of truth for the sidebar; the UI must not merge two
     /// separate lists (that races and drops fresh DMs).
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
+        let mut ids = self.dm_peers().into_iter().map(Into::into).collect::<Vec<_>>();
+        self.extend_anon_dm_ids(&mut ids);
+        let projection = self.sidebar_projection(&ids);
+        self.dm_sidebar_with_projection(&projection)
+    }
+
+    fn extend_anon_dm_ids(&self, ids: &mut Vec<crate::domain::ids::ChannelId>) {
+        ids.extend(self.list_anon_dm_conversations().into_iter().map(|dm| dm.id.into()));
+        ids.extend(self.list_anon_dm_message_requests().into_iter().map(|dm| dm.id.into()));
+        ids.extend(self.list_anon_dm_outgoing_requests().into_iter().map(|dm| dm.id.into()));
+    }
+
+    fn dm_sidebar_with_projection(
+        &self,
+        projection: &SidebarProjection,
+    ) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
         use crate::domain::message::ConversationType;
         use crate::ui::sidebar_data::ChatRowSendData;
@@ -347,7 +382,7 @@ impl ChatterClient {
         // both modes (Telegram-style), as their own `AnonDm` rows beside the
         // friend DM with the same person: the row kind is what the UI marks
         // as secret. Their traffic rides the onion channel in either mode.
-        let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
+        let mut out: Vec<ChatRowSendData> = self.regular_dm_sidebar_with_projection(projection);
         // Old requests can coexist with an accepted chat in local storage.
         // A superseding incoming request takes the peer's one visible row.
         let mut shown_secret_peers = std::collections::HashSet::new();
@@ -367,7 +402,7 @@ impl ChatterClient {
                 .peer_display_name
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             let last_message = if superseded_peers.contains(&dm.peer_id) {
                 format!("{} started a new secret chat — Accept / Decline", peer_name)
             } else {
@@ -398,7 +433,7 @@ impl ChatterClient {
                 .peer_display_name
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             // The preview every other row uses: "You: " on our own messages
             // (RC108 O5), typed attachment labels.
             let (last_message, timestamp_at) = match &latest {
@@ -426,7 +461,7 @@ impl ChatterClient {
                 .peer_display_name
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             let (last_message, timestamp_at) = match &latest {
                 Some(msg) => {
                     let preview = msg
@@ -461,13 +496,16 @@ impl ChatterClient {
     /// own rows (`list_sections_with_conversations`); every builder here drops
     /// what lives in one.
     pub fn sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
-        let mut rows = self.list_dm_sidebar();
-        rows.extend(self.sidebar_channels().iter().map(|c| self.channel_row(c)));
-        rows.extend(
-            self.sidebar_private_groups()
-                .iter()
-                .map(|g| self.private_group_row(g)),
-        );
+        let channels = self.sidebar_channels();
+        let groups = self.sidebar_private_groups();
+        let mut ids = self.dm_peers().into_iter().map(Into::into).collect::<Vec<_>>();
+        self.extend_anon_dm_ids(&mut ids);
+        ids.extend(channels.iter().map(|c| c.id));
+        ids.extend(groups.iter().map(|g| g.id.into()));
+        let projection = self.sidebar_projection(&ids);
+        let mut rows = self.dm_sidebar_with_projection(&projection);
+        rows.extend(channels.iter().map(|c| self.channel_row(c, &projection)));
+        rows.extend(groups.iter().map(|g| self.private_group_row(g, &projection)));
         crate::ui::sidebar_data::order_chat_rows(&mut rows);
         // The local AI channel leads the list while it is on; it cannot be
         // pinned, so no activity order may bury it.
@@ -486,10 +524,11 @@ impl ChatterClient {
     fn channel_row(
         &self,
         channel: &crate::domain::channel::Channel,
+        projection: &SidebarProjection,
     ) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::ui::sidebar_data::ChatRowSendData;
         let id = channel.id.to_string();
-        let latest = self.latest_message(&channel.id, &channel.conversation_type());
+        let latest = projection.latest.get(&(id.clone(), channel.conversation_type())).cloned();
         let (last_message, _) = self.sidebar_activity(latest.as_ref());
         // A channel with no messages yet orders (and is dated) by when it was
         // created, so a just-created channel leads the list instead of sinking
@@ -520,16 +559,17 @@ impl ChatterClient {
     fn private_group_row(
         &self,
         group: &crate::domain::anon_group::AnonGroup,
+        projection: &SidebarProjection,
     ) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::ui::sidebar_data::ChatRowSendData;
-        let latest = self.get_latest_anon_group_message(&group.id);
+        let latest = projection.latest.get(&(group.id.to_string(), crate::domain::message::ConversationType::AnonGroup)).cloned();
         let (last_message, _) = self.sidebar_activity(latest.as_ref());
         // As for channels: no messages yet = ordered by creation.
         let last_activity = latest.map_or(group.created_at, |m| m.created_at);
         ChatRowSendData {
             last_message,
             timestamp_at: Some(last_activity),
-            unread_count: self.anon_group_unread_count(&group.id),
+            unread_count: projection.unread.get(&(group.id.to_string(), crate::domain::message::ConversationType::AnonGroup)).copied().unwrap_or(0),
             member_count: self.get_anon_group_members(&group.id).len() as u32,
             is_pinned: self.is_conversation_pinned(&group.id.to_string()),
             // Any member may leave; the owner only once someone else owns it

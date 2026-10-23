@@ -1,6 +1,6 @@
 //! Local display formatting for rows rendered by the client.
 
-use chatter_core::domain::attachment::{FileCategory, format_bytes};
+use chatter_core::domain::attachment::format_bytes;
 use chatter_core::domain::call::CallResult;
 use chatter_core::domain::user::PresenceStatus;
 use chatter_core::ui::SharedContentItemData;
@@ -85,15 +85,8 @@ pub fn shared_content_lines(row: &SharedContentItemData) -> (String, String, boo
         };
         (name, size)
     };
-    let is_video = shared_content_is_video(row);
+    let is_video = row.is_video;
     (title, subtitle, is_video)
-}
-
-pub fn shared_content_is_video(row: &SharedContentItemData) -> bool {
-    matches!(
-        FileCategory::from_filename(&row.source_title),
-        FileCategory::Video
-    )
 }
 
 pub fn shared_tab_label(id: &str) -> &'static str {

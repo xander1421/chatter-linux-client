@@ -226,9 +226,9 @@ impl ChatterClient {
         let Some((conv_type, conv_id)) = conv.routing_key() else {
             return Vec::new();
         };
-        let repo = self.shared_content_repo();
+        let client = self.clone();
         tokio::task::spawn_blocking(move || {
-            match repo.list_scoped(
+            match client.shared_content_repo().list_scoped(
                 &conv_type,
                 &conv_id,
                 category,
@@ -236,7 +236,27 @@ impl ChatterClient {
                 offset,
                 sender.as_ref(),
             ) {
-                Ok(rows) => rows.iter().map(SharedContentItemData::from).collect(),
+                Ok(rows) => rows.iter().map(|row| {
+                    let mut item = SharedContentItemData::from(row);
+                    if let Ok(id) = row.attachment_id.parse() {
+                        item.is_video = client.get_attachment_metadata(&id).is_some_and(|attachment| {
+                            matches!(
+                                crate::domain::attachment::FileCategory::from_mime_and_filename(
+                                    &attachment.metadata.mime_type,
+                                    &attachment.metadata.name,
+                                ),
+                                crate::domain::attachment::FileCategory::Video
+                            )
+                        });
+                        #[cfg(target_os = "android")]
+                        if item.is_video && item.thumbnail.is_empty() {
+                            if let Ok(result) = client.decrypt_and_extract_video_thumbnail(&id) {
+                                item.thumbnail = result.image_bytes;
+                            }
+                        }
+                    }
+                    item
+                }).collect(),
                 Err(e) => {
                     tracing::error!(error = %e, "shared content page");
                     Vec::new()
