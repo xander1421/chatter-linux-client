@@ -217,7 +217,9 @@ export component MeshList inherits Rectangle {
                         alignment: center;
                         Image { source: Icons.radio; width: 18px; height: 18px; colorize: Colors.text-muted; }
                     }
-                    Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    // The name keeps its width; the binding label elides first in a narrow sidebar.
+                    Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+                        min-width: min(self.preferred-width, 120px); }
                     Text { text: peer.binding-label; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; overflow: elide; }
                 }
                 peer-touch := TouchArea {
