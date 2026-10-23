@@ -1020,8 +1020,11 @@ impl ChatterClient {
         self.clear_composer_session();
         let teardown_revision = self.auth_state().get().session_revision;
         let handles = std::mem::take(&mut *self.tasks.lock());
-        for handle in handles {
+        for handle in &handles {
             handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
         }
         let retired = self.authed_notif_session.lock().unwrap_or(expected);
         self.stop_authed_notification_streams(retired).await;
@@ -1044,9 +1047,14 @@ impl ChatterClient {
         if self.auth_state().get().session_revision != teardown_revision {
             return Ok(());
         }
+        // Publish the final status while this session can still authenticate.
+        // Every older session publication has been stopped above, and the
+        // lifecycle lock excludes new publications until teardown completes.
+        self.set_presence_for_shutdown(crate::domain::user::PresenceStatus::Offline)
+            .await;
         let result = self.auth().do_logout().await;
         if self.auth_state().get().session_revision == teardown_revision {
-            self.shutdown_session(teardown_revision, true).await;
+            self.shutdown_session(teardown_revision, false).await;
             self.auth_state()
                 .set_logged_out_if_current(teardown_revision);
         }

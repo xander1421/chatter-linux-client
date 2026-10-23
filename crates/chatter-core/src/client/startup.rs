@@ -209,31 +209,32 @@ impl ChatterClient {
             use tokio::sync::broadcast::error::RecvError;
             let join_gate = Arc::new(calls::JoinRotationGate::default());
             let key_slots = Arc::new(tokio::sync::Semaphore::new(CALL_KEY_TASKS));
+            let mut children = tokio::task::JoinSet::new();
             // Who we last knew to be in the room, to find departures a lag
             // swallowed. Refreshed from the worker on every state change
             // (connect, and each participant count change).
             let mut known_roster: HashSet<String> = HashSet::new();
 
-            let departed = |identity: String| {
+            let departed = |identity: String, children: &mut tokio::task::JoinSet<()>| {
                 let client = Arc::clone(&client);
-                tokio::spawn(async move {
+                children.spawn(async move {
                     if let Err(e) = client.handle_participant_departed(&identity).await {
                         tracing::error!(error = %e, "Failed to handle participant departure");
                     }
                 });
             };
-            let joined = || schedule_join_rotation(&client, &join_gate);
 
             loop {
                 tokio::select! {
+                    _ = children.join_next(), if !children.is_empty() => {}
                     event = rx.recv() => match event {
                         Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
                             known_roster.remove(&identity);
-                            departed(identity);
+                            departed(identity, &mut children);
                         }
                         Ok(LiveKitRoomEvent::ParticipantJoined { identity, .. }) => {
                             known_roster.insert(identity);
-                            joined();
+                            schedule_join_rotation(&client, &join_gate, &mut children);
                         }
                         Ok(LiveKitRoomEvent::StateChanged(_)) => {
                             known_roster = worker.remote_participant_identities().await.into_iter().collect();
@@ -246,10 +247,10 @@ impl ChatterClient {
                             known_roster = now;
                             // One rotation locks out every departure in the gap.
                             if let Some(identity) = gone.into_iter().next() {
-                                departed(identity);
+                                departed(identity, &mut children);
                             }
                             if !new.is_empty() {
-                                joined();
+                                schedule_join_rotation(&client, &join_gate, &mut children);
                             }
                         }
                         Err(RecvError::Closed) => break,
@@ -265,10 +266,12 @@ impl ChatterClient {
                             };
                             let client = Arc::clone(&client);
                             let gate = Arc::clone(&join_gate);
-                            tokio::spawn(async move {
+                            children.spawn(async move {
                                 // A key request due an answer rotates like a join.
-                                if client.handle_group_call_signal(call_id, sender_id, channel_id, signal).await {
-                                    schedule_join_rotation(&client, &gate);
+                                if client.handle_group_call_signal(call_id, sender_id, channel_id, signal).await
+                                    && gate.request()
+                                {
+                                    run_join_rotation(client, gate).await;
                                 }
                                 drop(slot);
                             });
@@ -284,10 +287,27 @@ impl ChatterClient {
                     },
                 }
             }
+            children.abort_all();
+            while children.join_next().await.is_some() {}
         })
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
+        struct StartupListeners<'a> {
+            handles: Vec<tokio::task::JoinHandle<()>>,
+            channel_delivery_shutdown: &'a AtomicBool,
+        }
+        impl Drop for StartupListeners<'_> {
+            fn drop(&mut self) {
+                if !self.handles.is_empty() {
+                    self.channel_delivery_shutdown.store(true, Ordering::SeqCst);
+                }
+                for handle in &self.handles {
+                    handle.abort();
+                }
+            }
+        }
+
         if self.started.swap(true, Ordering::SeqCst) {
             return Err(ClientError::AlreadyStarted);
         }
@@ -332,20 +352,31 @@ impl ChatterClient {
         }
 
         // ── Event handling ──────────────────────────────────────────
-        let h_events = self.ctx.spawn_event_handlers();
+        let mut listeners = StartupListeners {
+            handles: Vec::new(),
+            channel_delivery_shutdown: &self.channel_delivery_shutdown,
+        };
+        listeners.handles.push(self.ctx.spawn_event_handlers());
 
         // ── Multi-device crypto maintenance listener ────────────────
-        let h_skdm_retry = self.spawn_crypto_maintenance_listener();
-        let h_channel_delivery = self.spawn_channel_delivery_listener();
+        listeners.handles.push(self.spawn_crypto_maintenance_listener());
+        listeners.handles.push(self.spawn_channel_delivery_listener());
 
         // ── Call worker room-events policy listener ─────────────────
         #[cfg(feature = "media")]
-        let _h_call_room_policy = self.spawn_call_room_policy_listener();
+        listeners.handles.push(self.spawn_call_room_policy_listener());
 
         // ── Inbox polling + protocol processor ──────────────────────
         let inbox_rx = match self.services.start_inbox_provider().await {
             Some(rx) => rx,
             None => {
+                listeners.channel_delivery_shutdown.store(true, Ordering::SeqCst);
+                for handle in &listeners.handles {
+                    handle.abort();
+                }
+                for handle in listeners.handles.drain(..) {
+                    let _ = handle.await;
+                }
                 self.started.store(false, Ordering::SeqCst);
                 return Err(ClientError::Inbox("failed to start inbox".into()));
             }
@@ -511,26 +542,23 @@ impl ChatterClient {
         };
 
         // ── Presence ────────────────────────────────────────────────
-        // Fire and forget: start() is on the app's startup path, and awaiting
-        // this RPC held the first screen back for as long as the server took
-        // (27 s once, on a Redis-starved server).
-        {
+        // Start without blocking the first screen, but keep the handle so
+        // shutdown can stop and join the publication before sending Offline.
+        let h_presence = {
             let client = self.clone();
             tokio::spawn(async move {
                 client
                     .set_presence(crate::domain::user::PresenceStatus::Online)
                     .await;
-            });
-        }
+            })
+        };
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
+        tasks.extend(listeners.handles.drain(..));
         tasks.extend([
-            h_events,
             h_inbox,
-            h_skdm_retry,
-            h_channel_delivery,
             h_channel_stream,
             h_delete_batch_retry,
             h_receipt_retry,
@@ -547,6 +575,7 @@ impl ChatterClient {
             h_token_refill,
             h_shield_retry,
             h_ephemeral_reaper,
+            h_presence,
         ]);
         #[cfg(feature = "jarvis")]
         {

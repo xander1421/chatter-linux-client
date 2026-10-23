@@ -436,7 +436,7 @@ impl ChatterClient {
                 )
                 .await;
             }
-            spawn_group_key_wait(
+            if let Some(handle) = spawn_group_key_wait(
                 self.device_inbox_provider().get().cloned(),
                 call_worker.clone(),
                 self.call_signaling().clone(),
@@ -445,7 +445,9 @@ impl ChatterClient {
                 channel_id,
                 0,
                 KEY_REQUEST_AFTER,
-            );
+            ) {
+                self.tasks.lock().push(handle);
+            }
         } else {
             // InitiateCall already attempts initial media publication before
             // returning for the host. The worker owns that attempt and logs

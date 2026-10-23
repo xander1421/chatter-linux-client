@@ -26,8 +26,11 @@ impl ChatterClient {
 
         self.channel_delivery_shutdown.store(true, Ordering::SeqCst);
         let handles = std::mem::take(&mut *self.tasks.lock());
-        for handle in handles {
+        for handle in &handles {
             handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
         }
         let retired = self.authed_notif_session.lock().unwrap_or(revision);
         self.stop_authed_notification_streams(retired).await;
@@ -88,8 +91,11 @@ impl ChatterClient {
             let mut tasks = self.tasks.lock();
             std::mem::take(&mut *tasks)
         };
-        for handle in handles {
+        for handle in &handles {
             handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
         }
 
         // Abort the separately-tracked gRPC notification stream.
@@ -103,7 +109,7 @@ impl ChatterClient {
         // Deleted accounts have already lost their auth token and cannot
         // publish presence; avoid delaying the local session transition.
         if publish_offline {
-            self.set_presence(crate::domain::user::PresenceStatus::Offline)
+            self.set_presence_for_shutdown(crate::domain::user::PresenceStatus::Offline)
                 .await;
         }
 
