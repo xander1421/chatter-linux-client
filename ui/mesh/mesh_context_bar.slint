@@ -70,8 +70,9 @@ export component MeshContextBar inherits Rectangle {
         padding-bottom: Spacing.xs;
         spacing: Spacing.sm;
 
+        // Top-aligned: the column beside it grows with the member and settings rows.
         VerticalLayout {
-            alignment: center;
+            alignment: start;
             horizontal-stretch: 0;
             Image {
                 source: Icons.radio;
@@ -131,7 +132,7 @@ export component MeshContextBar inherits Rectangle {
                 for member in MeshGlobal.private-removable-members: Rectangle {
                     height: Spacing.button-height;
                     Text { text: MeshGlobal.private-remove-pending == member.peer-id ? "Tap again to remove " + member.display-name : (member.display-name + " · " + member.status-label);
-                        color: Colors.text-secondary; font-size: Typography.xs;
+                        width: 100%; color: Colors.text-secondary; font-size: Typography.xs;
                         vertical-alignment: center; overflow: elide; }
                     TouchArea { clicked => {
                         if MeshGlobal.private-remove-pending == member.peer-id {
@@ -148,6 +149,7 @@ export component MeshContextBar inherits Rectangle {
                 Rectangle {
                     height: Spacing.button-height;
                     Text {
+                        width: 100%;
                         text: MeshGlobal.private-leave-pending ? "Confirm leave group and delete this device's group key" : "Leave group";
                         color: Colors.warning;
                         font-size: Typography.xs;
