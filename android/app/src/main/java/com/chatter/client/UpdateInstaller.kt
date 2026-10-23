@@ -31,7 +31,7 @@ object UpdateInstaller {
         true
     }
 
-    fun start(activity: MainActivity, path: String): Boolean {
+    fun start(activity: MainActivity, path: String, versionCode: Long): Boolean {
         if (isPlayInstalled(activity)) return false
         android.util.Log.i("UpdateInstaller", "verified update installer handoff requested")
         if (!activity.packageManager.canRequestPackageInstalls()) {
@@ -69,6 +69,7 @@ object UpdateInstaller {
                 }
                 fun code(info: android.content.pm.PackageInfo): Long =
                     if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+                require(code(archive) == versionCode) { "Update version differs from signed manifest" }
                 require(code(archive) > code(installed)) { "Update version is not newer" }
                 fun signerDigests(info: android.content.pm.PackageInfo): List<String> {
                     val signatures = if (Build.VERSION.SDK_INT >= 28)

@@ -230,7 +230,7 @@ if [ "${RELEASE:-0}" = "1" ]; then
     echo ">> RELEASE build: production keys, signed"
 fi
 
-( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build -p chatter-ui $CARGO_PROFILE_FLAG \
+( cd "$PROJECT_ROOT" && cargo ndk -t arm64-v8a build --locked -p chatter-ui $CARGO_PROFILE_FLAG \
     --no-default-features --features "mobile${MESH_FEATURE}${TRUST_ROOT_FEATURE}${QUIC_FEATURE}${ONION_FEATURE}${DEV_AUTO_REGISTER_FEATURE}" --lib )
 
 # ── 2. Stage the .so into the Gradle module ─────────────────────────────────

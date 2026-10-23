@@ -115,7 +115,8 @@ class MainActivity : GameActivity() {
     fun isPlayInstalled(): Boolean = UpdateInstaller.isPlayInstalled(this)
 
     @Suppress("unused")
-    fun installVerifiedUpdate(path: String): Boolean = UpdateInstaller.start(this, path)
+    fun installVerifiedUpdate(path: String, versionCode: Long): Boolean =
+        UpdateInstaller.start(this, path, versionCode)
 
     @Suppress("unused")
     fun beginViewerMediaExport(name: String, mime: String, copy: Boolean): LongArray? =

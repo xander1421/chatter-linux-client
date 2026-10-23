@@ -193,6 +193,20 @@ pub fn verify_artifact(mut reader: impl Read, manifest: &UpdateManifest) -> Resu
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+pub fn android_handoff_version_code(
+    path: &Path,
+    manifest: &UpdateManifest,
+) -> Result<i64, String> {
+    if manifest.platform != "android"
+        || path.file_name().and_then(|name| name.to_str())
+            != Some(format!("android-{}.download", manifest.version_code).as_str())
+    {
+        return Err("verified Android update does not match the downloaded artifact".into());
+    }
+    i64::try_from(manifest.version_code).map_err(|_| "Android update version code is invalid".into())
+}
+
 fn update_url(origin: &str, path: &str) -> Result<String, String> {
     let base = url::Url::parse(origin).map_err(|_| "update server URL is invalid")?;
     if base.scheme() != "https"
@@ -522,6 +536,7 @@ pub fn stage_linux_archive(
         let decoder = flate2::read::GzDecoder::new(input);
         let mut archive = tar::Archive::new(decoder);
         let mut saw_binary = false;
+        let mut saw_build = false;
         let mut extracted = 0u64;
         for entry in archive.entries().map_err(|_| "update tar is invalid")? {
             let mut entry = entry.map_err(|_| "update tar entry is invalid")?;
@@ -547,6 +562,9 @@ pub fn stage_linux_archive(
             let ty = entry.header().entry_type();
             if !ty.is_file() && !ty.is_dir() {
                 return Err("update tar contains a link or special file".into());
+            }
+            if relative == Path::new("BUILD.txt") && entry.size() > 4096 {
+                return Err("update build metadata is too large".into());
             }
             extracted = extracted
                 .checked_add(entry.size())
@@ -574,11 +592,28 @@ pub fn stage_linux_archive(
                     .map_err(|_| "update archive sync failed")?;
                 if relative == Path::new("bin/chatter-ui") {
                     saw_binary = true;
+                } else if relative == Path::new("BUILD.txt") {
+                    saw_build = true;
                 }
             }
         }
         if !saw_binary {
             return Err("update archive has no client executable".into());
+        }
+        if !saw_build {
+            return Err("update archive has no build metadata".into());
+        }
+        let build = std::fs::read_to_string(stage.join("BUILD.txt"))
+            .map_err(|_| "update build metadata is invalid")?;
+        let fields: Vec<_> = build.lines().collect();
+        let expected_name = format!("version={}", manifest.version_name);
+        let expected_code = format!("version_code={}", manifest.version_code);
+        if fields.iter().filter(|line| line.starts_with("version=")).count() != 1
+            || fields.iter().filter(|line| line.starts_with("version_code=")).count() != 1
+            || !fields.contains(&expected_name.as_str())
+            || !fields.contains(&expected_code.as_str())
+        {
+            return Err("update build version differs from signed manifest".into());
         }
         #[cfg(unix)]
         {
@@ -608,17 +643,48 @@ pub fn stage_linux_archive(
     outcome
 }
 
+#[cfg(target_os = "linux")]
+struct LinuxLauncherRollback {
+    launcher: PathBuf,
+    previous: String,
+    activated: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxLauncherRollback {
+    fn restore(self) -> Result<(), String> {
+        let current = std::fs::read_to_string(&self.launcher)
+            .map_err(|_| "cannot read Linux desktop launcher for rollback")?;
+        if current != self.activated {
+            return Ok(());
+        }
+        let temporary = self.launcher.with_extension("desktop.rollback-pending");
+        std::fs::write(&temporary, self.previous)
+            .map_err(|_| "cannot write Linux desktop launcher rollback")?;
+        std::fs::set_permissions(
+            &temporary,
+            std::fs::metadata(&self.launcher)
+                .map_err(|_| "cannot read Linux launcher permissions for rollback")?
+                .permissions(),
+        )
+        .map_err(|_| "cannot preserve Linux launcher rollback permissions")?;
+        std::fs::rename(temporary, self.launcher)
+            .map_err(|_| "cannot restore Linux desktop launcher")?;
+        Ok(())
+    }
+}
+
 /// Point an existing per-user desktop launcher at the verified staged binary.
 /// Keep the first launcher as a manual rollback path to the previous executable.
 #[cfg(target_os = "linux")]
-pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
+fn activate_linux_launcher(executable: &Path) -> Result<Option<LinuxLauncherRollback>, String> {
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
         .ok_or("cannot locate Linux desktop launcher")?;
     let launcher = data_home.join("applications/chatter-linux.desktop");
     if !launcher.is_file() {
-        return Ok(());
+        return Ok(None);
     }
     let current = std::env::current_exe().map_err(|_| "cannot locate running executable")?;
     let old_exec = format!("Exec={}", current.display());
@@ -628,7 +694,7 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
         .lines()
         .any(|line| line == old_exec || line == "Exec=chatter-ui")
     {
-        return Ok(());
+        return Ok(None);
     }
     let new_exec = format!("Exec={}", executable.display());
     let updated = contents
@@ -648,7 +714,7 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
         std::fs::copy(&launcher, &backup).map_err(|_| "cannot save Linux launcher rollback")?;
     }
     let temporary = launcher.with_extension("desktop.update-pending");
-    std::fs::write(&temporary, updated).map_err(|_| "cannot write Linux desktop launcher")?;
+    std::fs::write(&temporary, &updated).map_err(|_| "cannot write Linux desktop launcher")?;
     std::fs::set_permissions(
         &temporary,
         std::fs::metadata(&launcher)
@@ -656,10 +722,29 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
             .permissions(),
     )
     .map_err(|_| "cannot preserve Linux launcher permissions")?;
-    std::fs::rename(temporary, launcher).map_err(|_| "cannot activate Linux desktop launcher")?;
+    std::fs::rename(temporary, &launcher)
+        .map_err(|_| "cannot activate Linux desktop launcher")?;
     tracing::info!(
         "Linux desktop launcher points at verified update; original launcher saved for rollback"
     );
+    Ok(Some(LinuxLauncherRollback {
+        launcher,
+        previous: contents,
+        activated: updated,
+    }))
+}
+
+/// Activate the launcher, then start the staged binary. Restore the immediately
+/// prior launcher if the binary cannot start and the launcher is still ours.
+#[cfg(target_os = "linux")]
+pub fn restart_into_linux_update(executable: &Path) -> Result<(), String> {
+    let rollback = activate_linux_launcher(executable)?;
+    if std::process::Command::new(executable).spawn().is_err() {
+        if let Some(rollback) = rollback {
+            rollback.restore()?;
+        }
+        return Err("Could not restart into the verified update".into());
+    }
     Ok(())
 }
 
@@ -809,6 +894,13 @@ mod tests {
             &checker[..],
         )
         .unwrap();
+        let build = b"version=0.1.0-rc122\nversion_code=122\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(build.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "chatter-122/BUILD.txt", &build[..])
+            .unwrap();
         tar.into_inner().unwrap().finish().unwrap();
         let contents = std::fs::read(&archive_path).unwrap();
         let mut manifest = fixture().0;
