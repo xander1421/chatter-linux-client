@@ -643,17 +643,48 @@ pub fn stage_linux_archive(
     outcome
 }
 
+#[cfg(target_os = "linux")]
+struct LinuxLauncherRollback {
+    launcher: PathBuf,
+    previous: String,
+    activated: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxLauncherRollback {
+    fn restore(self) -> Result<(), String> {
+        let current = std::fs::read_to_string(&self.launcher)
+            .map_err(|_| "cannot read Linux desktop launcher for rollback")?;
+        if current != self.activated {
+            return Ok(());
+        }
+        let temporary = self.launcher.with_extension("desktop.rollback-pending");
+        std::fs::write(&temporary, self.previous)
+            .map_err(|_| "cannot write Linux desktop launcher rollback")?;
+        std::fs::set_permissions(
+            &temporary,
+            std::fs::metadata(&self.launcher)
+                .map_err(|_| "cannot read Linux launcher permissions for rollback")?
+                .permissions(),
+        )
+        .map_err(|_| "cannot preserve Linux launcher rollback permissions")?;
+        std::fs::rename(temporary, self.launcher)
+            .map_err(|_| "cannot restore Linux desktop launcher")?;
+        Ok(())
+    }
+}
+
 /// Point an existing per-user desktop launcher at the verified staged binary.
 /// Keep the first launcher as a manual rollback path to the previous executable.
 #[cfg(target_os = "linux")]
-pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
+fn activate_linux_launcher(executable: &Path) -> Result<Option<LinuxLauncherRollback>, String> {
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
         .ok_or("cannot locate Linux desktop launcher")?;
     let launcher = data_home.join("applications/chatter-linux.desktop");
     if !launcher.is_file() {
-        return Ok(());
+        return Ok(None);
     }
     let current = std::env::current_exe().map_err(|_| "cannot locate running executable")?;
     let old_exec = format!("Exec={}", current.display());
@@ -663,7 +694,7 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
         .lines()
         .any(|line| line == old_exec || line == "Exec=chatter-ui")
     {
-        return Ok(());
+        return Ok(None);
     }
     let new_exec = format!("Exec={}", executable.display());
     let updated = contents
@@ -683,7 +714,7 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
         std::fs::copy(&launcher, &backup).map_err(|_| "cannot save Linux launcher rollback")?;
     }
     let temporary = launcher.with_extension("desktop.update-pending");
-    std::fs::write(&temporary, updated).map_err(|_| "cannot write Linux desktop launcher")?;
+    std::fs::write(&temporary, &updated).map_err(|_| "cannot write Linux desktop launcher")?;
     std::fs::set_permissions(
         &temporary,
         std::fs::metadata(&launcher)
@@ -695,32 +726,23 @@ pub fn activate_linux_launcher(executable: &Path) -> Result<(), String> {
     tracing::info!(
         "Linux desktop launcher points at verified update; original launcher saved for rollback"
     );
-    Ok(())
+    Ok(Some(LinuxLauncherRollback {
+        launcher,
+        previous: contents,
+        activated: updated,
+    }))
 }
 
-/// Start the staged binary and keep the current launcher until it survives
-/// the bounded startup window. The caller exits only after this succeeds.
+/// Activate the launcher, then start the staged binary. Restore the immediately
+/// prior launcher if the binary cannot start and the launcher is still ours.
 #[cfg(target_os = "linux")]
 pub fn restart_into_linux_update(executable: &Path) -> Result<(), String> {
-    let mut child = std::process::Command::new(executable)
-        .spawn()
-        .map_err(|_| "Could not restart into the verified update")?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while std::time::Instant::now() < deadline {
-        match child.try_wait() {
-            Ok(Some(_)) => return Err("Verified update exited during startup".into()),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("Could not check verified update startup".into());
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+    let rollback = activate_linux_launcher(executable)?;
+    if std::process::Command::new(executable).spawn().is_err() {
+        if let Some(rollback) = rollback {
+            rollback.restore()?;
         }
-    }
-    if let Err(error) = activate_linux_launcher(executable) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(error);
+        return Err("Could not restart into the verified update".into());
     }
     Ok(())
 }
