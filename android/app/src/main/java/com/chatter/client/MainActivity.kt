@@ -54,6 +54,10 @@ import java.util.concurrent.Executors
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
+    companion object {
+        private const val PENDING_SCREEN_SHARE_TOKEN = "pending-screen-share-token"
+    }
+
     private var pendingScreenShareToken = 0L
     private external fun nativeOnScreenShareDenied(token: Long)
     private val screenShareConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -190,6 +194,7 @@ class MainActivity : GameActivity() {
     private external fun nativeReleasePendingVideo(token: Long)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        pendingScreenShareToken = savedInstanceState?.getLong(PENDING_SCREEN_SHARE_TOKEN) ?: 0L
         // Samsung may prelaunch this Activity before BOOT_COMPLETED without
         // creating a usable window. Preserve the durable account marker until
         // Rust restores the session; the default Kotlin false is not sign-out.
@@ -241,13 +246,30 @@ class MainActivity : GameActivity() {
         nativeInitWebrtc()
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putLong(PENDING_SCREEN_SHARE_TOKEN, pendingScreenShareToken)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onDestroy() {
+        if (!isChangingConfigurations && pendingScreenShareToken != 0L) {
+            nativeOnScreenShareDenied(pendingScreenShareToken)
+            pendingScreenShareToken = 0L
+        }
+        cameraAnalysis?.let { analysis ->
+            analysis.clearAnalyzer()
+            cameraProvider?.unbind(analysis)
+        }
+        cameraAnalysis = null
+        cameraProvider = null
+        cameraExecutor.shutdown()
         torNetworkCallback?.let { callback ->
             val connectivity = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
                 as ConnectivityManager
             connectivity.unregisterNetworkCallback(callback)
         }
         torNetworkCallback = null
+        nativeClearActivity()
         super.onDestroy()
     }
 
@@ -514,6 +536,9 @@ class MainActivity : GameActivity() {
 
     /** Implemented in Rust. Stores a GlobalRef to this Activity. */
     private external fun nativeRegisterActivity()
+
+    /** Implemented in Rust. Releases this Activity if it is still the JNI target. */
+    private external fun nativeClearActivity()
 
     /** Implemented in Rust. Runs the in-app accept flow for an incoming call. */
     private external fun nativeAcceptIncomingCall(callId: String, capability: String)
@@ -955,14 +980,17 @@ class MainActivity : GameActivity() {
 
     // --- Camera capture (CameraX → I420 → Rust/LiveKit) ------------------------
     private var cameraProvider: ProcessCameraProvider? = null
+    private var cameraAnalysis: ImageAnalysis? = null
     private val cameraExecutor = Executors.newSingleThreadExecutor()
 
     /** Called from Rust (JNI) when a call starts publishing video. */
     @Suppress("unused", "UNUSED_PARAMETER")
     fun startCamera(width: Int, height: Int, fps: Int, front: Boolean) {
         runOnUiThread {
+            if (isDestroyed || cameraExecutor.isShutdown) return@runOnUiThread
             val future = ProcessCameraProvider.getInstance(this)
             future.addListener({
+                if (isDestroyed || cameraExecutor.isShutdown) return@addListener
                 val provider = try {
                     future.get()
                 } catch (e: Exception) {
@@ -974,6 +1002,7 @@ class MainActivity : GameActivity() {
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
+                cameraAnalysis = analysis
                 analysis.setAnalyzer(cameraExecutor) { image ->
                     try {
                         val i420 = yuv420ToI420(image)
@@ -1008,7 +1037,13 @@ class MainActivity : GameActivity() {
     /** Called from Rust (JNI) when video capture stops. */
     @Suppress("unused")
     fun stopCamera() {
-        runOnUiThread { cameraProvider?.unbindAll() }
+        runOnUiThread {
+            cameraAnalysis?.let { analysis ->
+                analysis.clearAnalyzer()
+                cameraProvider?.unbind(analysis)
+            }
+            cameraAnalysis = null
+        }
     }
 
     /** Convert a YUV_420_888 ImageProxy to tightly-packed I420 (Y, then U, V). */
