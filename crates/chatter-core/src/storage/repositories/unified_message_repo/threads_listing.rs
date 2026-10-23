@@ -1,6 +1,49 @@
 use super::*;
 
 impl UnifiedMessageRepository {
+    /// Latest visible activity for many conversations in one reader checkout.
+    /// The main-message bound matches the sidebar's eight 32-row pages.
+    pub fn sidebar_latest_batch(
+        &self,
+        ids: &[ChannelId],
+    ) -> Result<HashMap<(String, ConversationType), Message>, StorageError> {
+        let mut latest = HashMap::new();
+        if ids.is_empty() {
+            return Ok(latest);
+        }
+        let conn = self.db.read_connection()?;
+        for chunk in ids.chunks(400) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "WITH ranked AS (SELECT {}, \
+                 ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.conversation_type, \
+                 (m.thread_id IS NOT NULL) ORDER BY m.sent_at DESC, m.sender_id DESC) AS rank \
+                 FROM messages m WHERE m.conversation_id IN ({placeholders}) \
+                 AND (m.thread_id IS NULL OR m.is_deleted = 0) \
+                 AND (m.conversation_type NOT IN ('anon_dm', 'anon_group') OR m.is_deleted = 0)) \
+                 SELECT {} FROM ranked m WHERE (m.thread_id IS NULL AND m.rank <= 256) \
+                 OR (m.thread_id IS NOT NULL AND m.rank = 1)",
+                message_columns("m"), message_columns("m"),
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let params = chunk.iter().map(ToString::to_string).collect::<Vec<_>>();
+            let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
+            for message in collect_messages(&mut rows)? {
+                if !message.conversation_type.is_anon() && message.thread_id.is_none()
+                    && crate::services::disappearing::is_timer_notice(&message)
+                {
+                    continue;
+                }
+                let key = (message.conversation_id.to_string(), message.conversation_type.clone());
+                let replace = latest.get(&key).is_none_or(|old: &Message| message.sent_at > old.sent_at);
+                if replace {
+                    latest.insert(key, message);
+                }
+            }
+        }
+        Ok(latest)
+    }
+
     // ========================================================================
     // Thread operations
     // ========================================================================

@@ -509,47 +509,17 @@ pub(crate) fn apply_chat_list(
     use crate::bin_ui::converters::ChatRowExt;
     use slint::Model;
     let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
-    let target_len = rows.len();
     let model = window.global::<crate::SidebarPane>().get_chat_rows();
-    let mut arrivals = Vec::new();
+    let arrivals;
     if let Some(vec) = model
         .as_any()
         .downcast_ref::<slint::VecModel<crate::ChatRowData>>()
     {
         // Apply the core snapshot by identity. Replacing the ModelRc made
         // every row disappear and reappear for one changed preview.
-        let had_rows = vec.row_count() > 0;
-        for (target, mut row) in rows.into_iter().enumerate() {
-            let current = vec.row_data(target);
-            if current.as_ref().is_some_and(|old| {
-                old.conversation_id == row.conversation_id
-                    && old.conversation_type == row.conversation_type
-            }) {
-                vec.set_row_data(target, row);
-            } else if let Some(from) = (target + 1..vec.row_count()).find(|&index| {
-                vec.row_data(index).is_some_and(|old| {
-                    old.conversation_id == row.conversation_id
-                        && old.conversation_type == row.conversation_type
-                })
-            }) {
-                if from > target {
-                    row.arrival_serial = next_arrival_serial();
-                    arrivals.push((row.conversation_id.clone(), row.arrival_serial));
-                }
-                vec.remove(from);
-                vec.insert(target, row);
-            } else {
-                if had_rows {
-                    row.arrival_serial = next_arrival_serial();
-                    arrivals.push((row.conversation_id.clone(), row.arrival_serial));
-                }
-                vec.insert(target, row);
-            }
-        }
-        while vec.row_count() > target_len {
-            vec.remove(vec.row_count() - 1);
-        }
+        arrivals = reconcile_chat_rows(vec, rows, true);
     } else {
+        arrivals = Vec::new();
         window
             .global::<crate::SidebarPane>()
             .set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
@@ -562,6 +532,49 @@ pub(crate) fn apply_chat_list(
     crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
     #[cfg(target_os = "android")]
     crate::platform::android::notification_route::open_pending(window);
+}
+
+/// Apply a keyed snapshot while preserving delegates for unchanged rows.
+pub(super) fn reconcile_chat_rows(
+    vec: &slint::VecModel<crate::ChatRowData>,
+    rows: Vec<crate::ChatRowData>,
+    animate: bool,
+) -> Vec<(slint::SharedString, i32)> {
+    use slint::Model;
+    let had_rows = vec.row_count() > 0;
+    let mut keys = (0..vec.row_count()).filter_map(|i| vec.row_data(i)
+        .map(|row| row.conversation_id.to_string())).collect::<Vec<_>>();
+    let mut positions = keys.iter().enumerate()
+        .map(|(i, key)| (key.clone(), i)).collect::<std::collections::HashMap<_, _>>();
+    let mut arrivals = Vec::new();
+    let target_len = rows.len();
+    for (target, mut row) in rows.into_iter().enumerate() {
+        let key = row.conversation_id.to_string();
+        if positions.get(&key).copied() == Some(target) {
+            if vec.row_data(target).is_some_and(|old| old != row) {
+                vec.set_row_data(target, row);
+            }
+            continue;
+        }
+        let from = positions.get(&key).copied().filter(|&from| from > target);
+        if animate && (from.is_some() || had_rows) {
+            row.arrival_serial = next_arrival_serial();
+            arrivals.push((row.conversation_id.clone(), row.arrival_serial));
+        }
+        if let Some(from) = from {
+            vec.remove(from);
+            keys.remove(from);
+        }
+        vec.insert(target, row);
+        keys.insert(target, key);
+        for i in target..keys.len() {
+            positions.insert(keys[i].clone(), i);
+        }
+    }
+    while vec.row_count() > target_len {
+        vec.remove(vec.row_count() - 1);
+    }
+    arrivals
 }
 
 /// A conversation's stored history changed without a new message arriving —
