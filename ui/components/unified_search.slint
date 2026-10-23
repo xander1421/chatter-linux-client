@@ -498,23 +498,23 @@ export component UnifiedSearch inherits Rectangle {
                         animate x { duration: Materials.motion-standard; easing: Materials.spring; }
                         animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                     }
-                    for tab[i] in ["All", "Chats", "Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
+                    for category-name[i] in ["All", "Chats", "Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
                         x: i * 110px;
                         width: 110px;
                         height: Spacing.touch-target-min;
                         border-radius: Spacing.radius-xl;
                         background: tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
                         accessible-role: tab;
-                        accessible-label: tab;
-                        accessible-description: root.category == tab.to-lowercase() ? "Selected" : "";
-                        accessible-action-default => { root.category = tab.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
+                        accessible-label: category-name;
+                        accessible-description: root.category == category-name.to-lowercase() ? "Selected" : "";
+                        accessible-action-default => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         border-width: tab-keys.has-focus ? 2px : 0px;
                         border-color: Colors.focus-ring;
                         tab-keys := FocusScope {
                             width: 0px; height: 0px; enabled: root.show;
                             key-pressed(event) => {
                                 if event.text == Key.Space || event.text == Key.Return {
-                                    root.category = tab.to-lowercase(); root.selected-index = 0;
+                                    root.category = category-name.to-lowercase(); root.selected-index = 0;
                                     root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                                     return accept;
                                 }
@@ -529,9 +529,9 @@ export component UnifiedSearch inherits Rectangle {
                         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                         tab-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.category = tab.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
+                            clicked => { root.category = category-name.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         }
-                        tab-label := Text { text: tab + (root.category-counts[i] > 0 ? " " + (root.category-counts[i] > root.page-limits[i] ? root.page-limits[i] + "+" : root.category-counts[i]) : ""); color: root.category == tab.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                        tab-label := Text { text: category-name + (root.category-counts[i] > 0 ? " " + (root.category-counts[i] > root.page-limits[i] ? root.page-limits[i] + "+" : root.category-counts[i]) : ""); color: root.category == category-name.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                     }
                 }
             }
