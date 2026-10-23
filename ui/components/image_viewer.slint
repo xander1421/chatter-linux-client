@@ -60,6 +60,12 @@ export component ImageViewer inherits Rectangle {
     property <length> pan-x: 0px;
     property <length> pan-y: 0px;
     property <float> pinch-start-zoom: 1.0;
+    // Double tap is counted here, not by `double-clicked`: Slint 1.17 sends Exit
+    // after every touch release, which resets its click counter, so touch never
+    // produced a double click.
+    property <duration> last-tap-time: -1s;
+    property <length> last-tap-x: 0px;
+    property <length> last-tap-y: 0px;
     property <length> pinch-center-x: 0px;
     property <length> pinch-center-y: 0px;
     property <length> drag-x: 0px;
@@ -336,10 +342,20 @@ export component ImageViewer inherits Rectangle {
                         if (self.mouse-x < main-image.x || self.mouse-x > main-image.x + main-image.width
                             || self.mouse-y < main-image.y || self.mouse-y > main-image.y + main-image.height) {
                             root.request-close();
-                        } else { root.chrome-visible = !root.chrome-visible; }
+                        } else if (root.last-tap-time >= 0ms && animation-tick() - root.last-tap-time < 400ms
+                            && abs(self.mouse-x - root.last-tap-x) < 24px && abs(self.mouse-y - root.last-tap-y) < 24px) {
+                            // Second tap: undo the first tap's chrome toggle and zoom instead.
+                            root.last-tap-time = -1s;
+                            root.chrome-visible = !root.chrome-visible;
+                            root.toggle-zoom(self.mouse-x, self.mouse-y);
+                        } else {
+                            root.last-tap-time = animation-tick();
+                            root.last-tap-x = self.mouse-x;
+                            root.last-tap-y = self.mouse-y;
+                            root.chrome-visible = !root.chrome-visible;
+                        }
                     }
                 }
-                double-clicked => { root.toggle-zoom(self.mouse-x, self.mouse-y); }
                 scroll-event(event) => {
                     root.zoom-at(root.zoom * (event.delta-y < 0px ? 1.12 : 1.0 / 1.12), self.mouse-x, self.mouse-y);
                     return accept;
