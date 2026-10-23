@@ -164,18 +164,25 @@ export component MeshSetupSheet inherits Rectangle {
     if root.confirming-wipe: Rectangle {
         z: 10; background: Materials.scrim;
         TouchArea { clicked => { root.confirming-wipe = false; } }
-        Rectangle {
+        VerticalLayout {
             x: Spacing.lg; width: parent.width - Spacing.lg * 2;
-            y: parent.height - self.height - Spacing.lg;
-            height: confirm-content.preferred-height;
-            background: Colors.surface-section; border-radius: Spacing.radius-lg;
-            confirm-content := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
-                Text { text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
-                    color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
-                Button { text: "Erase Mesh Data"; variant: "destructive"; touch: root.touch;
-                    clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
-                Button { text: "Cancel"; variant: "secondary"; touch: root.touch;
-                    clicked => { root.confirming-wipe = false; } }
+            y: parent.height - self.preferred-height - Spacing.lg;
+            spacing: Spacing.sm;
+            Rectangle { height: wipe-action.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                wipe-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
+                    Text { text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
+                        color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
+                    Button { text: "Erase Mesh Data"; variant: "destructive"; touch: root.touch;
+                        clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
+                }
+            }
+            Rectangle { height: wipe-cancel.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                wipe-cancel := VerticalLayout { padding: Spacing.sm;
+                    Button { text: "Cancel"; variant: "ghost"; touch: root.touch;
+                        clicked => { root.confirming-wipe = false; } }
+                }
             }
         }
     }

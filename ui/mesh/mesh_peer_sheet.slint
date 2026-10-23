@@ -230,19 +230,26 @@ export component MeshPeerSheet inherits Rectangle {
     if MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id && MeshGlobal.sheet-peer-id != "": Rectangle {
         z: 10; background: Materials.scrim;
         TouchArea { clicked => { MeshGlobal.private-remove-pending = ""; } }
-        Rectangle {
+        VerticalLayout {
             x: Spacing.lg; width: parent.width - Spacing.lg * 2;
-            y: parent.height - self.height - Spacing.lg;
-            height: confirm-content.preferred-height;
-            background: Colors.surface-section; border-radius: Spacing.radius-lg;
-            confirm-content := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
-                Text { text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
-                    color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
-                Button { text: "Remove and rotate key"; variant: "destructive"; touch: root.touch;
-                    clicked => { MeshGlobal.private-remove-pending = "";
-                        MeshGlobal.remove-private-member(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); } }
-                Button { text: "Cancel"; variant: "secondary"; touch: root.touch;
-                    clicked => { MeshGlobal.private-remove-pending = ""; } }
+            y: parent.height - self.preferred-height - Spacing.lg;
+            spacing: Spacing.sm;
+            Rectangle { height: remove-action.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                remove-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
+                    Text { text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
+                        color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
+                    Button { text: "Remove and rotate key"; variant: "destructive"; touch: root.touch;
+                        clicked => { MeshGlobal.private-remove-pending = "";
+                            MeshGlobal.remove-private-member(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); } }
+                }
+            }
+            Rectangle { height: remove-cancel.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                remove-cancel := VerticalLayout { padding: Spacing.sm;
+                    Button { text: "Cancel"; variant: "ghost"; touch: root.touch;
+                        clicked => { MeshGlobal.private-remove-pending = ""; } }
+                }
             }
         }
     }
