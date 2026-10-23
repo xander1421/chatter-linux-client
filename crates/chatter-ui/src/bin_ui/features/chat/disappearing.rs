@@ -6,6 +6,7 @@
 //! only moves values into `DisappearingGlobal` and the picker's choice back.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
@@ -14,6 +15,8 @@ use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::{DisappearingGlobal, DisappearingOption, MainWindow};
+
+static PROFILE_REQUEST: AtomicU64 = AtomicU64::new(0);
 
 /// Wire the picker callback and keep the header's timer current.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -170,44 +173,62 @@ pub fn options() -> Vec<DisappearingOption> {
 
 /// Fill the DM-settings row for the contact screen of `peer_id`. Friends
 /// only — core announces a timer over the friend DM and has none with anyone
-/// else. Called from `open_user_profile` on the UI thread.
+/// else. Storage work runs away from the UI thread.
 pub fn show_for_profile(
     w: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     peer_id: &UserId,
     is_friend: bool,
 ) {
-    let dm = ActiveConversation::ServerDm { peer_id: *peer_id };
-    let can_set = is_friend && ui_ctx.can_set_disappearing_timer(dm.clone());
-    let seconds = if can_set {
-        ui_ctx.disappearing_timer(dm)
-    } else {
-        0
-    };
-    let g = w.global::<DisappearingGlobal>();
-    g.set_dm_can_set(can_set);
-    g.set_dm_seconds(seconds as i32);
-    g.set_dm_label(disappearing::timer_label(seconds).into());
-    let state = ui_ctx.disappearing_state(ActiveConversation::ServerDm { peer_id: *peer_id });
-    g.set_dm_activation_label(
-        disappearing::timer_label(if state.activation_seconds == 0 {
-            disappearing::DEFAULT_ACTIVATION_SECONDS
-        } else {
-            state.activation_seconds
-        })
-        .into(),
-    );
+    let request = PROFILE_REQUEST.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    w.global::<DisappearingGlobal>().set_dm_can_set(false);
+    let peer = *peer_id;
+    let ctx = ui_ctx.clone();
+    let weak = w.as_weak();
+    tokio::spawn(async move {
+        let Ok((can_set, state)) = tokio::task::spawn_blocking(move || {
+            let dm = ActiveConversation::ServerDm { peer_id: peer };
+            let can_set = is_friend && ctx.can_set_disappearing_timer(dm.clone());
+            (can_set, ctx.disappearing_state(dm))
+        }).await else { return };
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            if PROFILE_REQUEST.load(Ordering::Acquire) != request
+                || w.global::<crate::ModalHostState>().get_profile_user_id().to_string() != peer.to_string() {
+                return;
+            }
+            let seconds = if can_set { state.effective_seconds(chatter_core::util::time::TimestampNanos::now().as_u64()) } else { 0 };
+            let g = w.global::<DisappearingGlobal>();
+            g.set_dm_can_set(can_set);
+            g.set_dm_seconds(seconds as i32);
+            g.set_dm_label(disappearing::timer_label(seconds).into());
+            g.set_dm_activation_label(disappearing::timer_label(if state.activation_seconds == 0 {
+                disappearing::DEFAULT_ACTIVATION_SECONDS
+            } else {
+                state.activation_seconds
+            }).into());
+        });
+    });
 }
 
 /// Hide the DM-settings row (the contact screen is showing ourselves).
 pub fn hide_for_profile(w: &MainWindow) {
+    PROFILE_REQUEST.fetch_add(1, Ordering::AcqRel);
     w.global::<DisappearingGlobal>().set_dm_can_set(false);
 }
 
 /// The open conversation's timer onto the header.
 fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let state = ui_ctx.disappearing_state(ui_ctx.active_conversation());
-    apply_header_state(w, state);
+    let conv = ui_ctx.active_conversation();
+    let ctx = ui_ctx.clone();
+    let weak = w.as_weak();
+    tokio::spawn(async move {
+        let read_ctx = ctx.clone();
+        let read_conv = conv.clone();
+        let Ok(state) = tokio::task::spawn_blocking(move || read_ctx.disappearing_state(read_conv)).await else { return };
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            if ctx.active_conversation() == conv { apply_header_state(&w, state); }
+        });
+    });
 }
 
 fn apply_header_state(w: &MainWindow, state: disappearing::DmTimer) {
@@ -269,8 +290,6 @@ fn wire_set_dm_window(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Refresh on every conversation switch and on every timer change (ours from
 /// another device, or the friend's).
 fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    refresh_header(window, ui_ctx);
-
     let key = |d: &chatter_core::state::ChatStateData| d.active_conversation.clone();
     let mut current = key(&ui_ctx.chat_snapshot());
     let mut switches = ui_ctx.subscribe_chat_snapshots();
@@ -279,21 +298,34 @@ fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ctx = ui_ctx.clone();
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut expiration_sent = false;
+        let initial_conv = ctx.active_conversation();
         let mut state = {
             let ctx = ctx.clone();
-            match tokio::task::spawn_blocking(move || ctx.disappearing_state(ctx.active_conversation())).await {
+            let conv = initial_conv.clone();
+            match tokio::task::spawn_blocking(move || ctx.disappearing_state(conv)).await {
                 Ok(state) => state,
                 Err(_) => return,
             }
         };
+        let initial = state;
+        let initial_weak = weak.clone();
+        let initial_ctx = ctx.clone();
+        let _ = initial_weak.upgrade_in_event_loop(move |w| {
+            if initial_ctx.active_conversation() == initial_conv { apply_header_state(&w, initial); }
+        });
+        let mut state_conv = current;
         loop {
+            let ticking = state.enabled_until != 0 && !expiration_sent;
             let changed = tokio::select! {
-                _ = ticker.tick() => {
+                _ = async {
+                    if !ticking {
+                        std::future::pending::<()>().await;
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                } => {
                     let now = chatter_core::util::time::TimestampNanos::now().as_u64();
-                    if state.enabled_until == 0 || (now >= state.enabled_until && expiration_sent) { continue; }
                     if now >= state.enabled_until { expiration_sent = true; }
                     false
                 },
@@ -314,17 +346,20 @@ fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             if changed {
                 let ctx_for_read = ctx.clone();
+                state_conv = ctx.active_conversation();
+                let conv = state_conv;
                 expiration_sent = false;
                 state = match tokio::task::spawn_blocking(move || {
-                    ctx_for_read.disappearing_state(ctx_for_read.active_conversation())
+                    ctx_for_read.disappearing_state(conv)
                 }).await {
                     Ok(state) => state,
                     Err(_) => break,
                 };
             }
-            let (weak, ctx, state) = (weak.clone(), ctx.clone(), state);
+            let (weak, ctx, state, state_conv) = (weak.clone(), ctx.clone(), state, state_conv);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    if ctx.active_conversation() != state_conv { return; }
                     apply_header_state(&w, state);
                     if changed {
                         if let Ok(peer) = w.global::<crate::ModalHostState>()

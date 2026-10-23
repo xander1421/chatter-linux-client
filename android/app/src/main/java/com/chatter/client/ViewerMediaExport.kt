@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.PersistableBundle
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import java.io.File
@@ -27,6 +28,8 @@ internal object ViewerMediaExport {
     private val next = AtomicLong(1)
     private const val PDF_LIFETIME_MS = 5 * 60 * 1000L
     private val cleanupHandler = Handler(Looper.getMainLooper())
+    private val pdfCleanup = ConcurrentHashMap<Long, Runnable>()
+    private val pdfDeadline = ConcurrentHashMap<Long, Long>()
     @Volatile private var lastLegacyDownload: Pair<Uri, String>? = null
 
     @Synchronized fun begin(context: Context, name: String, mime: String, copy: Boolean, pdf: Boolean = false): LongArray? {
@@ -75,14 +78,6 @@ internal object ViewerMediaExport {
                     "image/tiff" -> ".tif"; "image/heic" -> ".heic"; "image/heif" -> ".heif"
                     else -> return null
                 } else ""
-                // Expired exports are also pruned when a new PDF is opened.
-                if (pdf) folder.listFiles()?.filter { it.isFile && System.currentTimeMillis() - it.lastModified() > PDF_LIFETIME_MS }?.forEach {
-                    try {
-                        val oldUri = FileProvider.getUriForFile(context, "${context.packageName}.viewer-media", it)
-                        context.revokeUriPermission(oldUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        it.delete()
-                    } catch (_: Exception) {}
-                }
                 val candidate = File(folder, "${UUID.randomUUID()}-$safeName$clipboardExtension${if (pdf && mime == "application/pdf") ".pdf" else ""}")
                 check(candidate.createNewFile()) // claim ownership before cleanup/truncation
                 file = candidate
@@ -92,18 +87,35 @@ internal object ViewerMediaExport {
             if (pdf && file != null) {
                 val exported = file ?: error("File unavailable")
                 val appContext = context.applicationContext
-                cleanupHandler.postDelayed({
-                    pending.remove(token)
-                    try {
-                        val grant = FileProvider.getUriForFile(appContext, "${appContext.packageName}.viewer-media", exported)
-                        appContext.revokeUriPermission(grant, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    } catch (_: Exception) {}
-                    exported.delete()
-                }, PDF_LIFETIME_MS)
+                val cleanup = object : Runnable {
+                    override fun run() {
+                        synchronized(this@ViewerMediaExport) {
+                            val remaining = (pdfDeadline[token] ?: return@synchronized) - SystemClock.elapsedRealtime()
+                            if (remaining > 0) {
+                                cleanupHandler.postDelayed(this, remaining)
+                                return@synchronized
+                            }
+                            pdfDeadline.remove(token)
+                            pdfCleanup.remove(token)
+                            pending.remove(token)
+                            try {
+                                val grant = FileProvider.getUriForFile(appContext, "${appContext.packageName}.viewer-media", exported)
+                                appContext.revokeUriPermission(grant, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            } catch (_: Exception) {}
+                            exported.delete()
+                        }
+                    }
+                }
+                pdfCleanup[token] = cleanup
+                pdfDeadline[token] = SystemClock.elapsedRealtime() + PDF_LIFETIME_MS
+                // Also bound exports whose native writer never calls finish.
+                cleanupHandler.postDelayed(cleanup, PDF_LIFETIME_MS)
             }
             descriptor.use { longArrayOf(token, it.detachFd().toLong()) }
         } catch (_: Exception) {
             pending.remove(token)
+            pdfCleanup.remove(token)?.let { cleanupHandler.removeCallbacks(it) }
+            pdfDeadline.remove(token)
             if (uri != null) try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
             file?.delete()
             null
@@ -112,7 +124,11 @@ internal object ViewerMediaExport {
 
     @Synchronized fun finish(context: Context, token: Long, success: Boolean): Boolean {
         val item = pending.remove(token) ?: return false
+        val cleanup = pdfCleanup[token]
+        if (cleanup != null) cleanupHandler.removeCallbacks(cleanup)
         fun discard() {
+            pdfCleanup.remove(token)
+            pdfDeadline.remove(token)
             if (item.uri != null) try { context.contentResolver.delete(item.uri, null, null) } catch (_: Exception) {}
             item.file?.delete()
         }
@@ -137,6 +153,11 @@ internal object ViewerMediaExport {
             } else {
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.viewer-media", item.file ?: error("File unavailable"))
                 lastLegacyDownload = uri to item.mime
+            }
+            // The viewer gets its full handoff window even after a slow export.
+            if (item.pdf && cleanup != null) {
+                pdfDeadline[token] = SystemClock.elapsedRealtime() + PDF_LIFETIME_MS
+                cleanupHandler.postDelayed(cleanup, PDF_LIFETIME_MS)
             }
             true
         } catch (_: Exception) { discard(); false }
@@ -163,6 +184,9 @@ internal object ViewerMediaExport {
 
     private fun clearPrivateExports(context: Context): Boolean {
         var ok = true
+        pdfCleanup.values.forEach { cleanupHandler.removeCallbacks(it) }
+        pdfCleanup.clear()
+        pdfDeadline.clear()
         val retired = pending.values.toList()
         pending.clear()
         retired.forEach { item ->

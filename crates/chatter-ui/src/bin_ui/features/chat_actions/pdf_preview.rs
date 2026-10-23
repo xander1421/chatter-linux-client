@@ -311,7 +311,6 @@ mod pdf_renderer {
 
     use pdfium_render::prelude::*;
     use slint::ComponentHandle;
-    use zeroize::Zeroize;
 
     use crate::MainWindow;
     use crate::bin_ui::slint_conversions::rgba_to_slint_image;
@@ -350,46 +349,44 @@ mod pdf_renderer {
             .or_else(|_| Pdfium::bind_to_library("/usr/local/lib/libpdfium.so"))
             .ok()
             .map(Pdfium::new);
-        let mut data = Vec::new();
-        let mut page_count = 0;
+        // Pdfium owns the loaded bytes, and the document never leaves this worker.
+        let mut document = None;
         let mut cache: VecDeque<CachedPage> = VecDeque::new();
         let mut cache_bytes = 0usize;
         while let Ok(command) = rx.recv() {
-            let (generation, page, weak) = match command {
+            let (generation, page, weak, load_data) = match command {
                 Command::Clear => {
-                    data.zeroize();
-                    data.clear();
+                    document = None;
                     cache.clear();
                     cache_bytes = 0;
-                    page_count = 0;
                     continue;
                 }
                 Command::Load(generation, bytes, weak) => {
-                    data.zeroize();
-                    data = bytes;
+                    document = None;
                     cache.clear();
                     cache_bytes = 0;
-                    page_count = 0;
-                    (generation, 0, weak)
+                    (generation, 0, weak, Some(bytes))
                 }
-                Command::Render(generation, page, weak) => (generation, page, weak),
+                Command::Render(generation, page, weak) => (generation, page, weak, None),
             };
             if GENERATION.load(Ordering::Acquire) != generation {
                 continue;
             }
             let result: Result<(u16, CachedPage), String> = (|| {
                 let pdfium = pdfium.as_ref().ok_or("PDF rendering unavailable. Install libpdfium for in-app viewing.")?;
-                let document = pdfium.load_pdf_from_byte_slice(&data, None)
-                    .map_err(|e| format!("Failed to load PDF: {e}"))?;
+                if let Some(bytes) = load_data {
+                    document = Some(pdfium.load_pdf_from_byte_vec(bytes, None)
+                        .map_err(|e| format!("Failed to load PDF: {e}"))?);
+                }
+                let document = document.as_ref().ok_or("PDF is no longer loaded")?;
                 let count = document.pages().len();
                 if count == 0 { return Err("PDF has no pages".into()); }
-                page_count = count;
-                if page >= page_count { return Err("PDF page is unavailable".into()); }
+                if page >= count { return Err("PDF page is unavailable".into()); }
                 if let Some(position) = cache.iter().position(|entry| entry.index == page) {
                     let cached = cache.remove(position).unwrap();
                     let response = CachedPage { index: page, width: cached.width, height: cached.height, rgba: cached.rgba.clone() };
                     cache.push_back(cached);
-                    return Ok((page_count, response));
+                    return Ok((count, response));
                 }
                 let rendered = render_page(&document, page)?;
                 let size = rendered.rgba.len();
@@ -401,7 +398,7 @@ mod pdf_renderer {
                     cache_bytes += size;
                     cache.push_back(CachedPage { index: page, width: rendered.width, height: rendered.height, rgba: rendered.rgba.clone() });
                 }
-                Ok((page_count, rendered))
+                Ok((count, rendered))
             })();
             if GENERATION.load(Ordering::Acquire) != generation { continue; }
             let _ = weak.upgrade_in_event_loop(move |window| {
@@ -420,7 +417,6 @@ mod pdf_renderer {
                 }
             });
         }
-        data.zeroize();
     }
 
     pub fn load_and_render(window: &MainWindow, pdf_data: &[u8]) {
