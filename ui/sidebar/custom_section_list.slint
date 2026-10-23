@@ -48,7 +48,7 @@ component CustomSectionHeader inherits Rectangle {
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     accessible-role: button;
     accessible-label: root.name;
-    accessible-description: root.is-expanded ? "Expanded section. Press M for section options." : "Collapsed section. Press M for section options.";
+    accessible-description: root.is-expanded ? "Expanded section. Press Shift+F10 or Menu for section options." : "Collapsed section. Press Shift+F10 or Menu for section options.";
     accessible-action-default => { root.toggle-expanded(); }
     border-width: header-keys.has-focus ? 2px : 0px;
     border-color: Colors.focus-ring;
@@ -61,8 +61,9 @@ component CustomSectionHeader inherits Rectangle {
                 root.toggle-expanded();
                 return accept;
             }
-            if event.text == "m" || event.text == "M" || event.text == "Menu" || (event.text == "F10" && event.modifiers.shift) {
-                root.context-menu-requested(root.width / 2, root.height);
+            if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                root.context-menu-requested(root.absolute-position.x + root.width / 2,
+                    root.absolute-position.y + root.height);
                 return accept;
             }
             return reject;
