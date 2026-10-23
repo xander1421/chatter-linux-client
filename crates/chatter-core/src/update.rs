@@ -722,7 +722,8 @@ fn activate_linux_launcher(executable: &Path) -> Result<Option<LinuxLauncherRoll
             .permissions(),
     )
     .map_err(|_| "cannot preserve Linux launcher permissions")?;
-    std::fs::rename(temporary, launcher).map_err(|_| "cannot activate Linux desktop launcher")?;
+    std::fs::rename(temporary, &launcher)
+        .map_err(|_| "cannot activate Linux desktop launcher")?;
     tracing::info!(
         "Linux desktop launcher points at verified update; original launcher saved for rollback"
     );
