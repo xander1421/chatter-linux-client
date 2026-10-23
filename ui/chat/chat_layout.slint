@@ -459,7 +459,9 @@ export component ChatLayout inherits Rectangle {
             can-open-pinned-list: root.header-can-open-pinned-list;
             topic: root.topic;
             typing-indicator: root.typing-indicator;
-            presence-status: root.presence-status;
+            // A mesh DM has no server presence; its dot is the core's reachability.
+            presence-status: MeshGlobal.active-kind == "dm"
+                ? (MeshGlobal.active-reachable ? "online" : "offline") : root.presence-status;
             avatar-source: root.channel-avatar-source;
             has-avatar: root.channel-has-avatar;
             jarvis-thinking: root.jarvis-thinking;
