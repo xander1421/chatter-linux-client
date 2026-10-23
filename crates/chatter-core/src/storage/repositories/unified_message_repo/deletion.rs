@@ -1,5 +1,26 @@
 use super::*;
 
+fn queue_message_attachments(
+    conn: &rusqlite::Connection,
+    id: &MessageId,
+) -> Result<(), StorageError> {
+    let blob: Option<Vec<u8>> = conn.query_row(
+        "SELECT attachments_blob FROM messages WHERE id = ?1",
+        params![id.to_string()],
+        |row| row.get(0),
+    ).optional()?;
+    if let Some(blob) = blob {
+        let attachments: Vec<AttachmentId> = db_deserialize(&blob)?;
+        for attachment in attachments {
+            conn.execute(
+                "INSERT OR IGNORE INTO attachment_cleanup_queue (attachment_id) VALUES (?1)",
+                params![attachment.to_string()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 impl UnifiedMessageRepository {
     /// Delete a message by ID (hard delete — CASCADE removes unified_reactions).
     /// Hard-delete every message of one conversation type.
@@ -41,10 +62,25 @@ impl UnifiedMessageRepository {
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Result<usize, StorageError> {
         let conn = self.db.connection()?;
-        let rows = conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare("SELECT id FROM messages WHERE conversation_type = ?1")?;
+            let ids: Vec<String> = stmt.query_map([conversation_type.as_str()], |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+            for id in ids {
+                let id: MessageId = id.parse().map_err(|_| StorageError::InvalidData("Invalid message ID".into()))?;
+                queue_message_attachments(&tx, &id)?;
+            }
+        }
+        let rows = tx.execute(
             "DELETE FROM messages WHERE conversation_type = ?1",
             params![conversation_type.as_str()],
         )?;
+        tx.commit()?;
+        drop(conn);
+        if let Err(error) = super::super::attachment_repo::AttachmentRepository::retry_pending_cleanup(&self.db) {
+            tracing::warn!(%error, "attachment cleanup will be retried");
+        }
         Ok(rows)
     }
 
@@ -147,6 +183,7 @@ impl UnifiedMessageRepository {
                 params![owner.to_string(), id.to_string(), sent_at as i64],
             )?;
         } else {
+            queue_message_attachments(&tx, id)?;
             tx.execute(
                 "DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
                  AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
@@ -161,6 +198,12 @@ impl UnifiedMessageRepository {
             crate::services::gateway::submission::check_send_session()?;
         }
         tx.commit()?;
+        drop(conn);
+        if !enqueue {
+            if let Err(error) = super::super::attachment_repo::AttachmentRepository::retry_pending_cleanup(&self.db) {
+                tracing::warn!(%error, "attachment cleanup will be retried");
+            }
+        }
         Ok(())
     }
 
@@ -181,17 +224,24 @@ impl UnifiedMessageRepository {
     /// ahead of the message itself must still win.
     pub fn delete(&self, id: &MessageId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        queue_message_attachments(&tx, id)?;
+        tx.execute(
             "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
             params![id.to_string()],
         )?;
-        tombstone_dm_receipt(&conn, id)?;
-        let rows = conn.execute(
+        tombstone_dm_receipt(&tx, id)?;
+        let rows = tx.execute(
             "DELETE FROM messages WHERE id = ?1",
             params![id.to_string()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Message {}", id)));
+        }
+        tx.commit()?;
+        drop(conn);
+        if let Err(error) = super::super::attachment_repo::AttachmentRepository::retry_pending_cleanup(&self.db) {
+            tracing::warn!(%error, "attachment cleanup will be retried");
         }
         Ok(())
     }
@@ -242,12 +292,14 @@ impl UnifiedMessageRepository {
             return Ok(0);
         }
         let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
         for id in ids {
-            conn.execute(
+            queue_message_attachments(&tx, id)?;
+            tx.execute(
                 "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
                 params![id.to_string()],
             )?;
-            tombstone_dm_receipt(&conn, id)?;
+            tombstone_dm_receipt(&tx, id)?;
         }
         let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
         let query = format!(
@@ -255,7 +307,12 @@ impl UnifiedMessageRepository {
             placeholders.join(", ")
         );
         let params_vec: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
-        let rows = conn.execute(&query, rusqlite::params_from_iter(params_vec.iter()))?;
+        let rows = tx.execute(&query, rusqlite::params_from_iter(params_vec.iter()))?;
+        tx.commit()?;
+        drop(conn);
+        if let Err(error) = super::super::attachment_repo::AttachmentRepository::retry_pending_cleanup(&self.db) {
+            tracing::warn!(%error, "attachment cleanup will be retried");
+        }
         Ok(rows)
     }
 

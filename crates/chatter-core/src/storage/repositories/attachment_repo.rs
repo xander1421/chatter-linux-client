@@ -10,7 +10,7 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use crate::storage::serialization::{db_deserialize, db_serialize};
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
 /// Let the shared-content index know an attachment's metadata now exists, so
@@ -354,29 +354,79 @@ impl AttachmentRepository {
     /// no remaining message carries (a forward shares the id), row and
     /// encrypted file both.
     pub fn delete_unreferenced(&self, ids: &[AttachmentId]) -> Result<(), StorageError> {
-        for id in ids {
-            if self.is_referenced_by_message(id)? {
-                continue;
-            }
-            if let Some(path) = self.get_file_path(id)? {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        tracing::warn!(attachment_id = %id, error = %e, "attachment file not removed");
-                    }
-                }
-            }
-            if let Some(thumbnail) = self.get_thumbnail(id)? {
-                if let Err(e) = std::fs::remove_file(&thumbnail.local_path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        tracing::warn!(attachment_id = %id, error = %e, "thumbnail file not removed");
-                    }
-                }
-            }
-            match self.delete(id) {
-                Ok(()) | Err(StorageError::NotFound(_)) => {}
-                Err(e) => return Err(e),
+        {
+            let conn = self.db.connection()?;
+            for id in ids {
+                conn.execute(
+                    "INSERT OR IGNORE INTO attachment_cleanup_queue (attachment_id) VALUES (?1)",
+                    params![id.to_string()],
+                )?;
             }
         }
+        Self::retry_pending_cleanup(&self.db)
+    }
+
+    /// Retry work retained before a message row was removed. A failed file
+    /// removal leaves both the attachment row and its queue entry intact.
+    pub(crate) fn retry_pending_cleanup(db: &Database) -> Result<(), StorageError> {
+        let ids: Vec<String> = {
+            let conn = db.connection()?;
+            let mut stmt = conn.prepare("SELECT attachment_id FROM attachment_cleanup_queue")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let mut first_error = None;
+        for id in ids {
+            if let Err(error) = Self::cleanup_queued(db, &id) {
+                tracing::warn!(attachment_id = %id, %error, "attachment cleanup deferred");
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn cleanup_queued(db: &Database, id: &str) -> Result<(), StorageError> {
+        let (referenced, file_path, thumbnail_path): (bool, Option<String>, Option<String>) = {
+            let conn = db.connection()?;
+            let referenced = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM shared_content WHERE attachment_id = ?1)",
+                [id], |row| row.get(0),
+            )?;
+            let file_path = conn.query_row(
+                "SELECT file_path FROM attachments WHERE id = ?1", [id], |row| row.get(0),
+            ).optional()?;
+            let thumbnail_path = conn.query_row(
+                "SELECT local_path FROM thumbnails WHERE attachment_id = ?1", [id], |row| row.get(0),
+            ).optional()?;
+            (referenced, file_path.flatten(), thumbnail_path)
+        };
+        if referenced {
+            // A forwarded message still owns the bytes; its eventual delete
+            // will put this id back in the queue.
+            db.connection()?.execute(
+                "DELETE FROM attachment_cleanup_queue WHERE attachment_id = ?1", [id],
+            )?;
+            return Ok(());
+        }
+        for path in [file_path, thumbnail_path].into_iter().flatten() {
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(StorageError::InvalidData(format!(
+                        "Attachment file cleanup failed: {error}"
+                    )));
+                }
+            }
+        }
+        let conn = db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM attachments WHERE id = ?1 AND NOT EXISTS
+             (SELECT 1 FROM shared_content WHERE attachment_id = ?1)", [id],
+        )?;
+        tx.execute("DELETE FROM attachment_cleanup_queue WHERE attachment_id = ?1", [id])?;
+        tx.commit()?;
         Ok(())
     }
 

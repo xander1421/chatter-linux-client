@@ -496,7 +496,6 @@ fn file_notice(
 pub fn reap_expired(
     db: &std::sync::Arc<crate::storage::Database>,
 ) -> Result<Vec<Message>, StorageError> {
-    use crate::storage::repositories::attachment_repo::AttachmentRepository;
     use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
 
     let ephemeral = EphemeralRepository::new(db.clone());
@@ -521,13 +520,8 @@ pub fn reap_expired(
             Err(e) => return Err(e),
         }
     }
-    let attachments: Vec<_> = gone
-        .iter()
-        .flat_map(|m| m.attachments.iter().copied())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    AttachmentRepository::new(db.clone()).delete_unreferenced(&attachments)?;
+    // delete_batch journals attachment cleanup in the same transaction as
+    // message removal and retries it without losing failed file paths.
     Ok(gone)
 }
 
