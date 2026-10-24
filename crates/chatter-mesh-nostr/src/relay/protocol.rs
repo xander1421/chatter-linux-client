@@ -137,7 +137,7 @@ pub(super) const NO_REASON_GIVEN: &str = "no reason given";
 /// checked and nothing is indexed. A frame we cannot make sense of is an error the
 /// caller drops, never a panic and never a partially-applied state change.
 pub fn parse_relay_message(raw: &str) -> Result<RelayMessage, NostrError> {
-    let value: Value = serde_json::from_str(raw).map_err(|e| NostrError::Json(e.to_string()))?;
+    let mut value: Value = serde_json::from_str(raw).map_err(|e| NostrError::Json(e.to_string()))?;
     let array = value
         .as_array()
         .ok_or_else(|| NostrError::Relay("relay frame is not a JSON array".to_string()))?;
@@ -145,15 +145,17 @@ pub fn parse_relay_message(raw: &str) -> Result<RelayMessage, NostrError> {
     let kind = array
         .first()
         .and_then(Value::as_str)
-        .ok_or_else(|| NostrError::Relay("relay frame has no type".to_string()))?;
+        .ok_or_else(|| NostrError::Relay("relay frame has no type".to_string()))?
+        .to_string();
 
-    match kind {
+    match kind.as_str() {
         "EVENT" => {
             let subscription_id = string_at(array, 1, "EVENT subscription id")?;
-            let raw_event = array
-                .get(2)
+            let raw_event = value
+                .as_array_mut()
+                .and_then(|items| items.get_mut(2))
                 .ok_or_else(|| NostrError::Relay("EVENT frame has no event".to_string()))?;
-            let event: NostrEvent = serde_json::from_value(raw_event.clone())
+            let event: NostrEvent = serde_json::from_value(raw_event.take())
                 .map_err(|e| NostrError::Json(e.to_string()))?;
             Ok(RelayMessage::Event {
                 subscription_id,

@@ -1,5 +1,5 @@
 use chatter_mesh::packet::BitchatPacket;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 // ---------------------------------------------------------------------------
 // The per-type packet stores
@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default)]
 pub(super) struct PacketStore {
     pub(super) packets: BTreeMap<[u8; 16], BitchatPacket>,
-    order: Vec<[u8; 16]>,
+    order: VecDeque<[u8; 16]>,
 }
 
 impl PacketStore {
@@ -26,13 +26,11 @@ impl PacketStore {
             return;
         }
         self.packets.insert(id, packet);
-        self.order.push(id);
+        self.order.push_back(id);
         while self.order.len() > capacity {
-            if self.order.is_empty() {
-                break;
+            if let Some(victim) = self.order.pop_front() {
+                self.packets.remove(&victim);
             }
-            let victim = self.order.remove(0);
-            self.packets.remove(&victim);
         }
     }
 
@@ -49,7 +47,7 @@ impl PacketStore {
 
     pub(super) fn remove_where(&mut self, should_remove: impl Fn(&BitchatPacket) -> bool) {
         let previous = core::mem::take(&mut self.order);
-        let mut next = Vec::with_capacity(previous.len());
+        let mut next = VecDeque::with_capacity(previous.len());
         for id in previous {
             let Some(packet) = self.packets.get(&id) else {
                 // Key with no packet: drop it from the order, as Swift does.
@@ -58,7 +56,7 @@ impl PacketStore {
             if should_remove(packet) {
                 self.packets.remove(&id);
             } else {
-                next.push(id);
+                next.push_back(id);
             }
         }
         self.order = next;

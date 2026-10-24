@@ -358,6 +358,7 @@ struct Actor {
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     events: MeshEvents,
+    persisted_dedup: Option<DedupSnapshot>,
 }
 
 impl Actor {
@@ -450,6 +451,7 @@ impl Actor {
             storage,
             sealer,
             events,
+            persisted_dedup: None,
         };
         actor.restore();
         actor
@@ -457,10 +459,10 @@ impl Actor {
 
     fn restore(&mut self) {
         match load_dedup(self.storage.as_ref(), self.sealer.as_ref()) {
-            Ok(snapshot) => self
-                .bridge
-                .borrow_mut()
-                .restore_dedup(&snapshot, now_secs()),
+            Ok(snapshot) => {
+                self.bridge.borrow_mut().restore_dedup(&snapshot, now_secs());
+                self.persisted_dedup = Some(snapshot);
+            }
             Err(error) => {
                 // A locked keyring is not an empty set. Starting empty would
                 // republish every drop this device has ever sent, which is the
@@ -485,8 +487,7 @@ impl Actor {
         }
         // Persist the dedup sets on the way out: losing them costs an
         // amplification storm on the next launch, which is worse than the write.
-        let snapshot = self.bridge.borrow().dedup_snapshot();
-        let _ = save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot);
+        self.persist_dedup();
     }
 
     fn handle(&mut self, command: RouterCommand) {
@@ -618,12 +619,16 @@ impl Actor {
         }
     }
 
-    fn persist_dedup(&self) {
+    fn persist_dedup(&mut self) {
         let snapshot = self.bridge.borrow().dedup_snapshot();
-        if let Err(error) = save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot) {
-            self.events.send(MeshEvent::Degraded(format!(
+        if self.persisted_dedup.as_ref() == Some(&snapshot) {
+            return;
+        }
+        match save_dedup(self.storage.as_ref(), self.sealer.as_ref(), &snapshot) {
+            Ok(()) => self.persisted_dedup = Some(snapshot),
+            Err(error) => self.events.send(MeshEvent::Degraded(format!(
                 "bridge drop history could not be persisted: {error}"
-            )));
+            ))),
         }
     }
 

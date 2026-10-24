@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::link::LinkId;
 
@@ -85,8 +85,14 @@ pub struct WriteAdmission {
 
 /// Per-link, byte-capped, priority-ordered outbound writes.
 #[derive(Clone, Debug, Default)]
+struct WriteQueue {
+    items: VecDeque<PendingWrite>,
+    bytes: usize,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct OutboundWriteBuffer {
-    writes: BTreeMap<LinkId, Vec<PendingWrite>>,
+    writes: BTreeMap<LinkId, WriteQueue>,
 }
 
 impl OutboundWriteBuffer {
@@ -114,26 +120,20 @@ impl OutboundWriteBuffer {
     /// Writes queued for one link.
     #[must_use]
     pub fn queued_count(&self, link: &LinkId) -> usize {
-        self.writes.get(link).map_or(0, Vec::len)
+        self.writes.get(link).map_or(0, |queue| queue.items.len())
     }
 
     /// Bytes queued for one link. Never exceeds the `cap_bytes` last used on it.
     #[must_use]
     pub fn queued_bytes(&self, link: &LinkId) -> usize {
-        self.writes
-            .get(link)
-            .map_or(0, |queue| queue.iter().map(|w| w.bytes.len()).sum())
+        self.writes.get(link).map_or(0, |queue| queue.bytes)
     }
 
     /// Bytes queued across every link. Bounded by `links * cap_bytes`, which is why
     /// [`Self::discard_all`] on disconnect is not optional.
     #[must_use]
     pub fn total_queued_bytes(&self) -> usize {
-        self.writes
-            .values()
-            .flat_map(|queue| queue.iter())
-            .map(|w| w.bytes.len())
-            .sum()
+        self.writes.values().map(|queue| queue.bytes).sum()
     }
 
     /// Drops every queue on every link.
@@ -172,25 +172,24 @@ impl OutboundWriteBuffer {
             };
         }
 
-        // Taken out and put back so the insert and the trim see one owned queue.
         let mut queue = self.writes.remove(link).unwrap_or_default();
 
         // First strictly-lower-priority item, or the tail. Ties keep FIFO order,
         // which matters: fragments of one transfer share a priority and must not be
         // reordered relative to each other.
         let insert_index = queue
-            .iter()
+            .items.iter()
             .position(|existing| priority < existing.priority)
-            .unwrap_or(queue.len());
-        queue.insert(insert_index, PendingWrite { priority, bytes });
+            .unwrap_or(queue.items.len());
+        queue.items.insert(insert_index, PendingWrite { priority, bytes });
+        queue.bytes += offered_bytes;
 
-        let mut total: usize = queue.iter().map(|w| w.bytes.len()).sum();
         let mut trimmed_bytes = 0usize;
-        while total > cap_bytes {
-            match queue.pop() {
+        while queue.bytes > cap_bytes {
+            match queue.items.pop_back() {
                 Some(removed) => {
                     trimmed_bytes += removed.bytes.len();
-                    total -= removed.bytes.len();
+                    queue.bytes -= removed.bytes.len();
                 }
                 None => break,
             }
@@ -198,16 +197,17 @@ impl OutboundWriteBuffer {
 
         // Trimming only ever removes from the tail, so the offered write survives
         // exactly when its insertion index is still in range.
-        let accepted = insert_index < queue.len();
+        let accepted = insert_index < queue.items.len();
 
-        if !queue.is_empty() {
+        let remaining_bytes = queue.bytes;
+        if !queue.items.is_empty() {
             self.writes.insert(link.clone(), queue);
         }
 
         WriteAdmission {
             result: WriteEnqueue::Enqueued {
                 trimmed_bytes,
-                remaining_bytes: total,
+                remaining_bytes,
             },
             accepted,
         }
@@ -216,7 +216,21 @@ impl OutboundWriteBuffer {
     /// Removes and returns everything queued for a link, highest priority first.
     #[must_use]
     pub fn take_all(&mut self, link: &LinkId) -> Vec<PendingWrite> {
-        self.writes.remove(link).unwrap_or_default()
+        self.writes
+            .remove(link)
+            .map(|queue| queue.items.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Removes the next paced frame without moving the remaining queue.
+    pub fn pop_front(&mut self, link: &LinkId) -> Option<PendingWrite> {
+        let queue = self.writes.get_mut(link)?;
+        let write = queue.items.pop_front()?;
+        queue.bytes -= write.bytes.len();
+        if queue.items.is_empty() {
+            self.writes.remove(link);
+        }
+        Some(write)
     }
 
     /// Drops a link's queue without returning it.
@@ -235,7 +249,7 @@ impl OutboundWriteBuffer {
             .remove(link)
             .map(|queue| {
                 queue
-                    .iter()
+                    .items.iter()
                     .filter_map(|write| write.bytes.get(1).copied())
                     .collect()
             })
@@ -251,9 +265,14 @@ impl OutboundWriteBuffer {
         if items.is_empty() {
             return;
         }
-        let mut queue = items;
+        let mut queue = WriteQueue::default();
+        for item in items {
+            queue.bytes += item.bytes.len();
+            queue.items.push_back(item);
+        }
         if let Some(existing) = self.writes.remove(link) {
-            queue.extend(existing);
+            queue.bytes += existing.bytes;
+            queue.items.extend(existing.items);
         }
         self.writes.insert(link.clone(), queue);
     }

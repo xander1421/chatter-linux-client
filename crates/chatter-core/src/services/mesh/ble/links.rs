@@ -275,6 +275,7 @@ impl BleRuntime {
             }
             if let Some(peer) = &peer {
                 state.dm_handshake_at_ms.remove(peer);
+                state.known_peer_reopen_attempts.remove(peer);
             }
             if let Some(address) = state.address_of.remove(link) {
                 state.connecting.remove(&address);

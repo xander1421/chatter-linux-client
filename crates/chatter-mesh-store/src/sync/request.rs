@@ -42,15 +42,13 @@ impl GossipSyncManager {
             return Ok(Vec::new());
         }
 
-        let mut sends = Vec::with_capacity(connected_peers.len());
-        for peer in connected_peers {
-            sends.push(self.build_request(
-                Some(peer),
-                SyncTypeFlags::FRAGMENT,
-                Some(filter.clone()),
-                now_unix_secs,
-            )?);
-        }
+        let payload = self
+            .build_gcs_payload(SyncTypeFlags::FRAGMENT, Some(filter), now_unix_secs)
+            .encode()?;
+        let sends = connected_peers
+            .iter()
+            .map(|peer| self.request_with_payload(Some(peer), payload.clone(), now_unix_secs))
+            .collect();
         Ok(sends)
     }
 
@@ -64,7 +62,12 @@ impl GossipSyncManager {
         connected_peers: &[PeerId],
         now_unix_secs: u64,
     ) -> Result<Vec<SyncSend>, StoreError> {
-        self.cleanup_expired(now_unix_secs);
+        if self.last_expiry_cleanup_secs.is_none_or(|last| {
+            now_unix_secs.saturating_sub(last) >= MAINTENANCE_INTERVAL_SECS
+        }) {
+            self.cleanup_expired(now_unix_secs);
+            self.last_expiry_cleanup_secs = Some(now_unix_secs);
+        }
         self.cleanup_stale_announcements_if_needed(now_unix_secs);
         self.requests.cleanup(now_unix_secs);
         self.rate_limiter.prune(now_unix_secs);
@@ -113,10 +116,11 @@ impl GossipSyncManager {
                 now_unix_secs,
             )?]);
         }
-        let mut sends = Vec::with_capacity(connected_peers.len());
-        for peer in connected_peers {
-            sends.push(self.build_request(Some(peer), types, None, now_unix_secs)?);
-        }
+        let payload = self.build_gcs_payload(types, None, now_unix_secs).encode()?;
+        let sends = connected_peers
+            .iter()
+            .map(|peer| self.request_with_payload(Some(peer), payload.clone(), now_unix_secs))
+            .collect();
         Ok(sends)
     }
 
@@ -131,15 +135,21 @@ impl GossipSyncManager {
         fragment_id_filter: Option<String>,
         now_unix_secs: u64,
     ) -> Result<SyncSend, StoreError> {
-        // Only a unicast request can be answered attributably, so only a unicast
-        // request opens a response window.
-        if let Some(peer) = to {
-            self.requests.register_request(peer, now_unix_secs);
-        }
-
         let payload = self
             .build_gcs_payload(types, fragment_id_filter, now_unix_secs)
             .encode()?;
+        Ok(self.request_with_payload(to, payload, now_unix_secs))
+    }
+
+    fn request_with_payload(
+        &mut self,
+        to: Option<&PeerId>,
+        payload: Vec<u8>,
+        now_unix_secs: u64,
+    ) -> SyncSend {
+        if let Some(peer) = to {
+            self.requests.register_request(peer, now_unix_secs);
+        }
 
         let packet = BitchatPacket::new(
             MessageType::RequestSync,
@@ -149,7 +159,7 @@ impl GossipSyncManager {
             payload,
             0,
         );
-        Ok(SyncSend::request(to, packet))
+        SyncSend::request(to, packet)
     }
 
     /// Builds the filter describing what we already hold, so the peer can send only

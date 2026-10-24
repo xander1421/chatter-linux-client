@@ -96,11 +96,14 @@ pub struct LinkStateInner {
     pub pending_dms: BTreeMap<PeerId, Vec<PendingDm>>,
     /// Last XX opening sent for a DM awaiting a session; limits retries on a flapping link.
     pub dm_handshake_at_ms: BTreeMap<PeerId, u64>,
+    /// Consecutive known-peer reopen attempts since the last successful Noise session.
+    pub known_peer_reopen_attempts: BTreeMap<PeerId, u8>,
     pub last_announce_ms: u64,
     /// An announce was requested inside the floor and is owed at its expiry.
     pub announce_deferred: bool,
     pub last_traffic_ms: u64,
     pub maintenance_cycle: u32,
+    pub last_router_maintenance_secs: Option<u64>,
     pub adapter_powered: bool,
     pub radio_running: bool,
     /// Whether the app is in the foreground. The duty cycle scans continuously
@@ -144,10 +147,12 @@ impl Default for LinkStateInner {
             connecting: BTreeSet::new(),
             pending_dms: BTreeMap::new(),
             dm_handshake_at_ms: BTreeMap::new(),
+            known_peer_reopen_attempts: BTreeMap::new(),
             last_announce_ms: 0,
             announce_deferred: false,
             last_traffic_ms: 0,
             maintenance_cycle: 0,
+            last_router_maintenance_secs: None,
             adapter_powered: true,
             radio_running: false,
             app_is_active: true,
