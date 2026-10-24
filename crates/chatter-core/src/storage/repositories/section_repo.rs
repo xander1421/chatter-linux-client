@@ -9,6 +9,7 @@ use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A custom sidebar section.
@@ -254,6 +255,32 @@ impl SectionRepository {
             let conversation_type = ConversationType::from_str_value(&conv_type_str)?;
             memberships.push(SectionMembership {
                 conversation_id,
+                conversation_type,
+            });
+        }
+        Ok(memberships)
+    }
+
+    /// Read every folder membership with one connection checkout, preserving
+    /// the insertion order that each folder uses before its sort mode applies.
+    pub fn all_section_conversations(
+        &self,
+    ) -> Result<HashMap<SectionId, Vec<SectionMembership>>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT section_id, conversation_id, conversation_type
+             FROM section_memberships ORDER BY section_id, added_at ASC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut memberships: HashMap<SectionId, Vec<SectionMembership>> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let section_id: String = row.get(0)?;
+            let id = section_id.parse().map_err(|e| {
+                StorageError::InvalidData(format!("Invalid section ID: {}", e))
+            })?;
+            let conversation_type = ConversationType::from_str_value(&row.get::<_, String>(2)?)?;
+            memberships.entry(id).or_default().push(SectionMembership {
+                conversation_id: row.get(1)?,
                 conversation_type,
             });
         }

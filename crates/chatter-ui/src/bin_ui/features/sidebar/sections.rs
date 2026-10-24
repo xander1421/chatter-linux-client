@@ -46,19 +46,13 @@ impl SectionSendData {
     }
 }
 
-/// Load all custom sections from the database and set them on the window.
+/// Start the initial folder read off the event loop, as on later refreshes.
 pub(crate) fn load_sections(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    match ui_ctx.list_sections_with_conversations() {
-        Ok(sections) => {
-            let send_data = build_section_data(&sections, ui_ctx);
-            // On startup we're on the UI thread, so convert directly.
-            let models: Vec<_> = send_data.into_iter().map(|s| s.to_slint()).collect();
-            apply_sections(window, models);
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to load custom sections");
-        }
-    }
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        refresh_sections_ui(&weak, &ui_ctx);
+    });
 }
 
 /// Wire all section-related callbacks.

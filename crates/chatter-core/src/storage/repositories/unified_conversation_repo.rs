@@ -22,6 +22,30 @@ impl UnifiedConversationRepository {
         Self { db }
     }
 
+    /// Names for folder rows. Folder enrichment obtains message activity from
+    /// `conversation_stats`, so this query need not aggregate messages again.
+    pub fn conversation_names(
+        &self,
+    ) -> Result<std::collections::HashMap<(String, ConversationType), String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, CASE channel_type WHEN 2 THEN 'server_dm' \
+                WHEN 3 THEN 'saved_messages' ELSE 'channel' END, name FROM channels \
+             UNION ALL SELECT id, 'anon_dm', COALESCE(peer_display_name, 'Anonymous Peer') \
+                FROM anon_dm_conversations \
+             UNION ALL SELECT id, 'anon_group', name FROM anon_groups",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut names = std::collections::HashMap::new();
+        while let Some(row) = rows.next()? {
+            let kind: String = row.get(1)?;
+            if let Ok(kind) = ConversationType::from_str_value(&kind) {
+                names.insert((row.get(0)?, kind), row.get(2)?);
+            }
+        }
+        Ok(names)
+    }
+
     /// List all conversations for the unified sidebar.
     ///
     /// Consolidates data from channels, anon_dm_conversations, and anon_groups.

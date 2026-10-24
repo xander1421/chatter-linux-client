@@ -216,17 +216,20 @@ impl MeshTimeline {
         }
     }
 
-    /// One conversation, with its counts read from the message store.
-    fn shape(&self, entry: &Entry) -> Result<UnifiedConversation, StorageError> {
+    /// One conversation, using the shared sidebar activity snapshot.
+    fn shape(
+        &self,
+        entry: &Entry,
+        stats: &HashMap<(String, ConversationType), (Option<DateTime<Utc>>, u32)>,
+    ) -> UnifiedConversation {
         let id = entry.conversation.conversation_id();
         let conversation_type: ConversationType = entry.conversation.conversation_type();
-        let latest = self
-            .messages
-            .get_latest_for_conversation(&id, &conversation_type)?;
-        let unread = self.messages.get_unread_count(&id, &conversation_type)?;
-        let last_message_at: Option<DateTime<Utc>> = latest.map(|message| message.created_at);
+        let (last_message_at, unread) = stats
+            .get(&(id.to_string(), conversation_type.clone()))
+            .cloned()
+            .unwrap_or((None, 0));
 
-        Ok(UnifiedConversation {
+        UnifiedConversation {
             id: id.to_string(),
             conversation_type,
             name: entry.label.clone(),
@@ -240,14 +243,14 @@ impl MeshTimeline {
             status: STATUS_ACTIVE,
             archived: false,
             last_message_at,
-            unread_count: u32::try_from(unread).unwrap_or(u32::MAX),
+            unread_count: unread,
             // Nothing records when a mesh conversation began: there is no row to
             // hold it and no server to have minted it. The last message is what
             // is available, and both fields only ever break a tie in the sort,
             // which `last_message_at` has already decided.
             created_at: last_message_at.unwrap_or_else(Utc::now),
             updated_at: last_message_at.unwrap_or_else(Utc::now),
-        })
+        }
     }
 
     /// Record that a conversation exists, refreshing a DM's display name when a
