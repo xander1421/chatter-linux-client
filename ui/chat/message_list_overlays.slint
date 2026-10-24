@@ -15,7 +15,7 @@ export component MessageScrollPill inherits GlassSurface {
     callback clicked();
     elevation: 3;
     width: pill-content.preferred-width + Spacing.lg * 2;
-    height: Spacing.button-height * Appearance.text-grow;
+    height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: self.height / 2;
     material-level: 2;
     backdrop-paused: root.scrolling;
@@ -77,7 +77,7 @@ export component MessageScrollPill inherits GlassSurface {
 export component MessageHistoryError inherits Rectangle {
     in property <length> available-width;
     callback retry();
-    width: min(root.available-width - 2 * Spacing.md, history-error.preferred-width);
+    width: max(0px, min(root.available-width - 2 * Spacing.md, history-error.preferred-width));
     height: max(Spacing.touch-target-min, history-error.preferred-height);
     border-radius: self.height / 2;
     background: Materials.regular;

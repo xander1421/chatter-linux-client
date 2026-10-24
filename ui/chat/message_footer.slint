@@ -33,7 +33,7 @@ export component MessageFooter inherits HorizontalLayout {
             // Grows with the text size; on touch the row is
             // tall enough to tell neighbouring chips apart
             // under a thumb (22px was the whole hit box).
-            height: (root.mobile ? 32px : 22px) * Appearance.text-grow;
+            height: (root.mobile ? Spacing.touch-target-min : 22px) * Appearance.text-grow;
             width: reactions-row.preferred-width + 8px;
             background: transparent;
             border-width: 0px;
@@ -47,7 +47,7 @@ export component MessageFooter inherits HorizontalLayout {
                 alignment: center;
 
                 for reaction in root.reactions: Rectangle {
-                    width: max(root.mobile ? Spacing.button-height : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
+                    width: max(root.mobile ? Spacing.touch-target-min : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
                     border-radius: self.height / 2;
                     // Own reactions: a neutral 8% tint, no ring and no
                     // brand-colour pill around a lone emoji (owner's
@@ -225,8 +225,8 @@ export component MessageFooter inherits HorizontalLayout {
             if root.is-own && !root.mesh-delivery && root.delivery-status == "unconfirmed": TooltipArea {
                 tooltip-text: "Delivery could not be confirmed, tap to retry";
                 placement: "top";
-                width: 26px;
-                height: 12px;
+                width: root.mobile ? Spacing.touch-target-min : 26px;
+                height: root.mobile ? Spacing.touch-target-min : 12px;
                 accessible-role: button;
                 accessible-label: "Delivery could not be confirmed, tap to retry";
                 accessible-action-default => { root.message-clicked(root.message-id); }
@@ -239,7 +239,8 @@ export component MessageFooter inherits HorizontalLayout {
                     source: Icons.check;
                     width: 12px;
                     height: 12px;
-                    x: 0px;
+                    x: (parent.width - 26px) / 2;
+                    y: (parent.height - 12px) / 2;
                     colorize: Colors.text-muted;
                 }
 
@@ -247,7 +248,8 @@ export component MessageFooter inherits HorizontalLayout {
                     source: Icons.alert-triangle;
                     width: 12px;
                     height: 12px;
-                    x: parent.width - self.width;
+                    x: (parent.width - 26px) / 2 + 14px;
+                    y: (parent.height - 12px) / 2;
                     colorize: Colors.warning;
                 }
             }
