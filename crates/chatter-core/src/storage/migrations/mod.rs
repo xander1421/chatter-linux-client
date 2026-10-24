@@ -122,7 +122,7 @@ mod v121_anon_group_departed_profiles;
 mod v122_secret_receive_control_kinds;
 mod v123_attachment_cleanup;
 mod v124_activity_center;
-mod v125_activity_outage_resolution;
+mod v126_activity_outage_resolution;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -472,5 +472,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v122_secret_receive_control_kinds::V122SecretReceiveControlKinds)
         .register(v123_attachment_cleanup::V123AttachmentCleanup)
         .register(v124_activity_center::V124ActivityCenter)
-        .register(v125_activity_outage_resolution::V125ActivityOutageResolution)
+        .register(v126_activity_outage_resolution::V126ActivityOutageResolution)
 }
