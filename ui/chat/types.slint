@@ -41,6 +41,7 @@ export struct MessageAttachmentData {
     // Transfer progress
     is-uploading: bool,     // Whether upload is in progress
     is-downloading: bool,   // Whether download is in progress
+    is-download-failed: bool, // Download can be retried by tapping the attachment
     progress: float,        // Transfer progress 0.0 to 1.0
 }
 

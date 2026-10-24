@@ -16,6 +16,7 @@ export component AudioPlayer inherits HorizontalLayout {
     in property <string> filename: "";
     in property <[int]> waveform: [];
     in property <string> duration-display: "";
+    in property <bool> is-download-failed: false;
 
     // Shared playback state (driven from the owning message list)
     in property <string> current-playing-attachment-id: "";
@@ -56,7 +57,7 @@ export component AudioPlayer inherits HorizontalLayout {
         Image {
             width: root.icon-size;
             height: root.icon-size;
-            source: (root.is-this-playing && root.is-media-playing) ? Icons.pause : Icons.play;
+            source: root.is-download-failed ? Icons.download : ((root.is-this-playing && root.is-media-playing) ? Icons.pause : Icons.play);
             colorize: Colors.text-primary;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
@@ -142,8 +143,8 @@ export component AudioPlayer inherits HorizontalLayout {
         }
 
         Text {
-            text: root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.duration-display;
-            color: Colors.text-muted;
+            text: root.is-download-failed ? "Download failed · Tap to retry" : (root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.duration-display);
+            color: root.is-download-failed ? Colors.primary : Colors.text-muted;
             font-size: Typography.xs;
         }
     }

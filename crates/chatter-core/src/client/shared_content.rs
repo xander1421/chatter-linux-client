@@ -226,15 +226,38 @@ impl ChatterClient {
             return Vec::new();
         };
         let client = self.clone();
+        #[cfg(target_os = "android")]
+        let revision = self.auth_snapshot().session_revision;
         tokio::task::spawn_blocking(move || {
             match client.shared_content_repo().list_scoped(
                 &conv_type, &conv_id, category, limit, offset, sender.as_ref(),
             ) {
-                Ok(rows) => rows.iter().map(|row| {
-                    let mut item = SharedContentItemData::from(row);
-                    item.is_video = category == SharedCategory::Video;
-                    item
-                }).collect(),
+                Ok(rows) => rows
+                    .iter()
+                    .map(|row| {
+                        let mut item = SharedContentItemData::from(row);
+                        item.is_video = category == SharedCategory::Video;
+                        #[cfg(target_os = "android")]
+                        if item.is_video
+                            && item.thumbnail.is_empty()
+                            && client.auth_snapshot().session_revision == revision
+                        {
+                            if let Ok(id) = item.attachment_id.parse() {
+                                if client
+                                    .get_attachment_metadata(&id)
+                                    .is_some_and(|attachment| !attachment.needs_download())
+                                {
+                                    if let Ok(result) =
+                                        client.decrypt_and_extract_video_thumbnail(&id)
+                                    {
+                                        item.thumbnail = result.image_bytes;
+                                    }
+                                }
+                            }
+                        }
+                        item
+                    })
+                    .collect(),
                 Err(e) => {
                     tracing::error!(error = %e, "shared content page");
                     Vec::new()
@@ -243,21 +266,6 @@ impl ChatterClient {
         })
         .await
         .unwrap_or_default()
-    }
-
-    /// Select at most `max` missing video previews from a page. The caller
-    /// performs the blocking extraction only for these attachment IDs.
-    #[cfg(target_os = "android")]
-    pub fn shared_content_video_thumbnail_candidates(
-        page: &[SharedContentItemData],
-        max: usize,
-    ) -> Vec<(usize, crate::domain::ids::AttachmentId)> {
-        page.iter()
-            .enumerate()
-            .filter(|(_, item)| item.is_video && item.thumbnail.is_empty())
-            .filter_map(|(index, item)| item.attachment_id.parse().ok().map(|id| (index, id)))
-            .take(max)
-            .collect()
     }
 
     /// The tab strip for a conversation: label + count per non-empty category,

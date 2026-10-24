@@ -123,6 +123,23 @@ export component MessageAttachments inherits VerticalLayout {
                 }
             }
 
+            if attachment.is-download-failed: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.overlay;
+
+                Text {
+                    width: parent.width - Spacing.md;
+                    height: parent.height;
+                    text: "Download failed · Tap to retry";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
             img-touch := HoldArea {
                 enabled-for-touch: root.mobile;
                 mouse-cursor: pointer;
@@ -150,6 +167,7 @@ export component MessageAttachments inherits VerticalLayout {
             filename: attachment.filename;
             waveform: attachment.waveform;
             duration-display: attachment.duration-display;
+            is-download-failed: attachment.is-download-failed;
             current-playing-attachment-id: root.current-playing-attachment-id;
             is-media-playing: root.is-media-playing;
             audio-progress: root.audio-progress;
@@ -253,6 +271,23 @@ export component MessageAttachments inherits VerticalLayout {
                 }
             }
 
+            if attachment.is-download-failed: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.overlay;
+
+                Text {
+                    width: parent.width - Spacing.md;
+                    height: parent.height;
+                    text: "Download failed · Tap to retry";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
             video-touch := HoldArea {
                 enabled-for-touch: root.mobile;
                 mouse-cursor: pointer;
@@ -310,8 +345,8 @@ export component MessageAttachments inherits VerticalLayout {
                         overflow: elide;
                     }
                     Text {
-                        text: attachment.size-display;
-                        color: Colors.text-muted;
+                        text: attachment.is-download-failed ? "Download failed · Tap to retry" : attachment.size-display;
+                        color: attachment.is-download-failed ? Colors.primary : Colors.text-muted;
                         font-size: Typography.xs;
                     }
                 }

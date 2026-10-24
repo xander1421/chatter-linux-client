@@ -13,6 +13,10 @@ thread_local! {
 /// 3-column grid fills several screens, small enough that decoding that many
 /// thumbnails does not stall a frame.
 const SHARED_PAGE_SIZE: u32 = 60;
+// Android's video fallback decodes missing previews before painting the page.
+// Keep that blocking batch small; later rows load as the grid scrolls.
+#[cfg(target_os = "android")]
+const SHARED_VIDEO_PAGE_SIZE: u32 = 12;
 
 /// Where the open profile's shared-content list has got to.
 ///
@@ -123,6 +127,14 @@ fn request_shared_page(
     let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
         return;
     };
+    #[cfg(target_os = "android")]
+    let page_size = if tab == "video" {
+        SHARED_VIDEO_PAGE_SIZE
+    } else {
+        SHARED_PAGE_SIZE
+    };
+    #[cfg(not(target_os = "android"))]
+    let page_size = SHARED_PAGE_SIZE;
     let offset = SHARED_PAGE.with(|p| {
         let mut p = p.borrow_mut();
         if append && (p.exhausted || p.in_flight || p.tab != tab) {
@@ -151,29 +163,12 @@ fn request_shared_page(
             .shared_content_page_scoped(
                 conversation,
                 &tab,
-                SHARED_PAGE_SIZE,
+                page_size,
                 offset,
                 shared_sender(conversation, peer_id),
             )
             .await;
-        #[cfg(target_os = "android")]
-        let page = {
-            let client = ui_ctx.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut page = page;
-                for (index, id) in
-                    ChatterClient::shared_content_video_thumbnail_candidates(&page, 4)
-                {
-                    if let Ok(result) = client.decrypt_and_extract_video_thumbnail(&id) {
-                        page[index].thumbnail = result.image_bytes;
-                    }
-                }
-                page
-            })
-            .await
-            .unwrap_or_default()
-        };
-        let short = page.len() < SHARED_PAGE_SIZE as usize;
+        let short = page.len() < page_size as usize;
         let count = page.len();
         let _ = slint::invoke_from_event_loop(move || {
             if ui_ctx.auth_snapshot().session_revision != revision {

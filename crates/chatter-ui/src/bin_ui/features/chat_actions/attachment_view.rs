@@ -27,6 +27,20 @@ use crate::bin_ui::video_state;
 use super::timers::{start_audio_progress_timer, start_video_progress_timer};
 use super::transfer_status::update_attachment_transfer_status;
 
+fn show_attachment_error(weak: &slint::Weak<MainWindow>, request: u64, message: &'static str) {
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if !super::media_viewer::is_current(request) {
+            return;
+        }
+        if let Some(window) = weak.upgrade() {
+            window.set_toast_message(message.into());
+            window.set_toast_variant("error".into());
+            window.set_toast_visible(true);
+        }
+    });
+}
+
 /// Wire the view attachment callback.
 pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
@@ -63,6 +77,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Some(att) => att,
                     None => {
                         tracing::warn!("Attachment {} not found in local repository", att_id);
+                        show_attachment_error(&weak, request, "Attachment is no longer available");
                         return;
                     }
                 };
@@ -90,13 +105,20 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // Follow an existing transfer without reopening an obsolete viewer request.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 while attachment.status == AttachmentStatus::Downloading {
-                    if !super::media_viewer::is_current(request)
-                        || std::time::Instant::now() >= deadline
-                    {
+                    if !super::media_viewer::is_current(request) {
+                        return;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        show_attachment_error(
+                            &weak,
+                            request,
+                            "Download is taking longer than expected. Try again.",
+                        );
                         return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     let Some(updated) = ui_ctx.get_attachment(&att_id) else {
+                        show_attachment_error(&weak, request, "Attachment is no longer available");
                         return;
                     };
                     attachment = updated;
@@ -141,6 +163,11 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     att_id,
                     attachment.content_location,
                     attachment.status
+                );
+                show_attachment_error(
+                    &weak,
+                    request,
+                    "Attachment is unavailable. Try again later.",
                 );
             });
         });
@@ -1158,7 +1185,7 @@ fn handle_download_attachment(
     let att_id_for_ui = att_id_str.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(window) = weak_for_ui.upgrade() {
-            update_attachment_transfer_status(&window, &att_id_for_ui, true, false, 0.0);
+            update_attachment_transfer_status(&window, &att_id_for_ui, true, false, 0.0, false);
         }
     });
 
@@ -1190,6 +1217,7 @@ fn handle_download_attachment(
                             false,
                             false,
                             1.0,
+                            false,
                         );
                     }
                 });
@@ -1278,7 +1306,15 @@ fn handle_download_attachment(
                             false,
                             false,
                             0.0,
+                            true,
                         );
+                        if super::media_viewer::is_current(request) {
+                            window.set_toast_message(
+                                "Download failed. Tap the attachment to retry.".into(),
+                            );
+                            window.set_toast_variant("error".into());
+                            window.set_toast_visible(true);
+                        }
                     }
                 });
             }
