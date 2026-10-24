@@ -98,6 +98,9 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::user::UserError> {
         self.users().remove_friend(user_id).await?;
+        if let Err(error) = self.set_contact_name(user_id, "") {
+            tracing::warn!(%error, "removed contact name was not cleared locally");
+        }
         let client = Arc::clone(self);
         tokio::spawn(async move {
             client.refresh_and_emit_friend_requests().await;

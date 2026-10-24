@@ -154,12 +154,20 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .await
                 {
                     Ok(Ok(())) => {
+                        let display_name = ui_ctx.display_name(&friend_id);
+                        let initials = crate::bin_ui::converters::initials_from_name(&display_name);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_loading(false);
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_is_friend(false);
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_contact_name("".into());
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_display_name(display_name.into());
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_initials(initials.into());
                                 show_toast(&w, ("Removed from friends", "success"));
                                 tracing::info!("Removed friend: {}", friend_id);
                             }
