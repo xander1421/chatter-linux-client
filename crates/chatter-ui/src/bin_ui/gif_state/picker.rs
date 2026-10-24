@@ -19,20 +19,18 @@ thread_local! {
 }
 
 /// Register a GIF for the picker animation.
-pub fn register_picker_gif(gif_id: String, raw_frames: Vec<(Vec<u8>, u32, u32, u64)>) {
-    if raw_frames.len() <= 1 {
+pub fn register_picker_gif(
+    gif_id: String,
+    prepared_frames: Vec<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)>,
+) {
+    if prepared_frames.len() <= 1 {
         return;
     }
 
-    // Convert raw frames to Slint Images
-    let frames: Vec<Image> = raw_frames
-        .iter()
-        .map(|(data, width, height, _)| {
-            crate::bin_ui::slint_conversions::rgba_to_slint_image(data, *width, *height)
-        })
-        .collect();
-
-    let delays: Vec<u64> = raw_frames.iter().map(|(_, _, _, d)| *d).collect();
+    let (frames, delays): (Vec<Image>, Vec<u64>) = prepared_frames
+        .into_iter()
+        .map(|(pixels, delay)| (Image::from_rgba8(pixels), delay))
+        .unzip();
 
     let state = InlineGifState {
         frames,
@@ -108,15 +106,14 @@ fn tick_picker_gifs(elapsed_ms: u64) {
 }
 
 fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Image)]) {
-    // A GIF can sit in both sections (sent before, trending now); each tile
-    // showing it animates.
+    // A GIF can sit in both sections (sent before, trending now).
+    let changed: HashMap<&str, &Image> = updates
+        .iter()
+        .map(|(id, image)| (id.as_str(), image))
+        .collect();
     for results in [
-        window
-            .global::<crate::ChatPane>()
-            .get_composer_gif_picker_recent(),
-        window
-            .global::<crate::ChatPane>()
-            .get_composer_gif_picker_results(),
+        window.global::<crate::ChatPane>().get_composer_gif_picker_recent(),
+        window.global::<crate::ChatPane>().get_composer_gif_picker_results(),
     ] {
         let Some(model) = results
             .as_any()
@@ -124,14 +121,11 @@ fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Imag
         else {
             continue;
         };
-        for (update_id, new_image) in updates {
-            for idx in 0..model.row_count() {
-                if let Some(mut gif) = model.row_data(idx) {
-                    if gif.id.as_str() == update_id {
-                        gif.preview = new_image.clone();
-                        model.set_row_data(idx, gif);
-                        break;
-                    }
+        for idx in 0..model.row_count() {
+            if let Some(mut gif) = model.row_data(idx) {
+                if let Some(image) = changed.get(gif.id.as_str()) {
+                    gif.preview = (*image).clone();
+                    model.set_row_data(idx, gif);
                 }
             }
         }

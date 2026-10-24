@@ -247,6 +247,7 @@ fn handle_local_attachment(
                     match ui_ctx_for_gif.decrypt_attachment_auto(&att_id_for_gif) {
                         Ok(buffer) => {
                             let data = buffer.as_slice().to_vec();
+                            let first_frame = crate::bin_ui::gif_state::prepare_first_gif_frame(&data);
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak_decrypt.upgrade() {
                                     if !super::media_viewer::is_current(request) {
@@ -265,6 +266,7 @@ fn handle_local_attachment(
                                             &data,
                                             &weak_anim,
                                             &att_id_str_decrypt,
+                                            first_frame,
                                         )
                                     {
                                         w.global::<crate::ChatPane>()
@@ -737,6 +739,7 @@ fn display_image_from_buffer(
     );
 
     if is_gif {
+        let first_frame = crate::bin_ui::gif_state::prepare_first_gif_frame(&data);
         // GIF: Handle on UI thread
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
@@ -759,6 +762,7 @@ fn display_image_from_buffer(
                     &data,
                     &weak_for_gif,
                     &att_id_for_inline,
+                    first_frame,
                 ) {
                     tracing::info!("CLICK: Got first frame, setting viewer source");
                     w.global::<crate::ChatPane>()

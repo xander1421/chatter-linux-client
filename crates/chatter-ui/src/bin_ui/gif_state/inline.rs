@@ -201,6 +201,20 @@ pub fn register_inline_gif_from_images(
     Some(first_frame)
 }
 
+/// Append a progressive batch without rebuilding frames already on the UI thread.
+fn append_inline_gif_from_buffers(
+    attachment_id: &str,
+    buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
+    delays: Vec<u64>,
+) {
+    INLINE_GIFS.with(|gifs| {
+        if let Some(state) = gifs.borrow_mut().get_mut(attachment_id) {
+            state.frames.extend(buffers.into_iter().map(Image::from_rgba8));
+            state.delays.extend(delays);
+        }
+    });
+}
+
 /// Unregister an inline GIF (when message is removed from view).
 pub fn unregister_inline_gif(attachment_id: &str) {
     INLINE_GIFS.with(|gifs| {
@@ -566,7 +580,11 @@ pub fn register_gif_attachment(
         let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = vec![];
         let mut all_delays: Vec<u64> = vec![];
         let mut animation_started = false;
+        let mut pending_buffers = Vec::new();
+        let mut pending_delays = Vec::new();
+        let mut decoded_bytes = 0usize;
         const BATCH_SIZE: usize = 5;
+        const MAX_FRAMES: usize = 100;
 
         for (_idx, frame_result) in frames_iter.enumerate() {
             let frame = match frame_result {
@@ -590,19 +608,29 @@ pub fn register_gif_attachment(
             let (width, height) = buffer.dimensions();
             let raw_data = buffer.into_raw();
 
+            if !chatter_core::media::gif::frame_fits_budget(
+                all_buffers.len(), decoded_bytes, raw_data.len(),
+                MAX_FRAMES, chatter_core::media::gif::MAX_UI_GIF_BYTES,
+            ) {
+                break;
+            }
+            decoded_bytes += raw_data.len();
+
             // Convert to Slint pixel buffer IN THE BACKGROUND THREAD (Send)
             let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                 &raw_data, width, height,
             );
 
-            all_buffers.push(pixel_buffer);
+            all_buffers.push(pixel_buffer.clone());
             all_delays.push(delay_ms);
+            pending_buffers.push(pixel_buffer);
+            pending_delays.push(delay_ms);
 
             // Start animation as soon as we have enough frames
             if !animation_started && all_buffers.len() >= 2 {
                 animation_started = true;
-                let buffers_batch = all_buffers.clone();
-                let delays_batch = all_delays.clone();
+                let buffers_batch = std::mem::take(&mut pending_buffers);
+                let delays_batch = std::mem::take(&mut pending_delays);
                 let att_id_batch = attachment_id.clone();
                 let weak_batch = window_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -618,11 +646,11 @@ pub fn register_gif_attachment(
             }
             // Update animation periodically with new frames
             else if animation_started && all_buffers.len() % BATCH_SIZE == 0 {
-                let buffers_batch = all_buffers.clone();
-                let delays_batch = all_delays.clone();
+                let buffers_batch = std::mem::take(&mut pending_buffers);
+                let delays_batch = std::mem::take(&mut pending_delays);
                 let att_id_batch = attachment_id.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch);
+                    append_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch);
                 });
             }
         }
@@ -634,20 +662,13 @@ pub fn register_gif_attachment(
                 all_buffers.clone(),
                 all_delays.clone(),
             );
-            let att_id_full = attachment_id.clone();
-            let weak_full = window_weak.clone();
-            let buffers_full = all_buffers.clone();
-            let delays_full = all_delays.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(first_image) =
-                    register_inline_gif_from_buffers(&att_id_full, buffers_full, delays_full)
-                {
-                    if let Some(w) = weak_full.upgrade() {
-                        set_attachment_thumbnail(&w, &att_id_full, first_image);
-                    }
-                }
-                tracing::info!("Completed sent GIF animation: {}", att_id_full);
-            });
+            if !pending_buffers.is_empty() {
+                let att_id_full = attachment_id.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    append_inline_gif_from_buffers(&att_id_full, pending_buffers, pending_delays);
+                    tracing::info!("Completed sent GIF animation: {}", att_id_full);
+                });
+            }
         }
     });
 }
