@@ -735,15 +735,28 @@ fn activate_linux_launcher(executable: &Path) -> Result<Option<LinuxLauncherRoll
 }
 
 /// Activate the launcher, then start the staged binary. Restore the immediately
-/// prior launcher if the binary cannot start and the launcher is still ours.
+/// prior launcher if the binary cannot start or exits during startup.
 #[cfg(target_os = "linux")]
 pub fn restart_into_linux_update(executable: &Path) -> Result<(), String> {
     let rollback = activate_linux_launcher(executable)?;
-    if std::process::Command::new(executable).spawn().is_err() {
-        if let Some(rollback) = rollback {
-            rollback.restore()?;
+    let mut child = match std::process::Command::new(executable).spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            if let Some(rollback) = rollback { rollback.restore()?; }
+            return Err("Could not restart into the verified update".into());
         }
-        return Err("Could not restart into the verified update".into());
+    };
+    // An executable can spawn successfully and still fail immediately because
+    // its runtime cannot initialize. Keep the old process alive during this
+    // bounded window so it can report the failure and preserve the launcher.
+    for _ in 0..20 {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => {
+                if let Some(rollback) = rollback { rollback.restore()?; }
+                return Err("The verified update closed during startup".into());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
     }
     Ok(())
 }

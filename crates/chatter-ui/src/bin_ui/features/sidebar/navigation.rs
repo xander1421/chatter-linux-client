@@ -85,9 +85,12 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                             "Failed to fetch saved messages channel from server: {}",
                             e
                         );
-                        crate::run_history_ui!(weak, owner, |w| w
-                            .global::<crate::ChatPane>()
-                            .set_loading_messages(false));
+                        crate::run_history_ui!(weak, owner, |w| {
+                            w.global::<crate::ChatPane>().set_loading_messages(false);
+                            w.set_toast_message("Couldn't open Saved Messages. Check your connection and try again.".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        });
                         return;
                     }
                 }

@@ -76,8 +76,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                 g.set_detail_body(body.into());
                             }
                             Err(error) => {
+                                tracing::warn!(%error, "server record details failed");
                                 g.set_detail_title("Details unavailable".into());
-                                g.set_detail_body(error.to_string().into());
+                                g.set_detail_body("Check your connection and try again.".into());
                             }
                         }
                     });
@@ -130,6 +131,7 @@ fn request(
     } else {
         String::new()
     };
+    let was_action = action.is_some();
     g.set_loading(true);
     g.set_error("".into());
     let token = generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -208,7 +210,14 @@ fn request(
                     g.set_rows(ModelRc::new(VecModel::from(rows)));
                     g.set_next(page.next.into());
                 }
-                Err(error) => g.set_error(error.to_string().into()),
+                Err(error) => {
+                    tracing::warn!(%error, kind, "server records request failed");
+                    g.set_error(if was_action {
+                        "Couldn't make that change. Check your connection and try again."
+                    } else {
+                        "Couldn't load records. Check your connection and try again."
+                    }.into());
+                }
             }
         });
     });
