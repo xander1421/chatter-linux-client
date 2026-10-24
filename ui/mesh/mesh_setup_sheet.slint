@@ -30,11 +30,14 @@ component NearbyPeerRow inherits Rectangle {
     }
     HorizontalLayout { padding-left: Spacing.md; padding-right: Spacing.md;
         spacing: Spacing.md;
-        Rectangle { width: 40px; height: 40px; border-radius: Spacing.radius-full;
-            background: Colors.tint-strong;
-            Image { source: Icons.user; width: Spacing.button-icon; height: Spacing.button-icon;
-                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                colorize: Colors.primary; }
+        VerticalLayout {
+            alignment: center;
+            Rectangle { width: 40px; height: 40px; border-radius: Spacing.radius-full;
+                background: Colors.tint-strong;
+                Image { source: Icons.user; width: Spacing.button-icon; height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary; }
+            }
         }
         VerticalLayout { horizontal-stretch: 1; alignment: center;
             Text { text: root.name; color: Colors.text-primary; font-size: Typography.base;

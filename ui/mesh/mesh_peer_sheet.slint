@@ -80,12 +80,15 @@ export component MeshPeerSheet inherits Rectangle {
                     padding-bottom: Spacing.xl;
                     VerticalLayout {
                         alignment: center; spacing: Spacing.sm;
-                        Rectangle {
-                            width: 72px; height: 72px; border-radius: Spacing.radius-full;
-                            background: Colors.tint-strong;
-                            Image { source: Icons.user; width: 34px; height: 34px;
-                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                                colorize: Colors.primary; }
+                        HorizontalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 72px; height: 72px; border-radius: Spacing.radius-full;
+                                background: Colors.tint-strong;
+                                Image { source: Icons.user; width: 34px; height: 34px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                    colorize: Colors.primary; }
+                            }
                         }
                         Text { text: MeshGlobal.sheet-peer-name; color: Colors.text-primary;
                             font-size: 22px; font-weight: Typography.semibold; horizontal-alignment: center; }

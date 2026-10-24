@@ -30,12 +30,15 @@ component ComposeMenuRow inherits Rectangle {
     HorizontalLayout {
         padding-left: Spacing.md; padding-right: Spacing.md;
         spacing: Spacing.md;
-        Rectangle {
-            width: 40px; height: 40px; border-radius: Spacing.radius-md;
-            background: root.tint.with-alpha(0.16);
-            Image { source: root.icon; width: Spacing.button-icon; height: Spacing.button-icon;
-                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                colorize: root.tint; }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: Spacing.radius-md;
+                background: root.tint.with-alpha(0.16);
+                Image { source: root.icon; width: Spacing.button-icon; height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    colorize: root.tint; }
+            }
         }
         VerticalLayout { horizontal-stretch: 1; alignment: center;
             Text { text: root.title; color: Colors.text-primary; font-size: Typography.base;

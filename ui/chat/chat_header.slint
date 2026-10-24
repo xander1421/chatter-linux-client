@@ -491,24 +491,27 @@ export component ChatHeader inherits GlassSurface {
                 height: 100%;
                 alignment: center;
                 spacing: Spacing.sm;
-                if MeshGlobal.active-kind == "dm": Avatar {
-                    size: Spacing.avatar-sm;
-                    name: MeshGlobal.active-title;
-                    show-presence: MeshGlobal.active-reachable;
-                    presence-color: Colors.online;
-                }
-                if MeshGlobal.active-kind != "dm": Rectangle {
-                    width: Spacing.avatar-sm;
-                    height: Spacing.avatar-sm;
-                    border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
-                    background: Colors.primary.with-alpha(0.16);
-                    Image {
-                        source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
-                        width: 16px;
-                        height: 16px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.primary;
+                VerticalLayout {
+                    alignment: center;
+                    if MeshGlobal.active-kind == "dm": Avatar {
+                        size: Spacing.avatar-sm;
+                        name: MeshGlobal.active-title;
+                        show-presence: MeshGlobal.active-reachable;
+                        presence-color: Colors.online;
+                    }
+                    if MeshGlobal.active-kind != "dm": Rectangle {
+                        width: Spacing.avatar-sm;
+                        height: Spacing.avatar-sm;
+                        border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
+                        background: Colors.primary.with-alpha(0.16);
+                        Image {
+                            source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.primary;
+                        }
                     }
                 }
                 VerticalLayout {

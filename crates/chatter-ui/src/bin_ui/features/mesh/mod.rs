@@ -245,12 +245,18 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         global.on_create_private_channel(move |name| {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.mesh_create_private_channel(name.as_str()) {
-                Ok(_) => {
-                    w.global::<MeshGlobal>().set_notice(
-                        "Private group created. Open a nearby person's peer sheet to invite them."
-                            .into(),
-                    );
+                Ok(scope) => {
                     refresh_rows(&w, &ui_ctx);
+                    // Land in the new group with Group Info open, where Add
+                    // Members is the next step.
+                    if let Some(row) = core_api::rows(&ui_ctx)
+                        .into_iter()
+                        .find(|row| row.kind == "private-channel" && row.scope == scope)
+                    {
+                        crate::bin_ui::features::back::close(&w, "mesh-compose");
+                        conversation::open(&w, &ui_ctx, &row.id);
+                        crate::bin_ui::features::back::push(&w, "mesh-info");
+                    }
                 }
                 Err(error) => w
                     .global::<MeshGlobal>()

@@ -78,16 +78,19 @@ export component MeshInfoSheet inherits Rectangle {
                 if !root.adding-members: VerticalLayout {
                     alignment: center;
                     spacing: Spacing.xs;
-                    Rectangle {
-                        width: 64px; height: 64px;
-                        border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-lg : Spacing.radius-full;
-                        background: Colors.primary.with-alpha(0.16);
-                        Image {
-                            source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
-                            width: 28px; height: 28px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            colorize: Colors.primary;
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 64px; height: 64px;
+                            border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-lg : Spacing.radius-full;
+                            background: Colors.primary.with-alpha(0.16);
+                            Image {
+                                source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
+                                width: 28px; height: 28px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.primary;
+                            }
                         }
                     }
                     Text { text: MeshGlobal.active-title; color: Colors.text-primary;
