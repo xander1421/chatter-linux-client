@@ -27,6 +27,7 @@ import { UpdateGlobal } from "../update/update_global.slint";
 import { UpdateBanner } from "update_banner.slint";
 import { SidebarFooter } from "sidebar_footer.slint";
 import { SidebarHeader } from "sidebar_header.slint";
+import { ActivityBell } from "../activity/activity_bell.slint";
 
 export { ChatRowData, CustomSectionData }
 
@@ -57,10 +58,10 @@ export component Sidebar inherits Rectangle {
     // Touch input: sizes the targets. Independent of `mobile-mode`, so a
     // two-pane tablet keeps finger-sized rows.
     in property <bool> touch: false;
-    // The server is settled-unreachable. Shown as a dot on the settings button,
-    // mirroring how the anon-mode button carries its Tor dot, so the connection
-    // banner can be dismissed without the outage becoming invisible.
+    // The server reachability fact drives the Activity bell and the compact
+    // rail settings dot, where the sidebar header is hidden.
     in property <bool> server-unreachable: false;
+    in property <string> connection-status: "connected";
     in property <length> mobile-width: 360px;
     // macOS unified titlebar: the traffic lights are drawn over this panel's
     // top-left corner (app.slint stopped reserving a row for them). Both are
@@ -650,6 +651,8 @@ export component Sidebar inherits Rectangle {
             header-control-shell: root.header-control-shell;
             header-control-glyph: root.header-control-glyph;
             search-overlay-open: root.search-overlay-open;
+            server-unreachable: root.server-unreachable;
+            connection-status: root.connection-status;
             mobile-mode: root.mobile-mode;
             touch: root.touch;
             search-clicked => { root.search-clicked(); }
@@ -670,6 +673,8 @@ export component Sidebar inherits Rectangle {
                 spacing: Spacing.sm;
                 // iOS large-title bar: actions only, the title is MeshList's.
                 Rectangle { horizontal-stretch: 1; }
+                ActivityBell { touch: root.touch; server-unreachable: root.server-unreachable;
+                    connection-status: root.connection-status; }
                 Rectangle {
                     width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
                     height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;

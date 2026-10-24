@@ -6,6 +6,7 @@ import { MeshPeerSheet } from "mesh/mesh_peer_sheet.slint";
 import { MeshSetupSheet } from "mesh/mesh_setup_sheet.slint";
 import { MeshComposeSheet } from "mesh/mesh_compose_sheet.slint";
 import { MeshInfoSheet } from "mesh/mesh_info_sheet.slint";
+import { ActivitySheet } from "activity/activity_sheet.slint";
 import { Materials } from "theme/materials.slint";
 import { ServerRecordsScreen, ServerRecordsGlobal } from "server_records/screen.slint";
 import { AvatarOption } from "components/avatar_picker.slint";
@@ -21,6 +22,9 @@ export component AppModalHost inherits Rectangle {
     in property <bool> compact-layout;
     in property <string> exiting-modal;
     in property <bool> is-mobile-platform;
+    in property <string> connection-status;
+    in property <bool> server-unreachable;
+    in property <int> connection-reconnect-attempt;
     in property <string> presented-modal;
     function is-presented(name: string) -> bool {
         return root.presented-modal == name || root.exiting-modal == name;
@@ -70,6 +74,15 @@ export component AppModalHost inherits Rectangle {
         show-modal: root.active-modal == "mesh-compose";
         touch: root.is-mobile-platform;
         close => { ModalHostState.nav-close("mesh-compose"); }
+    }
+
+    if root.is-presented("activity"): ActivitySheet {
+        show-modal: root.active-modal == "activity";
+        touch: root.is-mobile-platform;
+        connection-status: root.connection-status;
+        server-unreachable: root.server-unreachable;
+        connection-reconnect-attempt: root.connection-reconnect-attempt;
+        close => { ModalHostState.nav-close("activity"); }
     }
 
     // Create Channel Modal

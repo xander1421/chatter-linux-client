@@ -4,6 +4,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Colors } from "../theme/colors.slint";
 import { Icons } from "../theme/icons.slint";
 import { HeaderButton } from "../components/header_button.slint";
+import { ActivityBell } from "../activity/activity_bell.slint";
 import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 
 export component SidebarHeader inherits GlassSurface {
@@ -20,6 +21,8 @@ export component SidebarHeader inherits GlassSurface {
     in property <bool> search-overlay-open;
     in property <bool> mobile-mode;
     in property <bool> touch;
+    in property <bool> server-unreachable;
+    in property <string> connection-status;
     callback search-clicked();
     callback create-clicked();
     callback anon-mode-clicked();
@@ -71,6 +74,15 @@ export component SidebarHeader inherits GlassSurface {
                 icon: Icons.plus;
                 label: "Create";
                 clicked => { root.create-clicked(); }
+            }
+            ActivityBell {
+                touch: root.touch;
+                server-unreachable: root.server-unreachable;
+                connection-status: root.connection-status;
+                x: root.mobile-mode
+                    ? parent.width - self.width * 2 - Spacing.sm - Spacing.header-action-gap
+                    : parent.width - self.width * 3 - Spacing.sm - Spacing.header-action-gap * 2;
+                y: (parent.height - self.height) / 2;
             }
             // Shield toggle — the chat list's own header control (owner decision
             // 2026-09-26: Shield is a mode of this list, not a tab). Declared
