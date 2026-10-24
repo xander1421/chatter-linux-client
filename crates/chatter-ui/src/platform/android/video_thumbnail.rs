@@ -24,10 +24,7 @@ static NEXT: AtomicI64 = AtomicI64::new(1);
 static HELPER: Mutex<Option<Arc<Global<JObject<'static>>>>> = Mutex::new(None);
 thread_local! { static READ_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) }; }
 
-fn with_helper<T>(
-    env: &mut jni::Env<'_>,
-    call: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> jni::errors::Result<T>,
-) -> jni::errors::Result<T> {
+fn video_helper(env: &mut jni::Env<'_>) -> jni::errors::Result<Arc<Global<JObject<'static>>>> {
     let mut slot = HELPER.lock().map_err(|_| jni::errors::Error::NullPtr("video helper lock"))?;
     if slot.is_none() {
         let loader = env
@@ -52,9 +49,7 @@ fn with_helper<T>(
         let helper = env.new_object(env.cast_local::<JClass>(class)?, jni::jni_sig!("()V"), &[])?;
         *slot = Some(Arc::new(env.new_global_ref(helper)?));
     }
-    let helper = Arc::clone(slot.as_ref().unwrap());
-    drop(slot);
-    call(env, helper.as_obj())
+    Ok(Arc::clone(slot.as_ref().unwrap()))
 }
 
 pub fn init() {
@@ -67,14 +62,15 @@ fn extract_file(path: &std::path::Path) -> Result<VideoMetadata, String> {
     let packed = activity::with_jni_env(|env| {
         let result = env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
             let jpath = env.new_string(path)?;
-            let bytes = with_helper(env, |env, helper| env
+            let helper = video_helper(env)?;
+            let bytes = env
                 .call_method(
-                    helper,
+                    helper.as_obj(),
                     jni::jni_str!("extractFile"),
                     jni::jni_sig!("(Ljava/lang/String;)[B"),
                     &[JValue::Object(jpath.as_ref())],
                 )?
-                .l())?;
+                .l()?;
             if bytes.is_null() {
                 return Err(jni::errors::Error::NullPtr("video metadata unavailable"));
             }
@@ -145,14 +141,15 @@ fn extract(
 fn extract_jni(token: i64) -> Result<ImageDecodeResult, String> {
     activity::with_jni_env(|env| {
         let result = env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
-            let bytes = with_helper(env, |env, helper| env
+            let helper = video_helper(env)?;
+            let bytes = env
                 .call_method(
-                    helper,
+                    helper.as_obj(),
                     jni::jni_str!("extract"),
                     jni::jni_sig!("(J)[B"),
                     &[JValue::Long(token)],
                 )?
-                .l())?;
+                .l()?;
             if bytes.is_null() {
                 return Err(jni::errors::Error::NullPtr("video preview unavailable"));
             }
