@@ -66,11 +66,11 @@ export component ForwardMessageModal inherits Rectangle {
                 if root.contact-share: HorizontalLayout {
                     padding: Spacing.md;
                     spacing: Spacing.md;
-                    alignment: center;
 
                     Avatar { size: 48px; name: root.contact-name; source: root.contact-avatar; }
                     Text {
                         text: root.contact-name;
+                        vertical-alignment: center;
                         color: Colors.text-primary;
                         font-size: Typography.base;
                         font-weight: Typography.semibold;
