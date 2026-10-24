@@ -125,6 +125,7 @@ mod v124_activity_center;
 mod v125_contact_names;
 mod v126_activity_outage_resolution;
 mod v127_shared_content_categories;
+mod v128_pending_dm_retry;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -477,4 +478,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v125_contact_names::V125ContactNames)
         .register(v126_activity_outage_resolution::V126ActivityOutageResolution)
         .register(v127_shared_content_categories::V127SharedContentCategories)
+        .register(v128_pending_dm_retry::V128PendingDmRetry)
 }

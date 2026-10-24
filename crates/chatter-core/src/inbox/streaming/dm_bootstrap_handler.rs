@@ -20,6 +20,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use prost::Message as _;
 
 use tokio::sync::{Mutex, broadcast};
 use tokio::task::JoinHandle;
@@ -35,6 +37,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::SignalService;
 use crate::services::message::{MessageService, PendingFlush, queued_bubble_timestamp};
+use crate::storage::repositories::PendingDmRepository;
 use crate::storage::{Database, KeyStore, SettingsRepository};
 use crate::util::time::TimestampNanos;
 
@@ -94,6 +97,10 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
 
     tokio::spawn(async move {
         tracing::info!("DM bootstrap handler started");
+        let pending_dms = PendingDmRepository::new(database.clone());
+        let mut recovery = HashMap::<UserId, BootstrapWait>::new();
+        let mut recovery_tick = tokio::time::interval(Duration::from_secs(30));
+        recovery_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         // Per-bootstrap tasks are owned by this JoinSet. When the handler
         // exits (channel closed) or is aborted, the JoinSet drops and every
@@ -103,6 +110,48 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
 
         loop {
             tokio::select! {
+                _ = recovery_tick.tick() => {
+                    match pending_dms.active_peers() {
+                        Ok(peers) => {
+                            recovery.retain(|peer, _| peers.contains(peer));
+                            for peer in peers {
+                                let wait = recovery.entry(peer).or_insert_with(BootstrapWait::new);
+                                match wait.advance(Instant::now()) {
+                                    BootstrapDecision::Wait => {}
+                                    BootstrapDecision::Reissue => {
+                                        let service = message_service.clone();
+                                        bootstrap_tasks.spawn(async move {
+                                            if let Err(error) = service.reissue_dm_bootstrap(&peer).await {
+                                                tracing::warn!(%peer, %error, "DM bootstrap reissue failed");
+                                            }
+                                        });
+                                    }
+                                    BootstrapDecision::Fail => {
+                                        recovery.remove(&peer);
+                                        match pending_dms.fail_peer(&peer) {
+                                            Ok(contents) => {
+                                                let mut flush = PendingFlush::default();
+                                                for bytes in contents {
+                                                    let bubble = crate::proto::content_v1::Content::decode(bytes.as_slice())
+                                                        .ok().and_then(|content| queued_bubble_timestamp(&content));
+                                                    flush.record(bubble, Err("Secure channel setup timed out. Tap Retry to try again".into()));
+                                                }
+                                                if !flush.failed.is_empty() {
+                                                    if let Err(error) = message_service.mark_bootstrap_timeout(&peer, &flush.failed) {
+                                                        tracing::warn!(%peer, %error, "Could not persist bootstrap timeout");
+                                                    }
+                                                    flush.emit(peer, &event_bus);
+                                                }
+                                            }
+                                            Err(error) => tracing::warn!(%peer, %error, "Could not park timed-out bootstrap"),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => tracing::warn!(%error, "Could not inspect pending DM bootstraps"),
+                    }
+                },
                 // Drain finished tasks so the JoinSet doesn't grow unbounded.
                 // The `if !is_empty()` guard disables this branch when the set
                 // is empty (otherwise `join_next` returns `None` immediately
@@ -315,6 +364,38 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
             }
         }
     })
+}
+
+const BOOTSTRAP_WAIT: Duration = Duration::from_secs(240);
+const BOOTSTRAP_ATTEMPTS: u8 = 3;
+
+struct BootstrapWait {
+    since: Instant,
+    attempts: u8,
+}
+
+enum BootstrapDecision { Wait, Reissue, Fail }
+
+impl BootstrapWait {
+    fn new() -> Self { Self { since: Instant::now(), attempts: 1 } }
+
+    fn advance(&mut self, now: Instant) -> BootstrapDecision {
+        if now.duration_since(self.since) < BOOTSTRAP_WAIT { return BootstrapDecision::Wait; }
+        self.since = now;
+        if self.attempts >= BOOTSTRAP_ATTEMPTS { BootstrapDecision::Fail }
+        else { self.attempts += 1; BootstrapDecision::Reissue }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn missing_bootstrap_reissues_twice_then_fails() {
+    let start = Instant::now();
+    let mut wait = BootstrapWait { since: start, attempts: 1 };
+    assert!(matches!(wait.advance(start + BOOTSTRAP_WAIT - Duration::from_secs(1)), BootstrapDecision::Wait));
+    assert!(matches!(wait.advance(start + BOOTSTRAP_WAIT), BootstrapDecision::Reissue));
+    assert!(matches!(wait.advance(start + BOOTSTRAP_WAIT * 2), BootstrapDecision::Reissue));
+    assert!(matches!(wait.advance(start + BOOTSTRAP_WAIT * 3), BootstrapDecision::Fail));
 }
 
 /// The lock that serialises `peer`'s bootstrap tasks.

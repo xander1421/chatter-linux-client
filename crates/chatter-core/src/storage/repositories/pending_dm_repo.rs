@@ -70,7 +70,7 @@ impl PendingDmRepository {
 
         let mut stmt = tx.prepare(
             "SELECT id, content, attachment_ids_blob, channel_id FROM pending_dm_messages
-             WHERE peer_id = ?1 ORDER BY id ASC",
+             WHERE peer_id = ?1 AND failed = 0 ORDER BY id ASC",
         )?;
         let messages = {
             let mut rows = stmt.query(params![peer])?;
@@ -95,10 +95,57 @@ impl PendingDmRepository {
         drop(stmt);
 
         tx.execute(
-            "DELETE FROM pending_dm_messages WHERE peer_id = ?1",
+            "DELETE FROM pending_dm_messages WHERE peer_id = ?1 AND failed = 0",
             params![peer],
         )?;
         tx.commit().map_err(StorageError::Database)?;
         Ok(messages)
+    }
+
+    /// Peers whose original content is still waiting for bootstrap.
+    pub fn active_peers(&self) -> Result<Vec<UserId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT peer_id FROM pending_dm_messages WHERE failed = 0")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.map(|row| {
+            row?.parse().map_err(|_| StorageError::InvalidData("Invalid pending DM peer".into()))
+        }).collect()
+    }
+
+    /// Park without deleting the original wire bytes. A late answer cannot
+    /// flush these rows; Retry explicitly reactivates one of them.
+    pub fn fail_peer(&self, peer_id: &UserId) -> Result<Vec<Vec<u8>>, StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction().map_err(StorageError::Database)?;
+        let content = {
+            let mut stmt = tx.prepare("SELECT content FROM pending_dm_messages WHERE peer_id = ?1 AND failed = 0")?;
+            let rows = stmt.query_map([peer_id.to_string()], |row| row.get::<_, Vec<u8>>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        tx.execute("UPDATE pending_dm_messages SET failed = 1 WHERE peer_id = ?1 AND failed = 0", [peer_id.to_string()])?;
+        tx.commit().map_err(StorageError::Database)?;
+        Ok(content)
+    }
+
+    /// Give a failed bubble its exact queued Content back to the normal flush.
+    pub fn reactivate(&self, peer_id: &UserId, sent_at: u64) -> Result<Option<i64>, StorageError> {
+        use prost::Message as _;
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare("SELECT id, content FROM pending_dm_messages WHERE peer_id = ?1 AND failed = 1 ORDER BY id")?;
+        let rows = stmt.query_map([peer_id.to_string()], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+        for row in rows {
+            let (id, bytes) = row?;
+            if crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
+                .and_then(|content| crate::services::message::queued_bubble_timestamp(&content)) == Some(sent_at) {
+                conn.execute("UPDATE pending_dm_messages SET failed = 0 WHERE id = ?1", [id])?;
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn park(&self, id: i64) -> Result<(), StorageError> {
+        self.db.connection()?.execute("UPDATE pending_dm_messages SET failed = 1 WHERE id = ?1", [id])?;
+        Ok(())
     }
 }

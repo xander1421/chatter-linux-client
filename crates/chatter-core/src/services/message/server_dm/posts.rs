@@ -270,6 +270,19 @@ impl MessageService {
         }
         let peer_id = UserId::from_uuid(*message.conversation_id.as_uuid());
 
+        if message.failure_reason.as_deref() == Some(super::super::core::BOOTSTRAP_TIMED_OUT) {
+            let queued_id = self.pending_dms.reactivate(&peer_id, message.sent_at)?
+                .ok_or_else(|| MessageError::InvalidContent("Original queued message is unavailable".into()))?;
+            // Retry only the handshake; the existing queue owns the exact
+            // serialized Content and a completion drains it once.
+            if let Err(error) = self.reissue_dm_bootstrap(&peer_id).await {
+                self.pending_dms.park(queued_id)?;
+                return Err(error);
+            }
+            self.finish_retry_row(&message.id, "sending", None)?;
+            return Ok("sending");
+        }
+
         let pointers = self.pointers_for_resend(&message.attachments)?;
         let quote = match (message.reply_to_author_id, message.reply_to) {
             (Some(author), Some(parent_id)) => self.message_repo.get(&parent_id)?.map(|parent| {

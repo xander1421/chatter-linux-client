@@ -1,6 +1,25 @@
 use super::*;
 
 impl MessageService {
+    /// Reissue only the handshake. Queued content remains byte-for-byte in
+    /// pending_dm_messages until one completion path wins the drain.
+    pub(crate) async fn reissue_dm_bootstrap(&self, peer_id: &UserId) -> Result<(), MessageError> {
+        let our_user_id = self.settings_repo.current_user_id()?;
+        let mut auth_client = AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone());
+        if our_user_id.as_uuid() > peer_id.as_uuid() {
+            return self.send_bootstrap_request(&mut auth_client, peer_id, &our_user_id, &self.grpc_pool).await;
+        }
+        let devices = self.bootstrap_devices(&mut auth_client, peer_id).await?;
+        let mut mailbox_client = self.bootstrap_mailbox_client(&self.grpc_pool)?;
+        let bootstrap = DmBootstrap::new(self.database.clone())
+            .initiate_dm(*peer_id, &mut mailbox_client).await
+            .map_err(|e| MessageError::DmError(format!("Bootstrap reissue failed: {e}")))?;
+        self.send_bootstrap_payload(
+            &mut auth_client, peer_id, &devices, self.bootstrap_delivery(),
+            &bootstrap.bootstrap_message, &self.grpc_pool,
+        ).await.map(|_| ())
+    }
+
     pub(super) fn bootstrap_mailbox_client(
         &self,
         grpc_pool: &GrpcClientPool,
