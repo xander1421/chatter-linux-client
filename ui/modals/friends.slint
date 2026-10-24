@@ -233,24 +233,38 @@ export component FriendsModal inherits Rectangle {
                 }
 
                 // ===== Find Users Tab =====
-                find-content := FindTab {
-                    active-tab: root.active-tab;
-                    mobile-mode: root.mobile-mode;
-                    can-scan: root.can-scan;
-                    loading: root.loading;
-                    code-input <=> root.code-input;
-                    code-status: root.code-status;
-                    my-code: root.my-code;
-                    request-note <=> root.request-note;
-                    qr-code-image: root.qr-code-image;
-                    show-qr <=> root.show-qr;
-                    effective-private-mode: root.effective-private-mode;
-                    generate-code(value) => { root.generate-code(value); }
-                    generate-qr(value) => { root.generate-qr(value); }
-                    copy-code => { root.copy-code(); }
-                    paste-code => { root.paste-code(); }
-                    scan-code => { root.scan-code(); }
-                    connect-via-code(value) => { root.connect-via-code(value); }
+                // The full-screen Contacts page shrinks when the IME opens.
+                // Keep the lower note field reachable when the form exceeds
+                // that viewport (especially with the QR card expanded).
+                find-scroll := Flickable {
+                    visible: root.active-tab == "find";
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: self.width;
+                    viewport-height: max(self.height, find-content.preferred-height);
+                    interactive: root.mobile-mode && self.viewport-height > self.height;
+                    immediate-child-press: true;
+
+                    find-content := FindTab {
+                        width: find-scroll.width;
+                        active-tab: root.active-tab;
+                        mobile-mode: root.mobile-mode;
+                        can-scan: root.can-scan;
+                        loading: root.loading;
+                        code-input <=> root.code-input;
+                        code-status: root.code-status;
+                        my-code: root.my-code;
+                        request-note <=> root.request-note;
+                        qr-code-image: root.qr-code-image;
+                        show-qr <=> root.show-qr;
+                        effective-private-mode: root.effective-private-mode;
+                        generate-code(value) => { root.generate-code(value); }
+                        generate-qr(value) => { root.generate-qr(value); }
+                        copy-code => { root.copy-code(); }
+                        paste-code => { root.paste-code(); }
+                        scan-code => { root.scan-code(); }
+                        connect-via-code(value) => { root.connect-via-code(value); }
+                    }
                 }
 
                 // ===== Requests Tab =====
