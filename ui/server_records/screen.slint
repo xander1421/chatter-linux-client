@@ -73,7 +73,7 @@ export component ServerRecordsScreen inherits Rectangle {
                     padding: Spacing.md;
                     spacing: Spacing.sm;
                     HorizontalLayout {
-                        Text { text: ServerRecordsGlobal.detail-title; color: Colors.text-primary; font-weight: Typography.semibold; horizontal-stretch: 1; }
+                        Text { text: ServerRecordsGlobal.detail-title; color: Colors.text-primary; font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
                         Button { text: "Close"; variant: "ghost"; clicked => { ServerRecordsGlobal.detail-title = ""; ServerRecordsGlobal.detail-body = ""; ServerRecordsGlobal.detail-id = ""; } }
                     }
                     Text { text: ServerRecordsGlobal.detail-body; wrap: word-wrap; color: Colors.text-secondary; }
@@ -120,8 +120,8 @@ export component ServerRecordsScreen inherits Rectangle {
                                 spacing: 2px;
                                 HorizontalLayout {
                                     spacing: Spacing.sm;
-                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; }
-                                    Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; }
+                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; vertical-alignment: center; }
                                     Rectangle {
                                         min-width: 8px; max-width: 8px; height: 8px;
                                         border-radius: 4px; background: row.read ? transparent : Colors.primary;
