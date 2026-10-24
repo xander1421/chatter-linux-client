@@ -375,17 +375,6 @@ pub enum InboxEvent {
         /// Total messages received across all group mailboxes.
         total_messages: u32,
     },
-    /// Group mailbox announcement received from another member.
-    GroupMailboxAnnouncement {
-        /// Channel ID.
-        channel_id: ChannelId,
-        /// Sender/member who announced their mailbox.
-        member_id: UserId,
-        /// Member's mailbox public key (32 bytes Ed25519).
-        mailbox_pk: Vec<u8>,
-        /// When the mailbox announcement was sent (ms since epoch).
-        timestamp: u64,
-    },
     /// Missing sender's key - need to request their SKDM.
     SenderKeyNeeded {
         /// Channel ID where message couldn't be decrypted.

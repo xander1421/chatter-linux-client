@@ -534,12 +534,6 @@ async fn process_sealed_sender_group_message(
                     sender_id = %sender_id,
                     "Processed group mailbox announcement via sealed sender"
                 );
-                let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
-                    channel_id,
-                    member_id: sender_id,
-                    mailbox_pk: announcement.mailbox_pk.clone(),
-                    timestamp: announcement.timestamp,
-                });
             }
         }
         SealedSenderResult::AnonGroupMessageReceived {

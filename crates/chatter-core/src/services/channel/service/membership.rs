@@ -13,7 +13,6 @@ use tokio_stream::{Stream, StreamExt};
 use crate::domain::channel::{MemberRole, Membership};
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::NetworkError;
-use crate::mailbox::group::GroupMailboxSetupResult;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::proto::chat_v1::{self as pb, ChannelEvent, channel_event};
 use crate::services::channel::membership_log::{
@@ -91,19 +90,12 @@ impl ChannelService {
         &self,
         channel_id: &ChannelId,
         password: Option<&str>,
-    ) -> Result<
-        (
-            crate::domain::channel::Channel,
-            Option<GroupMailboxSetupResult>,
-        ),
-        ChannelError,
-    > {
+    ) -> Result<crate::domain::channel::Channel, ChannelError> {
         let proof = match password.filter(|p| !p.is_empty()) {
             Some(p) => JoinProof::Key(password_invite_key(channel_id, p)?),
             None => JoinProof::None,
         };
-        let channel = self.join_with(channel_id, proof).await?;
-        Ok((channel, None))
+        self.join_with(channel_id, proof).await
     }
 
     /// Join through a `chatter://join/...` link.

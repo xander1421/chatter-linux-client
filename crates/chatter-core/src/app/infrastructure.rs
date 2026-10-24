@@ -289,10 +289,7 @@ impl InfrastructureContainer {
 
         // 10. Create group mailbox infrastructure
         let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
-        let group_coordinator = Arc::new(GroupCoordinator::new(
-            database.clone(),
-            group_mailbox_manager.clone(),
-        ));
+        let group_coordinator = Arc::new(GroupCoordinator::new(group_mailbox_manager.clone()));
 
         // 12. Create token manager for anonymous mailbox and call room credentials
         let token_manager = Arc::new(TokenManager::new(database.clone()));

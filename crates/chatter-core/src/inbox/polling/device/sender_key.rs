@@ -224,12 +224,6 @@ pub(super) async fn process_sender_key_message(
                     sender_id = %sender_id,
                     "Processed group mailbox announcement from device inbox"
                 );
-                let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
-                    channel_id,
-                    member_id: *sender_id,
-                    mailbox_pk: announcement.mailbox_pk.clone(),
-                    timestamp: announcement.timestamp,
-                });
             }
             stats.write().messages_processed += 1;
         }

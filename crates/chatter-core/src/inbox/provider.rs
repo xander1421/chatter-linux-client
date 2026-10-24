@@ -613,10 +613,7 @@ impl DeviceInboxProvider {
 
         // Create group mailbox infrastructure
         let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
-        let group_coordinator = Arc::new(GroupCoordinator::new(
-            database.clone(),
-            group_mailbox_manager.clone(),
-        ));
+        let group_coordinator = Arc::new(GroupCoordinator::new(group_mailbox_manager.clone()));
         let group_fanout = Arc::new(GroupFanout::new(
             group_mailbox_manager,
             mailbox_client.clone(),

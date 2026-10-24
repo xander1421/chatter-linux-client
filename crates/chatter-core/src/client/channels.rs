@@ -134,11 +134,7 @@ impl ChatterClient {
         self.services.channel_stream_service.request_resubscribe();
     }
 
-    /// Create a channel and set up group encryption (mailbox + sender keys).
-    ///
-    /// Handles the full protocol: create on server, announce mailbox,
-    /// distribute SKDM to members. The caller doesn't need to know about
-    /// mailbox setup or sender key distribution.
+    /// Create a channel and subscribe to its message stream.
     pub async fn create_channel(
         self: &Arc<Self>,
         name: &str,
@@ -149,7 +145,7 @@ impl ChatterClient {
         password: Option<&str>,
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let (channel, _mailbox_setup) = self
+        let channel = self
             .channels()
             .create_channel(
                 name,
@@ -208,17 +204,13 @@ impl ChatterClient {
         .await
     }
 
-    /// Join a channel and set up group encryption.
-    ///
-    /// Handles mailbox announcement, SKDM distribution, and requesting
-    /// existing members' SKDMs automatically. Without receiving existing
-    /// members' SKDMs, the new member cannot decrypt their messages.
+    /// Join a channel and request sender keys from its existing members.
     pub async fn join_channel(
         self: &Arc<Self>,
         channel_id: &crate::domain::ids::ChannelId,
         password: Option<&str>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
-        let (channel, _mailbox_setup) = self.channels().join_channel(channel_id, password).await?;
+        let channel = self.channels().join_channel(channel_id, password).await?;
         self.resubscribe_channel_messages();
 
         // Pull SKDMs from existing members so we can decrypt their next

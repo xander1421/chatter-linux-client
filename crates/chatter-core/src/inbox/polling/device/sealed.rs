@@ -148,12 +148,6 @@ pub(super) async fn process_sealed_sender_message(
                 channel_id = %channel_id,
                 "[INBOX] Stored GroupMailboxAddress via sealed sender"
             );
-            let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
-                channel_id,
-                member_id: sender_id,
-                mailbox_pk: announcement.mailbox_pk.clone(),
-                timestamp: announcement.timestamp,
-            });
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });

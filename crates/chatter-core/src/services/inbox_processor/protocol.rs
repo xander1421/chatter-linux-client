@@ -128,10 +128,6 @@ impl InboxEventProcessor {
                 tracing::trace!(total_groups, total_messages, "Group mailbox poll completed");
             }
 
-            // The group-mailbox transport is retired for server-managed
-            // channels; announcements from older peers are ignored.
-            InboxEvent::GroupMailboxAnnouncement { .. } => {}
-
             InboxEvent::CallKeyAnswerReceived {
                 peer_id,
                 call_id,

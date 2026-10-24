@@ -81,7 +81,6 @@ impl InboxEventProcessor {
             | InboxEvent::PollFailed { .. }
             | InboxEvent::AcknowledgeFailed { .. }
             | InboxEvent::GroupMailboxPollCompleted { .. }
-            | InboxEvent::GroupMailboxAnnouncement { .. }
             | InboxEvent::CallKeyAnswerReceived { .. }
             | InboxEvent::CallKeyOfferReceived { .. }
             | InboxEvent::GroupCallSignalReceived { .. }

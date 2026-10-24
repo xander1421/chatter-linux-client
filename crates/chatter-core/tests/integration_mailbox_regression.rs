@@ -6,7 +6,6 @@
 //!    - Other client hasn't received/processed the mailbox announcement yet
 //!    - Fanout shows delivered=1 but only to known members (not the new one)
 //! 2. Key mismatch detection - stored keys differ from announced keys
-//! 3. Concurrent setup races
 //!
 //! All tests use real server connections to simulate production conditions.
 
@@ -19,7 +18,7 @@ use ed25519_dalek::Signer;
 
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::mailbox::TokenManager;
-use chatter_core::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
+use chatter_core::mailbox::group::{GroupMailboxManager, MemberMailbox};
 use chatter_core::network::grpc::{
     AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient,
 };
@@ -38,7 +37,6 @@ struct MailboxTestContext {
     pool: Arc<GrpcClientPool>,
     mailbox_manager: Arc<GroupMailboxManager>,
     token_manager: TokenManager,
-    group_coordinator: GroupCoordinator,
 }
 
 impl MailboxTestContext {
@@ -54,14 +52,12 @@ impl MailboxTestContext {
 
         let mailbox_manager = Arc::new(GroupMailboxManager::new(db.clone()));
         let token_manager = TokenManager::new(db.clone());
-        let group_coordinator = GroupCoordinator::new(db.clone(), mailbox_manager.clone());
 
         Ok(Self {
             user,
             pool,
             mailbox_manager,
             token_manager,
-            group_coordinator,
         })
     }
 
@@ -113,106 +109,6 @@ async fn create_test_channel(client: &mut ChannelClient, user: &TestUser, name: 
     }
 
     channel_id
-}
-
-// ============================================================================
-// Regression Test: Stale Database State
-// ============================================================================
-
-/// Test: Messages fail when local database has old mailbox keys that don't match server.
-///
-/// Scenario:
-/// 1. User creates channel and sets up mailbox
-/// 2. Mailbox keys stored locally
-/// 3. Simulate "stale state" by creating new mailbox (old keys still in DB)
-/// 4. Send message - should detect key mismatch or re-sync
-#[tokio::test]
-async fn test_stale_mailbox_key_detection() {
-    skip_if_no_server!();
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_test_writer()
-        .try_init();
-
-    tracing::info!("=== Starting regression test: stale mailbox key detection ===");
-
-    let ctx = assert_ok(MailboxTestContext::new().await);
-    let mut channel_client = ctx.channel_client();
-
-    // Step 1: Create channel
-    let channel_name = format!("stale_key_test_{}", unique_username());
-    let channel_id_str = create_test_channel(&mut channel_client, &ctx.user, &channel_name).await;
-    let channel_id: ChannelId = channel_id_str.parse().expect("Valid channel ID");
-
-    tracing::info!(channel_id = %channel_id, "Created test channel");
-
-    // Step 2: Request tokens and setup first mailbox
-    let mut mailbox_client = ctx.mailbox_client();
-    let tokens_acquired = assert_ok(
-        ctx.token_manager
-            .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
-            .await,
-    );
-    assert!(tokens_acquired > 0, "Should acquire at least one token");
-
-    let mut anon_mailbox_client = ctx.anon_mailbox_client();
-    let first_setup = assert_ok(
-        ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut anon_mailbox_client)
-            .await,
-    );
-
-    let first_mailbox_pk = first_setup.mailbox.public_key;
-    tracing::info!(
-        mailbox_id = %first_setup.mailbox.id,
-        pk_hex = %hex::encode(&first_mailbox_pk),
-        "First mailbox created"
-    );
-
-    // Step 3: Simulate stale state by clearing and creating new mailbox
-    // This simulates what happens when app restarts but server state changed
-    ctx.mailbox_manager.delete_group_state(&channel_id).ok();
-
-    // Get more tokens for second mailbox
-    let _ = ctx
-        .token_manager
-        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
-        .await;
-
-    let second_setup = assert_ok(
-        ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut anon_mailbox_client)
-            .await,
-    );
-
-    let second_mailbox_pk = second_setup.mailbox.public_key;
-    tracing::info!(
-        mailbox_id = %second_setup.mailbox.id,
-        pk_hex = %hex::encode(&second_mailbox_pk),
-        "Second mailbox created (simulating stale recovery)"
-    );
-
-    // Step 4: Verify keys are different (proves stale state was simulated)
-    assert_ne!(
-        first_mailbox_pk, second_mailbox_pk,
-        "New mailbox should have different keys (simulating key rotation/stale state)"
-    );
-
-    // Step 5: Verify announcement contains correct (new) key
-    let announcement = ctx
-        .group_coordinator
-        .get_announcement(&channel_id)
-        .expect("Should get announcement")
-        .expect("Should have announcement");
-
-    assert_eq!(
-        announcement.mailbox_pk.as_slice(),
-        &second_mailbox_pk,
-        "Announcement should contain current (new) mailbox key"
-    );
-
-    tracing::info!("=== Stale key detection test passed ===");
 }
 
 // ============================================================================
@@ -534,113 +430,6 @@ async fn test_member_mailbox_key_update() {
 }
 
 // ============================================================================
-// Regression Test: Concurrent Mailbox Setup Race
-// ============================================================================
-
-/// Test: Multiple concurrent mailbox setup attempts should not corrupt state.
-///
-/// Scenario:
-/// 1. Multiple async tasks try to setup mailbox for same channel
-/// 2. Only one should succeed, others should reuse existing
-/// 3. No state corruption should occur
-#[tokio::test]
-async fn test_concurrent_mailbox_setup() {
-    skip_if_no_server!();
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .with_test_writer()
-        .try_init();
-
-    tracing::info!("=== Starting regression test: concurrent mailbox setup ===");
-
-    let ctx = Arc::new(assert_ok(MailboxTestContext::new().await));
-    let mut channel_client = ctx.channel_client();
-
-    // Create channel
-    let channel_name = format!("concurrent_test_{}", unique_username());
-    let channel_id_str = create_test_channel(&mut channel_client, &ctx.user, &channel_name).await;
-    let channel_id: ChannelId = channel_id_str.parse().expect("Valid channel ID");
-
-    // Pre-request tokens
-    let mut mailbox_client = ctx.mailbox_client();
-    let _ = ctx
-        .token_manager
-        .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 10)
-        .await;
-
-    // Spawn multiple concurrent setup attempts
-    let mut handles = Vec::new();
-    for i in 0..5 {
-        let ctx_clone = ctx.clone();
-        let channel_id_clone = channel_id;
-        handles.push(tokio::spawn(async move {
-            let mut anon_client = ctx_clone.anon_mailbox_client();
-            let result = ctx_clone
-                .group_coordinator
-                .setup_group_mailbox(&channel_id_clone, &mut anon_client)
-                .await;
-            (i, result)
-        }));
-    }
-
-    // Wait for all to complete
-    let results: Vec<_> = futures::future::join_all(handles)
-        .await
-        .into_iter()
-        .map(|r| r.expect("Task should not panic"))
-        .collect();
-
-    // Count successes
-    let successes: Vec<_> = results.iter().filter(|(_, r)| r.is_ok()).collect();
-
-    tracing::info!(
-        total_attempts = results.len(),
-        successes = successes.len(),
-        "Concurrent setup completed"
-    );
-
-    // All attempts should succeed (either creating new or reusing existing)
-    for (i, result) in &results {
-        match result {
-            Ok(setup) => {
-                tracing::info!(
-                    attempt = i,
-                    mailbox_id = %setup.mailbox.id,
-                    "Setup succeeded"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    attempt = i,
-                    error = %e,
-                    "Setup failed (may be expected for some race conditions)"
-                );
-            }
-        }
-    }
-
-    // Verify final state is consistent
-    let final_state = ctx
-        .mailbox_manager
-        .load_group_state(&channel_id)
-        .expect("Should load state");
-
-    assert!(
-        final_state.is_some(),
-        "Should have mailbox state after concurrent setup"
-    );
-
-    let state = final_state.unwrap();
-    assert!(
-        state.our_mailbox.is_some(),
-        "Should have our mailbox after concurrent setup"
-    );
-
-    tracing::info!("=== Concurrent mailbox setup test passed ===");
-}
-
-// ============================================================================
 // Regression Test: Poll With Wrong Key Returns Empty
 // ============================================================================
 
@@ -670,24 +459,16 @@ async fn test_server_rejects_wrong_credentials() {
         .request_tokens(&mut mailbox_client, &mut ctx.pool.anonymous_kt_client(), 3)
         .await;
 
-    let channel_id: ChannelId = uuid::Uuid::new_v4()
-        .to_string()
-        .parse()
-        .expect("Valid UUID");
+    let token = assert_ok(ctx.token_manager.claim_prefetched_token());
     let mut anon_mailbox_client = ctx.anon_mailbox_client();
-    let setup = assert_ok(
-        ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut anon_mailbox_client)
-            .await,
-    );
-
-    let correct_pk = setup.mailbox.public_key;
-    let correct_private_key = setup.mailbox.private_key;
-    tracing::info!(
-        mailbox_id = %setup.mailbox.id,
-        correct_pk_hex = %hex::encode(&correct_pk),
-        "Created real mailbox for testing"
-    );
+    let mailbox = assert_ok(anon_mailbox_client.create_ephemeral_mailbox(
+        token.public_key.clone(),
+        token.signature.clone(),
+        chatter_core::mailbox::group::coordination::DEFAULT_GROUP_MAILBOX_TTL_SECONDS,
+    ).await);
+    let correct_pk: [u8; 32] = token.public_key.try_into().expect("32-byte mailbox key");
+    let correct_private_key = token.private_key;
+    tracing::info!(mailbox_id = %mailbox.mailbox_id, "Created real mailbox for testing");
 
     // Test 1: Challenge request with non-existent public key
     let mut wrong_pk = [0u8; 32];

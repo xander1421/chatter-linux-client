@@ -18,7 +18,7 @@ use tokio_stream::StreamExt;
 
 use crate::domain::channel::{Channel, ChannelConfig, ChannelType};
 use crate::domain::ids::{ChannelId, UserId};
-use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
+use crate::mailbox::group::GroupCoordinator;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::{self, self as pb, channel_event};
@@ -120,7 +120,7 @@ impl ChannelService {
         icon: Option<&[u8]>,
         password: Option<&str>,
         initial_members: Vec<UserId>,
-    ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
+    ) -> Result<Channel, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
 
         let trimmed_name = name.trim();
@@ -200,7 +200,7 @@ impl ChannelService {
             }
         }
 
-        Ok((channel, None))
+        Ok(channel)
     }
 
     /// `CreateChannel` until its `ChannelCreated`; stores the channel row.
