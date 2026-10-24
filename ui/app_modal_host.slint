@@ -5,6 +5,7 @@ import { AuthFlow } from "app_auth_flow.slint";
 import { MeshPeerSheet } from "mesh/mesh_peer_sheet.slint";
 import { MeshSetupSheet } from "mesh/mesh_setup_sheet.slint";
 import { MeshComposeSheet } from "mesh/mesh_compose_sheet.slint";
+import { MeshInfoSheet } from "mesh/mesh_info_sheet.slint";
 import { Materials } from "theme/materials.slint";
 import { ServerRecordsScreen, ServerRecordsGlobal } from "server_records/screen.slint";
 import { AvatarOption } from "components/avatar_picker.slint";
@@ -51,6 +52,11 @@ export component AppModalHost inherits Rectangle {
         show-modal: root.active-modal == "mesh-setup";
         touch: root.is-mobile-platform;
         close => { ModalHostState.nav-close("mesh-setup"); }
+    }
+
+    if root.is-presented("mesh-info"): MeshInfoSheet {
+        show-modal: root.active-modal == "mesh-info";
+        close => { ModalHostState.nav-close("mesh-info"); }
     }
 
     // Mesh peer details

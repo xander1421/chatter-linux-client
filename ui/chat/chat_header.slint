@@ -7,7 +7,6 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { Avatar } from "../components/avatar.slint";
 import { HeaderButton } from "../components/header_button.slint";
 import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
@@ -104,47 +103,8 @@ export component ChatHeader inherits GlassSurface {
     // would be offering something that cannot happen.
     property <bool> is-mesh: MeshGlobal.active-id != "";
 
-    // Whether the trailing button group will draw anything. Mirrors the three
-    // `if`s on that group exactly; used by the mesh divider above it, which
-    // otherwise hangs off the right edge with nothing to separate.
-    property <bool> has-utility-actions:
-        root.show-invite || root.show-more;
-
-    // Mesh status wording. Kept here rather than in the strip below because this
-    // is where it is now shown; the strip's remaining line is the one that has to
-    // wrap, and these are the ones that must not.
-    // Narrow enough that the header has to give something up.
-    //
-    // What it gives up is the standing claim and the word next to the switch, not
-    // the conversation name: on a phone the mesh line squeezed "#mesh" down to
-    // "#m…" while "No server, no inte…" kept its space, which is backwards. The
-    // peer count stays because it is the connectivity signal, and the switch stays
-    // because it is a control.
-    property <bool> mesh-tight: root.width < 520px;
-    // Narrow header. At 411dp minus the sidebar rail there is room for the
-    // conversation name OR for every secondary action, not both — and the name
-    // is what tells you where you are, so the actions yield. Both of the ones
-    // dropped here stay reachable from channel settings (the kebab).
+    // Narrow header keeps the conversation name ahead of secondary actions.
     property <bool> tight: root.width < 420px;
-    property <bool> mesh-radio-down: !MeshGlobal.radio-running;
-    property <string> mesh-standing:
-        MeshGlobal.active-kind == "private-channel" ? "Private mesh · invited devices"
-      : MeshGlobal.active-kind == "geohash"
-            ? (MeshGlobal.relay-count == 0
-                ? "Public cell · no relay"
-              : MeshGlobal.relay-count == 1
-                ? "Public cell · 1 relay"
-                : "Public cell · " + MeshGlobal.relay-count + " relays")
-      : !MeshGlobal.mesh-on
-            ? "Mesh off"
-            : "No server, no internet";
-    property <string> mesh-peers:
-        !MeshGlobal.mesh-on ? "radio stopped"
-      : root.mesh-radio-down
-            ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off" : "mesh unavailable")
-      : MeshGlobal.peer-count == 0 ? "none nearby"
-      : MeshGlobal.peer-count == 1 ? "1 nearby"
-      : MeshGlobal.peer-count + " nearby";
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
     property <bool> show-invite: root.can-invite && !tight;
@@ -183,7 +143,7 @@ export component ChatHeader inherits GlassSurface {
     // conversation.
     height: root.header-height;
     animate height { duration: Materials.motion-standard; easing: Materials.settle; }
-    HorizontalLayout {
+    if !root.is-mesh: HorizontalLayout {
         // Constrain to the header width so the name elides instead of growing
         // the whole chat column past the screen (which clipped the composer's
         // Send button in channels/groups, where the header has more icons).
@@ -329,58 +289,14 @@ export component ChatHeader inherits GlassSurface {
                             vertical-alignment: center;
                         }
                         name-touch := TouchArea {
-                            enabled: root.show-settings || (root.is-mesh && MeshGlobal.active-kind == "dm");
+                            enabled: root.show-settings;
                             mouse-cursor: pointer;
                             clicked => {
-                                if root.is-mesh && MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
-                                else { root.settings-clicked(); }
+                                root.settings-clicked();
                             }
                         }
                     }
-                    if has-channel && root.is-mesh && MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified: HorizontalLayout {
-                        spacing: Spacing.xs;
-                        min-width: 0px;
-                        Image {
-                            source: Icons.lock;
-                            width: 11px;
-                            height: 11px;
-                            colorize: Colors.success;
-                            vertical-alignment: center;
-                        }
-                        if !MeshGlobal.identity-panel-open: Text {
-                            text: root.mesh-tight ? "Verified" : MeshGlobal.active-binding-label;
-                            color: Colors.success;
-                            font-size: Typography.xs;
-                            min-width: 0px;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-                        Rectangle {
-                            width: 58px;
-                            height: 20px;
-                            border-radius: Spacing.radius-sm;
-                            background: identity-touch.has-hover ? Colors.surface-hover : transparent;
-                            transform-scale-x: identity-touch.pressed ? 94% : 100%;
-                            transform-scale-y: identity-touch.pressed ? 94% : 100%;
-                            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-                            Text {
-                                text: MeshGlobal.identity-panel-open ? "Close" : "Identity";
-                                color: Colors.text-secondary;
-                                font-size: Typography.xs;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            identity-touch := TouchArea {
-                                y: -Spacing.sm;
-                                height: Spacing.button-height;
-                                mouse-cursor: pointer;
-                                accessible-role: button;
-                                accessible-label: MeshGlobal.identity-panel-open ? "Close mesh identity" : "Open mesh identity";
-                                clicked => { MeshGlobal.identity-panel-open = !MeshGlobal.identity-panel-open; }
-                            }
-                        }
-                    }
+
                     // Typing shares the title's bounded column, so long peer
                     // names yield to the call buttons instead of drawing over them.
                     if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
@@ -448,55 +364,6 @@ export component ChatHeader inherits GlassSurface {
                 }
             }
 
-            // Mesh status, inline. The strip below the header used to carry three
-            // lines of this; on a phone that was most of the space above the
-            // first message. The facts that are short enough to sit on one line
-            // live here now, and the strip keeps only the sentence that cannot
-            // be shortened without changing what it says.
-            //
-            // The peer count is last and never elided: it is the connectivity
-            // signal for this feature, and the part before it is context.
-            if root.is-mesh: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-                min-width: 0px;
-                Rectangle {
-                    width: 1px;
-                    height: 16px;
-                    background: Colors.divider;
-                    y: (parent.height - self.height) / 2;
-                }
-                if !root.mesh-tight: Text {
-                    text: root.mesh-standing;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    min-width: 0px;
-                }
-                if !root.mesh-tight: Text {
-                    text: "·";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
-                Text {
-                    text: root.mesh-peers;
-                    color: root.mesh-radio-down ? Colors.warning : Colors.text-muted;
-                    font-size: Typography.xs;
-                    font-weight: root.mesh-radio-down ? 600 : 400;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                    // Nearby peers (and a private channel's Invite) live in mesh setup.
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        accessible-role: button;
-                        accessible-label: "Mesh setup, " + root.mesh-peers;
-                        clicked => { MeshGlobal.open-setup(); }
-                    }
-                }
-            }
         }
 
         // Center section: Topic / Jarvis — only when there is something to put
@@ -571,52 +438,6 @@ export component ChatHeader inherits GlassSurface {
                 }
             }
 
-            // The mesh switch, where the mesh is — not in a settings screen the
-            // user would have to leave the conversation to find, and would have
-            // to reach through a working app in exactly the situation the mesh
-            // exists for. Off stops the radio; the conversations stay listed and
-            // readable, because they are messages that already arrived.
-            if root.is-mesh: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-                // Always labelled. This used to be dropped below 520px, which
-                // left an unexplained pill switch in the corner of the one
-                // screen where flipping the wrong thing costs the user their
-                // only transport. "Mesh" is four characters; what the narrow
-                // header gives up is the standing claim beside the title, which
-                // is a sentence, not this.
-                Text {
-                    text: "Mesh";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
-                // Wrapped and centred, the same way the header's other fixed-size
-                // children are: the toggle has its own height, and left to the
-                // row it rides above the text it belongs to.
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    NeoActionToggle {
-                        checked: MeshGlobal.mesh-on;
-                        glow-mode: "cyan";
-                        accessible-text: "Bluetooth mesh";
-                        toggled(value) => { MeshGlobal.set-mesh-on(value); }
-                    }
-                }
-                // Separates the switch from the utility buttons — and only when
-                // there are any. In a mesh conversation invite, pin and settings
-                // are all suppressed (they are server operations), so this drew a
-                // rule against the right edge with nothing on the other side of
-                // it. A divider that divides one thing from nothing is a smudge.
-                if root.has-utility-actions: Rectangle {
-                    width: 1px;
-                    height: 20px;
-                    background: Colors.divider;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
             // Utility buttons group
             HorizontalLayout {
                 spacing: Spacing.header-action-gap;
@@ -641,5 +462,105 @@ export component ChatHeader inherits GlassSurface {
         }
     }
 
+
+    if root.is-mesh: HorizontalLayout {
+        width: 100%;
+        padding-left: Spacing.sm + root.leading-inset;
+        padding-right: Spacing.sm;
+        spacing: Spacing.xs;
+
+        Rectangle {
+            width: root.mobile ? Spacing.header-action-box-touch : Spacing.header-action-box;
+            height: root.header-height;
+            if root.show-back-button: HeaderButton {
+                touch: root.mobile;
+                plain: true;
+                backdrop-paused: root.backdrop-paused;
+                icon: Icons.chevron-left;
+                label: "Back";
+                clicked => { root.back-clicked(); }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            height: root.header-height;
+            HorizontalLayout {
+                width: 100%;
+                height: 100%;
+                alignment: center;
+                spacing: Spacing.sm;
+                if MeshGlobal.active-kind == "dm": Avatar {
+                    size: Spacing.avatar-sm;
+                    name: MeshGlobal.active-title;
+                    show-presence: MeshGlobal.active-reachable;
+                    presence-color: Colors.online;
+                }
+                if MeshGlobal.active-kind != "dm": Rectangle {
+                    width: Spacing.avatar-sm;
+                    height: Spacing.avatar-sm;
+                    border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-md : Spacing.radius-full;
+                    background: Colors.primary.with-alpha(0.16);
+                    Image {
+                        source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    min-width: 0px;
+                    Text {
+                        text: MeshGlobal.active-title;
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                        horizontal-alignment: center;
+                        min-width: 0px;
+                    }
+                    Text {
+                        text: MeshGlobal.active-kind == "dm"
+                            ? (!MeshGlobal.active-reachable ? "Waiting for a carrier"
+                                : MeshGlobal.active-verified ? "Verified ✓" : "Not verified ›")
+                            : MeshGlobal.active-kind == "private-channel" ? "Private group · invited devices"
+                            : MeshGlobal.active-kind == "geohash"
+                                ? (MeshGlobal.relay-count == 1 ? "1 relay" : MeshGlobal.relay-count + " relays")
+                                : (MeshGlobal.peer-count == 1 ? "1 nearby" : MeshGlobal.peer-count + " nearby");
+                        color: MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                        horizontal-alignment: center;
+                        min-width: 0px;
+                    }
+                }
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                accessible-role: button;
+                accessible-label: "Open mesh conversation information";
+                clicked => {
+                    if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                    else { MeshGlobal.open-sheet("mesh-info"); }
+                }
+            }
+        }
+
+        HeaderButton {
+            touch: root.mobile;
+            plain: true;
+            backdrop-paused: root.backdrop-paused;
+            icon: Icons.info;
+            label: "Conversation info";
+            clicked => {
+                if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                else { MeshGlobal.open-sheet("mesh-info"); }
+            }
+        }
+    }
 
 }

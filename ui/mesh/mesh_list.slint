@@ -3,7 +3,6 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Toggle } from "../components/toggle.slint";
-import { ModalHostState } from "../app_modal_host_state.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { MeshListItem } from "mesh_list_item.slint";
 
@@ -60,7 +59,7 @@ export component MeshList inherits Rectangle {
                     }
                     compose-touch := TouchArea {
                         mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh conversation";
-                        clicked => { ModalHostState.nav-push("mesh-compose"); }
+                        clicked => { MeshGlobal.open-sheet("mesh-compose"); }
                     }
                 }
                 Rectangle {
@@ -178,10 +177,10 @@ export component MeshList inherits Rectangle {
                             width: 64px; spacing: Spacing.xs; alignment: start;
                             Rectangle {
                                 width: 52px; height: 52px; border-radius: Spacing.radius-full;
-                                background: index % 3 == 0 ? Colors.avatar-teal
-                                    : index % 3 == 1 ? Colors.avatar-blue : Colors.avatar-purple;
+                                background: Math.mod(index, 3) == 0 ? Colors.avatar-teal
+                                    : Math.mod(index, 3) == 1 ? Colors.avatar-blue : Colors.avatar-purple;
                                 Text {
-                                    text: peer.name.to-upper-case();
+                                    text: peer.name.to-uppercase();
                                     width: 16px; height: 28px;
                                     x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                     color: Colors.on-action; font-size: Typography.xxl;
@@ -224,7 +223,7 @@ export component MeshList inherits Rectangle {
                         font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
                     TouchArea {
                         mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh group";
-                        clicked => { ModalHostState.nav-push("mesh-compose"); }
+                        clicked => { MeshGlobal.open-sheet("mesh-compose"); }
                     }
                 }
             }

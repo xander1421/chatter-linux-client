@@ -1,0 +1,297 @@
+// Information and membership controls for the open mesh group or channel.
+import { Modal } from "../components/modal.slint";
+import { NeoActionToggle } from "../components/neo_action_toggle.slint";
+import { Avatar } from "../components/avatar.slint";
+import { MeshGlobal } from "mesh_global.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+component InfoActionRow inherits Rectangle {
+    in property <string> title: "";
+    in property <string> detail: "";
+    in property <bool> destructive: false;
+    in property <bool> muted: false;
+    callback clicked();
+    height: detail == "" ? 52px : 60px;
+    background: row-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
+    HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.lg;
+        spacing: Spacing.sm;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            Text { text: root.title; color: root.destructive ? Colors.danger : root.muted ? Colors.text-primary : Colors.primary;
+                font-size: Typography.base; font-weight: 600; overflow: elide; }
+            if root.detail != "": Text { text: root.detail; color: Colors.text-muted;
+                font-size: Typography.xs; overflow: elide; }
+        }
+        if !root.destructive: Image { source: Icons.chevron-right; width: 16px; height: 16px;
+            colorize: Colors.text-muted; vertical-alignment: center; }
+    }
+    row-touch := TouchArea {
+        mouse-cursor: pointer;
+        accessible-role: button;
+        accessible-label: root.title;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MeshInfoSheet inherits Rectangle {
+    in property <bool> show-modal: false;
+    callback close();
+    property <bool> adding-members: false;
+    property <string> selected-member-id: "";
+    property <string> selected-member-name: "";
+    property <string> confirm-kind: "";
+    property <string> leave-label: MeshGlobal.active-kind == "private-channel" ? "Leave Group"
+        : MeshGlobal.active-kind == "geohash" ? "Leave Cell" : "Leave Channel";
+
+    Modal {
+        show: root.show-modal;
+        title: root.adding-members ? "Add Members"
+            : MeshGlobal.active-kind == "private-channel" ? "Group Info"
+            : MeshGlobal.active-kind == "geohash" ? "Cell Info" : "Channel Info";
+        modal-width: 500px;
+        max-modal-height: 760px;
+        fill-height: true;
+        close => {
+            if root.adding-members { root.adding-members = false; }
+            else { root.close(); }
+        }
+        Flickable {
+            width: 100%;
+            height: 100%;
+            viewport-height: info-content.preferred-height;
+            info-content := VerticalLayout {
+                width: parent.width;
+                padding-left: Spacing.lg;
+                padding-right: Spacing.lg;
+                padding-bottom: Spacing.xl;
+                spacing: Spacing.lg;
+
+                if !root.adding-members: VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+                    Rectangle {
+                        width: 64px; height: 64px;
+                        border-radius: MeshGlobal.active-kind == "private-channel" ? Spacing.radius-lg : Spacing.radius-full;
+                        background: Colors.primary.with-alpha(0.16);
+                        Image {
+                            source: MeshGlobal.active-kind == "private-channel" ? Icons.lock : Icons.hash;
+                            width: 28px; height: 28px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.primary;
+                        }
+                    }
+                    Text { text: MeshGlobal.active-title; color: Colors.text-primary;
+                        font-size: Typography.xl; font-weight: 600; horizontal-alignment: center; }
+                    Text {
+                        text: MeshGlobal.active-kind == "private-channel" ? "Private group · invited devices"
+                            : MeshGlobal.active-kind == "geohash" ? "Public cell"
+                            : "Public channel";
+                        color: Colors.text-muted; font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                if !root.adding-members && MeshGlobal.active-kind == "private-channel": VerticalLayout {
+                    spacing: Spacing.xs;
+                    Text { text: "MEMBERS"; color: Colors.text-muted; font-size: Typography.xs;
+                        font-weight: 600; letter-spacing: 0.4px; }
+                    Rectangle {
+                        border-radius: Spacing.radius-md;
+                        background: Colors.surface-section;
+                        VerticalLayout {
+                            for member in MeshGlobal.private-removable-members: Rectangle {
+                                height: 60px;
+                                background: member-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
+                                HorizontalLayout {
+                                    padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+                                    Avatar { size: 38px; name: member.display-name; }
+                                    VerticalLayout {
+                                        alignment: center; horizontal-stretch: 1; min-width: 0px;
+                                        Text { text: member.display-name; color: Colors.text-primary;
+                                            font-size: Typography.base; font-weight: 600; overflow: elide; }
+                                        Text { text: member.status-label; color: Colors.text-muted;
+                                            font-size: Typography.xs; overflow: elide; }
+                                    }
+                                    Image { source: Icons.chevron-right; width: 16px; height: 16px;
+                                        colorize: Colors.text-muted; vertical-alignment: center; }
+                                }
+                                member-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    accessible-role: button;
+                                    accessible-label: "View " + member.display-name;
+                                    clicked => {
+                                        if MeshGlobal.private-can-manage {
+                                            root.selected-member-id = member.peer-id;
+                                            root.selected-member-name = member.display-name;
+                                            root.confirm-kind = "member";
+                                        } else { MeshGlobal.open-peer(member.peer-id); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if MeshGlobal.private-can-manage: InfoActionRow {
+                        title: "Add Members";
+                        clicked => { root.adding-members = true; MeshGlobal.private-invite-visible = false; }
+                    }
+                    Text { text: "Only invited devices can read this group. Removing someone rotates the key.";
+                        color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+                    if MeshGlobal.private-rekey-pending: Text {
+                        text: "Waiting for the creator to rotate the group key. Sending is paused.";
+                        color: Colors.warning; font-size: Typography.sm; wrap: word-wrap;
+                    }
+                }
+
+                if root.adding-members: VerticalLayout {
+                    spacing: Spacing.xs;
+                    InfoActionRow { title: "‹ Group Info"; clicked => { root.adding-members = false; } }
+                    Text { text: "NEARBY DEVICES"; color: Colors.text-muted;
+                        font-size: Typography.xs; font-weight: 600; letter-spacing: 0.4px; }
+                    if MeshGlobal.nearby-peers.length == 0: Text {
+                        text: "No devices nearby yet."; color: Colors.text-muted; font-size: Typography.sm;
+                    }
+                    for peer in MeshGlobal.nearby-peers: Rectangle {
+                        height: 76px;
+                        border-radius: Spacing.radius-md;
+                        background: Colors.surface-section;
+                        HorizontalLayout {
+                            padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
+                            Avatar { size: 36px; name: peer.name; }
+                            VerticalLayout {
+                                alignment: center; horizontal-stretch: 1; min-width: 0px;
+                                Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm;
+                                    font-weight: 600; overflow: elide; }
+                                Text { text: peer.reachable ? "Nearby" : "Waiting for a route";
+                                    color: Colors.text-muted; font-size: Typography.xs; overflow: elide; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: "Invite"; color: Colors.primary; font-size: Typography.sm; font-weight: 600; }
+                                Text { text: "Invite with QR"; color: Colors.primary; font-size: Typography.xs; }
+                            }
+                        }
+                        TouchArea {
+                            x: parent.width - 110px; width: 110px; height: parent.height / 2;
+                            mouse-cursor: pointer; accessible-role: button;
+                            accessible-label: "Invite " + peer.name;
+                            clicked => { MeshGlobal.invite-private-channel-direct(MeshGlobal.active-scope, peer.id); }
+                        }
+                        TouchArea {
+                            x: parent.width - 110px; y: parent.height / 2; width: 110px; height: parent.height / 2;
+                            mouse-cursor: pointer; accessible-role: button;
+                            accessible-label: "Invite " + peer.name + " with QR";
+                            clicked => { MeshGlobal.invite-private-channel(MeshGlobal.active-scope, peer.id); }
+                        }
+                    }
+                    if MeshGlobal.private-invite-visible: Rectangle {
+                        height: 260px; border-radius: Spacing.radius-md; background: Colors.surface-section;
+                        Image { source: MeshGlobal.private-invite-image; width: 240px; height: 240px;
+                            x: (parent.width - self.width) / 2; y: 10px; image-fit: contain; }
+                    }
+                }
+
+                if !root.adding-members && MeshGlobal.active-kind == "channel": VerticalLayout {
+                    spacing: Spacing.xs;
+                    Text { text: "CHANNEL"; color: Colors.text-muted; font-size: Typography.xs;
+                        font-weight: 600; letter-spacing: 0.4px; }
+                    for row in MeshGlobal.conversations: Rectangle {
+                        visible: row.id == MeshGlobal.active-id;
+                        height: self.visible ? 56px : 0px;
+                        border-radius: Spacing.radius-md;
+                        background: Colors.surface-section;
+                        HorizontalLayout {
+                            padding-left: Spacing.lg; padding-right: Spacing.lg;
+                            Text { text: "Mute"; color: Colors.text-primary; font-size: Typography.base;
+                                vertical-alignment: center; horizontal-stretch: 1; }
+                            NeoActionToggle {
+                                checked: row.muted;
+                                accessible-text: "Mute channel";
+                                toggled(value) => { MeshGlobal.toggle-channel-mute(MeshGlobal.active-scope); }
+                            }
+                        }
+                    }
+                }
+
+                if !root.adding-members && MeshGlobal.active-kind == "geohash": Text {
+                    text: MeshGlobal.relay-count == 1 ? "1 relay connected" : MeshGlobal.relay-count + " relays connected";
+                    color: Colors.text-secondary; font-size: Typography.sm;
+                }
+
+                if !root.adding-members && MeshGlobal.active-kind != "room": InfoActionRow {
+                    title: root.leave-label;
+                    destructive: true;
+                    clicked => { root.confirm-kind = "leave"; }
+                }
+            }
+        }
+    }
+
+    if root.confirm-kind != "": Rectangle {
+        z: 20;
+        background: Materials.scrim;
+        TouchArea { clicked => { root.confirm-kind = ""; } }
+        Rectangle {
+            width: min(parent.width - Spacing.lg * 2, 420px);
+            height: root.confirm-kind == "member" ? 188px : 150px;
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - Spacing.lg;
+            VerticalLayout {
+                spacing: Spacing.sm;
+                Rectangle {
+                    height: root.confirm-kind == "member" ? 132px : 94px;
+                    border-radius: Spacing.radius-md;
+                    background: Colors.surface-section;
+                    VerticalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
+                        Text {
+                            text: root.confirm-kind == "member"
+                                ? "Remove " + root.selected-member-name + "? The group key will rotate."
+                                : MeshGlobal.active-kind == "private-channel"
+                                    ? "Reachable members will pause sending until the creator rotates the key."
+                                    : "Leave this mesh conversation?";
+                            color: Colors.text-muted; font-size: Typography.xs;
+                            wrap: word-wrap; horizontal-alignment: center;
+                            vertical-alignment: center; horizontal-stretch: 1;
+                        }
+                        if root.confirm-kind == "member": InfoActionRow {
+                            title: "View Contact";
+                            clicked => {
+                                root.confirm-kind = "";
+                                MeshGlobal.open-peer(root.selected-member-id);
+                            }
+                        }
+                        InfoActionRow {
+                            title: root.confirm-kind == "member" ? "Remove" : root.leave-label;
+                            destructive: true;
+                            clicked => {
+                                if root.confirm-kind == "member" {
+                                    MeshGlobal.remove-private-member(MeshGlobal.active-scope, root.selected-member-id);
+                                } else if MeshGlobal.active-kind == "private-channel" {
+                                    MeshGlobal.leave-private-channel(MeshGlobal.active-scope);
+                                    root.close();
+                                } else if MeshGlobal.active-kind == "geohash" {
+                                    MeshGlobal.leave-geohash(MeshGlobal.active-scope);
+                                    root.close();
+                                } else {
+                                    MeshGlobal.leave-channel(MeshGlobal.active-scope);
+                                    root.close();
+                                }
+                                root.confirm-kind = "";
+                            }
+                        }
+                    }
+                }
+                InfoActionRow { title: "Cancel"; clicked => { root.confirm-kind = ""; } }
+            }
+        }
+    }
+}

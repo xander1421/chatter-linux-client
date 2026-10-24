@@ -62,12 +62,7 @@ export global MeshGlobal {
     // The user's own switch, distinct from `enabled` above and from `running`
     // below. `enabled` is what was compiled; this is what was asked for.
     //
-    // Turning it off stops the radio and leaves everything else alone: past mesh
-    // conversations stay listed and readable, because they are messages the user
-    // received and switching a transport off is not a reason to hide them. The
-    // context bar already has wording for a mesh with no radio, so the off state
-    // needs no new surface — it says "Bluetooth off", which is now true because
-    // the user turned it off.
+    // Turning it off stops the radio but keeps past conversations readable.
     in-out property <bool> mesh-on: false;
     in-out property <string> nickname: "anon";
     callback set-nickname(string);
@@ -75,6 +70,9 @@ export global MeshGlobal {
     in-out property <[MeshPeerData]> nearby-peers: [];
     callback open-peer(string);
     callback open-setup();
+    // Present a mesh sheet ("mesh-compose", "mesh-info") from surfaces that
+    // cannot import ModalHostState without an import cycle.
+    callback open-sheet(string);
     callback open-peer-dm(string);
     in-out property <string> sheet-peer-id: "";
     in-out property <string> sheet-peer-name: "";
@@ -110,23 +108,13 @@ export global MeshGlobal {
     // Set the switch. Persists the preference and starts or stops the radio.
     callback set-mesh-on(bool);
 
-    // Whether the context strip below the header is worth any vertical space.
-    //
-    // Derived here rather than inside the strip because the layout has to decide
-    // whether to create it at all, and Slint cannot ask an element that does not
-    // exist yet. The strip earns its room when what the user is about to do could
-    // surprise them — nothing in range, no route to the peer, the radio down, the
-    // mesh switched off, or a send that failed. A working mesh with peers in range
-    // needs no standing caveat: the header already says how many are there.
+    // Show the capsule only for a state the reader can act on or needs to see.
     out property <bool> context-strip-needed:
         MeshGlobal.notice != ""
-        || MeshGlobal.binding-qr-visible
-        || MeshGlobal.active-kind == "private-channel"
-        || (MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open))
         || !MeshGlobal.mesh-on
-        || !MeshGlobal.radio-running
+        || MeshGlobal.radio-down == "bluetooth-off"
         || (MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable)
-        || (MeshGlobal.active-kind != "dm" && MeshGlobal.peer-count == 0);
+        || (MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-rekey-pending);
 
     // ── Transport, as reported by MeshService ──
     // The mesh service itself came up, so mesh conversations exist and can be
@@ -135,9 +123,7 @@ export global MeshGlobal {
     // the two transports it can go there over, and a mesh with neither still
     // keeps what you write for a carrier that has not arrived yet.
     //
-    // It is emphatically not a promise of delivery. What reaches anyone depends
-    // on who is in range, and the context bar above an open conversation is
-    // where that gets said.
+    // It is not a promise of delivery; reachability comes from the live rows.
     in-out property <bool> running: false;
     // The BLE radio is started. False on platforms with no radio, where the
     // mesh still runs over Nostr relays.
@@ -166,8 +152,7 @@ export global MeshGlobal {
     in-out property <string> active-scope: "";
     in-out property <bool> private-rekey-pending: false;
     in-out property <string> active-binding-label: "Mesh peer · self-asserted name";
-    // Header Identity control opens the detail panel. Reset when a DM changes
-    // or verification succeeds so a verified chat returns to its compact state.
+    // Kept for the Rust reset path while verification lives in the peer sheet.
     in-out property <bool> identity-panel-open: false;
     in-out property <string> active-protection-label: "Noise (bitchat)";
     in-out property <bool> active-signal-enabled: false;
