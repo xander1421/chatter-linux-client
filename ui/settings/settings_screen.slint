@@ -66,6 +66,7 @@ export component SettingsScreen inherits Rectangle {
     in-out property <string> message-backup-passphrase: "";
     in-out property <string> message-backup-pin: "";
     in property <string> message-backup-status: "";
+    in property <bool> message-backup-busy: false;
 
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
@@ -404,6 +405,7 @@ export component SettingsScreen inherits Rectangle {
                             message-backup-passphrase <=> root.message-backup-passphrase;
                             message-backup-pin <=> root.message-backup-pin;
                             message-backup-status : root.message-backup-status;
+                            message-backup-busy : root.message-backup-busy;
                             mobile-platform : root.mobile-platform;
                             new-password <=> root.new-password;
                             password-changing : root.password-changing;

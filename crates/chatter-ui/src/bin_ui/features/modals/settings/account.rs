@@ -10,22 +10,19 @@ pub(super) fn wire_credentials(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     window
         .global::<crate::SettingsPane>()
         .on_settings_change_password(move |current: SharedString, new: SharedString| {
+            let Some(window) = weak_window.upgrade() else { return };
+            let settings = window.global::<crate::SettingsPane>();
+            if settings.get_settings_password_changing() {
+                return;
+            }
+            settings.set_settings_password_changing(true);
+            settings.set_settings_password_error("".into());
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_pw.clone();
             let current = current.to_string();
             let new = new.to_string();
 
             tokio::spawn(async move {
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_password_changing(true);
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_password_error("".into());
-                    }
-                });
-
                 match ui_ctx.change_password(&current, &new).await {
                     Ok(()) => {
                         let _ = slint::invoke_from_event_loop(move || {
@@ -119,20 +116,16 @@ pub(super) fn wire_profile_and_deletion(window: &MainWindow, ui_ctx: &Arc<Chatte
     window
         .global::<crate::SettingsPane>()
         .on_settings_delete_account_confirmed(move |password: SharedString| {
+            let Some(window) = weak_window.upgrade() else { return };
+            let settings = window.global::<crate::SettingsPane>();
+            if settings.get_settings_delete_loading() {
+                return;
+            }
+            settings.set_settings_delete_loading(true);
+            settings.set_settings_delete_error("".into());
             let ui_ctx = ui_ctx_del.clone();
             let weak = weak_window.clone();
             let password = password.to_string();
-
-            // Enter loading; clear prior error.
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.global::<crate::SettingsPane>()
-                        .set_settings_delete_loading(true);
-                    w.global::<crate::SettingsPane>()
-                        .set_settings_delete_error("".into());
-                }
-            });
 
             tokio::spawn(async move {
                 match ui_ctx.delete_account(&password).await {

@@ -66,7 +66,6 @@ export component DevicesSettings inherits VerticalLayout {
                         }
 
                         // Zero is also the initial value before sessions load.
-                        // Display an unknown count until a signed-in session is known.
                         Rectangle {
                             width: 24px;
                             height: 20px;
@@ -74,7 +73,7 @@ export component DevicesSettings inherits VerticalLayout {
                             background: Colors.action-fill;
 
                             Text {
-                                text: root.session-count > 0 ? "\{root.session-count}" : "—";
+                                text: root.sessions-loaded ? "\{root.session-count}" : "—";
                                 color: Colors.on-action;
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;
