@@ -819,8 +819,23 @@ mod tests {
     #[test]
     fn publishing_tool_round_trip_verifies_in_client() {
         let temp = tempfile::tempdir().unwrap();
-        let artifact = temp.path().join("fixture.apk");
-        std::fs::write(&artifact, b"signed release fixture").unwrap();
+        // The publisher inspects the artifact before signing: a Linux archive
+        // must carry a BUILD.txt that matches the requested version.
+        let artifact = temp.path().join("fixture.tar.gz");
+        {
+            let encoder = flate2::write::GzEncoder::new(
+                std::fs::File::create(&artifact).unwrap(),
+                flate2::Compression::fast(),
+            );
+            let mut tar = tar::Builder::new(encoder);
+            let build = b"version=0.1.0-rc122\nversion_code=122\ntarget=x86_64-unknown-linux-gnu\n";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(build.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, "chatter-122/BUILD.txt", &build[..]).unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+        }
         let script =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/publish-update.py");
         let output = std::process::Command::new("python3")
@@ -828,9 +843,9 @@ mod tests {
             .args([
                 "--test-dev-seed",
                 "--platform",
-                "android",
+                "linux",
                 "--channel",
-                "sideload",
+                "stable",
                 "--version-code",
                 "122",
                 "--version-name",
@@ -851,11 +866,11 @@ mod tests {
             "publisher failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let signed = std::fs::read(temp.path().join("android/sideload/latest.json")).unwrap();
+        let signed = std::fs::read(temp.path().join("linux/stable/latest.json")).unwrap();
         let manifest =
-            verify_manifest(&signed, &dev_release_key(), "android", "sideload", 121).unwrap();
+            verify_manifest(&signed, &dev_release_key(), "linux", "stable", 121).unwrap();
         verify_artifact(
-            std::fs::File::open(temp.path().join("android/sideload/122.apk")).unwrap(),
+            std::fs::File::open(temp.path().join("linux/stable/122.tar.gz")).unwrap(),
             &manifest,
         )
         .unwrap();
