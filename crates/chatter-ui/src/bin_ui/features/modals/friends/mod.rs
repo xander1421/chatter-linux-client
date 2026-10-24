@@ -79,8 +79,10 @@ fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 "find" => {
                     if let Some(w) = weak.upgrade() {
-                        w.global::<crate::ModalHostState>()
-                            .set_friends_show_qr(false);
+                        let host = w.global::<crate::ModalHostState>();
+                        host.set_friends_my_code("".into());
+                        host.set_friends_show_qr(false);
+                        host.set_friends_qr_code_image(slint::Image::default());
                     }
                     let weak = weak.clone();
                     let ui_ctx = ui_ctx.clone();
