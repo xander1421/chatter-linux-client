@@ -548,13 +548,13 @@ fn a_blocked_sender_is_purged_from_disk_immediately() {
     );
     manager.on_public_packet_seen(&message(b"blocked", NOW_MS), NOW);
     manager.persist_if_dirty(NOW).expect("persist");
-    assert_eq!(GossipMessageArchive::new(storage.clone()).load().len(), 1);
+    assert_eq!(GossipMessageArchive::new(storage.clone()).load_packets().len(), 1);
 
     manager
         .remove_public_messages_from(&PeerId::from_bytes(&sender()), NOW)
         .expect("remove");
     assert!(
-        GossipMessageArchive::new(storage.clone()).load().is_empty(),
+        GossipMessageArchive::new(storage.clone()).load_packets().is_empty(),
         "the purge must reach disk before anything can restore it"
     );
 }
@@ -570,10 +570,10 @@ fn persisting_is_idempotent_when_nothing_changed() {
     );
     manager.on_public_packet_seen(&message(b"m", NOW_MS), NOW);
     manager.persist_if_dirty(NOW).expect("persist");
-    let first = storage.load(StorageKey::PublicArchive).expect("load");
+    let first = storage.load_archive_packets().expect("load");
 
     manager.persist_if_dirty(NOW).expect("persist again");
-    let second = storage.load(StorageKey::PublicArchive).expect("load");
+    let second = storage.load_archive_packets().expect("load");
     assert_eq!(first, second);
 }
 
@@ -585,4 +585,32 @@ fn a_driver_without_an_archive_still_works() {
         .persist_if_dirty(NOW)
         .expect("no archive is not an error");
     assert_eq!(manager.message_count(), 1);
+}
+
+#[test]
+fn archive_updates_only_changed_rows_and_deletes_evicted_packets() {
+    let storage = Arc::new(MemoryStorage::new());
+    let mut config = SyncConfig::default();
+    config.seen_capacity = 2;
+    let mut manager = GossipSyncManager::new(
+        &us(), config.clone(), Some(GossipMessageArchive::new(storage.clone())), NOW,
+    );
+    let first = message(b"first", NOW_MS);
+    let second = message(b"second", NOW_MS + 1);
+    let third = message(b"third", NOW_MS + 2);
+    manager.on_public_packet_seen(&first, NOW);
+    manager.on_public_packet_seen(&second, NOW);
+    manager.persist_if_dirty(NOW).expect("persist first two");
+    assert_eq!(storage.load_archive_packets().expect("load").len(), 2);
+
+    manager.on_public_packet_seen(&third, NOW);
+    manager.persist_if_dirty(NOW).expect("persist eviction");
+    let rows = storage.load_archive_packets().expect("load");
+    assert_eq!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![second.packet_id(), third.packet_id()]);
+
+    let restarted = GossipSyncManager::new(
+        &us(), config, Some(GossipMessageArchive::new(storage)), NOW,
+    );
+    assert_eq!(restarted.public_message_packets(NOW), vec![second, third]);
 }

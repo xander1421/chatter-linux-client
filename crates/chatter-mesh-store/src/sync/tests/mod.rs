@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::{MemoryStorage, Storage, StorageKey};
+use crate::storage::{MemoryStorage, Storage};
 use chatter_mesh::tlv::request_sync::MAX_FRAGMENT_ID_FILTER_COUNT;
 use chatter_mesh_noise::prekey::Prekey;
 use std::sync::Arc;

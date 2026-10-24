@@ -290,7 +290,7 @@ pub struct GossipSyncManager {
 
     schedules: Vec<SyncSchedule>,
     archive: Option<GossipMessageArchive>,
-    archive_dirty: bool,
+    archive_pending: Vec<[u8; 16]>,
     last_stale_peer_cleanup_secs: Option<u64>,
     last_expiry_cleanup_secs: Option<u64>,
 }
@@ -340,7 +340,7 @@ impl GossipSyncManager {
             board_packets: None,
             schedules,
             archive,
-            archive_dirty: false,
+            archive_pending: Vec::new(),
             last_stale_peer_cleanup_secs: None,
             last_expiry_cleanup_secs: None,
         };
@@ -398,8 +398,10 @@ impl GossipSyncManager {
                     return;
                 }
                 let capacity = self.config.seen_capacity.max(1);
-                self.messages.insert(id, packet.clone(), capacity);
-                self.archive_dirty = true;
+                if let Some(evicted) = self.messages.insert(id, packet.clone(), capacity) {
+                    self.mark_archive_changed(evicted);
+                }
+                self.mark_archive_changed(id);
             }
             MessageType::Fragment => {
                 if !is_broadcast_recipient(packet) {
@@ -416,7 +418,7 @@ impl GossipSyncManager {
                     return;
                 }
                 let capacity = self.config.fragment_capacity.max(1);
-                self.fragments
+                let _ = self.fragments
                     .insert(packet.packet_id(), packet.clone(), capacity);
             }
             MessageType::FileTransfer => {
@@ -424,7 +426,7 @@ impl GossipSyncManager {
                     return;
                 }
                 let capacity = self.config.file_transfer_capacity.max(1);
-                self.file_transfers
+                let _ = self.file_transfers
                     .insert(packet.packet_id(), packet.clone(), capacity);
             }
             MessageType::GroupMessage => {
@@ -434,7 +436,7 @@ impl GossipSyncManager {
                     return;
                 }
                 let capacity = self.config.group_message_capacity.max(1);
-                self.group_messages
+                let _ = self.group_messages
                     .insert(packet.packet_id(), packet.clone(), capacity);
             }
             MessageType::PrekeyBundle => {
@@ -590,17 +592,16 @@ impl GossipSyncManager {
         self.latest_announce_by_peer
             .retain(|_, packet| fresh(&*packet));
 
-        let before = self.messages.len();
-        self.messages.remove_expired(fresh);
-        if self.messages.len() != before {
-            self.archive_dirty = true;
-        }
+        let expired_ids = self.messages.remove_expired(fresh);
 
-        self.fragments.remove_expired(fresh);
-        self.file_transfers.remove_expired(fresh);
-        self.group_messages.remove_expired(fresh);
+        let _ = self.fragments.remove_expired(fresh);
+        let _ = self.file_transfers.remove_expired(fresh);
+        let _ = self.group_messages.remove_expired(fresh);
         self.latest_prekey_bundle_by_owner
             .retain(|_, packet| fresh(&*packet));
+        for id in expired_ids {
+            self.mark_archive_changed(id);
+        }
     }
 
     fn cleanup_stale_announcements_if_needed(&mut self, now_unix_secs: u64) {
@@ -633,17 +634,14 @@ impl GossipSyncManager {
         // who left the mesh, and they age out on their own, much longer schedule.
         self.latest_announce_by_peer.remove(peer);
 
-        let before = self.messages.len();
-        self.messages
-            .remove_where(|packet| PeerId::from_bytes(&packet.sender_id) == *peer);
-        if self.messages.len() != before {
-            self.archive_dirty = true;
+        for id in self.messages.remove_where(|packet| PeerId::from_bytes(&packet.sender_id) == *peer) {
+            self.mark_archive_changed(id);
         }
-        self.fragments
+        let _ = self.fragments
             .remove_where(|packet| PeerId::from_bytes(&packet.sender_id) == *peer);
-        self.file_transfers
+        let _ = self.file_transfers
             .remove_where(|packet| PeerId::from_bytes(&packet.sender_id) == *peer);
-        self.group_messages
+        let _ = self.group_messages
             .remove_where(|packet| PeerId::from_bytes(&packet.sender_id) == *peer);
     }
 
@@ -658,61 +656,54 @@ impl GossipSyncManager {
         peer: &PeerId,
         now_unix_secs: u64,
     ) -> Result<(), StoreError> {
-        let before = self.messages.len();
-        self.messages
+        let removed = self.messages
             .remove_where(|packet| PeerId::from_bytes(&packet.sender_id) == *peer);
-        if self.messages.len() == before {
+        if removed.is_empty() {
             return Ok(());
         }
-        self.archive_dirty = true;
+        for id in removed { self.mark_archive_changed(id); }
         self.persist_if_dirty(now_unix_secs)
     }
 
     // -- archive -----------------------------------------------------------
 
-    /// Rebuilds the public-message store from disk, dropping anything that aged out
-    /// while the process was dead.
-    fn restore_archived_messages(&mut self, now_unix_secs: u64) {
-        let Some(archive) = &self.archive else {
-            return;
-        };
-        let config = &self.config;
-        let capacity = config.seen_capacity.max(1);
-        let restored: Vec<BitchatPacket> = archive
-            .load_packets()
-            .into_iter()
-            .filter(|packet| packet.msg_type == MessageType::Message.as_u8())
-            .filter(|packet| packet_is_fresh(config, packet, now_unix_secs))
-            .collect();
-        if restored.is_empty() {
-            return;
+    fn mark_archive_changed(&mut self, id: [u8; 16]) {
+        if !self.archive_pending.contains(&id) {
+            self.archive_pending.push(id);
         }
-        for packet in restored {
-            self.messages.insert(packet.packet_id(), packet, capacity);
-        }
-        self.archive_dirty = true;
     }
 
-    /// Writes the carried public messages out, if anything changed since the last
-    /// write. Cheap and idempotent when nothing did.
+    /// Restore fresh rows; queue stale, invalid and over-capacity rows for deletion.
+    fn restore_archived_messages(&mut self, now_unix_secs: u64) {
+        let Some(archive) = &self.archive else { return; };
+        let Ok(entries) = archive.load_entries() else { return; };
+        let capacity = self.config.seen_capacity.max(1);
+        for (id, packet) in entries {
+            match packet {
+                Some(packet) if packet.msg_type == MessageType::Message.as_u8()
+                    && packet_is_fresh(&self.config, &packet, now_unix_secs) => {
+                    if let Some(evicted) = self.messages.insert(id, packet, capacity) {
+                        self.mark_archive_changed(evicted);
+                    }
+                }
+                _ => { self.mark_archive_changed(id); }
+            }
+        }
+    }
+
+    /// Flush only changed packet rows. Failed writes stay queued for the next tick.
     pub fn persist_if_dirty(&mut self, now_unix_secs: u64) -> Result<(), StoreError> {
-        if !self.archive_dirty {
-            return Ok(());
-        }
-        let config = &self.config;
-        let packets: Vec<BitchatPacket> = self
-            .messages
-            .all_packets(|packet| packet_is_fresh(config, packet, now_unix_secs))
-            .into_iter()
-            .cloned()
-            .collect();
+        if self.archive_pending.is_empty() { return Ok(()); }
         if let Some(archive) = &self.archive {
-            archive.save_packets(&packets)?;
+            let changes: Vec<_> = self.archive_pending.iter().map(|id| {
+                let packet = self.messages.packets.get(id)
+                    .filter(|packet| packet_is_fresh(&self.config, packet, now_unix_secs))
+                    .cloned();
+                (*id, packet)
+            }).collect();
+            archive.apply_changes(&changes)?;
         }
-        // Cleared only on success, so a transient storage failure retries next tick
-        // rather than silently dropping the write. A driver with no archive at all
-        // clears it too: there is nothing to be dirty against.
-        self.archive_dirty = false;
+        self.archive_pending.clear();
         Ok(())
     }
 
