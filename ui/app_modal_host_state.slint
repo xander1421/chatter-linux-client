@@ -12,7 +12,7 @@ import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } fro
 import { ForwardTarget } from "modals/forward_message.slint";
 import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SearchResultChannel } from "modals/join_channel.slint";
-import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
+import { ChannelMemberData, BannedMemberData, ChannelRosterRowData } from "modals/channel_member_types.slint";
 import { InviteUser } from "modals/invite_member.slint";
 import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
 import { PinnedItem } from "modals/pinned_messages.slint";
@@ -228,6 +228,7 @@ export global ModalHostState {
     in-out property <bool> channel-settings-ai-enabled: false;
     in property <[ChannelMemberData]> channel-settings-members: [];
     in property <[BannedMemberData]> channel-settings-banned-members: [];
+    in property <[ChannelRosterRowData]> channel-settings-roster-rows: [];
     in property <bool> channel-settings-can-view-bans: false;
     in property <bool> channel-settings-loading: false;
     in property <string> channel-settings-error: "";

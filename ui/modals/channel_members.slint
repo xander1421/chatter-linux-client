@@ -1,4 +1,4 @@
-import { ChannelMemberData, BannedMemberData } from "channel_member_types.slint";
+import { ChannelMemberData, ChannelRosterRowData } from "channel_member_types.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
@@ -7,8 +7,15 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
+
 export component ChannelMembersSection inherits VerticalLayout {
-    in property <[BannedMemberData]> banned-members;
+    in property <[ChannelRosterRowData]> roster-rows;
+    in property <length> roster-height: 420px;
     in property <bool> can-manage-members;
     in property <bool> can-invite;
     in property <bool> can-view-bans;
@@ -137,15 +144,21 @@ export component ChannelMembersSection inherits VerticalLayout {
         font-size: Typography.sm;
         wrap: word-wrap;
     }
-    for member in root.members: Rectangle {
-        height: member-col.preferred-height;
-        background: root.role-picker-user == member.user-id ? Colors.surface-section : transparent;
+    roster-list := ListView {
+        height: root.roster-height;
+        width: parent.width;
+        viewport-width: self.width;
+        for row in root.roster-rows: Rectangle {
+        width: roster-list.width;
+        property <ChannelMemberData> member: row.member;
+        height: row.kind == "member" ? member-col.preferred-height : row.kind == "banned" ? 52px : 42px;
+        background: row.kind == "member" && root.role-picker-user == member.user-id ? Colors.surface-section : transparent;
         border-radius: Spacing.radius-md;
         clip: true;
         animate height { duration: Materials.motion-standard; easing: Materials.glide; }
         animate background { duration: Materials.motion-quick; easing: Materials.settle; }
 
-        member-col := VerticalLayout {
+        if row.kind == "member": member-col := VerticalLayout {
             HorizontalLayout {
                 height: 52px;
                 spacing: Spacing.sm;
@@ -564,36 +577,33 @@ export component ChannelMembersSection inherits VerticalLayout {
         }
 
         // Bottom border
-        Rectangle {
+        if row.kind == "member": Rectangle {
             y: parent.height - 1px;
             height: 1px;
             background: Colors.divider;
         }
-    }
+        if row.kind == "banned-header": Text {
+            text: "Banned";
+            color: Colors.text-primary;
+            font-size: Typography.base;
+            font-weight: Typography.semibold;
+            vertical-alignment: center;
+        }
 
-    // Banned users (owner/admin only — the roles that can unban).
-    if root.can-view-bans && root.banned-members.length > 0: Text {
-        text: "Banned";
-        color: Colors.text-primary;
-        font-size: Typography.base;
-        font-weight: Typography.semibold;
-    }
-
-    if root.can-view-bans: VerticalLayout {
-        for banned in root.banned-members: HorizontalLayout {
+        if row.kind == "banned": HorizontalLayout {
             height: 52px;
             spacing: Spacing.sm;
             padding: Spacing.xs;
 
             Avatar {
                 size: 36px;
-                source: banned.avatar-source;
-                name: banned.display-name;
+                source: row.banned.avatar-source;
+                name: row.banned.display-name;
                 fallback-text: "?";
             }
 
             Text {
-                text: banned.display-name;
+                text: row.banned.display-name;
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 vertical-alignment: center;
@@ -605,9 +615,9 @@ export component ChannelMembersSection inherits VerticalLayout {
                 height: Spacing.touch-target-min;
                 text: "Unban";
                 variant: "secondary";
-                clicked => { root.unban-member(banned.user-id); }
+                clicked => { root.unban-member(row.banned.user-id); }
             }
         }
+        }
     }
-                    
 }

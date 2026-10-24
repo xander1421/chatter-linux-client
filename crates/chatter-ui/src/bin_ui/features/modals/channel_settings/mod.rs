@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::client::{ChatterClient, InviteCandidate};
+use chatter_core::client::{member_roster_rows, ChatterClient, InviteCandidate, MemberRosterRow};
 use chatter_core::domain::ChannelType;
 use chatter_core::domain::channel::NotificationPreference;
 use chatter_core::domain::anon_group::AnonGroupId;
@@ -12,7 +12,7 @@ use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::ConversationType;
 use chatter_core::state::ActiveConversation;
 
-use crate::{BannedMemberData, ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
+use crate::{BannedMemberData, ChannelMemberData, ChannelRosterRowData, InviteUser, MainWindow, PrivateGroupFriend};
 
 // UI-thread owned staging. Native picker cache files are never uploaded until Save.
 // Model identity retires a picker after any modal navigation, including closing
@@ -249,6 +249,8 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
     w.global::<crate::ModalHostState>()
         .set_channel_settings_members(ModelRc::default());
     w.global::<crate::ModalHostState>()
+        .set_channel_settings_roster_rows(ModelRc::default());
+    w.global::<crate::ModalHostState>()
         .set_channel_settings_can_view_bans(false);
     w.global::<crate::ModalHostState>()
         .set_channel_settings_banned_members(ModelRc::default());
@@ -359,6 +361,8 @@ fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSetting
     // after the screen is already up.
     w.global::<crate::ModalHostState>()
         .set_channel_settings_members(ModelRc::default());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_roster_rows(ModelRc::default());
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_view_bans(false);
     w.global::<crate::ModalHostState>()
@@ -562,6 +566,33 @@ pub fn open_channel_settings(
     });
 }
 
+fn roster_rows(
+    members: Vec<ChannelMemberData>,
+    banned: Vec<BannedMemberData>,
+) -> ModelRc<ChannelRosterRowData> {
+    let rows = member_roster_rows(members, banned)
+        .into_iter()
+        .map(|row| match row {
+            MemberRosterRow::Member(member) => ChannelRosterRowData {
+                kind: "member".into(),
+                member,
+                banned: BannedMemberData::default(),
+            },
+            MemberRosterRow::BannedHeader => ChannelRosterRowData {
+                kind: "banned-header".into(),
+                member: ChannelMemberData::default(),
+                banned: BannedMemberData::default(),
+            },
+            MemberRosterRow::Banned(banned) => ChannelRosterRowData {
+                kind: "banned".into(),
+                member: ChannelMemberData::default(),
+                banned,
+            },
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
 /// UI thread only (decodes avatars into `slint::Image`s). A partial roster
 /// leaves the member count from channel settings rather than calling the
 /// rows that loaded the total.
@@ -575,6 +606,13 @@ fn apply_member_lists(
         .iter()
         .map(crate::bin_ui::converters::member_to_slint)
         .collect();
+    let banned: Vec<BannedMemberData> = bans
+        .unwrap_or_default()
+        .iter()
+        .map(crate::bin_ui::converters::banned_member_to_slint)
+        .collect();
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_roster_rows(roster_rows(rows.clone(), banned.clone()));
     if complete {
         w.global::<crate::ModalHostState>()
             .set_channel_settings_member_count(rows.len() as i32);
@@ -583,11 +621,6 @@ fn apply_member_lists(
         .set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
     w.global::<crate::ModalHostState>()
         .set_channel_settings_can_view_bans(bans.is_some());
-    let banned: Vec<BannedMemberData> = bans
-        .unwrap_or_default()
-        .iter()
-        .map(crate::bin_ui::converters::banned_member_to_slint)
-        .collect();
     w.global::<crate::ModalHostState>()
         .set_channel_settings_banned_members(ModelRc::new(VecModel::from(banned)));
 }
@@ -759,6 +792,8 @@ pub fn apply_private_group_roster(
             unverified: false,
         })
         .collect();
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_roster_rows(roster_rows(rows.clone(), Vec::new()));
     w.global::<crate::ModalHostState>()
         .set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
 }

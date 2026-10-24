@@ -31,3 +31,10 @@ export struct BannedMemberData {
     display-name: string,
     avatar-source: image,
 }
+
+// Flattened row for the virtual member/banned roster.
+export struct ChannelRosterRowData {
+    kind: string, // "member", "banned-header", "banned"
+    member: ChannelMemberData,
+    banned: BannedMemberData,
+}

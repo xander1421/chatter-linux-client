@@ -179,6 +179,40 @@ impl UserRepository {
         Ok(out)
     }
 
+    /// Handles and decrypted profile photos for a roster page, in one read per
+    /// chunk. Missing directory/profile rows remain missing in the result.
+    pub fn roster_profile_sources(
+        &self,
+        ids: &[UserId],
+    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<Vec<u8>>)>, StorageError> {
+        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        let conn = self.db.read_connection()?;
+        for chunk in ids.chunks(500) {
+            let values = vec!["(?)"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "WITH ids(id) AS (VALUES {values}) \
+                 SELECT ids.id, u.username, p.avatar_bytes FROM ids \
+                 LEFT JOIN users u ON u.id = ids.id \
+                 LEFT JOIN profiles p ON p.user_id = ids.id"
+            ))?;
+            let keys: Vec<String> = chunk.iter().map(ToString::to_string).collect();
+            let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, username, avatar) = row?;
+                if let Ok(id) = id.parse::<UserId>() {
+                    out.insert(id, (username, avatar));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Count total number of users in the database.
     pub fn count(&self) -> Result<u64, StorageError> {
         let conn = self.db.connection()?;

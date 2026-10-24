@@ -1,5 +1,23 @@
 use super::*;
 
+/// One scrollable roster stream. The header stays in the same model as the
+/// banned rows, so a virtual list can render both sections in order.
+pub enum MemberRosterRow<M, B> {
+    Member(M),
+    BannedHeader,
+    Banned(B),
+}
+
+pub fn member_roster_rows<M, B>(members: Vec<M>, banned: Vec<B>) -> Vec<MemberRosterRow<M, B>> {
+    let mut rows = Vec::with_capacity(members.len() + banned.len() + usize::from(!banned.is_empty()));
+    rows.extend(members.into_iter().map(MemberRosterRow::Member));
+    if !banned.is_empty() {
+        rows.push(MemberRosterRow::BannedHeader);
+        rows.extend(banned.into_iter().map(MemberRosterRow::Banned));
+    }
+    rows
+}
+
 impl ChatterClient {
     // ── Drafts (façade) ─────────────────────────────────────────────
 
@@ -267,9 +285,15 @@ impl ChatterClient {
                         .map(|m| m.role)
                 })
         });
-        let names = self.users().get_display_names(
-            &members.iter().map(|member| member.user_id).collect::<Vec<_>>(),
-        );
+        let ids: Vec<_> = members.iter().map(|member| member.user_id).collect();
+        let names = self.users().get_display_names(&ids);
+        let profiles = self
+            .messages()
+            .user_repo
+            .roster_profile_sources(&ids)
+            .unwrap_or_default();
+        let own_username = self.full_username().unwrap_or_default();
+        let own_avatar = self.my_avatar();
         Ok(members
             .into_iter()
             .map(|membership| {
@@ -281,7 +305,26 @@ impl ChatterClient {
                 );
                 let unverified = self.is_unverified_channel_member(channel_id, &membership.user_id);
                 let display_name = names.get(&membership.user_id).cloned().unwrap_or_default();
-                let mut row = self.member_with_profile(membership, display_name);
+                let (username, avatar_bytes) = if is_me {
+                    (own_username.clone(), own_avatar.clone())
+                } else {
+                    let (handle, avatar) = profiles
+                        .get(&membership.user_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    (
+                        handle
+                            .filter(|value| crate::services::user::is_lookup_handle(value))
+                            .unwrap_or_default(),
+                        avatar,
+                    )
+                };
+                let mut row = self.member_with_profile(
+                    membership,
+                    display_name,
+                    username,
+                    avatar_bytes.filter(|bytes| !bytes.is_empty()),
+                );
                 row.moderation = moderation;
                 row.unverified = unverified;
                 // Our own row reads "You", as in Signal's member list.
@@ -293,24 +336,18 @@ impl ChatterClient {
             .collect())
     }
 
-    /// Resolve one membership's display data from local state.
+    /// Combine a membership with display data already resolved for its page.
     pub fn member_with_profile(
         &self,
         membership: crate::domain::channel::Membership,
         display_name: String,
+        username: String,
+        avatar_bytes: Option<Vec<u8>>,
     ) -> crate::domain::channel::MemberWithProfile {
-        let uid = membership.user_id;
         crate::domain::channel::MemberWithProfile {
             display_name,
-            // Our full handle lives in settings, while the user directory may
-            // only hold the nickname used at login. Peers show a handle only
-            // when the directory has its complete lookup form.
-            username: if self.session_current_user_id() == Some(uid) {
-                self.full_username().unwrap_or_default()
-            } else {
-                self.known_username(&uid).unwrap_or_default()
-            },
-            avatar_bytes: self.user_avatar(&uid),
+            username,
+            avatar_bytes,
             moderation: crate::domain::channel::MemberModeration::default(),
             unverified: false,
             membership,
