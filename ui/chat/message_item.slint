@@ -696,6 +696,7 @@ export component MessageItem inherits Rectangle {
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
                                 overflow: elide;
+                                vertical-alignment: center;
                             }
 
                             if root.is-ai: Rectangle {
@@ -723,11 +724,14 @@ export component MessageItem inherits Rectangle {
                             spacing: Spacing.xs;
                             alignment: start;
 
-                            Image {
-                                width: 11px;
-                                height: 11px;
-                                source: Icons.message-circle;
-                                colorize: Colors.accent-purple;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 11px;
+                                    height: 11px;
+                                    source: Icons.message-circle;
+                                    colorize: Colors.accent-purple;
+                                }
                             }
 
                             Text {

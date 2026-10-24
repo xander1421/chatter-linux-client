@@ -89,12 +89,14 @@ export component MessageListEmpty inherits Rectangle {
         HorizontalLayout {
             alignment: center;
             spacing: Spacing.sm;
-            Image {
-                source: root.public-broadcast ? Icons.globe : Icons.lock;
-                width: 14px;
-                height: 14px;
-                colorize: root.public-broadcast ? Colors.warning : Colors.success;
-                vertical-alignment: center;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: root.public-broadcast ? Icons.globe : Icons.lock;
+                    width: 14px;
+                    height: 14px;
+                    colorize: root.public-broadcast ? Colors.warning : Colors.success;
+                }
             }
             Text {
                 text: root.privacy-line;

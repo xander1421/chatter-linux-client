@@ -311,20 +311,24 @@ export component ChatHeader inherits GlassSurface {
                             min-width: 0px;
                             horizontal-stretch: 1;
                             overflow: elide;
+                            vertical-alignment: center;
                         }
-                        Rectangle {
-                            width: 21px;
-                            height: 12px;
-                            for dot in [0, 1, 2]: Rectangle {
-                                x: dot * 7px;
-                                y: Appearance.reduce-motion ? 5px : (dot == root.typing-phase ? 2px : 6px);
-                                width: 4px;
-                                height: 4px;
-                                border-radius: 2px;
-                                background: Colors.primary;
-                                opacity: Appearance.reduce-motion || dot == root.typing-phase ? 1 : 0.45;
-                                animate y { duration: Materials.motion-quick; easing: Materials.spring; }
-                                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 21px;
+                                height: 12px;
+                                for dot in [0, 1, 2]: Rectangle {
+                                    x: dot * 7px;
+                                    y: Appearance.reduce-motion ? 5px : (dot == root.typing-phase ? 2px : 6px);
+                                    width: 4px;
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: Colors.primary;
+                                    opacity: Appearance.reduce-motion || dot == root.typing-phase ? 1 : 0.45;
+                                    animate y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                                }
                             }
                         }
                     }
