@@ -144,7 +144,7 @@ fn record(
         return Err("Recording is too short".into());
     }
     #[cfg(target_os = "android")]
-    let samples = recorder.pcm_i16();
+    let samples = recorder.take_pcm_i16();
     #[cfg(target_os = "android")]
     super::android_aac::encode(file.path(), &samples, recorder.sample_rate(), recorder.channels())?;
     #[cfg(not(target_os = "android"))]

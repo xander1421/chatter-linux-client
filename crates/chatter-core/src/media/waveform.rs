@@ -462,16 +462,6 @@ pub(crate) fn waveform_from_pcm(samples: &[i16], samples_per_second: usize) -> V
     })
 }
 
-pub(crate) fn waveform_from_recorded_f32(
-    samples: &[f32],
-    samples_per_second: usize,
-) -> Vec<u8> {
-    sample_bars(samples.len(), WAVEFORM_BAR_COUNT, samples_per_second, |i| {
-        let pcm = (samples[i].clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        pcm as f32 / 32768.0
-    })
-}
-
 /// Process decoded samples without quantizing quiet audio before normalization.
 fn process_samples_to_bars(
     samples: Vec<f32>,
@@ -538,15 +528,6 @@ fn rms(start: usize, end: usize, sample: &impl Fn(usize) -> f32) -> f32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn recorded_float_waveform_matches_encoded_pcm() {
-        let samples = [-1.0, -0.25, 0.0, 0.125, 0.75, 1.0];
-        let pcm: Vec<i16> = samples
-            .iter()
-            .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
-            .collect();
-        assert_eq!(waveform_from_recorded_f32(&samples, 8000), waveform_from_pcm(&pcm, 8000));
-    }
 
     #[test]
     fn repair_detects_flat_and_absolute_scale_metadata() {

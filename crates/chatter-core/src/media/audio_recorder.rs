@@ -44,7 +44,7 @@ pub struct AudioRecorder {
     /// Current recording state.
     state: RecordingState,
     /// Sample buffer shared with recording callback.
-    samples: Arc<Mutex<Vec<f32>>>,
+    samples: Arc<Mutex<Vec<i16>>>,
     /// Sample rate of the recording.
     sample_rate: u32,
     /// Number of channels.
@@ -165,11 +165,14 @@ impl AudioRecorder {
         let level = if fresh.is_empty() {
             0.0
         } else {
-            let energy = fresh.iter().map(|sample| sample * sample).sum::<f32>();
+            let energy = fresh.iter().map(|sample| {
+                let normalized = *sample as f32 / 32768.0;
+                normalized * normalized
+            }).sum::<f32>();
             let rms = (energy / fresh.len() as f32).sqrt();
             let peak = fresh
                 .iter()
-                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+                .fold(0.0_f32, |peak, sample| peak.max((*sample as f32 / 32768.0).abs()));
             // Android microphone speech can sit far below digital full scale.
             // Compress the range before quantizing to 0..100 so quiet words
             // still move the bars; true silence remains zero.
@@ -183,7 +186,7 @@ impl AudioRecorder {
     /// Builds an input stream for a specific sample type.
     fn build_input_stream<T>(
         &self,
-        samples: Arc<Mutex<Vec<f32>>>,
+        samples: Arc<Mutex<Vec<i16>>>,
         err_fn: impl Fn(cpal::Error) + Send + 'static,
     ) -> Result<Stream, MediaError>
     where
@@ -201,9 +204,9 @@ impl AudioRecorder {
                     let mut samples = samples.lock().unwrap();
                     let remaining = max_samples.saturating_sub(samples.len());
                     for &sample in data.iter().take(remaining) {
-                        // Convert to f32 for storage using cpal's FromSample trait
+                        // Keep the encoded PCM format as the only full recording buffer.
                         let f32_sample: f32 = cpal::Sample::from_sample(sample);
-                        samples.push(f32_sample);
+                        samples.push((f32_sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
                     }
                 },
                 err_fn,
@@ -280,11 +283,8 @@ impl AudioRecorder {
         let mut writer = WavWriter::create(path, spec)
             .map_err(|e| MediaError::RecordingError(format!("failed to create WAV file: {}", e)))?;
 
-        // Convert f32 samples to i16 for WAV encoding
         for &sample in samples.iter() {
-            let clamped = sample.clamp(-1.0, 1.0);
-            let i16_sample = (clamped * i16::MAX as f32) as i16;
-            writer.write_sample(i16_sample).map_err(|e| {
+            writer.write_sample(sample).map_err(|e| {
                 MediaError::RecordingError(format!("failed to write sample: {}", e))
             })?;
         }
@@ -296,14 +296,9 @@ impl AudioRecorder {
         Ok(())
     }
 
-    /// Return interleaved PCM for waveform calculation and platform encoding.
-    pub fn pcm_i16(&self) -> Vec<i16> {
-        self.samples
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|&sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
-            .collect()
+    /// Move captured PCM to the platform encoder after stopping the stream.
+    pub fn take_pcm_i16(&mut self) -> Vec<i16> {
+        std::mem::take(&mut *self.samples.lock().unwrap())
     }
 
     /// Count captured interleaved samples without copying the recording.
@@ -311,10 +306,10 @@ impl AudioRecorder {
         self.samples.lock().unwrap().len()
     }
 
-    /// Calculate the sent waveform using the same i16 quantization as WAV encoding.
+    /// Calculate the sent waveform from the canonical PCM buffer.
     pub fn waveform_i16(&self) -> Vec<u8> {
         let samples = self.samples.lock().unwrap();
-        crate::media::waveform::waveform_from_recorded_f32(
+        crate::media::waveform::waveform_from_pcm(
             &samples,
             self.sample_rate as usize * self.channels as usize,
         )
