@@ -64,30 +64,47 @@ fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 "requests" => {
                     let ui_ctx = ui_ctx.clone();
+                    let weak = weak.clone();
                     tokio::spawn(async move {
+                        private_requests::refresh_private_requests(weak, &ui_ctx).await;
                         // Emits FriendRequestsUpdated; the domain handler rebuilds
                         // the Received/Sent rows.
                         ui_ctx.refresh_friend_requests().await;
                     });
                 }
                 "blocked" => {
-                    private_requests::refresh_blocked_users(weak.clone(), &ui_ctx);
+                    let weak = weak.clone();
+                    let ui_ctx = ui_ctx.clone();
+                    std::thread::spawn(move || {
+                        private_requests::refresh_blocked_users(weak, &ui_ctx);
+                    });
                 }
                 "find" => {
-                    let Some(w) = weak.upgrade() else { return };
-                    let private_mode = ui_ctx.anon_mode_enabled();
-                    match ui_ctx.current_friend_code(private_mode) {
-                        Ok(code) => w
-                            .global::<crate::ModalHostState>()
-                            .set_friends_my_code(code.into()),
-                        Err(error) => {
-                            w.global::<crate::ModalHostState>()
-                                .set_friends_my_code("".into());
-                            tracing::warn!("Could not load current friend code: {}", error);
-                        }
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::ModalHostState>()
+                            .set_friends_show_qr(false);
                     }
-                    w.global::<crate::ModalHostState>()
-                        .set_friends_show_qr(false);
+                    let weak = weak.clone();
+                    let ui_ctx = ui_ctx.clone();
+                    std::thread::spawn(move || {
+                        let private_mode = ui_ctx.anon_mode_enabled();
+                        let code = ui_ctx.current_friend_code(private_mode);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let Some(w) = weak.upgrade() else { return };
+                            let host = w.global::<crate::ModalHostState>();
+                            // A later Shield switch owns the currently displayed code.
+                            if ui_ctx.anon_mode_enabled() != private_mode {
+                                return;
+                            }
+                            match code {
+                                Ok(code) => host.set_friends_my_code(code.into()),
+                                Err(error) => {
+                                    host.set_friends_my_code("".into());
+                                    tracing::warn!("Could not load current friend code: {}", error);
+                                }
+                            }
+                        });
+                    });
                 }
                 _ => {}
             }

@@ -25,36 +25,44 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
         .on_friends_generate_code(move |private_mode: bool| {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_gen.clone();
-
-            // Generate appropriate friend code based on mode
-            let result = if private_mode {
-                ui_ctx.generate_private_friend_code()
-            } else {
-                ui_ctx.generate_friend_code()
-            };
-
-            match result {
-                Ok(code) => {
-                    let mode_str = if private_mode { "private" } else { "regular" };
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.global::<crate::ModalHostState>()
-                                .set_friends_my_code(code.into());
-                            tracing::debug!("Generated {} friend code", mode_str);
-                        }
-                    });
+            std::thread::spawn(move || {
+                let result = if private_mode {
+                    ui_ctx.generate_private_friend_code()
+                } else {
+                    ui_ctx.generate_friend_code()
+                };
+                match result {
+                    Ok(code) => {
+                        let mode_str = if private_mode { "private" } else { "regular" };
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                if ui_ctx.anon_mode_enabled() != private_mode {
+                                    return;
+                                }
+                                w.global::<crate::ModalHostState>()
+                                    .set_friends_my_code(code.into());
+                                w.global::<crate::ModalHostState>()
+                                    .set_friends_show_qr(false);
+                                w.global::<crate::ModalHostState>()
+                                    .set_friends_qr_code_image(slint::Image::default());
+                                w.global::<crate::ModalHostState>()
+                                    .set_friends_code_status("".into());
+                                tracing::debug!("Generated {} friend code", mode_str);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        let error_msg = e.user_message();
+                        tracing::error!("Failed to generate friend code: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_friends_code_status(error_msg.into());
+                            }
+                        });
+                    }
                 }
-                Err(e) => {
-                    let error_msg = e.user_message();
-                    tracing::error!("Failed to generate friend code: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.global::<crate::ModalHostState>()
-                                .set_friends_code_status(error_msg.into());
-                        }
-                    });
-                }
-            }
+            });
         });
 
     // Wire QR code generation
@@ -171,11 +179,13 @@ fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
 
                 let Some(text) = text else {
                     tracing::warn!("Paste: no clipboard tool succeeded");
+                    show_code_status(weak, "Clipboard unavailable. Enter the code manually.");
                     return;
                 };
                 let trimmed = text.trim().to_string();
                 if trimmed.is_empty() {
                     tracing::warn!("Paste: clipboard empty");
+                    show_code_status(weak, "Clipboard is empty.");
                     return;
                 }
                 let _ = slint::invoke_from_event_loop(move || {
@@ -200,52 +210,73 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .on_friends_generate_qr(move |private_mode: bool| {
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_qr.clone();
+            // QR encoding and PNG decoding can be expensive for a private code.
+            std::thread::spawn(move || {
+                let result = if private_mode {
+                    ui_ctx.generate_private_friend_qr(150)
+                } else {
+                    ui_ctx.generate_friend_qr(150)
+                };
+                match result {
+                    Ok(png_bytes) => {
+                        // Decode PNG outside UI thread - this is image processing work
+                        let decoded = image::load_from_memory(&png_bytes).map(|img| {
+                            let rgba = img.to_rgba8();
+                            let (width, height) = rgba.dimensions();
+                            let pixels = rgba.into_raw();
+                            (pixels, width, height)
+                        });
 
-            // Generate appropriate QR code based on mode (150x150 pixels)
-            let result = if private_mode {
-                ui_ctx.generate_private_friend_qr(150)
-            } else {
-                ui_ctx.generate_friend_qr(150)
-            };
+                        match decoded {
+                            Ok((pixels, width, height)) => {
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(w) = weak.upgrade() {
+                                        if ui_ctx.anon_mode_enabled() != private_mode {
+                                            return;
+                                        }
+                                        // UI thread only: create Slint buffer from pre-decoded pixels
+                                        let mut buffer =
+                                            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(
+                                                width, height,
+                                            );
+                                        buffer.make_mut_bytes().copy_from_slice(&pixels);
 
-            match result {
-                Ok(png_bytes) => {
-                    // Decode PNG outside UI thread - this is image processing work
-                    let decoded = image::load_from_memory(&png_bytes).map(|img| {
-                        let rgba = img.to_rgba8();
-                        let (width, height) = rgba.dimensions();
-                        let pixels = rgba.into_raw();
-                        (pixels, width, height)
-                    });
-
-                    match decoded {
-                        Ok((pixels, width, height)) => {
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    // UI thread only: create Slint buffer from pre-decoded pixels
-                                    let mut buffer =
-                                        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(
-                                            width, height,
-                                        );
-                                    buffer.make_mut_bytes().copy_from_slice(&pixels);
-
-                                    let image = slint::Image::from_rgba8(buffer);
-                                    w.global::<crate::ModalHostState>()
-                                        .set_friends_qr_code_image(image);
-                                    tracing::debug!("Generated QR code image");
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to decode QR code PNG: {}", e);
+                                        let image = slint::Image::from_rgba8(buffer);
+                                        w.global::<crate::ModalHostState>()
+                                            .set_friends_qr_code_image(image);
+                                        w.global::<crate::ModalHostState>()
+                                            .set_friends_show_qr(true);
+                                        w.global::<crate::ModalHostState>()
+                                            .set_friends_code_status("".into());
+                                        tracing::debug!("Generated QR code image");
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to decode QR code PNG: {}", e);
+                                show_code_status(
+                                    weak,
+                                    "Couldn't display QR code. Try Copy instead.",
+                                );
+                            }
                         }
                     }
+                    Err(e) => {
+                        tracing::error!("Failed to generate QR code: {}", e);
+                        show_code_status(weak, "Couldn't create QR code. Try Copy instead.");
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to generate QR code: {}", e);
-                }
-            }
+            });
         });
+}
+
+fn show_code_status(weak: slint::Weak<MainWindow>, message: &'static str) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.global::<crate::ModalHostState>()
+                .set_friends_code_status(message.into());
+        }
+    });
 }
 
 /// Wire callback to copy friend code to clipboard.
@@ -265,14 +296,21 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     {
                         let code_clone = code.clone();
+                        let weak_copy = weak_window.clone();
                         std::thread::spawn(move || {
                             match crate::platform::clipboard::set_text(
                                 "Friend code",
                                 &code_clone,
                                 false,
                             ) {
-                                Ok(()) => tracing::info!("Copied friend code to clipboard"),
-                                Err(e) => tracing::error!("Failed to copy to clipboard: {}", e),
+                                Ok(()) => {
+                                    tracing::info!("Copied friend code to clipboard");
+                                    show_code_status(weak_copy.clone(), "Copied to clipboard!");
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to copy to clipboard: {}", e);
+                                    show_code_status(weak_copy, "Couldn't copy — use Show QR");
+                                }
                             }
                         });
                     }
@@ -289,15 +327,6 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                                 .set_friends_code_status("Couldn't copy — use Show QR".into());
                         }
                     }
-
-                    // Desktop reports success unconditionally because the copy runs
-                    // on a detached thread above. Mobile sets its own status in the
-                    // match arms, so this must NOT also claim success — that is how
-                    // the button came to say "Copied to clipboard!" on Android while
-                    // doing nothing at all (OPEN-ITEMS §112f).
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    w.global::<crate::ModalHostState>()
-                        .set_friends_code_status("Copied to clipboard!".into());
                 } else {
                     tracing::warn!("No friend code to copy");
                 }
@@ -317,12 +346,24 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
             let ui_ctx = ui_ctx_connect.clone();
             let code_str = code.to_string();
             if code_str.trim().is_empty() {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::ModalHostState>()
+                        .set_friends_code_status("Enter a friend code first.".into());
+                }
+                return;
+            }
+            if weak
+                .upgrade()
+                .is_some_and(|w| w.global::<crate::ModalHostState>().get_friends_loading())
+            {
                 return;
             }
 
             let (note, display_name) = weak
                 .upgrade()
                 .map(|w| {
+                    w.global::<crate::ModalHostState>()
+                        .set_friends_loading(true);
                     (
                         w.global::<crate::ModalHostState>()
                             .get_friends_request_note()
@@ -376,6 +417,7 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                     }
                     Ok(FriendCodeConnection::SecretChat(dm)) => {
                         tracing::info!("Started secret chat {} with {}", dm.id, dm.peer_id);
+                        let dm_id = dm.id;
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
@@ -387,6 +429,9 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                                     .set_friends_request_note("".into());
                                 w.global::<crate::ModalHostState>()
                                     .set_friends_code_status("Secret chat started!".into());
+                                crate::bin_ui::features::back::reset_to_chats(&w);
+                                w.global::<crate::SidebarPane>()
+                                    .invoke_dm_selected(dm_id.to_string().into());
                             }
                         });
                     }

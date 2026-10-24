@@ -20,13 +20,14 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
     window
         .global::<crate::ModalHostState>()
         .on_friends_accept_request(move |user_id: SharedString| {
+            if !begin_action(&weak_window) {
+                return;
+            }
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
             let user_id_str = user_id.to_string();
 
             tokio::spawn(async move {
-                set_loading(&weak, true);
-
                 let friend_id = match user_id_str.parse() {
                     Ok(id) => id,
                     Err(_) => {
@@ -79,13 +80,14 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClie
     window
         .global::<crate::ModalHostState>()
         .on_friends_decline_request(move |user_id: SharedString| {
+            if !begin_action(&weak_window) {
+                return;
+            }
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
             let user_id_str = user_id.to_string();
 
             tokio::spawn(async move {
-                set_loading(&weak, true);
-
                 let friend_id = match user_id_str.parse() {
                     Ok(id) => id,
                     Err(_) => {
@@ -117,13 +119,14 @@ pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
     window
         .global::<crate::ModalHostState>()
         .on_friends_cancel_request(move |user_id: SharedString| {
+            if !begin_action(&weak_window) {
+                return;
+            }
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
             let user_id_str = user_id.to_string();
 
             tokio::spawn(async move {
-                set_loading(&weak, true);
-
                 let friend_id = match user_id_str.parse() {
                     Ok(id) => id,
                     Err(_) => {
@@ -168,6 +171,18 @@ fn report_failure(weak: &slint::Weak<MainWindow>, message: &str) {
         w.set_toast_visible(true);
         w.global::<crate::Haptics>().invoke_error();
     });
+}
+
+fn begin_action(weak: &slint::Weak<MainWindow>) -> bool {
+    let Some(w) = weak.upgrade() else {
+        return false;
+    };
+    let host = w.global::<crate::ModalHostState>();
+    if host.get_friends_loading() {
+        return false;
+    }
+    host.set_friends_loading(true);
+    true
 }
 
 fn set_loading(weak: &slint::Weak<MainWindow>, loading: bool) {

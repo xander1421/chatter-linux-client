@@ -219,6 +219,7 @@ export component FriendsModal inherits Rectangle {
                 // ===== Friends Tab =====
                 if root.active-tab == "friends": FriendsTab {
                     mobile-mode: root.mobile-mode;
+                    private-mode: root.effective-private-mode;
                     bottom-inset: root.bottom-inset;
                     row-height: root.row-height;
                     row-avatar: root.row-avatar;
@@ -254,6 +255,7 @@ export component FriendsModal inherits Rectangle {
                 if root.active-tab == "requests": RequestsTab {
                     mobile-mode: root.mobile-mode;
                     bottom-inset: root.bottom-inset;
+                    loading: root.loading;
                     requests-sub-tab <=> root.requests-sub-tab;
                     received-requests: root.received-requests;
                     sent-requests: root.sent-requests;
@@ -280,7 +282,10 @@ export component FriendsModal inherits Rectangle {
                 if root.active-tab == "blocked": BlockedTab {
                     mobile-mode: root.mobile-mode;
                     bottom-inset: root.bottom-inset;
+                    loading: root.loading;
                     row-height: root.row-height;
+                    row-avatar: root.row-avatar;
+                    row-name-size: root.row-name-size;
                     blocked-users: root.blocked-users;
                     confirm-remove-id <=> root.confirm-remove-id;
                     unblock-user(value) => { root.unblock-user(value); }

@@ -10,6 +10,7 @@ import { Avatar } from "../components/avatar.slint";
 
 export component RequestsTab inherits VerticalLayout {
     in property <bool> mobile-mode;
+    in property <bool> loading;
     in property <length> bottom-inset;
     in-out property <string> requests-sub-tab;
     in property <[FriendRequestData]> received-requests;
@@ -142,6 +143,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Accept";
                                     variant: "primary";
+                                    disabled: root.loading;
 
                                     clicked => {
                                         root.accept-request(request.user-id);
@@ -152,6 +154,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Decline";
                                     variant: "ghost";
+                                    disabled: root.loading;
 
                                     clicked => {
                                         root.decline-request(request.user-id);
@@ -264,6 +267,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Cancel";
                                     variant: "ghost";
+                                    disabled: root.loading;
 
                                     clicked => {
                                         root.cancel-request(request.user-id);
@@ -400,7 +404,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Accept";
                                     variant: "primary";
-                                    disabled: root.private-request-decision != "";
+                                    disabled: root.loading || root.private-request-decision != "";
                                     loading: root.private-request-decision == request.user-id;
 
                                     clicked => {
@@ -412,7 +416,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Decline";
                                     variant: "ghost";
-                                    disabled: root.private-request-decision != "";
+                                    disabled: root.loading || root.private-request-decision != "";
                                     loading: root.private-request-decision == request.user-id;
 
                                     clicked => {
@@ -424,7 +428,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Block";
                                     variant: "danger-ghost";
-                                    disabled: root.private-request-decision != "";
+                                    disabled: root.loading || root.private-request-decision != "";
 
                                     clicked => {
                                         root.block-private-request(request.user-id);
@@ -556,7 +560,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Join";
                                     variant: "primary";
-                                    disabled: root.group-invite-decision != "";
+                                    disabled: root.loading || root.group-invite-decision != "";
                                     loading: root.group-invite-decision == "join:" + invite.user-id;
 
                                     clicked => {
@@ -568,7 +572,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Decline";
                                     variant: "ghost";
-                                    disabled: root.group-invite-decision != "";
+                                    disabled: root.loading || root.group-invite-decision != "";
                                     loading: root.group-invite-decision == "decline:" + invite.user-id;
 
                                     clicked => {
@@ -698,6 +702,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Join";
                                     variant: "primary";
+                                    disabled: root.loading;
 
                                     clicked => {
                                         root.accept-channel-invite(invite.user-id);
@@ -708,6 +713,7 @@ export component RequestsTab inherits VerticalLayout {
                                     touch: root.mobile-mode;
                                     text: "Decline";
                                     variant: "ghost";
+                                    disabled: root.loading;
 
                                     clicked => {
                                         root.decline-channel-invite(invite.user-id);

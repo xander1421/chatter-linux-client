@@ -8,8 +8,11 @@ import { Avatar } from "../components/avatar.slint";
 
 export component BlockedTab inherits VerticalLayout {
     in property <bool> mobile-mode;
+    in property <bool> loading;
     in property <length> bottom-inset;
     in property <length> row-height;
+    in property <length> row-avatar;
+    in property <length> row-name-size;
     in property <[BlockedUserData]> blocked-users;
     in-out property <string> confirm-remove-id;
     callback unblock-user(string);
@@ -87,7 +90,7 @@ export component BlockedTab inherits VerticalLayout {
                         spacing: Spacing.sm;
 
                         Avatar {
-                            size: 40px;
+                            size: root.row-avatar;
                             source: user.avatar-source;
                             anonymous: user.anon;
                             name: user.display-name;
@@ -101,7 +104,7 @@ export component BlockedTab inherits VerticalLayout {
                             Text {
                                 text: user.display-name;
                                 color: Colors.text-primary;
-                                font-size: Typography.sm;
+                                font-size: root.row-name-size;
                                 font-weight: Typography.medium;
                                 overflow: elide;
                             }
@@ -128,6 +131,7 @@ export component BlockedTab inherits VerticalLayout {
                                 touch: root.mobile-mode;
                                 text: "Unblock";
                                 variant: "ghost";
+                                disabled: root.loading;
 
                                 clicked => {
                                     root.unblock-user(user.user-id);
@@ -141,6 +145,7 @@ export component BlockedTab inherits VerticalLayout {
                                 touch: root.mobile-mode;
                                 text: user.anon ? "Delete chat" : "Remove";
                                 variant: "ghost";
+                                disabled: root.loading;
 
                                 clicked => {
                                     root.confirm-remove-id = user.user-id;
@@ -166,6 +171,7 @@ export component BlockedTab inherits VerticalLayout {
                                 touch: root.mobile-mode;
                                 text: user.anon ? "Delete" : "Remove";
                                 variant: "destructive";
+                                disabled: root.loading;
 
                                 clicked => {
                                     root.confirm-remove-id = "";
