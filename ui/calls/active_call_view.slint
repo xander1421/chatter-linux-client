@@ -281,14 +281,21 @@ export component ActiveCallView inherits Rectangle {
                     || (root.maximized-index >= 0 && root.maximized-index != idx) ? 0 : 1;
                 animate opacity { duration: Materials.motion-standard; easing: Materials.settle; }
                 visible: idx < root.tile-indices.length || self.opacity > 0;
-                interactive: self.opacity > 0.95
+                interactive: source-index >= 0 && source-index < call-data.participants.length
+                    && self.opacity > 0.95
                     && (root.maximized-index < 0 || root.maximized-index == idx);
                 participant: root.tile-indices.length > idx
                     ? call-data.participants[source-index] : root.empty-participant;
                 video-frame: source-index >= 0 && source-index == call-data.participants.length - 1 ? local-video-frame
                     : source-index >= 0 && remote-video-frames.length > source-index ? remote-video-frames[source-index] : local-video-frame;
                 is-local: source-index == call-data.participants.length - 1;
-                clicked => { root.pinned-id = call-data.participants[source-index].user-id; root.user-focus = root.maximized-index == idx ? -1 : idx; }
+                clicked => {
+                    if source-index >= 0 && source-index < call-data.participants.length {
+                        let was-maximized = root.maximized-index == idx;
+                        root.pinned-id = call-data.participants[source-index].user-id;
+                        root.user-focus = was-maximized ? -1 : idx;
+                    }
+                }
             }
 
             // Per-peer controls bar — top of the maximized tile, remote only.
