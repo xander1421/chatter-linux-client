@@ -568,6 +568,7 @@ pub fn apply_thread_reply_badges(
     };
     let model = window.global::<crate::SidebarPane>().get_chat_rows();
     let mut found = false;
+    use slint::Model as _;
     if let Some(vec) = model.as_any().downcast_ref::<slint::VecModel<crate::ChatRowData>>() {
         if let Some(i) = (0..vec.row_count()).find(|&i| {
             vec.row_data(i).is_some_and(|row| row.conversation_id.as_str() == key.as_str())

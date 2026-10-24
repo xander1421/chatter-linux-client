@@ -570,7 +570,7 @@ fn roster_rows(
     members: Vec<ChannelMemberData>,
     banned: Vec<BannedMemberData>,
 ) -> ModelRc<ChannelRosterRowData> {
-    let rows = member_roster_rows(members, banned)
+    let rows: Vec<ChannelRosterRowData> = member_roster_rows(members, banned)
         .into_iter()
         .map(|row| match row {
             MemberRosterRow::Member(member) => ChannelRosterRowData {
