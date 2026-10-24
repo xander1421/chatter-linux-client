@@ -43,7 +43,8 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .map(|t| t.target_type.to_string())
             };
             // In the order they are to arrive.
-            let sources = crate::bin_ui::features::chat::forward_sources(&w);
+            let contact_text = crate::bin_ui::features::chat::contact_share_text(&w);
+            let sources = if contact_text.is_none() { crate::bin_ui::features::chat::forward_sources(&w) } else { None };
 
             // The row's type tag is core's conversation vocabulary, so the target
             // resolves through core's own inverse — no second mapping to drift.
@@ -53,7 +54,7 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .as_deref()
                 .and_then(|kind| ConversationType::from_str_value(kind).ok())
                 .and_then(|kind| ActiveConversation::from_routing_key(&kind, &target_id_str));
-            let (Some(target), Some(sources)) = (target, sources.filter(|s| !s.is_empty())) else {
+            let Some(target) = target else {
                 tracing::error!(
                     target_id = %target_id_str,
                     ?target_type,
@@ -61,10 +62,39 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 );
                 return;
             };
+            if contact_text.is_none() && sources.as_ref().is_none_or(Vec::is_empty) {
+                return;
+            }
             w.global::<crate::ModalHostState>()
                 .set_forward_loading(true);
 
             tokio::spawn(async move {
+                if let Some(text) = contact_text {
+                    let sent = match ui_ctx.send_text(target, &text).await {
+                        Ok(_) => true,
+                        Err(error) => {
+                            tracing::error!(%error, "contact share failed");
+                            false
+                        }
+                    };
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<crate::ModalHostState>().set_forward_loading(false);
+                            if sent {
+                                crate::bin_ui::features::back::close(&w, "forward-message");
+                                if ui_ctx.active_conversation() == target {
+                                    crate::bin_ui::features::sidebar::select_conversation(&w, target);
+                                }
+                            } else {
+                                w.set_toast_message("Could not share contact".into());
+                                w.set_toast_variant("error".into());
+                                w.set_toast_visible(true);
+                            }
+                        }
+                    });
+                    return;
+                }
+                let Some(sources) = sources.filter(|s| !s.is_empty()) else { return; };
                 let source = ui_ctx.conversation(ui_ctx.active_conversation());
                 // One at a time, in order: the copies must arrive in the order the
                 // originals were written. A failure does not stop the rest.

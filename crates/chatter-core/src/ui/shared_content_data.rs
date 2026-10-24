@@ -2,7 +2,7 @@
 
 use crate::storage::repositories::SharedContentRow;
 
-/// One tile (Media/GIFs) or row (Files/Links/Voice/Music) of the shared-content
+/// One tile (Photos/Videos/GIFs) or row (Files/Links/Voice/Audio) of the shared-content
 /// tabs.
 ///
 /// The client presenter maps this to a `SharedContentItem`.
@@ -43,13 +43,15 @@ impl From<&SharedContentRow> for SharedContentItemData {
 
 /// One segment of the shared-content tab strip.
 ///
-/// The client presenter supplies the visible tab label.
+/// The label is ready to render, including the count.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SharedTabData {
     /// `SharedCategory::as_str` — sent back on selection.
     pub id: String,
     /// How many items sit behind it.
     pub count: i32,
+    /// Ready to render, including count and singular/plural noun.
+    pub label: String,
 }
 
 /// Build the tab strip from the index's per-category counts.
@@ -60,14 +62,25 @@ pub struct SharedTabData {
 /// does not reshuffle as a conversation grows.
 #[must_use]
 pub fn shared_tabs(counts: &[(String, u32)]) -> Vec<SharedTabData> {
-    const ORDER: &[&str] = &["media", "file", "link", "voice", "gif", "music"];
+    const ORDER: &[&str] = &["photo", "video", "audio", "link", "voice", "gif", "file"];
     ORDER
         .iter()
         .filter_map(|id| {
             let count = counts.iter().find(|(c, _)| c == id).map(|(_, n)| *n)?;
-            (count > 0).then(|| SharedTabData {
+            if count == 0 { return None; }
+            let noun = match (*id, count) {
+                ("photo", 1) => "photo", ("photo", _) => "photos",
+                ("video", 1) => "video", ("video", _) => "videos",
+                ("audio", 1) => "audio file", ("audio", _) => "audio files",
+                ("link", 1) => "shared link", ("link", _) => "shared links",
+                ("voice", 1) => "voice message", ("voice", _) => "voice messages",
+                ("gif", 1) => "GIF", ("gif", _) => "GIFs",
+                ("file", 1) => "file", _ => "files",
+            };
+            Some(SharedTabData {
                 id: (*id).to_string(),
                 count: count as i32,
+                label: format!("{count} {noun}"),
             })
         })
         .collect()
@@ -100,15 +113,17 @@ mod tests {
     #[test]
     fn tab_strip_keeps_fixed_order_and_drops_empty_tabs() {
         let tabs = shared_tabs(&[
-            ("music".into(), 2),
-            ("media".into(), 9),
+            ("audio".into(), 2),
+            ("photo".into(), 9),
             ("voice".into(), 0),
             ("nonsense".into(), 5),
         ]);
         assert_eq!(
             tabs.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-            vec!["media", "music"],
+            vec!["photo", "audio"],
         );
         assert_eq!(tabs[0].count, 9);
+        assert_eq!(tabs[0].label, "9 photos");
+        assert_eq!(tabs[1].label, "2 audio files");
     }
 }

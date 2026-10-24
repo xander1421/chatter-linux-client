@@ -73,17 +73,18 @@ impl UserService {
         &self,
         user_ids: &[UserId],
     ) -> std::collections::HashMap<UserId, String> {
+        let owner = self.settings_repo.current_user_id().ok();
         let sources = self
             .user_repo
-            .display_name_sources(user_ids)
+            .display_name_sources(owner.as_ref(), user_ids)
             .unwrap_or_default();
         user_ids
             .iter()
             .map(|user_id| {
-                let (profile_name, username) = sources.get(user_id).cloned().unwrap_or_default();
+                let (contact_name, profile_name, username) = sources.get(user_id).cloned().unwrap_or_default();
                 (
                     *user_id,
-                    self.resolve_display_name(user_id, profile_name, username),
+                    contact_name.filter(|name| !name.is_empty()).unwrap_or_else(|| self.resolve_display_name(user_id, profile_name, username)),
                 )
             })
             .collect()

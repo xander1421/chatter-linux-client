@@ -9,6 +9,46 @@ impl ChatterClient {
         self.users().get_display_name(user_id)
     }
 
+    /// The local name saved on this device for the signed-in account.
+    pub fn contact_name(&self, user_id: &crate::domain::ids::UserId) -> Option<String> {
+        let owner = self.session_current_user_id()?;
+        crate::storage::repositories::UserRepository::new(self.services.database.clone())
+            .contact_name(&owner, user_id)
+            .ok()
+            .flatten()
+    }
+
+    /// Change only this device's encrypted contact-name row. Empty resets it.
+    pub fn set_contact_name(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        name: &str,
+    ) -> Result<(), crate::error::StorageError> {
+        let owner = self.session_current_user_id().ok_or_else(||
+            crate::error::StorageError::InvalidData("signed out".into()))?;
+        crate::storage::repositories::UserRepository::new(self.services.database.clone())
+            .set_contact_name(&owner, user_id, name.trim())
+    }
+
+    /// Text suitable for sending through the ordinary conversation send path.
+    /// Public friend codes use the existing connect URL; a known non-friend
+    /// has no code issued to this device, so share the handle instead.
+    pub fn share_contact_text(&self, user_id: &crate::domain::ids::UserId) -> Option<String> {
+        if self.anon_mode_enabled() || self.is_profile_user_blocked(user_id) {
+            return None;
+        }
+        if self.is_friend(user_id) {
+            return Some(format!("chatter://connect/{user_id}"));
+        }
+        self.known_username(user_id).map(|handle| format!("@{handle}"))
+    }
+
+    /// Eligible destinations use the same mode-scoped conversation list as
+    /// the forward picker, without imposing a source-message constraint.
+    pub fn share_contact_destinations(&self, query: &str) -> Vec<crate::client::ForwardDestination> {
+        self.forward_destinations(query)
+    }
+
     /// Apply the event before rendering: the core state subscriber and UI
     /// subscriber run independently, so the UI must not race the former.
     pub fn update_typing_indicator(

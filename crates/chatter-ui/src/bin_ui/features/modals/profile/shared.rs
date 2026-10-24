@@ -69,10 +69,9 @@ pub(super) fn load_shared_tabs(
         let rows: Vec<SharedTab> = tabs
             .into_iter()
             .map(|t| {
-                let label = crate::bin_ui::converters::shared_tab_label(&t.id);
                 SharedTab {
                     id: t.id.into(),
-                    label: label.into(),
+                    label: t.label.into(),
                     count: t.count,
                 }
             })
@@ -377,7 +376,7 @@ mod shared_content_title_tests {
         ] {
             assert_eq!(shared_content_display_title("voice", filename), filename);
         }
-        for category in ["music", "file", "media", "link"] {
+        for category in ["audio", "file", "photo", "link"] {
             assert_eq!(
                 shared_content_display_title(category, "Voice message.wav"),
                 "Voice message.wav"

@@ -159,6 +159,34 @@ pub(super) fn open_forward_modal(
     crate::bin_ui::features::back::push(&w, "forward-message");
 }
 
+/// Open the existing destination picker for a locally shaped contact card.
+/// The source model carries a tagged text payload while this picker is open.
+pub(crate) fn open_contact_share_modal(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    text: String,
+) {
+    w.global::<crate::ModalHostState>()
+        .set_forward_message_preview(text.clone().into());
+    w.global::<crate::ModalHostState>()
+        .set_forward_sources(ModelRc::new(VecModel::from(vec![format!("contact:{text}").into()])));
+    w.global::<crate::ModalHostState>()
+        .set_forward_search_text("".into());
+    let targets = forward_targets(w, ui_ctx, "");
+    w.global::<crate::ModalHostState>()
+        .set_forward_targets(ModelRc::new(VecModel::from(targets)));
+    crate::bin_ui::features::back::push(w, "forward-message");
+}
+
+/// Contact-share payload while the picker is open, if any.
+pub(crate) fn contact_share_text(w: &MainWindow) -> Option<String> {
+    w.global::<crate::ModalHostState>()
+        .get_forward_sources()
+        .iter()
+        .next()
+        .and_then(|value| value.strip_prefix("contact:").map(ToString::to_string))
+}
+
 /// Wire the forward picker's search box. The filter itself is core's — this
 /// re-asks for the destination list narrowed by what was typed.
 pub fn wire_forward_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -197,6 +225,17 @@ pub(crate) fn forward_sources(w: &MainWindow) -> Option<Vec<(UserId, u64)>> {
 /// picker renders. The modal blocks conversation switches, so the active
 /// conversation is the sources' conversation.
 fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<ForwardTarget> {
+    if contact_share_text(w).is_some() {
+        return ui_ctx.share_contact_destinations(query).into_iter().map(|d| ForwardTarget {
+            avatar_source: crate::bin_ui::features::modals::target_avatar(ui_ctx, &d.kind, &d.id),
+            is_anonymous: matches!(d.kind,
+                chatter_core::domain::message::ConversationType::AnonDm
+                | chatter_core::domain::message::ConversationType::AnonGroup),
+            id: d.id.into(),
+            name: d.name.into(),
+            target_type: d.kind.as_str().into(),
+        }).collect();
+    }
     let Some(sources) = forward_sources(w) else {
         return Vec::new();
     };

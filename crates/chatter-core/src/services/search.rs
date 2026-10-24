@@ -200,7 +200,7 @@ impl SearchCategory {
 
     pub fn from_shared_kind(kind: &str) -> Self {
         match kind {
-            "media" | "gif" => Self::Media,
+            "photo" | "video" | "gif" => Self::Media,
             "voice" => Self::Voice,
             "link" => Self::Links,
             _ => Self::Files,

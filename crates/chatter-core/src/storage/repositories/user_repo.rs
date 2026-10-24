@@ -110,40 +110,69 @@ impl UserRepository {
         }
     }
 
-    /// The two name columns `UserService::get_display_names` reads first —
-    /// profile `display_name` and `users.username` — for every id, in one
-    /// query on a reader. A conversation page resolves all its senders here
-    /// instead of two writer-mutex queries per row (`get_profile` also pulled
-    /// each sender's avatar blob just to read the name). Ids with neither row
-    /// map to `(None, None)`.
+    /// Read this account's local override for a peer.
+    pub fn contact_name(&self, owner: &UserId, peer: &UserId) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        conn.query_row(
+            "SELECT name FROM contact_names WHERE owner_id = ?1 AND peer_id = ?2",
+            params![owner.to_string(), peer.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StorageError::Database)
+    }
+
+    /// An empty name removes the local override. No profile or server row is changed.
+    pub fn set_contact_name(&self, owner: &UserId, peer: &UserId, name: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        if name.is_empty() {
+            conn.execute(
+                "DELETE FROM contact_names WHERE owner_id = ?1 AND peer_id = ?2",
+                params![owner.to_string(), peer.to_string()],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO contact_names (owner_id, peer_id, name) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(owner_id, peer_id) DO UPDATE SET name = excluded.name",
+                params![owner.to_string(), peer.to_string(), name],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Batched local override, profile name, and username sources for display.
+    /// The owner key keeps overrides isolated between accounts on this device.
     pub fn display_name_sources(
         &self,
+        owner: Option<&UserId>,
         ids: &[UserId],
-    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<String>)>, StorageError>
+    ) -> Result<std::collections::HashMap<UserId, (Option<String>, Option<String>, Option<String>)>, StorageError>
     {
         let mut out = std::collections::HashMap::with_capacity(ids.len());
         let conn = self.db.read_connection()?;
-        // Far below SQLITE_MAX_VARIABLE_NUMBER; a page has a handful of senders.
         for chunk in ids.chunks(500) {
             let values = vec!["(?)"; chunk.len()].join(",");
             let mut stmt = conn.prepare(&format!(
                 "WITH ids(id) AS (VALUES {values}) \
-                 SELECT ids.id, p.display_name, u.username FROM ids \
+                 SELECT ids.id, n.name, p.display_name, u.username FROM ids \
+                 LEFT JOIN contact_names n ON n.owner_id = ? AND n.peer_id = ids.id \
                  LEFT JOIN profiles p ON p.user_id = ids.id \
                  LEFT JOIN users u ON u.id = ids.id"
             ))?;
-            let keys: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
+            let mut keys: Vec<String> = chunk.iter().map(|id| id.to_string()).collect();
+            keys.push(owner.map(ToString::to_string).unwrap_or_default());
             let rows = stmt.query_map(rusqlite::params_from_iter(keys.iter()), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             })?;
             for row in rows {
-                let (id, display_name, username) = row?;
+                let (id, contact_name, display_name, username) = row?;
                 if let Ok(id) = id.parse::<UserId>() {
-                    out.insert(id, (display_name, username));
+                    out.insert(id, (contact_name, display_name, username));
                 }
             }
         }

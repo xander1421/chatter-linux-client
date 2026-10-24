@@ -34,6 +34,10 @@ pub fn open_user_profile_in_conversation(
     w.global::<crate::ModalHostState>()
         .set_profile_user_id(user_id.to_string().into());
     w.global::<crate::ModalHostState>()
+        .set_profile_contact_name(if is_self || scoped_member { String::new() } else {
+            ui_ctx.and_then(|ctx| ctx.contact_name(user_id)).unwrap_or_default()
+        }.into());
+    w.global::<crate::ModalHostState>()
         .set_profile_is_anonymous(conversation.is_anon());
     // Offered for another user only (set again on that path below).
     w.global::<crate::ModalHostState>()
