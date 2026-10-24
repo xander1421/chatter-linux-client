@@ -575,6 +575,7 @@ mod infrastructure;
 mod startup;
 mod outgoing;
 mod conversation_listing;
+pub use conversation_listing::{member_roster_rows, MemberRosterRow};
 mod social;
 mod profile_facade;
 mod presence_facade;

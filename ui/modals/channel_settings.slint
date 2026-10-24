@@ -17,7 +17,7 @@ import { Input } from "../components/input.slint";
 import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 import { ScrollView } from "std-widgets.slint";
 
-import { ChannelMemberData, BannedMemberData } from "channel_member_types.slint";
+import { ChannelMemberData, BannedMemberData, ChannelRosterRowData } from "channel_member_types.slint";
 
 export component ChannelSettingsModal inherits Rectangle {
     in property <bool> show-modal: false;
@@ -63,6 +63,7 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <[ChannelMemberData]> members: [];
     // Active bans; only filled for roles that can unban (can-view-bans).
     in property <[BannedMemberData]> banned-members: [];
+    in property <[ChannelRosterRowData]> roster-rows: [];
     in property <bool> can-view-bans: false;
     // Loading/error state
     in property <bool> loading: false;
@@ -229,7 +230,7 @@ export component ChannelSettingsModal inherits Rectangle {
                 vertical-stretch: 1;
                 preferred-height: content-area.preferred-height;
 
-                ScrollView {
+                settings-scroll := ScrollView {
                     // Fill the area the layout gave us and scroll inside it.
                     // Sized to the content instead, it was centered in a
                     // shorter parent and the overview's top was cut off.
@@ -671,6 +672,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             loading: root.loading;
                             member-count: root.member-count;
                             members: root.members;
+                            roster-rows: root.roster-rows;
+                            roster-height: max(180px, settings-scroll.height - 120px);
                             narrow: root.narrow;
                             role-picker-user <=> root.role-picker-user;
                             ban-member(arg0) => { root.ban-member(arg0); }
