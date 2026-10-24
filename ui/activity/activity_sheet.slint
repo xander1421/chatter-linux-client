@@ -189,7 +189,12 @@ export component ActivitySheet inherits Rectangle {
                     VerticalLayout { spacing: Spacing.xs;
                         Text { text: "ACTIVITY"; color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
-                        if ActivityGlobal.items.length == 0: VerticalLayout {
+                        if ActivityGlobal.loading: Text {
+                            text: "Loading activity…"; color: Colors.text-muted;
+                            font-size: Typography.sm; horizontal-alignment: center;
+                            height: 160px; vertical-alignment: center;
+                        }
+                        if !ActivityGlobal.loading && ActivityGlobal.items.length == 0: VerticalLayout {
                             alignment: center; spacing: Spacing.sm; height: 160px;
                             HorizontalLayout { alignment: center;
                                 Rectangle { width: 52px; height: 52px; border-radius: Spacing.radius-full;
