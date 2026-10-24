@@ -114,7 +114,8 @@ impl PendingDmRepository {
 
     /// Park without deleting the original wire bytes. A late answer cannot
     /// flush these rows; Retry explicitly reactivates one of them.
-    pub fn fail_peer(&self, peer_id: &UserId) -> Result<Vec<Vec<u8>>, StorageError> {
+    pub fn fail_peer(&self, peer_id: &UserId, reason: &str) -> Result<Vec<Vec<u8>>, StorageError> {
+        use prost::Message as _;
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction().map_err(StorageError::Database)?;
         let content = {
@@ -122,6 +123,17 @@ impl PendingDmRepository {
             let rows = stmt.query_map([peer_id.to_string()], |row| row.get::<_, Vec<u8>>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
+        for bytes in &content {
+            if let Some(sent_at) = crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
+                .and_then(|decoded| crate::services::message::queued_bubble_timestamp(&decoded)) {
+                tx.execute(
+                    "UPDATE messages SET delivery_status='failed', failure_reason=?3
+                     WHERE conversation_type='server_dm' AND conversation_id=?1 AND sent_at=?2
+                     AND delivery_status NOT IN ('sent','delivered','read')",
+                    params![ChannelId::from(*peer_id).to_string(), sent_at, reason],
+                )?;
+            }
+        }
         tx.execute("UPDATE pending_dm_messages SET failed = 1 WHERE peer_id = ?1 AND failed = 0", [peer_id.to_string()])?;
         tx.commit().map_err(StorageError::Database)?;
         Ok(content)

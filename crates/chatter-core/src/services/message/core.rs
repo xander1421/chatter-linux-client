@@ -74,23 +74,6 @@ fn update_retry_status(
 }
 
 impl MessageService {
-    pub(crate) fn mark_bootstrap_timeout(
-        &self,
-        peer_id: &crate::domain::ids::UserId,
-        timestamps: &[u64],
-    ) -> Result<(), MessageError> {
-        let conn = self.database.connection()?;
-        for &timestamp in timestamps {
-            conn.execute(
-                "UPDATE messages SET delivery_status='failed', failure_reason=?3
-                 WHERE conversation_type='server_dm' AND conversation_id=?1 AND sent_at=?2
-                 AND delivery_status NOT IN ('sent','delivered','read')",
-                rusqlite::params![ChannelId::from(*peer_id).to_string(), timestamp, BOOTSTRAP_TIMED_OUT],
-            ).map_err(crate::error::StorageError::from)?;
-        }
-        Ok(())
-    }
-
     /// Change retry progress without overwriting a concurrently arriving receipt.
     pub(crate) fn finish_retry_row(
         &self,

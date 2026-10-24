@@ -115,8 +115,9 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                         Ok(peers) => {
                             recovery.retain(|peer, _| peers.contains(peer));
                             for peer in peers {
-                                let wait = recovery.entry(peer).or_insert_with(BootstrapWait::new);
-                                match wait.advance(Instant::now()) {
+                                let decision = recovery.entry(peer).or_insert_with(BootstrapWait::new)
+                                    .advance(Instant::now());
+                                match decision {
                                     BootstrapDecision::Wait => {}
                                     BootstrapDecision::Reissue => {
                                         let service = message_service.clone();
@@ -128,7 +129,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                     }
                                     BootstrapDecision::Fail => {
                                         recovery.remove(&peer);
-                                        match pending_dms.fail_peer(&peer) {
+                                        match pending_dms.fail_peer(&peer, crate::services::message::core::BOOTSTRAP_TIMED_OUT) {
                                             Ok(contents) => {
                                                 let mut flush = PendingFlush::default();
                                                 for bytes in contents {
@@ -137,9 +138,6 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                                     flush.record(bubble, Err("Secure channel setup timed out. Tap Retry to try again".into()));
                                                 }
                                                 if !flush.failed.is_empty() {
-                                                    if let Err(error) = message_service.mark_bootstrap_timeout(&peer, &flush.failed) {
-                                                        tracing::warn!(%peer, %error, "Could not persist bootstrap timeout");
-                                                    }
                                                     flush.emit(peer, &event_bus);
                                                 }
                                             }
