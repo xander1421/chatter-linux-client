@@ -205,6 +205,7 @@ export component AppModalHost inherits Rectangle {
         is-anonymous: ModalHostState.profile-is-anonymous;
         scoped-member: ModalHostState.profile-scoped-member;
         display-name: ModalHostState.profile-display-name;
+        contact-name: ModalHostState.profile-contact-name;
         username: ModalHostState.profile-username;
         avatar-source: ModalHostState.profile-avatar-source;
         initials: ModalHostState.profile-initials;
@@ -279,6 +280,8 @@ export component AppModalHost inherits Rectangle {
         block-user => {
             ModalHostState.profile-block-user();
         }
+        share-contact => { ModalHostState.profile-share-contact(); }
+        edit-contact(name) => { ModalHostState.profile-edit-contact(name); }
         // Unblocking lives only in Friends › Blocked.
         manage-blocked => {
             ModalHostState.friends-modal-tab = "blocked";

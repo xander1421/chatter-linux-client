@@ -28,8 +28,8 @@ export component ProfileSafetyNumber inherits VerticalLayout {
             alignment: space-between;
 
             Text {
-                text: "SAFETY NUMBER";
-                color: Colors.text-muted;
+                text: root.is-verified ? "✓ Verified" : "Not verified · Safety number";
+                color: root.is-verified ? Colors.online : Colors.text-muted;
                 font-size: Typography.xs2;
                 font-weight: Typography.bold;
                 letter-spacing: 0.5px;

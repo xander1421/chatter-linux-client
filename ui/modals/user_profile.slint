@@ -1,7 +1,6 @@
 import { SharedContentItem, SharedTab } from "profile_shared_types.slint";
 import { ProfileSharedList } from "profile_shared_list.slint";
 import { ProfileSharedGrid } from "profile_shared_grid.slint";
-import { ProfileSafetyNumber } from "profile_safety_number.slint";
 import { ProfileStatusPicker } from "profile_status_picker.slint";
 import { ProfileInfoCard } from "profile_info_card.slint";
 import { ProfileActionTiles } from "profile_action_tiles.slint";
@@ -29,6 +28,7 @@ import { Icons } from "../theme/icons.slint";
 import { ModalContainer } from "../components/modal_container.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
 import { Modal } from "../components/modal.slint";
 import { Avatar } from "../components/avatar.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
@@ -54,6 +54,7 @@ export component UserProfileModal inherits Rectangle {
     in property <string> last-seen: "";
     in property <string> bio: "";
     in property <bool> is-friend: false;
+    in property <string> contact-name: "";
     in property <bool> is-blocked: false;
     // Core's `can_start_secret_chat`: onion channel available, not Shield,
     // not self, not blocked.
@@ -63,10 +64,15 @@ export component UserProfileModal inherits Rectangle {
     property <bool> confirm-block: false;
     // Remove Friend asks too — it is destructive and was instant.
     property <bool> confirm-remove: false;
+    property <bool> confirm-unblock: false;
+    property <bool> more-open: false;
+    property <bool> edit-contact-open: false;
+    property <string> contact-draft: "";
+    property <bool> shared-page-open: false;
     // The disappearing-messages choices are unfolded under their row.
     property <bool> timer-picker-open: false;
-    changed user-id => { self.timer-picker-open = false; }
-    changed display-name => { self.confirm-block = false; self.confirm-remove = false; }
+    changed user-id => { self.timer-picker-open = false; self.shared-page-open = false; self.more-open = false; self.edit-contact-open = false; }
+    changed display-name => { self.confirm-block = false; self.confirm-remove = false; self.confirm-unblock = false; }
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> is-muted: false;
     in property <bool> loading: false;
@@ -116,6 +122,8 @@ export component UserProfileModal inherits Rectangle {
     callback add-friend();
     callback remove-friend();
     callback block-user();
+    callback share-contact();
+    callback edit-contact(string);
     // A blocked profile only points at Friends › Blocked, the one place to
     // unblock or remove someone.
     callback manage-blocked();
@@ -126,6 +134,14 @@ export component UserProfileModal inherits Rectangle {
     callback shared-tab-selected(string /* category */);
     callback shared-load-more();
     callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */, string /* selected-url */);
+
+    pure function shared-icon(id: string) -> image {
+        if id == "photo" || id == "gif" { return Icons.image; }
+        if id == "video" { return Icons.video; }
+        if id == "audio" || id == "voice" { return Icons.mic; }
+        if id == "link" { return Icons.link; }
+        return Icons.file;
+    }
 
     // Helper to get presence color from string
     pure function presence-color(p: string) -> color {
@@ -199,14 +215,26 @@ export component UserProfileModal inherits Rectangle {
                     // X, trailing. The bar carries no title on purpose; the name
                     // below is the title. (No kebab: every action it would hold is
                     // already a tile or a row on this page.)
-                    if root.mobile-mode && !root.root-screen: DismissButton {
+                    if root.shared-page-open: DismissButton {
+                        back: true;
+                        clicked => { root.shared-page-open = false; }
+                    }
+
+                    if root.mobile-mode && !root.root-screen && !root.shared-page-open: DismissButton {
                         back: true;
                         clicked => { root.close(); }
                     }
 
                     Rectangle { horizontal-stretch: 1; }
 
-                    if !root.mobile-mode: DismissButton {
+                    if root.shared-page-open: Text {
+                        text: root.shared-tabs.length > 0 ? root.shared-tab : "Shared media";
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        vertical-alignment: center;
+                    }
+
+                    if !root.mobile-mode && !root.shared-page-open: DismissButton {
                         back: false;
                         clicked => { root.close(); }
                     }
@@ -235,7 +263,7 @@ export component UserProfileModal inherits Rectangle {
                 // Core ignores the request when a load is already in flight or
                 // the last page came back short.
                 changed viewport-y => {
-                    if (self.viewport-height + self.viewport-y - self.height < self.height) {
+                    if (root.shared-page-open && self.viewport-height + self.viewport-y - self.height < self.height) {
                         root.shared-load-more();
                     }
                 }
@@ -246,6 +274,8 @@ export component UserProfileModal inherits Rectangle {
                     alignment: start;
                     spacing: Spacing.md;
 
+                    if !root.shared-page-open: VerticalLayout {
+                        spacing: Spacing.md;
                     // ── Avatar ────────────────────────────────────────
                     HorizontalLayout {
                         alignment: center;
@@ -364,6 +394,24 @@ export component UserProfileModal inherits Rectangle {
                         send-message => { root.send-message(); }
                         toggle-mute => { root.toggle-mute(); }
                         start-call(video) => { root.start-call(video); }
+                        open-more => { root.more-open = !root.more-open; }
+                    }
+
+                    if root.more-open && !root.is-self: HorizontalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
+                        Rectangle {
+                            height: more-content.preferred-height;
+                            background: Colors.inset; border-radius: Spacing.radius-lg;
+                            more-content := VerticalLayout {
+                                padding: Spacing.sm; spacing: Spacing.xs;
+                                if !root.scoped-member && !root.is-anonymous: Button { text: "Video call"; variant: "secondary"; clicked => { root.more-open = false; root.start-call(true); } }
+                                if root.can-start-secret-chat && !root.scoped-member: Button { text: "Start secret chat"; variant: "secondary"; clicked => { root.more-open = false; root.start-secret-chat(); } }
+                                if !root.scoped-member: Button { text: "Safety number"; variant: "secondary"; clicked => { root.more-open = false; root.view-safety-number(); root.show-safety-number = true; } }
+                                if !root.scoped-member: Button { text: "Share contact"; variant: "secondary"; clicked => { root.more-open = false; root.share-contact(); } }
+                                if !root.scoped-member: Button { text: "Edit contact"; variant: "secondary"; clicked => { root.more-open = false; root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
+                                if !root.scoped-member && !root.is-blocked: Button { text: "Block user"; variant: "destructive"; clicked => { root.more-open = false; root.confirm-block = true; } }
+                            }
+                        }
                     }
 
                     // ── Disappearing messages ─────────────────────────
@@ -469,10 +517,16 @@ export component UserProfileModal inherits Rectangle {
                     // domain model nor the schema, and a faked row is worse
                     // than a missing one. Nothing to show (a peer with no
                     // known handle and no bio) means no card, not an empty one.
-                    if root.username != "" || root.bio != "": ProfileInfoCard {
+                    if root.username != "" || root.bio != "" || (!root.is-self && !root.scoped-member): ProfileInfoCard {
                         username: root.username;
                         bio: root.bio;
                         is-self: root.is-self;
+                        scoped-member: root.scoped-member;
+                        is-verified: root.is-verified;
+                        safety-number: root.safety-number;
+                        show-safety-number <=> root.show-safety-number;
+                        view-safety-number => { root.view-safety-number(); }
+                        toggle-verified => { root.toggle-verified(); }
                         share-link: root.share-link;
                         share-qr: root.share-qr;
                         share-status: root.share-status;
@@ -486,15 +540,6 @@ export component UserProfileModal inherits Rectangle {
                     if root.is-self: ProfileStatusPicker {
                         status-mode: root.status-mode;
                         change-status(mode) => { root.change-status(mode); }
-                    }
-
-                    // ── Safety number (non-self) ──────────────────────
-                    if !root.scoped-member && !root.is-self: ProfileSafetyNumber {
-                        safety-number: root.safety-number;
-                        is-verified: root.is-verified;
-                        show-safety-number <=> root.show-safety-number;
-                        view-safety-number => { root.view-safety-number(); }
-                        toggle-verified => { root.toggle-verified(); }
                     }
 
                     // ── Secret chat ───────────────────────────────────
@@ -533,171 +578,46 @@ export component UserProfileModal inherits Rectangle {
                         }
                     }
 
-                    // ── Shared-content tab strip ──────────────────────
-                    // A pill segmented control, not the underlined tabs the
-                    // Contacts modal uses: those read as page navigation, this
-                    // is a filter over one list.
-                    //
-                    // The pill is sized from the chip inside it, not the other
-                    // way round: 48px shell minus 2px inset either side leaves
-                    // each chip exactly at the 48px-token-derived 44px touch
-                    // floor. At the old 40px/3px it was 34px, which is a
-                    // failed target dressed as a style choice.
-                    //
-                    // One tab is not a choice: a lone pill looked like a button.
-                    // Then — and for the empty state — a plain section header.
-                    if !root.is-self && root.shared-tabs.length <= 1 && !root.shared-loading: HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        padding-top: Spacing.sm;
-
-                        Text {
-                            text: root.shared-tabs.length == 1 ? root.shared-tabs[0].label : "Shared media";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs2;
-                            font-weight: Typography.bold;
-                            letter-spacing: 0.5px;
-                        }
-                    }
-
-                    if root.shared-tabs.length > 1: HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-
+                    // Shared categories remain a compact card until one is opened.
+                    if !root.is-self && root.shared-tabs.length > 0: HorizontalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
-                            height: Spacing.touch-target-min;
-                            border-radius: Spacing.radius-full;
-                            background: Colors.inset;
-
-                            HorizontalLayout {
-                                padding: Spacing.xxs;
-                                spacing: Spacing.xxs;
-
-                                for tab in root.shared-tabs: Rectangle {
-                                    horizontal-stretch: 1;
-                                    border-radius: Spacing.radius-full;
-                                    background: root.shared-tab == tab.id
-                                        ? Colors.tint-strong
-                                        : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
-                                    transform-origin: { x: self.width / 2, y: self.height / 2 };
-                                    transform-scale-x: tab-touch.pressed ? 96% : 100%;
-                                    transform-scale-y: tab-touch.pressed ? 92% : 100%;
-                                    animate background { duration: Materials.motion-standard; easing: Materials.glide; }
-                                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                            height: shared-card.preferred-height;
+                            background: Colors.inset; border-radius: Spacing.radius-lg;
+                            shared-card := VerticalLayout {
+                                for category in root.shared-tabs: Rectangle {
+                                    height: root.row-height;
+                                    background: shared-touch.has-hover ? Colors.surface-hover : transparent;
                                     accessible-role: button;
-                                    accessible-label: "shared-tab-" + tab.id;
-
-                                    Text {
-                                        text: tab.label;
-                                        color: root.shared-tab == tab.id ? Colors.primary : Colors.text-muted;
-                                        font-size: Typography.sm;
-                                        font-weight: root.shared-tab == tab.id ? Typography.semibold : Typography.normal;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                        overflow: elide;
+                                    accessible-label: category.label;
+                                    accessible-action-default => { root.shared-tab = category.id; root.shared-page-open = true; root.shared-tab-selected(category.id); }
+                                    HorizontalLayout {
+                                        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+                                        VerticalLayout { alignment: center;
+                                            Image { source: root.shared-icon(category.id); width: 20px; height: 20px; colorize: Colors.primary; }
+                                        }
+                                        Text { text: category.label; color: Colors.text-primary; font-size: Typography.base; vertical-alignment: center; horizontal-stretch: 1; }
+                                        VerticalLayout { alignment: center;
+                                            Image { source: Icons.chevron-right; width: 16px; height: 16px; colorize: Colors.text-muted; }
+                                        }
                                     }
-
-                                    tab-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => { root.shared-tab-selected(tab.id); }
-                                    }
+                                    shared-touch := TouchArea { mouse-cursor: pointer; clicked => { root.shared-tab = category.id; root.shared-page-open = true; root.shared-tab-selected(category.id); } }
                                 }
                             }
-                            }
-                    }
-
-                    // ── Media / GIF grid ──────────────────────────────
-                    // Three flush columns, 2px gutters, edge to edge. Same
-                    // absolute-placement trick the section-icon picker uses —
-                    // Slint has no wrapping grid over a model.
-                    if root.shared-tab == "media" || root.shared-tab == "gif": ProfileSharedGrid {
-                        shared-items: root.shared-items;
-                        open-shared-item(message-id, attachment-id, category, selected-url) => {
-                            root.open-shared-item(message-id, attachment-id, category, selected-url);
                         }
                     }
 
-                    // ── Files / Links / Voice / Music list ────────────
-                    if root.shared-tab != "" && root.shared-tab != "media" && root.shared-tab != "gif": ProfileSharedList {
-                        shared-items: root.shared-items;
-                        mobile-mode: root.mobile-mode;
-                        row-height: root.row-height;
-                        open-shared-item(message-id, attachment-id, category, selected-url) => {
-                            root.open-shared-item(message-id, attachment-id, category, selected-url);
-                        }
-                    }
-
-                    // Nothing shared yet, or the tab is still loading.
-                    if root.shared-tabs.length == 0 && !root.shared-loading && !root.is-self: HorizontalLayout {
-                        alignment: center;
-                        padding: Spacing.lg;
-
-                        Text {
-                            text: "Nothing shared in this conversation yet.";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                        }
-                    }
-
-                    if root.shared-loading: HorizontalLayout {
-                        alignment: center;
-                        padding: Spacing.md;
-
-                        Text {
-                            text: "Loading…";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                        }
-                    }
-
-                    // Destructive actions belong below the profile and shared
-                    // content, as quiet text rows instead of primary buttons.
-                    if !root.scoped-member && !root.is-self && !root.is-blocked: VerticalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        spacing: Spacing.none;
-
-                        if root.is-friend: Rectangle {
-                            height: Spacing.touch-target-min;
-                            background: remove-touch.has-hover ? Colors.surface-hover : transparent;
-                            accessible-role: button;
-                            accessible-label: "Remove Friend";
-                            accessible-enabled: !root.loading;
-                            accessible-action-default => {
-                                if !root.loading { root.confirm-block = false; root.confirm-remove = true; }
-                            }
-                            Text {
-                                text: "Remove Friend";
-                                color: Colors.error-hover;
-                                font-size: Typography.sm;
-                                vertical-alignment: center;
-                            }
-                            remove-touch := TouchArea {
-                                enabled: !root.loading;
-                                mouse-cursor: pointer;
-                                clicked => { root.confirm-block = false; root.confirm-remove = true; }
-                            }
-                        }
-
+                    if !root.scoped-member && !root.is-self: HorizontalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
-                            height: Spacing.touch-target-min;
-                            background: block-touch.has-hover ? Colors.surface-hover : transparent;
-                            accessible-role: button;
-                            accessible-label: "Block";
-                            accessible-action-default => { root.confirm-remove = false; root.confirm-block = true; }
-                            Text {
-                                text: "Block";
-                                color: Colors.error-hover;
-                                font-size: Typography.sm;
-                                vertical-alignment: center;
-                            }
-                            block-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.confirm-remove = false; root.confirm-block = true; }
+                            height: actions-card.preferred-height;
+                            background: Colors.inset; border-radius: Spacing.radius-lg;
+                            actions-card := VerticalLayout {
+                                padding: Spacing.sm; spacing: Spacing.xs;
+                                Button { text: "Share this contact"; icon: Icons.send; variant: "secondary"; clicked => { root.share-contact(); } }
+                                Button { text: "Edit contact"; icon: Icons.edit; variant: "secondary"; clicked => { root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
+                                if root.is-friend: Button { text: "Delete contact"; icon: Icons.trash; variant: "destructive"; clicked => { root.confirm-remove = true; } }
+                                Button { text: root.is-blocked ? "Unblock user" : "Block user"; variant: "destructive"; clicked => { if root.is-blocked { root.confirm-unblock = true; } else { root.confirm-block = true; } } }
                             }
                         }
                     }
@@ -705,6 +625,22 @@ export component UserProfileModal inherits Rectangle {
                     // Breathing room so the last grid row clears the bottom
                     // edge (and, full-screen, the floating dock).
                     Rectangle { height: Spacing.xl; }
+                    }
+
+                    if root.shared-page-open: VerticalLayout {
+                        spacing: Spacing.md;
+                        Text { text: "Shared " + root.shared-tab; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
+                        if root.shared-tab == "photo" || root.shared-tab == "video" || root.shared-tab == "gif": ProfileSharedGrid {
+                            shared-items: root.shared-items;
+                            open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
+                        }
+                        if root.shared-tab != "photo" && root.shared-tab != "video" && root.shared-tab != "gif": ProfileSharedList {
+                            shared-items: root.shared-items; mobile-mode: root.mobile-mode; row-height: root.row-height;
+                            open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
+                        }
+                        if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
+                        if !root.shared-loading && root.shared-items.length == 0: Text { text: "Nothing shared yet."; color: Colors.text-muted; font-size: Typography.sm; }
+                    }
                 }
             }
         }
@@ -713,7 +649,7 @@ export component UserProfileModal inherits Rectangle {
     // they collided with the Media strip below.
     Modal {
         show: root.confirm-remove && root.is-friend && !root.is-self && !root.is-blocked;
-        title: "Remove " + root.display-name + "?";
+        title: "Delete " + root.display-name + "?";
         modal-width: 400px;
         show-close: false;
         close => { root.confirm-remove = false; }
@@ -739,7 +675,7 @@ export component UserProfileModal inherits Rectangle {
                 }
 
                 Button {
-                    text: "Remove";
+                    text: "Delete contact";
                     variant: "destructive";
                     clicked => {
                         root.confirm-remove = false;
@@ -788,4 +724,38 @@ export component UserProfileModal inherits Rectangle {
             }
         }
     }
+    Modal {
+        show: root.edit-contact-open;
+        title: "Edit contact";
+        modal-width: 400px;
+        show-close: false;
+        close => { root.edit-contact-open = false; }
+        VerticalLayout {
+            spacing: Spacing.md;
+            Input { text <=> root.contact-draft; placeholder: "Contact name"; control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button { text: "Cancel"; variant: "secondary"; clicked => { root.edit-contact-open = false; } }
+                Button { text: "Reset"; variant: "secondary"; clicked => { root.edit-contact-open = false; root.edit-contact(""); } }
+                Button { text: "Save"; variant: "primary"; clicked => { root.edit-contact-open = false; root.edit-contact(root.contact-draft); } }
+            }
+        }
+    }
+
+    Modal {
+        show: root.confirm-unblock && root.is-blocked && !root.is-self;
+        title: "Unblock " + root.display-name + "?";
+        modal-width: 400px; show-close: false;
+        close => { root.confirm-unblock = false; }
+        VerticalLayout {
+            spacing: Spacing.md;
+            Text { text: "Open blocked contacts to unblock this person."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button { text: "Cancel"; variant: "secondary"; clicked => { root.confirm-unblock = false; } }
+                Button { text: "Open Blocked"; variant: "primary"; clicked => { root.confirm-unblock = false; root.manage-blocked(); } }
+            }
+        }
+    }
+
 }

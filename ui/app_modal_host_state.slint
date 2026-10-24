@@ -108,6 +108,7 @@ export global ModalHostState {
     in property <bool> profile-is-anonymous: false;
     in property <bool> profile-scoped-member: false;
     in property <string> profile-display-name: "";
+    in property <string> profile-contact-name: "";
     in property <string> profile-username: "";
     in property <image> profile-avatar-source;
     in property <string> profile-initials: "";
@@ -259,6 +260,8 @@ export global ModalHostState {
     callback profile-add-friend();
     callback profile-remove-friend();
     callback profile-block-user();
+    callback profile-share-contact();
+    callback profile-edit-contact(string);
     callback profile-edit-profile();
     callback profile-view-safety-number();
     callback profile-toggle-verified();

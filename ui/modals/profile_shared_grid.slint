@@ -9,7 +9,7 @@ export component ProfileSharedGrid inherits Rectangle {
     height: Math.ceil(root.shared-items.length / 3) * (root.tile + root.gutter);
 
     for item[index] in root.shared-items: Rectangle {
-        x: mod(index, 3) * (root.tile + root.gutter);
+        x: Math.mod(index, 3) * (root.tile + root.gutter);
         y: Math.floor(index / 3) * (root.tile + root.gutter);
         width: root.tile;
         height: root.tile;
