@@ -270,6 +270,7 @@ export component UnifiedSearch inherits Rectangle {
     in-out property <string> from-label: "";
     in-out property <string> in-label: "";
     in property <[QuickSwitcherItem]> picker-options: [];
+    in property <bool> picker-searching: false;
     property <string> picker-mode: "";
     property <string> picker-query: "";
     callback picker-request(string, string);
@@ -313,7 +314,9 @@ export component UnifiedSearch inherits Rectangle {
     callback resolve(string);
     callback person-selected(string);
 
-    property <int> total-count: root.conversations.length + root.messages.length;
+    property <int> visible-conversation-count: root.category == "all" || root.category == "chats" ? root.conversations.length : 0;
+    property <int> visible-message-count: root.category == "chats" ? 0 : root.messages.length;
+    property <int> total-count: root.visible-conversation-count + root.visible-message-count;
     property <float> open-progress: root.show ? 1 : 0;
     animate open-progress { duration: Materials.motion-standard; easing: Materials.glide; }
     property <float> shape-progress: root.show ? 1 : 0;
@@ -323,18 +326,19 @@ export component UnifiedSearch inherits Rectangle {
         // Whatever the query is on open/close, the next edit compares to it.
         root.last-edited-query = root.query;
         if root.show { search-input.focus(); }
+        else { root.date-sheet-open = false; root.picker-mode = ""; }
     }
 
     visible: root.show || root.open-progress > 0 || root.shape-progress > 0;
 
     function activate-selected() {
-        if root.selected-index < root.conversations.length {
+        if root.selected-index < root.visible-conversation-count {
             root.conversation-selected(
                 root.conversations[root.selected-index].id,
                 root.conversations[root.selected-index].conv-type);
         } else if root.selected-index < root.total-count {
             root.message-selected(
-                root.messages[root.selected-index - root.conversations.length].message-id);
+                root.messages[root.selected-index - root.visible-conversation-count].message-id);
         }
     }
 
@@ -438,7 +442,9 @@ export component UnifiedSearch inherits Rectangle {
                                     return accept;
                                 }
                                 if (event.text == Key.Escape) {
-                                    root.close();
+                                    if (root.date-sheet-open) { root.date-sheet-open = false; }
+                                    else if (root.picker-mode != "") { root.picker-mode = ""; }
+                                    else { root.close(); }
                                     return accept;
                                 }
                                 return reject;
@@ -747,15 +753,16 @@ export component UnifiedSearch inherits Rectangle {
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
-                    for c[i] in root.conversations: ConvRow {
-                        visible: root.category == "all" || root.category == "chats";
-                        interactive: root.show;
-                        item-id: c.id;
-                        name: c.name;
-                        conv-type: c.conv-type;
-                        unread-count: c.unread-count;
-                        selected: i == root.selected-index;
-                        clicked(id, t) => { root.conversation-selected(id, t); }
+                    if root.category == "all" || root.category == "chats": VerticalLayout {
+                        for c[i] in root.conversations: ConvRow {
+                            interactive: root.show;
+                            item-id: c.id;
+                            name: c.name;
+                            conv-type: c.conv-type;
+                            unread-count: c.unread-count;
+                            selected: i == root.selected-index;
+                            clicked(id, t) => { root.conversation-selected(id, t); }
+                        }
                     }
 
                     // Messages (content)
@@ -795,7 +802,7 @@ export component UnifiedSearch inherits Rectangle {
                                 highlight-start: m.highlight-start;
                                 highlight-end: m.highlight-end;
                                 timestamp: m.timestamp;
-                                selected: (root.conversations.length + j) == root.selected-index;
+                                selected: (root.visible-conversation-count + j) == root.selected-index;
                                 clicked(id) => { root.message-selected(id); }
                             }
                         }
@@ -812,6 +819,8 @@ export component UnifiedSearch inherits Rectangle {
                             height: media-grid.tile;
                             border-radius: Spacing.radius-md;
                             background: Colors.inset;
+                            border-width: root.visible-conversation-count + index == root.selected-index ? 2px : 0px;
+                            border-color: Colors.primary;
                             clip: true;
                             accessible-role: button;
                             accessible-label: m.content-preview;
@@ -1020,7 +1029,7 @@ export component UnifiedSearch inherits Rectangle {
                             Text { text: option.name; x: Spacing.sm + 40px; width: parent.width - Spacing.sm - 48px; height: 100%; color: Colors.text-primary;
                                 font-size: Typography.sm; vertical-alignment: center; overflow: elide; }
                         }
-                        if root.picker-options.length == 0: Text { text: "No matches"; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
+                        if root.picker-options.length == 0: Text { text: root.picker-searching ? "Searching this device…" : "No matches"; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
                     }
                 }
             }
