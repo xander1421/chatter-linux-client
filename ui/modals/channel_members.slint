@@ -146,7 +146,6 @@ export component ChannelMembersSection inherits VerticalLayout {
     }
     roster-list := ListView {
         height: root.roster-height;
-        width: parent.width;
         viewport-width: self.width;
         for row in root.roster-rows: Rectangle {
         width: roster-list.width;
@@ -158,7 +157,9 @@ export component ChannelMembersSection inherits VerticalLayout {
         animate height { duration: Materials.motion-standard; easing: Materials.glide; }
         animate background { duration: Materials.motion-quick; easing: Materials.settle; }
 
-        if row.kind == "member": member-col := VerticalLayout {
+        // Unconditional wrapper so the row height can read its preferred height.
+        member-col := VerticalLayout {
+        if row.kind == "member": VerticalLayout {
             HorizontalLayout {
                 height: 52px;
                 spacing: Spacing.sm;
@@ -574,6 +575,7 @@ export component ChannelMembersSection inherits VerticalLayout {
                     }
                 }
             }
+        }
         }
 
         // Bottom border

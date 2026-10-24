@@ -661,7 +661,6 @@ export component ChannelSettingsModal inherits Rectangle {
 
                         // ========== Members Section ==========
                         if root.active-section == "members": ChannelMembersSection {
-                            banned-members: root.banned-members;
                             can-manage-members: root.can-manage-members;
                             can-invite: root.can-invite;
                             can-view-bans: root.can-view-bans;
@@ -673,7 +672,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             member-count: root.member-count;
                             members: root.members;
                             roster-rows: root.roster-rows;
-                            roster-height: max(180px, settings-scroll.height - 120px);
+                            // Fixed: tying it to settings-scroll.height made a layout binding loop.
+                            roster-height: 480px;
                             narrow: root.narrow;
                             role-picker-user <=> root.role-picker-user;
                             ban-member(arg0) => { root.ban-member(arg0); }
