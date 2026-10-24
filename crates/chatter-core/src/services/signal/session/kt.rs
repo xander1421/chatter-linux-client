@@ -129,6 +129,34 @@ impl SignalService {
         .await
     }
 
+    /// Return the identity key from one proof only after the same inclusion
+    /// and pinned-head checks used for prekey bundles have accepted it.
+    pub async fn verified_identity_key_from_kt(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+    ) -> Result<Vec<u8>, ServiceError> {
+        let pin = kt_anchor::lock_pin().await;
+        let fetched =
+            kt_anchor::pinned_rpc(auth_client.get_key_transparency_proof(recipient_id)).await;
+        let identity_key = fetched
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|proof| proof.identity_key.clone())
+            .unwrap_or_default();
+        self.judge_kt_proof(
+            &pin,
+            "KT",
+            recipient_id,
+            &identity_key,
+            fetched,
+            |old, new| auth_client.get_consistency_proof(old, new),
+        )
+        .await?;
+        Ok(identity_key)
+    }
+
     /// The verdict both KT gates (identified and anonymous) reach once the
     /// proof fetch has returned. `path` labels the log lines.
     async fn judge_kt_proof<F, Fut>(

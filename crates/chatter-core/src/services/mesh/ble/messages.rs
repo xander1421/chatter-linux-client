@@ -16,7 +16,17 @@ impl BleRuntime {
                 .with(|state| state.self_broadcasts.contains(packet))
     }
 
+    #[cfg(test)]
     pub(super) fn on_public_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        self.on_public_message_with_verdict(packet, claimed, None);
+    }
+
+    pub(super) fn on_public_message_with_verdict(
+        &mut self,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+        verified_key: Option<[u8; 32]>,
+    ) {
         if self.events.peer_blocked(claimed) {
             return;
         }
@@ -106,7 +116,7 @@ impl BleRuntime {
             };
             (key, nickname, verified)
         };
-        if !verify_packet(packet, &signing_key) {
+        if verified_key != Some(signing_key) && !verify_packet(packet, &signing_key) {
             tracing::debug!(
                 target: "mesh::ble",
                 peer = %sender,
