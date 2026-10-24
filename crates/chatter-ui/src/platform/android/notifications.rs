@@ -550,6 +550,17 @@ impl AndroidNotifications {
             )
             .map_err(|e| SystemError::NotificationSend(format!("setContentText: {}", e)))?;
 
+            // Keep distinct conversations together in the Android shade while
+            // retaining each conversation's own notification and tap target.
+            let group = env.new_string("chatter.messages").map_err(nerr)?;
+            env.call_method(
+                &builder,
+                jni::jni_str!("setGroup"),
+                jni::jni_sig!("(Ljava/lang/String;)Landroid/app/Notification$Builder;"),
+                &[JValue::Object(&group)],
+            )
+            .map_err(nerr)?;
+
             env.call_method(
                 &builder,
                 jni::jni_str!("setAutoCancel"),

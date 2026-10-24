@@ -22,8 +22,9 @@ pub struct ActivityItem {
 
 #[derive(Clone, Debug)]
 pub struct ActivityTarget {
-    pub conversation_id: String,
-    pub conversation_type: String,
+    pub kind: String,
+    pub conversation_id: Option<String>,
+    pub conversation_type: Option<String>,
     pub message_id: Option<String>,
 }
 
@@ -124,10 +125,10 @@ impl ActivityService {
     pub fn target(&self, owner: UserId, id: &str) -> Result<Option<ActivityTarget>, StorageError> {
         let conn = self.db.read_connection()?;
         conn.query_row(
-            "SELECT conversation_id,conversation_type,message_id FROM activity_items
-             WHERE owner_id=?1 AND id=?2 AND conversation_id IS NOT NULL AND conversation_type IS NOT NULL",
+            "SELECT kind,conversation_id,conversation_type,message_id FROM activity_items
+             WHERE owner_id=?1 AND id=?2",
             params![owner.to_string(), id],
-            |row| Ok(ActivityTarget { conversation_id: row.get(0)?, conversation_type: row.get(1)?, message_id: row.get(2)? }),
+            |row| Ok(ActivityTarget { kind: row.get(0)?, conversation_id: row.get(1)?, conversation_type: row.get(2)?, message_id: row.get(3)? }),
         ).optional().map_err(Into::into)
     }
 

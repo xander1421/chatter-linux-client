@@ -217,7 +217,11 @@ impl ChatterClient {
             }
             DomainEvent::FriendRequestsUpdated { received, .. } => {
                 for request in received {
-                    let title = format!("{} sent you a contact request", request.display_name);
+                    let name = request.user_id.parse::<crate::domain::UserId>()
+                        .ok()
+                        .and_then(|user_id| self.contact_name(&user_id))
+                        .unwrap_or_else(|| request.display_name.clone());
+                    let title = format!("{name} sent you a contact request");
                     self.record_activity(owner, NewActivity {
                         id: &format!("contact-request:{}:{}", request.user_id, request.created_at_ns),
                         kind: "contact-request", title: &title, preview: "",
@@ -238,7 +242,12 @@ impl ChatterClient {
                 });
             }
             DomainEvent::AnonGroupInviteReceived { group_id, group_name, inviter_id, inviter_display_name, .. } => {
-                let name = inviter_display_name.unwrap_or_else(|| self.activity_sender_name(inviter_id));
+                let local_name = self.activity_sender_name(inviter_id);
+                let name = if local_name == "Someone" {
+                    inviter_display_name.unwrap_or(local_name)
+                } else {
+                    local_name
+                };
                 let title = format!("{name} invited you to {group_name}");
                 self.record_activity(owner, NewActivity {
                     id: &format!("invite:anon:{group_id}"), kind: "invite", title: &title,
