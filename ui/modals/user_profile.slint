@@ -148,10 +148,10 @@ export component UserProfileModal inherits Rectangle {
     callback add-friend();
     callback remove-friend();
     callback block-user();
+    callback unblock-user();
     callback share-contact();
     callback edit-contact(string);
-    // A blocked profile only points at Friends › Blocked, the one place to
-    // unblock or remove someone.
+    // The blocked banner also opens the full list of blocked contacts.
     callback manage-blocked();
     callback view-safety-number();
     callback toggle-verified();
@@ -518,7 +518,7 @@ export component UserProfileModal inherits Rectangle {
                         spacing: Spacing.sm;
 
                         Text {
-                            text: "You blocked this person. Manage in Contacts › Blocked.";
+                            text: "You blocked this person.";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             wrap: word-wrap;
@@ -704,7 +704,7 @@ export component UserProfileModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "Blocked people can't call or message you. You can unblock them in Contacts › Blocked.";
+                text: "Blocked people can't call or message you. You can unblock them from their profile or Contacts › Blocked.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
@@ -756,11 +756,11 @@ export component UserProfileModal inherits Rectangle {
         close => { root.confirm-unblock = false; }
         VerticalLayout {
             spacing: Spacing.md;
-            Text { text: "Open blocked contacts to unblock this person."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+            Text { text: "They will be able to call and message you again."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button { text: "Cancel"; variant: "secondary"; clicked => { root.confirm-unblock = false; } }
-                Button { text: "Open Blocked"; variant: "primary"; clicked => { root.confirm-unblock = false; root.manage-blocked(); } }
+                Button { text: "Unblock"; variant: "primary"; clicked => { root.confirm-unblock = false; root.unblock-user(); } }
             }
         }
     }

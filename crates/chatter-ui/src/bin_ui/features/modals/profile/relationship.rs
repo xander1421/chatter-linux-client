@@ -1,6 +1,7 @@
 use super::*;
 
 const REMOVE_FAILED: &str = "Not removed — you are still friends. Try again.";
+const BLOCK_FAILED: &str = "That did not go through. Check your connection and try again.";
 
 /// Say how a relationship change on the profile went: the button flipping
 /// label alone was the only feedback (REVIEW-R4 P1-12). UI thread only.
@@ -283,6 +284,79 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_loading(false);
+                                show_toast(&w, (BLOCK_FAILED, "error"));
+                            }
+                        });
+                    }
+                }
+            });
+        });
+
+    // Unblock user from the profile's confirmation sheet.
+    let weak_window = window.as_weak();
+    let ui_ctx_unblock = ui_ctx.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_unblock_user(move || {
+            let weak = weak_window.clone();
+            let Some(w) = weak.upgrade() else { return };
+            let state = w.global::<crate::ModalHostState>();
+            if state.get_profile_scoped_member() || state.get_profile_loading() {
+                return;
+            }
+            let profile_user_id = state.get_profile_user_id().to_string();
+            let Ok(user_id) = profile_user_id.parse::<UserId>() else {
+                tracing::error!("Invalid profile user ID");
+                show_toast(&w, (BLOCK_FAILED, "error"));
+                return;
+            };
+            state.set_profile_loading(true);
+            let ui_ctx = ui_ctx_unblock.clone();
+            tokio::spawn(async move {
+                match ui_ctx.unblock_profile_user(&user_id).await {
+                    Ok(()) => {
+                        crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                            weak.clone(),
+                            ui_ctx.clone(),
+                        );
+                        crate::bin_ui::features::modals::friends::refresh_blocked_users(
+                            weak.clone(),
+                            &ui_ctx,
+                        );
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                let state = w.global::<crate::ModalHostState>();
+                                if state.get_profile_user_id().as_str() == profile_user_id.as_str() {
+                                    state.set_profile_loading(false);
+                                    state.set_profile_is_blocked(false);
+                                    state.set_profile_is_friend(ui_ctx.is_friend(&user_id));
+                                    state.set_profile_can_start_secret_chat(
+                                        ui_ctx.can_start_secret_chat(&user_id),
+                                    );
+                                }
+                                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+                                if let Some(channel) = ui_ctx.chat_snapshot().active_channel_id {
+                                    crate::bin_ui::features::chat::send_message::show_send_notice(
+                                        &w.as_weak(),
+                                        &ui_ctx,
+                                        channel,
+                                    );
+                                }
+                                tracing::info!("Unblocked user: {}", user_id);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to unblock user: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                if w.global::<crate::ModalHostState>()
+                                    .get_profile_user_id().as_str() == profile_user_id.as_str()
+                                {
+                                    w.global::<crate::ModalHostState>()
+                                        .set_profile_loading(false);
+                                    show_toast(&w, (BLOCK_FAILED, "error"));
+                                }
                             }
                         });
                     }
