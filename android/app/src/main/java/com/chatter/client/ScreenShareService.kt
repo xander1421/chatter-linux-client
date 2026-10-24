@@ -47,11 +47,18 @@ class ScreenShareService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action != START || token != 0L) {
+        val requestedToken = intent?.takeIf { it.action == START }?.getLongExtra(TOKEN, 0L) ?: 0L
+        if (token != 0L) {
+            // A second start must not stop the projection already owned by this
+            // service. Tell its caller that this separate request did not start.
+            if (requestedToken != 0L && requestedToken != token) nativeOnScreenStopped(requestedToken)
+            return START_NOT_STICKY
+        }
+        if (requestedToken == 0L) {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        token = intent.getLongExtra(TOKEN, 0L)
+        token = requestedToken
         try {
             val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

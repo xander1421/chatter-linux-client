@@ -244,6 +244,7 @@ class MainActivity : GameActivity() {
     }
 
     override fun onDestroy() {
+        cameraRequestGeneration++
         if (pendingScreenShareToken != 0L) {
             val token = pendingScreenShareToken
             pendingScreenShareToken = 0L
@@ -954,8 +955,13 @@ class MainActivity : GameActivity() {
     @Suppress("unused")
     fun showCallPermissionDenied(permission: String) {
         runOnUiThread {
+            val label = when (permission) {
+                android.Manifest.permission.CAMERA -> "Camera"
+                android.Manifest.permission.RECORD_AUDIO -> "Microphone"
+                else -> "The required"
+            }
             android.app.AlertDialog.Builder(this)
-                .setMessage("$permission permission is needed for calls.")
+                .setMessage("$label permission is needed for calls.")
                 .setNegativeButton("Close", null)
                 .setPositiveButton("Open app settings") { _, _ ->
                     startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -977,6 +983,7 @@ class MainActivity : GameActivity() {
     // --- Camera capture (CameraX → I420/NV12 → Rust/LiveKit) -------------------
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraAnalysis: ImageAnalysis? = null
+    private var cameraRequestGeneration = 0
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private var cameraFrameBytes = ByteArray(0)
 
@@ -985,9 +992,11 @@ class MainActivity : GameActivity() {
     fun startCamera(width: Int, height: Int, fps: Int, front: Boolean) {
         runOnUiThread {
             if (isDestroyed || cameraExecutor.isShutdown) return@runOnUiThread
+            val requestGeneration = ++cameraRequestGeneration
             val future = ProcessCameraProvider.getInstance(this)
             future.addListener({
-                if (isDestroyed || cameraExecutor.isShutdown) return@addListener
+                if (isDestroyed || cameraExecutor.isShutdown ||
+                    requestGeneration != cameraRequestGeneration) return@addListener
                 val provider = try {
                     future.get()
                 } catch (e: Exception) {
@@ -1049,6 +1058,7 @@ class MainActivity : GameActivity() {
     @Suppress("unused")
     fun stopCamera() {
         runOnUiThread {
+            cameraRequestGeneration++
             cameraAnalysis?.let { analysis ->
                 analysis.clearAnalyzer()
                 cameraProvider?.unbind(analysis)
