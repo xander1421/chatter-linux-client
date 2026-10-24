@@ -711,6 +711,21 @@ impl ChatterClient {
         self.conversation(conv).is_muted()
     }
 
+    pub fn conversation_notification_preference(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+    ) -> Result<crate::domain::channel::NotificationPreference, crate::services::conversation::ConversationError> {
+        self.conversation(conv).notification_preference()
+    }
+
+    pub fn set_conversation_notification_preference(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        preference: crate::domain::channel::NotificationPreference,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).set_notification_preference(preference)
+    }
+
     /// Leave a channel or private group. See `ConversationHandle::leave`.
     pub async fn leave_conversation(
         self: &Arc<Self>,

@@ -591,6 +591,10 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                         });
                         return;
                     };
+                    let muted = ui_ctx.is_conversation_muted(opened).unwrap_or(false);
+                    let notification_preference = ui_ctx
+                        .conversation_notification_preference(opened)
+                        .unwrap_or_default();
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
                         let current_id = w
@@ -622,6 +626,12 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                             .set_channel_settings_description_draft("".into());
                         w.global::<crate::ModalHostState>()
                             .set_channel_settings_ai_enabled(ui_ctx.ai_enabled_for(&group_id_str));
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_muted(muted);
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_notification_pref(
+                                super::modals::preference_label(notification_preference).into(),
+                            );
                         w.global::<crate::ModalHostState>()
                             .set_channel_settings_type("private-group".into());
                         super::modals::apply_private_group_roster(&w, roster);

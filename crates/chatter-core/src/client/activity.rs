@@ -276,15 +276,7 @@ impl ChatterClient {
         if message.sender_id.is_none() || message.sender_id == Some(owner) { return; }
         let sender = message.sender_id.unwrap();
         let text = message.as_text().unwrap_or("");
-        let username = self.get_user_local(&owner).map(|u| u.username).unwrap_or_default();
-        let display_name = self.get_profile_local(&owner).map(|p| p.display_name).unwrap_or_default();
-        let mentioned = MentionExtractor::extract_mentions(text).iter().any(|mention| {
-            match mention.mention_type {
-                MentionType::User => !username.is_empty() && mention.display_text[1..].eq_ignore_ascii_case(&username),
-                MentionType::All | MentionType::Here => message.conversation_type == ConversationType::Channel,
-                MentionType::Channel => false,
-            }
-        }) || named_mention(text, &display_name) || named_mention(text, &username);
+        let mentioned = self.message_mentions_user(message, &owner);
         let reply_to_me = message.reply_to_author_id == Some(owner)
             || message.reply_to.and_then(|id| self.get_message_local(&id)).is_some_and(|parent| parent.sender_id == Some(owner))
             || message.thread_id.and_then(|id| self.get_message_local(&id)).is_some_and(|parent| parent.sender_id == Some(owner));
@@ -303,6 +295,19 @@ impl ChatterClient {
             conversation_type: Some(message.conversation_type.as_str()),
             message_id: Some(&message.id.to_string()), created_at_ms: message.created_at.timestamp_millis(),
         });
+    }
+
+    pub(crate) fn message_mentions_user(&self, message: &Message, owner: &crate::domain::UserId) -> bool {
+        let text = message.as_text().unwrap_or("");
+        let username = self.get_user_local(owner).map(|u| u.username).unwrap_or_default();
+        let display_name = self.get_profile_local(owner).map(|p| p.display_name).unwrap_or_default();
+        MentionExtractor::extract_mentions(text).iter().any(|mention| {
+            match mention.mention_type {
+                MentionType::User => !username.is_empty() && mention.display_text[1..].eq_ignore_ascii_case(&username),
+                MentionType::All | MentionType::Here => message.conversation_type == ConversationType::Channel,
+                MentionType::Channel => false,
+            }
+        }) || named_mention(text, &display_name) || named_mention(text, &username)
     }
 }
 

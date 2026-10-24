@@ -98,6 +98,33 @@ impl ConversationHandle {
         }
     }
 
+    /// Local alert preference for a channel or private group. The server's
+    /// membership mute is a moderation action, so this is device owned.
+    pub fn notification_preference(
+        &self,
+    ) -> ConversationResult<crate::domain::channel::NotificationPreference> {
+        use crate::domain::channel::NotificationPreference;
+        let key = match self.conversation {
+            ActiveConversation::Channel(id) => format!("conv.notification.channel.{id}"),
+            ActiveConversation::AnonGroup(id) => format!("conv.notification.anon_group.{id}"),
+            _ => return Err(ConversationError::NoConversation),
+        };
+        Ok(self.client.channels().settings_repo.get(&key)?.unwrap_or(NotificationPreference::All))
+    }
+
+    pub fn set_notification_preference(
+        &self,
+        preference: crate::domain::channel::NotificationPreference,
+    ) -> ConversationResult {
+        let key = match self.conversation {
+            ActiveConversation::Channel(id) => format!("conv.notification.channel.{id}"),
+            ActiveConversation::AnonGroup(id) => format!("conv.notification.anon_group.{id}"),
+            _ => return Err(ConversationError::NoConversation),
+        };
+        self.client.channels().settings_repo.set(&key, &preference)?;
+        Ok(())
+    }
+
     /// Leave this conversation (Settings › Leave, the sidebar row menu).
     ///
     /// A channel is left on the server and stays listed, read-only. A private

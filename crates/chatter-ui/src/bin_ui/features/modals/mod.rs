@@ -40,7 +40,7 @@ pub use channel_settings::{
     open_private_group_invite_modal, refresh_members_if_open, wire_channel_settings,
 };
 pub(crate) use channel_settings::{
-    present_settings_error, settings_open_allowed, settings_refresh_allowed,
+    preference_label, present_settings_error, settings_open_allowed, settings_refresh_allowed,
     show_channel_settings_shell,
 };
 pub use forward::{target_avatar, wire_forward_message};

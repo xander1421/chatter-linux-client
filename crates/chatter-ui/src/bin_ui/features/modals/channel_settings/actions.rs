@@ -28,6 +28,7 @@ pub(super) fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         .to_string()
                 })
                 .unwrap_or_default();
+            let settings_epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
             tokio::spawn(async move {
                 if channel_id.is_empty() {
                     return;
@@ -39,13 +40,21 @@ pub(super) fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 let result = ui_ctx
                     .archive_channel(&channel_uuid, !currently_archived)
                     .await;
-                if result.is_ok() {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            crate::bin_ui::features::back::close(&w, "channel-settings");
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id() != channel_id.as_str()
+                        || SETTINGS_EPOCH.with(|epoch| epoch.get() != settings_epoch)
+                        || !settings_on_stack(&w) { return; }
+                    match result {
+                        Ok(_) => crate::bin_ui::features::back::close(&w, "channel-settings"),
+                        Err(error) => {
+                            tracing::warn!(%error, "Channel archive change failed");
+                            w.global::<crate::ModalHostState>().set_channel_settings_error(
+                                format!("Couldn't change archive status: {}", error.user_message()).into(),
+                            );
                         }
-                    });
-                }
+                    }
+                });
             });
         });
 
@@ -199,7 +208,7 @@ fn leave_conversation(
                 Err(e) => {
                     tracing::warn!(%id, error = %e, "Leave failed");
                     // A toast, not the modal's error line: the row menu has no modal.
-                    w.set_toast_message(format!("Couldn't leave: {e}").into());
+                    w.set_toast_message("Couldn't leave the conversation. Please try again.".into());
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 }

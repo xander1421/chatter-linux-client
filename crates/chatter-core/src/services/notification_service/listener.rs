@@ -100,6 +100,13 @@ pub fn spawn_notification_listener(
                     if !should_notify_message(message, me.as_ref(), on_screen, muted) {
                         continue;
                     }
+                    use crate::domain::channel::NotificationPreference;
+                    match conversation_preference(&client, message) {
+                        NotificationPreference::None => continue,
+                        NotificationPreference::Mentions
+                            if !me.as_ref().is_some_and(|id| client.message_mentions_user(message, id)) => continue,
+                        _ => {}
+                    }
 
                     // In an anon group the per-group name, never the global
                     // profile name of a contact who happens to be in it.
@@ -182,7 +189,7 @@ pub fn spawn_notification_listener(
                         continue;
                     };
                     let (on_screen, muted) = conversation_attention(&client, &target);
-                    if on_screen || muted {
+                    if on_screen || muted || conversation_preference(&client, &target) != crate::domain::channel::NotificationPreference::All {
                         continue;
                     }
                     let _ = notification_service.show_message_notification(
@@ -324,4 +331,16 @@ fn conversation_attention(
     );
     let muted = client.is_conversation_muted(conversation).unwrap_or(false);
     (on_screen, muted)
+}
+
+fn conversation_preference(
+    client: &std::sync::Arc<crate::client::ChatterClient>,
+    message: &crate::domain::message::Message,
+) -> crate::domain::channel::NotificationPreference {
+    let conversation = client.classify_active_conversation(
+        &message.conversation_id,
+        &message.conversation_type,
+        message.sender_id,
+    );
+    client.conversation_notification_preference(conversation).unwrap_or_default()
 }
