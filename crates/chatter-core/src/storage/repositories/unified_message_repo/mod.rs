@@ -112,8 +112,7 @@ mod tests;
 // Column list & row mappers
 // ============================================================================
 
-// Timestamp-only quote IDs are hashes, so recover the local ID from the
-// author's timestamps rather than trying to decode the UUID or match text.
+// Timestamp-only quote IDs are hashes persisted with each new message.
 fn resolve_timestamp_quote(
     conn: &rusqlite::Connection,
     parent: &MessageId,
@@ -121,22 +120,19 @@ fn resolve_timestamp_quote(
     conversation: &ChannelId,
     kind: &ConversationType,
 ) -> Result<Option<MessageId>, StorageError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, sent_at FROM messages WHERE sender_id = ?1 AND conversation_id = ?2 AND conversation_type = ?3",
-    )?;
-    let mut rows = stmt.query(params![
-        author.to_string(),
-        conversation.to_string(),
-        kind.as_str()
-    ])?;
-    while let Some(row) = rows.next()? {
-        let sent_at = row.get::<_, i64>(1)? as u64;
-        if MessageId::from_timestamp(sent_at) == *parent {
-            let id: String = row.get(0)?;
-            return Ok(id.parse().ok());
-        }
-    }
-    Ok(None)
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM messages WHERE conversation_type = ?1 AND conversation_id = ?2 AND sender_id = ?3 AND timestamp_quote_key = ?4 LIMIT 1",
+            params![
+                kind.as_str(),
+                conversation.to_string(),
+                author.to_string(),
+                parent.to_string()
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(id.and_then(|id| id.parse().ok()))
 }
 
 /// SELECT column list for unified messages — must match `row_to_message` column indices.

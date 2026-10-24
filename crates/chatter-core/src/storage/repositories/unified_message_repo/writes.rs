@@ -215,11 +215,12 @@ impl UnifiedMessageRepository {
                 reaction_counts_blob, current_user_reactions_blob,
                 mentioned_integrations_blob, targets_ai_bot, delivery_status,
                 reply_to_author_id, reply_to_text,
-                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason
+                reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason,
+                timestamp_quote_key
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
             )",
                 if or_ignore { "OR IGNORE" } else { "" }
             ),
@@ -253,6 +254,7 @@ impl UnifiedMessageRepository {
                 message.reply_to_thumbnail.as_deref(),
                 message.reply_to_thumbnail_mime.as_deref(),
                 message.failure_reason.as_deref(),
+                MessageId::from_timestamp(message.sent_at).to_string(),
             ],
         )?;
         if rows > 0 {
