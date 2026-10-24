@@ -118,11 +118,16 @@ impl AttachmentService {
                 attachment.metadata.waveform_samples.as_deref(),
             )
         {
-            // inline, voice notes are small (seconds of audio); move
-            // to spawn_blocking with an owned service if long audio shows up here.
-            let result = self
-                .decrypt_to_memory(attachment_id)
-                .and_then(|audio| self.repair_waveform(attachment_id, audio.as_slice()));
+            let service = self.clone();
+            let id = *attachment_id;
+            let result = tokio::task::spawn_blocking(move || {
+                service
+                    .decrypt_to_memory(&id)
+                    .and_then(|audio| service.repair_waveform(&id, audio.as_slice()))
+            })
+            .await
+            .map_err(|error| AttachmentError::StorageError(error.to_string()))
+            .and_then(|result| result);
             if let Err(error) = result {
                 tracing::warn!(%error, "Could not recover audio waveform");
             }

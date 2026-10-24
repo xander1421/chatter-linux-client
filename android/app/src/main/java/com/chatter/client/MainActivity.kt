@@ -140,7 +140,7 @@ class MainActivity : GameActivity() {
 
     @Suppress("unused")
     @androidx.annotation.Keep
-    fun renderViewerPdfPage(token: Long, page: Int): IntArray? = ViewerPdfRenderer.render(this, token, page)
+    fun renderViewerPdfPage(token: Long, page: Int): ByteArray? = ViewerPdfRenderer.render(this, token, page)
 
     @Suppress("unused")
     @androidx.annotation.Keep

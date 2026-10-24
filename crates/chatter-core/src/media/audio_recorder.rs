@@ -306,6 +306,20 @@ impl AudioRecorder {
             .collect()
     }
 
+    /// Count captured interleaved samples without copying the recording.
+    pub fn sample_count(&self) -> usize {
+        self.samples.lock().unwrap().len()
+    }
+
+    /// Calculate the sent waveform using the same i16 quantization as WAV encoding.
+    pub fn waveform_i16(&self) -> Vec<u8> {
+        let samples = self.samples.lock().unwrap();
+        crate::media::waveform::waveform_from_recorded_f32(
+            &samples,
+            self.sample_rate as usize * self.channels as usize,
+        )
+    }
+
     /// Cancels the current recording and discards samples.
     pub fn cancel(&mut self) {
         self.stream = None;

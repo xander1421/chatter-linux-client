@@ -52,7 +52,7 @@ internal object ViewerPdfRenderer {
         }
     }
 
-    @Synchronized fun render(context: Context, token: Long, index: Int): IntArray? {
+    @Synchronized fun render(context: Context, token: Long, index: Int): ByteArray? {
         val document = documents[token] ?: return null
         if (index !in 0 until document.renderer.pageCount) return null
         return try {
@@ -68,10 +68,25 @@ internal object ViewerPdfRenderer {
                 try {
                     bitmap.eraseColor(Color.WHITE)
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                    IntArray(2 + width * height).also { result ->
-                        result[0] = width
-                        result[1] = height
-                        bitmap.getPixels(result, 2, width, 0, 0, width, height)
+                    val pixels = IntArray(width * height)
+                    try {
+                        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+                        ByteArray(8 + pixels.size * 4).also { result ->
+                            for (i in 0 until 4) {
+                                result[i] = (width ushr (24 - i * 8)).toByte()
+                                result[4 + i] = (height ushr (24 - i * 8)).toByte()
+                            }
+                            for (i in pixels.indices) {
+                                val argb = pixels[i]
+                                val at = 8 + i * 4
+                                result[at] = (argb ushr 16).toByte()
+                                result[at + 1] = (argb ushr 8).toByte()
+                                result[at + 2] = argb.toByte()
+                                result[at + 3] = (argb ushr 24).toByte()
+                            }
+                        }
+                    } finally {
+                        pixels.fill(0)
                     }
                 } finally {
                     bitmap.eraseColor(Color.TRANSPARENT)
