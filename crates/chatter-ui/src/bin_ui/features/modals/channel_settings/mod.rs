@@ -1052,18 +1052,23 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             if channel_id.is_empty() {
                 return;
             }
-            match ui_ctx_ai.set_ai_enabled_for(&channel_id, enabled) {
-                Ok(()) => w
-                    .global::<crate::ModalHostState>()
-                    .set_channel_settings_ai_enabled(enabled),
-                Err(e) => {
-                    tracing::error!("Failed to save per-channel AI setting: {}", e);
-                    // Snap the toggle back so it never shows a state we did not
-                    // manage to persist.
-                    w.global::<crate::ModalHostState>()
-                        .set_channel_settings_ai_enabled(ui_ctx_ai.ai_enabled_for(&channel_id));
-                }
-            }
+            let weak = weak_ai.clone();
+            let ui_ctx = ui_ctx_ai.clone();
+            tokio::spawn(async move {
+                let result = ui_ctx.set_ai_enabled_for(&channel_id, enabled);
+                let stored = ui_ctx.ai_enabled_for(&channel_id);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id() != channel_id.as_str()
+                        || !settings_on_stack(&w) { return; }
+                    w.global::<crate::ModalHostState>().set_channel_settings_ai_enabled(stored);
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "Could not save conversation AI setting");
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_error("Couldn't save AI setting".into());
+                    }
+                });
+            });
         });
 
     // Mute DOES persist: `mute_conversation` writes a per-channel settings key
