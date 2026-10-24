@@ -36,7 +36,7 @@ export component ActivityBell inherits Rectangle {
         border-radius: Spacing.radius-full;
         background: Colors.primary;
         Text {
-            text: ActivityGlobal.unread-count > 99 ? "99+" : ActivityGlobal.unread-count;
+            text: ActivityGlobal.unread-count > 99 ? "99+" : "" + ActivityGlobal.unread-count;
             color: Colors.on-action;
             font-size: Typography.xs;
             font-weight: Typography.bold;
