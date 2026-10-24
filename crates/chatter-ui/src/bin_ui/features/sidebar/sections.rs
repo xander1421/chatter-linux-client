@@ -132,25 +132,18 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
-        let ui_ctx = ui_ctx.clone();
         let weak = window.as_weak();
 
         window
             .global::<crate::SidebarPane>()
             .on_rename_section_clicked(move |section_id: SharedString| {
-                let section_id_str = section_id.to_string();
-                if let Ok(sections) = ui_ctx.list_sections_with_conversations() {
-                    if let Some(section) =
-                        sections.iter().find(|s| s.id.to_string() == section_id_str)
-                    {
-                        let name: SharedString = section.name.clone().into();
-                        let emoji: SharedString = section.icon_emoji.clone().into();
-                        run_ui!(weak, |w| {
-                            w.global::<crate::ModalHostState>()
-                                .set_create_section_name(name);
-                            w.global::<crate::ModalHostState>()
-                                .set_create_section_emoji(emoji);
-                        });
+                if let Some(w) = weak.upgrade() {
+                    let sections = w.global::<crate::SidebarPane>().get_custom_sections();
+                    if let Some(section) = sections.iter().find(|s| s.section_id == section_id) {
+                        w.global::<crate::ModalHostState>()
+                            .set_create_section_name(section.name);
+                        w.global::<crate::ModalHostState>()
+                            .set_create_section_emoji(section.icon_emoji);
                     }
                 }
             });

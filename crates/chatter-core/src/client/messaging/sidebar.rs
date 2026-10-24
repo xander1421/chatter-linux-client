@@ -187,12 +187,7 @@ impl ChatterClient {
         use crate::domain::message::ConversationType as CT;
         use crate::ui::sidebar_data::ChatRowSendData;
 
-        let mut display_name = conv.display_name.clone();
-        if display_name.is_empty() {
-            if let Ok(peer_id) = conv.conversation_id.parse() {
-                display_name = self.display_name(&peer_id);
-            }
-        }
+        let display_name = conv.display_name.clone();
         let channel_id = conv
             .conversation_id
             .parse::<crate::domain::ids::ChannelId>()
@@ -227,6 +222,52 @@ impl ChatterClient {
             )
         };
 
+        if conv.conversation_type == CT::AnonDm {
+            if let Ok(id) = conv.conversation_id.parse::<crate::domain::anon_dm::AnonDmId>() {
+                if let Some(dm) = self.get_anon_dm_conversation(&id) {
+                    row.display_name = self.anon_dm_peer_name(&dm);
+                    row.user_id = dm.peer_id.to_string();
+                    row.avatar_bytes = self.anon_dm_avatar(&dm);
+                    row.presence_status = if dm.status == crate::domain::anon_dm::AnonDmStatus::Active {
+                        "online"
+                    } else if dm.initiated_by_us {
+                        "offline"
+                    } else {
+                        "pending"
+                    }.to_string();
+                    let (preview, at) = self.sidebar_activity(self.get_latest_anon_dm_message(&id).as_ref());
+                    if dm.status == crate::domain::anon_dm::AnonDmStatus::Pending {
+                        if dm.initiated_by_us {
+                            row.last_message = if preview.is_empty() { "Waiting for response...".to_string() } else { preview };
+                            row.label = crate::ui::sidebar_data::ChatRowLabel::OutgoingSecretRequest;
+                        } else {
+                            row.last_message = if preview.is_empty() { "Message request".to_string() } else { preview };
+                            row.unread_count = row.unread_count.max(1);
+                            row.label = crate::ui::sidebar_data::ChatRowLabel::IncomingSecretRequest;
+                        }
+                        row.timestamp_at = Some(at.unwrap_or(dm.created_at));
+                    } else {
+                        row.last_message = preview;
+                        row.timestamp_at = at;
+                    }
+                    row.last_activity = row.timestamp_at.clone();
+                }
+            }
+            return row;
+        }
+        if conv.conversation_type == CT::AnonGroup {
+            if let Ok(id) = conv.conversation_id.parse::<crate::domain::anon_group::AnonGroupId>() {
+                if let Some(group) = self.get_anon_group(&id) {
+                    row.display_name = group.name.clone();
+                    row.member_count = self.get_anon_group_members(&id).len() as u32;
+                    let (preview, at) = self.sidebar_activity(self.get_latest_anon_group_message(&id).as_ref());
+                    row.last_message = preview;
+                    row.timestamp_at = Some(at.unwrap_or(group.created_at));
+                    row.last_activity = row.timestamp_at.clone();
+                }
+            }
+            return row;
+        }
         let Some(id) = channel_id else { return row };
         if !matches!(conv.conversation_type, CT::ServerDm | CT::Channel) {
             return row;
@@ -236,6 +277,7 @@ impl ChatterClient {
         match conv.conversation_type {
             CT::ServerDm => {
                 let peer = crate::domain::ids::UserId::from_uuid(*id.as_uuid());
+                row.user_id = peer.to_string();
                 let profile = self.get_profile_local(&peer);
                 row.presence_status = self.peer_presence(&peer).as_str().to_string();
                 row.avatar_bytes = profile.and_then(|p| p.avatar_bytes);
