@@ -20,7 +20,9 @@ impl ChatterClient {
         let result = self.users().send_friend_request(user_id, note).await?;
         let client = Arc::clone(self);
         tokio::spawn(async move {
-            client.refresh_and_emit_friend_requests().await;
+            if let Err(error) = client.refresh_and_emit_friend_requests().await {
+                tracing::debug!(%error, "Could not refresh friend requests after send");
+            }
         });
         Ok(result)
     }
@@ -62,7 +64,9 @@ impl ChatterClient {
         let result = self.users().respond_friend_request(user_id, accept).await?;
         let client = Arc::clone(self);
         tokio::spawn(async move {
-            client.refresh_and_emit_friend_requests().await;
+            if let Err(error) = client.refresh_and_emit_friend_requests().await {
+                tracing::debug!(%error, "Could not refresh friend requests after response");
+            }
         });
 
         // On accept, establish the DM Signal session in the background so the
@@ -103,7 +107,9 @@ impl ChatterClient {
         }
         let client = Arc::clone(self);
         tokio::spawn(async move {
-            client.refresh_and_emit_friend_requests().await;
+            if let Err(error) = client.refresh_and_emit_friend_requests().await {
+                tracing::debug!(%error, "Could not refresh friend requests after removal");
+            }
         });
         Ok(())
     }
@@ -116,11 +122,11 @@ impl ChatterClient {
     /// profiles + notes. Call on load to populate immediately (the single
     /// source of truth — the UI must not build these rows itself, since the
     /// encrypted envelope only reaches it via this event).
-    pub async fn refresh_friend_requests(&self) {
-        self.refresh_and_emit_friend_requests().await;
+    pub async fn refresh_friend_requests(&self) -> Result<(), crate::error::NetworkError> {
+        self.refresh_and_emit_friend_requests().await
     }
 
-    pub(crate) async fn refresh_and_emit_friend_requests(&self) {
+    pub(crate) async fn refresh_and_emit_friend_requests(&self) -> Result<(), crate::error::NetworkError> {
         use crate::inbox::events::FriendRequestInfo;
         use crate::proto::chat_v1::friend_requests_filter;
 
@@ -142,7 +148,7 @@ impl ChatterClient {
                 .collect::<Vec<_>>(),
             Err(e) => {
                 tracing::debug!(error = %e, "refresh_and_emit_friend_requests: received fetch failed");
-                return;
+                return Err(e);
             }
         };
         let sent = match user_client
@@ -163,11 +169,12 @@ impl ChatterClient {
                 .collect::<Vec<_>>(),
             Err(e) => {
                 tracing::debug!(error = %e, "refresh_and_emit_friend_requests: sent fetch failed");
-                return;
+                return Err(e);
             }
         };
         self.event_bus()
             .emit_domain(DomainEvent::FriendRequestsUpdated { received, sent });
+        Ok(())
     }
 
     /// Block a user.

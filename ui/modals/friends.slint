@@ -45,6 +45,8 @@ export component FriendsModal inherits Rectangle {
     in property <[FriendRequestData]> private-requests: [];  // Anonymous DM requests
     in property <[FriendRequestData]> group-invites: [];     // Pending anonymous group invites
     in property <[ChannelInviteData]> channel-invites: [];   // Pending channel invitations
+    in property <bool> requests-error: false;
+    callback requests-retry();
 
     // Blocked tab data
     in property <[BlockedUserData]> blocked-users: [];
@@ -262,6 +264,8 @@ export component FriendsModal inherits Rectangle {
                     private-requests: root.private-requests;
                     group-invites: root.group-invites;
                     channel-invites: root.channel-invites;
+                    read-error: root.requests-error;
+                    retry => { root.requests-retry(); }
                     private-request-decision: root.private-request-decision;
                     group-invite-decision: root.group-invite-decision;
                     group-invite-error-id: root.group-invite-error-id;

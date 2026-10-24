@@ -197,15 +197,14 @@ impl ChatterClient {
     /// stalls every frame in the app.
     ///
     /// An unknown `category`, or a conversation with no routing key, yields an
-    /// empty page rather than an error — there is nothing a caller could do
-    /// with the error that differs from rendering an empty tab.
+    /// empty page. Storage and worker failures are returned to the caller.
     pub async fn shared_content_page(
         self: &Arc<Self>,
         conv: ActiveConversation,
         category: &str,
         limit: u32,
         offset: u32,
-    ) -> Vec<SharedContentItemData> {
+    ) -> Result<Vec<SharedContentItemData>, crate::error::StorageError> {
         self.shared_content_page_scoped(conv, category, limit, offset, None)
             .await
     }
@@ -218,21 +217,20 @@ impl ChatterClient {
         limit: u32,
         offset: u32,
         sender: Option<crate::domain::ids::UserId>,
-    ) -> Vec<SharedContentItemData> {
+    ) -> Result<Vec<SharedContentItemData>, crate::error::StorageError> {
         let Some(category) = SharedCategory::from_str_value(category) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let Some((conv_type, conv_id)) = conv.routing_key() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let client = self.clone();
         #[cfg(target_os = "android")]
         let revision = self.auth_snapshot().session_revision;
         tokio::task::spawn_blocking(move || {
-            match client.shared_content_repo().list_scoped(
+            client.shared_content_repo().list_scoped(
                 &conv_type, &conv_id, category, limit, offset, sender.as_ref(),
-            ) {
-                Ok(rows) => rows
+            ).map(|rows| rows
                     .iter()
                     .map(|row| {
                         let mut item = SharedContentItemData::from(row);
@@ -257,15 +255,10 @@ impl ChatterClient {
                         }
                         item
                     })
-                    .collect(),
-                Err(e) => {
-                    tracing::error!(error = %e, "shared content page");
-                    Vec::new()
-                }
-            }
+                    .collect())
         })
         .await
-        .unwrap_or_default()
+        .map_err(|error| crate::error::StorageError::ConnectionPool(error.to_string()))?
     }
 
     /// The tab strip for a conversation: label + count per non-empty category,
@@ -279,7 +272,7 @@ impl ChatterClient {
     pub async fn shared_content_tabs(
         self: &Arc<Self>,
         conv: ActiveConversation,
-    ) -> Vec<SharedTabData> {
+    ) -> Result<Vec<SharedTabData>, crate::error::StorageError> {
         self.shared_content_tabs_scoped(conv, None).await
     }
 
@@ -288,21 +281,19 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
         sender: Option<crate::domain::ids::UserId>,
-    ) -> Vec<SharedTabData> {
+    ) -> Result<Vec<SharedTabData>, crate::error::StorageError> {
         let Some((conv_type, conv_id)) = conv.routing_key() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let repo = self.shared_content_repo();
         let db = self.services.database.clone();
         tokio::task::spawn_blocking(move || {
             backfill_once(&repo, &db, &conv_type, &conv_id);
-            crate::ui::shared_tabs(
-                &repo.counts_scoped(&conv_type, &conv_id, sender.as_ref())
-                    .unwrap_or_default(),
-            )
+            repo.counts_scoped(&conv_type, &conv_id, sender.as_ref())
+                .map(|counts| crate::ui::shared_tabs(&counts))
         })
         .await
-        .unwrap_or_default()
+        .map_err(|error| crate::error::StorageError::ConnectionPool(error.to_string()))?
     }
 
     fn shared_content_repo(&self) -> SharedContentRepository {

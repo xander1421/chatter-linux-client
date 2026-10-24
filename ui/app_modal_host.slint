@@ -230,6 +230,7 @@ export component AppModalHost inherits Rectangle {
         shared-tab <=> ModalHostState.profile-shared-tab;
         shared-items: ModalHostState.profile-shared-items;
         shared-loading: ModalHostState.profile-shared-loading;
+        shared-error: ModalHostState.profile-shared-error;
         mobile-mode: root.compact-layout;
 
         close => {
@@ -249,6 +250,7 @@ export component AppModalHost inherits Rectangle {
         shared-load-more => {
             ModalHostState.profile-shared-load-more();
         }
+        shared-retry => { ModalHostState.profile-shared-retry(); }
         open-shared-item(message-id, attachment-id, category, selected-url) => {
             ModalHostState.profile-open-shared-item(message-id, attachment-id, category, selected-url);
         }

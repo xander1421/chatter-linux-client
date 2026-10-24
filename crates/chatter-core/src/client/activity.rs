@@ -45,18 +45,17 @@ impl ChatterClient {
         }
     }
 
-    pub fn activity_items(&self) -> Vec<ActivityItem> {
-        let Some(owner) = self.auth_snapshot().current_user_id else { return Vec::new() };
+    pub fn activity_items(&self) -> Result<Vec<ActivityItem>, crate::error::StorageError> {
+        let Some(owner) = self.auth_snapshot().current_user_id else { return Ok(Vec::new()) };
         let show_preview = self.notification_detail_level() == NotificationDetailLevel::NameAndMessage;
-        self.activity.list(owner, show_preview).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "Could not read activity feed");
-            Vec::new()
-        })
+        self.activity.list(owner, show_preview)
     }
 
-    pub fn activity_unread_count(&self) -> u32 {
-        self.auth_snapshot().current_user_id
-            .and_then(|owner| self.activity.unread_count(owner).ok()).unwrap_or(0)
+    pub fn activity_unread_count(&self) -> Result<u32, crate::error::StorageError> {
+        match self.auth_snapshot().current_user_id {
+            Some(owner) => self.activity.unread_count(owner),
+            None => Ok(0),
+        }
     }
 
     pub fn activity_target(&self, id: &str) -> Option<ActivityTarget> {

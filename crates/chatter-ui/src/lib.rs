@@ -154,20 +154,20 @@ pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadl
 #[cfg(target_os = "android")]
 async fn android_core(
     allow_signed_out: bool,
-) -> Result<(std::sync::Arc<chatter_core::client::ChatterClient>, bool), String> {
+) -> Result<(std::sync::Arc<chatter_core::client::ChatterClient>, bool), chatter_core::client::StartupError> {
     tracing::info!("Android core: waiting for startup lock");
     let _lock = ANDROID_CORE_LOCK.lock().await;
     tracing::info!("Android core: startup lock acquired");
     if let Some(client) = ANDROID_CLIENT.get() {
         if !allow_signed_out && !client.is_logged_in() {
-            return Err("No signed-in session".into());
+            return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
         }
         if client.is_logged_in()
             && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire)
         {
             match client.start().await {
                 Ok(()) => ANDROID_SERVICES_READY.store(true, std::sync::atomic::Ordering::Release),
-                Err(error) if !allow_signed_out => return Err(error.to_string()),
+                Err(error) if !allow_signed_out => return Err(error.into()),
                 Err(error) => tracing::warn!("Could not start services: {error}"),
             }
         }
@@ -188,14 +188,14 @@ async fn android_core(
         .data_dir(data_dir)
         .notification_sink(sink)
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(chatter_core::client::StartupError::from)?;
     // The ChatState default is visible for desktop. A Service-first client
     // starts off screen, before any Activity callback can reach it.
     client.set_app_visible(ANDROID_ACTIVITY_VISIBLE.load(std::sync::atomic::Ordering::Acquire));
     tracing::info!("Android core: client opened");
     client.restore_session();
     if !client.is_logged_in() && !allow_signed_out {
-        return Err("No restored signed-in session".into());
+        return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
     }
     client.prewarm_tor();
     crate::platform::android::call_actions::register_call_client(client.clone());
@@ -224,7 +224,7 @@ async fn android_core(
     client.set_app_visible(ANDROID_ACTIVITY_VISIBLE.load(std::sync::atomic::Ordering::Acquire));
     tracing::info!("Android core: client published");
     if !allow_signed_out && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("Messaging services did not start".into());
+        return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
     }
     Ok((client, connected))
 }
@@ -480,13 +480,12 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // Running `window.run()` inside `block_on` would stall the I/O reactor
     // and kill any in-flight gRPC streams bound to it.
     let rt = android_runtime();
-    let app_state = rt.block_on(app_init());
     let _guard = rt.enter();
-    let app_state = match app_state {
-        Ok(state) => state,
-        Err(message) => {
-            show_startup_error(&message);
-            return;
+    let app_state = loop {
+        match rt.block_on(app_init()) {
+            Ok(state) => break state,
+            Err(error) if show_startup_error(error) => continue,
+            Err(_) => return,
         }
     };
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
@@ -607,9 +606,9 @@ fn init_tracing() {
 
 /// Phase 1: Async initialization (runs inside block_on — reactor is active).
 /// Creates client, gRPC channels, window, and wires callbacks.
-/// Returns state for the sync event loop phase, or a message to show when
+/// Returns state for the sync event loop phase, or a typed error to show when
 /// client initialization fails before the normal window can be created.
-pub async fn app_init() -> Result<AppState, String> {
+pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> {
     let startup_started = std::time::Instant::now();
     let _ = STARTUP_STARTED.set(startup_started);
     let _ = RT_HANDLE.set(tokio::runtime::Handle::current());
@@ -695,8 +694,9 @@ pub async fn app_init() -> Result<AppState, String> {
     let client = match builder.build() {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to initialize application: {}", e);
-            return Err(e.to_string());
+            let error = chatter_core::client::StartupError::from(e);
+            tracing::error!(kind = ?error.kind, "Failed to initialize application");
+            return Err(error);
         }
     };
     // Overlap Tor directory/guard work with UI/login. This never contacts the
@@ -1079,14 +1079,28 @@ pub async fn app_init() -> Result<AppState, String> {
     })
 }
 
-fn show_startup_error(message: &str) {
+fn show_startup_error(error: chatter_core::client::StartupError) -> bool {
     use slint::ComponentHandle;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     let window = StartupErrorWindow::new().expect("Failed to create startup error window");
-    window.set_error_message(message.into());
+    window.set_error_message(error.message().into());
+    window.set_error_details(error.details().into());
+    let retry = Rc::new(Cell::new(false));
+    let retry_requested = retry.clone();
+    let weak = window.as_weak();
+    window.on_retry(move || {
+        retry_requested.set(true);
+        if let Some(window) = weak.upgrade() {
+            let _ = window.hide();
+        }
+        let _ = slint::quit_event_loop();
+    });
     #[cfg(target_os = "android")]
     crate::platform::android::activity::clear_launch_cover_after_first_frame(window.window());
     window.run().expect("Failed to run startup error window");
+    retry.get()
 }
 
 /// Register a throwaway development account on first launch so a dev build lands
@@ -1244,8 +1258,11 @@ fn app_run(state: AppState) {
 /// Desktop entry point. Runs init then event loop inside tokio::main's block_on.
 /// On desktop, tokio worker threads keep the reactor alive while window.run() blocks.
 pub async fn app_main() {
-    match app_init().await {
-        Ok(state) => app_run(state),
-        Err(message) => show_startup_error(&message),
+    loop {
+        match app_init().await {
+            Ok(state) => { app_run(state); break; }
+            Err(error) if show_startup_error(error) => continue,
+            Err(_) => break,
+        }
     }
 }

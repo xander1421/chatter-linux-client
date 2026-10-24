@@ -1,5 +1,6 @@
 import { Colors } from "theme/colors.slint";
 import { Typography } from "theme/typography.slint";
+import { Button } from "components/button.slint";
 
 // This window must work before the client and its normal UI are initialized.
 export component StartupErrorWindow inherits Window {
@@ -10,6 +11,9 @@ export component StartupErrorWindow inherits Window {
     preferred-height: 360px;
     default-font-family: Typography.font-family;
     in property <string> error-message;
+    in property <string> error-details;
+    property <bool> show-details: false;
+    callback retry();
     background: Colors.background;
 
     VerticalLayout {
@@ -31,6 +35,15 @@ export component StartupErrorWindow inherits Window {
         Text {
             text: root.error-message;
             color: Colors.text-secondary;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Button { text: "Retry"; clicked => { root.retry(); } }
+        Button { text: root.show-details ? "Hide details" : "Details"; variant: "secondary"; clicked => { root.show-details = !root.show-details; } }
+        if root.show-details: Text {
+            text: root.error-details;
+            color: Colors.text-muted;
             font-size: Typography.sm;
             wrap: word-wrap;
             horizontal-alignment: center;

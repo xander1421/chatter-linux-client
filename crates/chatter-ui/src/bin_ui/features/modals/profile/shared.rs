@@ -69,6 +69,21 @@ pub(super) fn load_shared_tabs(
         let tabs = ui_ctx
             .shared_content_tabs_scoped(conversation, shared_sender(conversation, peer_id))
             .await;
+        let tabs = match tabs {
+            Ok(tabs) => tabs,
+            Err(error) => {
+                tracing::warn!(%error, "Could not load shared content tabs");
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if SHARED_PAGE.with(|p| (p.borrow().peer, p.borrow().conversation, p.borrow().generation))
+                        != (Some(peer_id), Some(conversation), generation) { return; }
+                    let host = w.global::<crate::ModalHostState>();
+                    host.set_profile_shared_loading(false);
+                    host.set_profile_shared_error("Could not load shared content. Try again.".into());
+                });
+                return;
+            }
+        };
         let first = tabs.first().map(|t| t.id.clone());
         let rows: Vec<SharedTab> = tabs
             .into_iter()
@@ -96,6 +111,8 @@ pub(super) fn load_shared_tabs(
             }
             w.global::<crate::ModalHostState>()
                 .set_profile_shared_tabs(ModelRc::new(VecModel::from(rows)));
+            w.global::<crate::ModalHostState>()
+                .set_profile_shared_error("".into());
             match first {
                 Some(tab) => {
                     w.global::<crate::ModalHostState>()
@@ -155,6 +172,8 @@ fn request_shared_page(
 
     w.global::<crate::ModalHostState>()
         .set_profile_shared_loading(true);
+    w.global::<crate::ModalHostState>()
+        .set_profile_shared_error("".into());
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
     let revision = ui_ctx.auth_snapshot().session_revision;
@@ -168,8 +187,8 @@ fn request_shared_page(
                 shared_sender(conversation, peer_id),
             )
             .await;
-        let short = page.len() < page_size as usize;
-        let count = page.len();
+        let count = page.as_ref().map_or(0, Vec::len);
+        let short = count < page_size as usize;
         let _ = slint::invoke_from_event_loop(move || {
             if ui_ctx.auth_snapshot().session_revision != revision {
                 return;
@@ -204,6 +223,15 @@ fn request_shared_page(
             }
             w.global::<crate::ModalHostState>()
                 .set_profile_shared_loading(false);
+            let page = match page {
+                Ok(page) => page,
+                Err(error) => {
+                    tracing::warn!(%error, "Could not load shared content page");
+                    w.global::<crate::ModalHostState>()
+                        .set_profile_shared_error("Could not load shared content. Try again.".into());
+                    return;
+                }
+            };
 
             // Thumbnails decode here, on the UI thread, because a
             // `slint::Image` cannot cross threads.
@@ -257,6 +285,19 @@ fn shared_content_display_title<'a>(category: &str, title: &'a str) -> &'a str {
 
 /// Wire the shared-content drawer: tab switches, paging, and opening an item.
 pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx_retry = ui_ctx.clone();
+    window.global::<crate::ModalHostState>().on_profile_shared_retry(move || {
+        let Some(w) = weak_window.upgrade() else { return };
+        let (peer, conversation, tab) = SHARED_PAGE.with(|p| {
+            let p = p.borrow();
+            (p.peer, p.conversation, p.tab.clone())
+        });
+        if let (Some(peer), Some(conversation)) = (peer, conversation) {
+            if tab.is_empty() { load_shared_tabs(w.as_weak(), ui_ctx_retry.clone(), peer, conversation); }
+            else { request_shared_page(&w, &ui_ctx_retry, peer, tab, false); }
+        }
+    });
     let weak_window = window.as_weak();
     let ui_ctx_tab = ui_ctx.clone();
     window

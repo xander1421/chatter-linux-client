@@ -129,6 +129,7 @@ export global ModalHostState {
     in-out property <string> profile-shared-tab: "";
     in property <[SharedContentItem]> profile-shared-items: [];
     in property <bool> profile-shared-loading: false;
+    in property <string> profile-shared-error: "";
     // Presence as words ("last seen yesterday 4:12 pm"), shaped by core.
     in property <string> profile-last-seen: "";
     in property <bool> profile-is-muted: false;
@@ -158,6 +159,7 @@ export global ModalHostState {
     in property <[ChannelInviteData]> friends-channel-invites: [];
     in property <[BlockedUserData]> friends-blocked-users: [];
     in property <bool> friends-loading: false;
+    in property <bool> friends-requests-error: false;
     // Pending message requests count (for sidebar badge)
     in property <int> pending-message-requests: 0;
     // Pending group invites count (for sidebar badge)
@@ -273,6 +275,7 @@ export global ModalHostState {
     callback profile-start-call(bool /* is-video */);
     callback profile-shared-tab-selected(string /* category */);
     callback profile-shared-load-more();
+    callback profile-shared-retry();
     // message-id, attachment-id, category, selected-url
     callback profile-open-shared-item(string, string, string, string);
     callback profile-generate-share-link();
@@ -284,6 +287,7 @@ export global ModalHostState {
     callback edit-profile-remove-avatar();
     // Friends modal
     callback friends-modal-switch-tab(string);
+    callback friends-requests-retry();
     callback friends-view-profile(string);
     callback friends-start-dm(string);
     callback friends-accept-request(string);

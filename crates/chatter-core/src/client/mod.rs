@@ -333,6 +333,60 @@ pub enum ClientError {
     IdentityRecoveryRequired(crate::services::key_recovery::KeyRecoveryNeed),
 }
 
+/// Safe, typed failure shown before the main window can be created.
+#[derive(Clone, Copy, Debug)]
+pub enum StartupErrorKind {
+    Storage,
+    Keyring,
+    Network,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StartupError {
+    pub kind: StartupErrorKind,
+}
+
+impl StartupError {
+    pub fn message(self) -> &'static str {
+        match self.kind {
+            StartupErrorKind::Storage => "Chatter could not open its local data.",
+            StartupErrorKind::Keyring => "Chatter could not unlock its local data.",
+            StartupErrorKind::Network => "Chatter could not set up its network connection.",
+            StartupErrorKind::Other => "Chatter could not finish starting.",
+        }
+    }
+
+    pub fn details(self) -> &'static str {
+        match self.kind {
+            StartupErrorKind::Storage => "Local storage initialization failed. Check available space and access to the app data folder, then retry.",
+            StartupErrorKind::Keyring => "The system credential store did not provide the database key. Unlock the credential store, then retry.",
+            StartupErrorKind::Network => "Network setup failed. Check your connection and server settings, then retry.",
+            StartupErrorKind::Other => "An initialization step failed. Retry, or restart the app if the problem continues.",
+        }
+    }
+}
+
+impl std::fmt::Display for StartupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str((*self).message())
+    }
+}
+
+impl From<ClientError> for StartupError {
+    fn from(error: ClientError) -> Self {
+        use crate::app::ContextError;
+        use crate::error::SystemError;
+        let kind = match error {
+            ClientError::Init(ContextError::Storage(_)) => StartupErrorKind::Storage,
+            ClientError::Init(ContextError::System(SystemError::Keyring(_))) => StartupErrorKind::Keyring,
+            ClientError::Init(ContextError::Network(_)) | ClientError::Connection(_) => StartupErrorKind::Network,
+            _ => StartupErrorKind::Other,
+        };
+        Self { kind }
+    }
+}
+
 impl ClientError {
     /// Whether a message-history backup requires a newer app to restore.
     pub fn is_unsupported_backup(&self) -> bool {

@@ -26,13 +26,25 @@ fn refresh_status(window: &MainWindow, client: &ChatterClient) {
 fn refresh(window: &MainWindow, client: &Arc<ChatterClient>) {
     let request = REFRESH_REQUEST.fetch_add(1, Ordering::Relaxed) + 1;
     let weak = window.as_weak();
+    window.global::<ActivityGlobal>().set_loading(true);
     let client = client.clone();
     tokio::task::spawn_blocking(move || {
         let items = client.activity_items();
-        let count = client.activity_unread_count().min(i32::MAX as u32) as i32;
+        let count = client.activity_unread_count();
         let _ = slint::invoke_from_event_loop(move || {
             if REFRESH_REQUEST.load(Ordering::Relaxed) != request { return; }
             let Some(window) = weak.upgrade() else { return };
+            let (items, count) = match (items, count) {
+                (Ok(items), Ok(count)) => (items, count),
+                (items, count) => {
+                    if let Err(error) = items { tracing::warn!(%error, "Could not read activity feed"); }
+                    if let Err(error) = count { tracing::warn!(%error, "Could not read activity count"); }
+                    let global = window.global::<ActivityGlobal>();
+                    global.set_read_error(true);
+                    global.set_loading(false);
+                    return;
+                }
+            };
             let rows = items.into_iter().map(|item| ActivityItemData {
                 id: item.id.into(),
                 kind: item.kind.into(),
@@ -44,13 +56,19 @@ fn refresh(window: &MainWindow, client: &Arc<ChatterClient>) {
             }).collect::<Vec<_>>();
             let global = window.global::<ActivityGlobal>();
             global.set_items(ModelRc::new(VecModel::from(rows)));
-            global.set_unread_count(count);
+            global.set_unread_count(count.min(i32::MAX as u32) as i32);
+            global.set_read_error(false);
             global.set_loading(false);
         });
     });
 }
 
 pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let client_retry = client.clone();
+    window.global::<ActivityGlobal>().on_retry(move || {
+        if let Some(window) = weak.upgrade() { refresh(&window, &client_retry); }
+    });
     let mut updates = client.subscribe_activity();
     let mut auth = client.subscribe_auth_snapshots();
     client.start_activity_listener();
