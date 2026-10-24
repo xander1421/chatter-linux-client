@@ -1,0 +1,17 @@
+export struct ActivityItemData {
+    id: string,
+    kind: string,
+    title: string,
+    preview: string,
+    time-label: string,
+    section: string,
+    unread: bool,
+}
+
+export global ActivityGlobal {
+    in-out property <[ActivityItemData]> items: [];
+    in-out property <int> unread-count: 0;
+    callback open-item(string);
+    callback mark-all-read();
+    callback opened();
+}

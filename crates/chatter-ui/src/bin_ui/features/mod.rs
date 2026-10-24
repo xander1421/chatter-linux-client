@@ -12,6 +12,7 @@
 //! Services encapsulate all repository access - UI code never touches repos directly.
 
 pub mod auth;
+pub mod activity;
 pub(crate) mod avatar_defaults;
 /// Android hardware/gesture Back. Compiled everywhere; inert on desktop.
 pub mod back;
@@ -48,6 +49,7 @@ use chatter_core::client::ChatterClient;
 /// Wire all UI callbacks to their handlers.
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     auth::wire(window, ui_ctx);
+    activity::wire(window, ui_ctx);
     back::wire(window);
     navigation::wire(window, ui_ctx);
     chat::wire(window, ui_ctx);

@@ -133,6 +133,7 @@ impl From<crate::storage::mesh_binding_store::PeerBinding> for MeshBindingStatus
 }
 
 mod notification;
+mod activity;
 mod picker_history;
 mod pin;
 mod profile;
@@ -243,10 +244,13 @@ impl ClientBuilder {
             self.notification_sink,
         )?;
         let services = ctx.core_services();
+        let activity = Arc::new(crate::services::activity_service::ActivityService::new(services.database.clone()));
         let anon_mode = services.message_service.shield_mode.clone();
         let client = Arc::new(ChatterClient {
             ctx,
             services,
+            activity,
+            activity_listener_started: AtomicBool::new(false),
             tasks: Mutex::new(Vec::new()),
             pending_receipts: Mutex::new(Vec::new()),
             sent_receipts: Mutex::new(Vec::new()),
@@ -451,6 +455,8 @@ pub struct ConversationActions {
 pub struct ChatterClient {
     ctx: AppContext,
     services: Arc<CoreServices>,
+    activity: Arc<crate::services::activity_service::ActivityService>,
+    activity_listener_started: AtomicBool,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     /// Failed ephemeral receipts for this process and auth session only.
     pub(crate) pending_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,

@@ -3,6 +3,7 @@
 //! Service layer orchestrating domain, storage, network, and crypto.
 
 pub mod account_service;
+pub mod activity_service;
 #[cfg(target_os = "android")]
 mod android_aac;
 pub mod ai;
