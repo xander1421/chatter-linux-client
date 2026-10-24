@@ -105,7 +105,7 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if w.global::<crate::ChatPane>().get_thread_root_message_id().as_str() != thread.root_message_id.to_string() { return; }
                     if w.global::<crate::ChatPane>().get_thread_mention_query() != requested { return; }
                     let rows: Vec<_> = suggestions.into_iter().map(|suggestion| MentionSuggestion {
-                        id: suggestion.id.into(), name: suggestion.display.into(),
+                        id: suggestion.id.into(), name: suggestion.name.into(),
                         mention_type: suggestion.kind.as_str().into(),
                         avatar: slint::Image::default(), has_avatar: suggestion.has_avatar,
                     }).collect();

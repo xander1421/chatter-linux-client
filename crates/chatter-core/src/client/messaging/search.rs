@@ -220,7 +220,7 @@ impl ChatterClient {
         if "here".starts_with(&query_lower) {
             out.push(MentionSuggestionInfo {
                 id: "here".into(),
-                display: "@here".into(),
+                name: "here".into(),
                 kind: MentionSuggestionKind::Broadcast,
                 has_avatar: false,
             });
@@ -228,7 +228,7 @@ impl ChatterClient {
         if "all".starts_with(&query_lower) || "everyone".starts_with(&query_lower) {
             out.push(MentionSuggestionInfo {
                 id: "all".into(),
-                display: "@all".into(),
+                name: "all".into(),
                 kind: MentionSuggestionKind::Broadcast,
                 has_avatar: false,
             });
@@ -271,7 +271,7 @@ impl ChatterClient {
             {
                 out.push(MentionSuggestionInfo {
                     id: user_id_str,
-                    display: format!("@{}", display_name),
+                    name: display_name,
                     kind: MentionSuggestionKind::User,
                     has_avatar: false,
                 });

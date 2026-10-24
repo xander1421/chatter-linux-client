@@ -113,6 +113,6 @@ async fn fetch_mention_suggestions_raw(
         .search_mention_suggestions(&channel_id, query)
         .await
         .into_iter()
-        .map(|s| (s.id, s.display, s.kind.as_str().to_string(), s.has_avatar))
+        .map(|s| (s.id, s.name, s.kind.as_str().to_string(), s.has_avatar))
         .collect()
 }

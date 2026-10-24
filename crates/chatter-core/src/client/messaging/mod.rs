@@ -258,7 +258,8 @@ pub struct SendMessageUiResult {
 #[derive(Debug, Clone)]
 pub struct MentionSuggestionInfo {
     pub id: String,
-    pub display: String,
+    /// Bare name; the composer adds the `@` prefix.
+    pub name: String,
     pub kind: MentionSuggestionKind,
     pub has_avatar: bool,
 }
