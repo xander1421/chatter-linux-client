@@ -111,25 +111,6 @@ impl GroupMailboxManager {
 
         let now = Utc::now().to_rfc3339();
 
-        // Count total rows from both tables (for debugging)
-        let server_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM group_mailboxes", [], |row| row.get(0))
-            .unwrap_or(0);
-        let anon_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM anon_group_mailboxes", [], |row| {
-                row.get(0)
-            })
-            .unwrap_or(0);
-
-        tracing::debug!(
-            server_count = server_count,
-            anon_count = anon_count,
-            now = %now,
-            "[GROUP_MAILBOX] Querying all group mailboxes (server: {}, anon: {})",
-            server_count,
-            anon_count
-        );
-
         // Query from both tables using UNION
         // Both group_mailboxes.group_id and anon_group_mailboxes.group_id are TEXT UUIDs.
         let mut stmt = conn
@@ -209,7 +190,7 @@ impl GroupMailboxManager {
         if results.is_empty() {
             tracing::trace!("[GROUP_MAILBOX] No active group mailboxes for polling");
         } else {
-            tracing::info!(
+            tracing::debug!(
                 count = results.len(),
                 "[GROUP_MAILBOX] Returning {} active group mailboxes for polling",
                 results.len()

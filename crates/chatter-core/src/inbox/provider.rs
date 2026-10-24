@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use ed25519_dalek::{Signer, SigningKey};
+use futures::{stream, StreamExt};
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
 
@@ -593,8 +594,8 @@ impl DeviceInboxProvider {
         tracing::info!("Inbox provider run_loop started");
 
         // Create DM infrastructure
-        let two_way = TwoWayAnonymity::new(database.clone());
-        let conversation_manager = DmConversationManager::new(database.clone());
+        let two_way = Arc::new(TwoWayAnonymity::new(database.clone()));
+        let conversation_manager = Arc::new(DmConversationManager::new(database.clone()));
 
         // Create repositories
         let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
@@ -689,6 +690,7 @@ impl DeviceInboxProvider {
 
         let mut anon_polls = tokio::task::JoinSet::new();
         let mut group_polls = tokio::task::JoinSet::new();
+        let mut dm_polls = tokio::task::JoinSet::new();
         let mut poll_cycle: u64 = 0;
         let mut pending_device_acks: Vec<String> = Vec::new();
         let mut catch_up_pages = 0u8;
@@ -855,25 +857,11 @@ impl DeviceInboxProvider {
 
                 // Maybe do a dummy poll (NDSS '21 access pattern obfuscation)
                 if should_dummy_poll() {
-                    perform_dummy_poll(&mailbox_client, &decoys).await;
+                    let dummy_client = Arc::new(tokio::sync::Mutex::new(
+                        grpc_pool.anonymous_mailbox_client(),
+                    ));
+                    perform_dummy_poll(&dummy_client, &decoys).await;
                 }
-
-                // 2. Poll DM mailboxes
-                poll_dm_mailboxes(
-                    &two_way,
-                    &conversation_manager,
-                    &mailbox_client,
-                    &message_gateway,
-                    &event_tx,
-                    &settings_repo,
-                    &message_repo,
-                    &attachment_repo,
-                    &user_repo,
-                    domain_tx.as_ref(),
-                    &dm_deduplicator,
-                    &retry_budget,
-                )
-                .await;
             };
             let resumed = tokio::select! {
                 result = tokio::time::timeout(auxiliary_budget, auxiliary) => {
@@ -884,6 +872,45 @@ impl DeviceInboxProvider {
                 }
                 _ = poll_hints.foreground_wake.notified() => true,
             };
+
+            // Preserve fetched DM results across device-cycle deadlines and wakes.
+            while let Some(result) = dm_polls.try_join_next() {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "DM mailbox polling task failed");
+                }
+            }
+            if dm_polls.is_empty() {
+                let two_way = two_way.clone();
+                let conversation_manager = conversation_manager.clone();
+                let mailbox_client = mailbox_client.clone();
+                let message_gateway = message_gateway.clone();
+                let event_tx = event_tx.clone();
+                let settings_repo = settings_repo.clone();
+                let message_repo = message_repo.clone();
+                let attachment_repo = attachment_repo.clone();
+                let user_repo = user_repo.clone();
+                let domain_tx = domain_tx.clone();
+                let dm_deduplicator = dm_deduplicator.clone();
+                let retry_budget = retry_budget.clone();
+                dm_polls.spawn(async move {
+                    poll_dm_mailboxes(
+                        &two_way,
+                        &conversation_manager,
+                        &mailbox_client,
+                        &message_gateway,
+                        &event_tx,
+                        &settings_repo,
+                        &message_repo,
+                        &attachment_repo,
+                        &user_repo,
+                        domain_tx.as_ref(),
+                        &dm_deduplicator,
+                        &retry_budget,
+                        auxiliary_budget,
+                    )
+                    .await;
+                });
+            }
 
             // Group mailboxes can take longer than the auxiliary budget over
             // Tor. Keep one poll in flight across device-inbox cycles; a cycle
@@ -977,14 +1004,15 @@ impl DeviceInboxProvider {
 
                         // Report each secret cycle before cover traffic or Tor
                         // calls, which can use the whole deadline.
-                        let mailbox_count = match anon_poller.get_active_mailbox_keys() {
-                            Ok(keys) => keys.len(),
+                        let mailbox_keys = match anon_poller.get_active_mailbox_keys() {
+                            Ok(keys) => keys,
                             Err(error) => {
                                 tracing::warn!(%error, "Secret chat mailbox lookup failed");
                                 return;
                             }
                         };
-                        tracing::info!(mailbox_count, "Secret chat polling cycle");
+                        let mailbox_count = mailbox_keys.len();
+                        tracing::debug!(mailbox_count, "Secret chat polling cycle");
 
                         // Keep secret-chat cover traffic off the direct mailbox
                         // client's mutex so it cannot stall the next inbox cycle.
@@ -1006,29 +1034,32 @@ impl DeviceInboxProvider {
 
                         // Anonymous DMs are secret chats: poll them over Tor only
                         // (no auth headers, challenge-response). No Tor route → skip.
-                        let secret_client = if mailbox_count == 0 {
-                            None
-                        } else {
-                            match grpc_pool.secret_mailbox_client() {
-                                Ok(client) => Some(client),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        mailbox_count,
-                                        "[ANON_DM] Skipping anonymous DM polling: no Tor route"
-                                    );
-                                    None
+                        if mailbox_count > 0 {
+                            let polls = stream::iter(mailbox_keys).map(|(conversation_id, _, _)| {
+                                let grpc_pool = grpc_pool.clone();
+                                let anon_poller = anon_poller.clone();
+                                async move {
+                                    let mut client = grpc_pool.secret_mailbox_client()
+                                        .map_err(|error| error.to_string())?;
+                                    let result = tokio::time::timeout(
+                                        std::time::Duration::from_secs(95),
+                                        anon_poller.poll_mailbox(&conversation_id, &mut client, None),
+                                    )
+                                    .await
+                                    .map_err(|_| "Secret mailbox poll timed out".to_string())?
+                                    .map_err(|error| error.to_string())?;
+                                    Ok::<_, String>((client, result))
                                 }
-                            }
-                        };
-                        if let Some(mut client) = secret_client {
-                            match tokio::time::timeout_at(
-                                poll_deadline,
-                                anon_poller.poll_all(&mut client),
-                            ).await {
-                                Ok(Ok(results)) => {
-                                    let secret_healthy = !results.is_empty();
-                                    if !results.is_empty() {
+                            }).buffer_unordered(4);
+                            tokio::pin!(polls);
+                            let mut secret_healthy = false;
+                            let mut failed = false;
+                            while let Some(outcome) = polls.next().await {
+                                match outcome {
+                                Ok((mut client, result)) => {
+                                    secret_healthy = true;
+                                    let results = vec![result];
+                                    if results[0].has_messages() {
                                         // Create mpsc channel for events (process_anon_dm_results expects mpsc)
                                         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
                                         // Blocking check closure — uses the DB directly to
@@ -1132,19 +1163,22 @@ impl DeviceInboxProvider {
                                             }
                                         }
                                     }
-                                    if secret_healthy {
-                                        if let Some(owner) = current_user_id {
-                                            let _ = crate::services::gateway::submission::retry_pending(&database,&grpc_pool,&owner.to_string(),None,domain_tx.as_ref()).await;
-                                        }
-                                    }
                                 }
-                                Ok(Err(e)) => {
-                                    tracing::warn!(error = %e, "Failed to poll anonymous DM mailboxes");
-                                    grpc_pool.disconnect_secret();
+                                Err(error) => {
+                                    failed = true;
+                                    tracing::warn!(%error, "Failed to poll anonymous DM mailbox");
                                 }
-                                Err(_) => {
-                                    tracing::warn!("Anonymous DM Tor polling exceeded 95-second budget");
-                                    grpc_pool.disconnect_secret();
+                                }
+                            }
+                            if failed {
+                                grpc_pool.disconnect_secret();
+                            }
+                            if secret_healthy {
+                                if let Some(owner) = current_user_id.as_ref() {
+                                    let _ = crate::services::gateway::submission::retry_pending(
+                                        &database, &grpc_pool, &owner.to_string(), None,
+                                        domain_tx.as_ref(),
+                                    ).await;
                                 }
                             }
                         }

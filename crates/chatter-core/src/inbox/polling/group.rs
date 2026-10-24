@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use tokio::sync::broadcast;
 
 use crate::domain::ids::ChannelId;
@@ -55,6 +56,7 @@ pub(crate) fn group_failure_decision(
     )
 }
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
+use crate::mailbox::group::fanout::GroupPollOutcome;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::attachment::AttachmentService;
 use crate::services::gateway::{MessageGateway, SealedSenderResult};
@@ -88,20 +90,14 @@ pub async fn poll_group_mailboxes(
     if let Some(handoff) = content_handoff {
         handoff.replay(message_repo).await;
     }
-    match group_fanout.poll_all_group_mailboxes().await {
-        Ok(batch) => {
+    match group_fanout.poll_all_group_mailboxes() {
+        Ok((mailbox_count, polls)) => {
             let mut total_groups = 0u32;
             let mut total_messages = 0u32;
-
-            tracing::info!(
-                mailbox_count = batch.mailbox_count,
-                completed = batch.results.len(),
-                timed_out = batch.timed_out,
-                failed = batch.failed,
-                "[GROUP_POLL] Group mailbox polling cycle completed"
-            );
-
-            if batch.mailbox_count == 0 {
+            let mut timed_out = 0usize;
+            let mut failed = 0usize;
+            let mut secret_healthy = false;
+            if mailbox_count == 0 {
                 // Only log occasionally to avoid spam
                 static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -110,18 +106,32 @@ pub async fn poll_group_mailboxes(
                 }
             }
 
-            for (group_id, poll_result) in batch.results {
+            tokio::pin!(polls);
+            while let Some(outcome) = polls.next().await {
+                let (group_id, poll_result) = match outcome {
+                    GroupPollOutcome::Received(group_id, secret, result) => {
+                        secret_healthy |= secret;
+                        (group_id, result)
+                    }
+                    GroupPollOutcome::Failed(group_id, error) => {
+                        failed += 1;
+                        tracing::warn!(%group_id, %error, "Failed to poll group mailbox");
+                        continue;
+                    }
+                    GroupPollOutcome::TimedOut(group_id) => {
+                        timed_out += 1;
+                        tracing::warn!(%group_id, "Group mailbox poll timed out after 95 seconds");
+                        continue;
+                    }
+                };
                 total_groups += 1;
                 let message_count = poll_result.messages.len();
-                tracing::info!(
-                    group_id = %group_id,
-                    message_count = message_count,
-                    "[GROUP_POLL] Polled group mailbox"
-                );
-
                 if message_count == 0 {
+                    tracing::debug!(group_id = %group_id, "[GROUP_POLL] Polled empty group mailbox");
                     continue;
                 }
+                tracing::info!(group_id = %group_id, message_count,
+                    "[GROUP_POLL] Polled group mailbox");
 
                 // Acking makes the SERVER DELETE the message, so ids go in here
                 // per-message, only once the policy has decided this one is
@@ -223,13 +233,15 @@ pub async fn poll_group_mailboxes(
                 }
             }
 
+            tracing::debug!(mailbox_count, completed = total_groups, timed_out, failed,
+                "[GROUP_POLL] Group mailbox polling cycle completed");
             if total_messages > 0 || total_groups > 0 {
                 let _ = event_tx.send(InboxEvent::GroupMailboxPollCompleted {
                     total_groups,
                     total_messages,
                 });
             }
-            batch.secret_healthy
+            secret_healthy
         }
         Err(e) => {
             tracing::warn!(error = %e, "Group mailbox poll failed");

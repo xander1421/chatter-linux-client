@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use ed25519_dalek::{Signer, SigningKey};
-use futures::future::join_all;
+use futures::{stream, Stream, StreamExt};
 use tokio::sync::Mutex;
 
 use crate::domain::{ChannelId, UserId};
@@ -84,14 +84,12 @@ pub struct GroupPollResult {
     pub mailbox_id: String,
 }
 
-/// Results of one group polling pass, including mailboxes that did not finish.
-pub struct GroupPollBatch {
-    /// At least one anonymous-group mailbox was successfully fetched over Tor.
-    pub secret_healthy: bool,
-    pub results: Vec<(ChannelId, GroupPollResult)>,
-    pub mailbox_count: usize,
-    pub timed_out: usize,
-    pub failed: usize,
+/// A completed mailbox fetch. The caller processes each result before waiting
+/// for the remaining mailboxes and acknowledges only after durable handling.
+pub enum GroupPollOutcome {
+    Received(ChannelId, bool, GroupPollResult),
+    Failed(ChannelId, MailboxError),
+    TimedOut(ChannelId),
 }
 
 impl GroupPollResult {
@@ -313,25 +311,16 @@ impl GroupFanout {
 
     /// Poll all group mailboxes for new messages.
     ///
-    /// Polls each group's mailbox independently and returns completed results.
-    /// A stalled mailbox cannot discard results fetched from other groups.
+    /// Polls each group's mailbox independently and yields results as they finish.
     ///
     /// # Returns
     ///
-    /// Completed results and counts for all attempted mailboxes.
-    pub async fn poll_all_group_mailboxes(&self) -> Result<GroupPollBatch, MailboxError> {
+    /// The number of mailboxes and a bounded stream of completed fetches.
+    pub fn poll_all_group_mailboxes(
+        &self,
+    ) -> Result<(usize, impl Stream<Item = GroupPollOutcome>), MailboxError> {
         // Get all active group mailboxes
         let group_mailboxes = self.mailbox_manager.get_all_group_mailboxes()?;
-
-        if group_mailboxes.is_empty() {
-            return Ok(GroupPollBatch {
-                secret_healthy: false,
-                results: Vec::new(),
-                mailbox_count: 0,
-                timed_out: 0,
-                failed: 0,
-            });
-        }
 
         let mailbox_count = group_mailboxes.len();
 
@@ -340,18 +329,18 @@ impl GroupFanout {
             "[GROUP_FANOUT] Found group mailboxes to poll"
         );
 
-        // Give each mailbox its own client. A shared mutex serialized the Tor
-        // requests even though join_all was nominally polling in parallel.
+        // Give each mailbox its own client, with at most four fetches active.
         let futures: Vec<_> = group_mailboxes
             .into_iter()
             .map(|(group_id, public_key, private_key, mailbox_id, secret)| {
-                let client = if secret {
-                    self.pool.secret_mailbox_client()
-                } else {
-                    Ok(self.pool.anonymous_mailbox_client())
-                };
+                let pool = Arc::clone(&self.pool);
                 let manager = Arc::clone(&self.mailbox_manager);
                 async move {
+                    let client = if secret {
+                        pool.secret_mailbox_client()
+                    } else {
+                        Ok(pool.anonymous_mailbox_client())
+                    };
                     // Only the fetch is timed out. The caller processes and
                     // acknowledges every successful result without a deadline.
                     let result = match client {
@@ -370,40 +359,17 @@ impl GroupFanout {
                         .map_err(|_| ()),
                         Err(e) => Ok(Err(MailboxError::Network(e.to_string()))),
                     };
-                    (group_id, secret, result)
+                    match result {
+                        Ok(Ok(poll_result)) => {
+                            GroupPollOutcome::Received(group_id, secret, poll_result)
+                        }
+                        Ok(Err(error)) => GroupPollOutcome::Failed(group_id, error),
+                        Err(()) => GroupPollOutcome::TimedOut(group_id),
+                    }
                 }
             })
             .collect();
-
-        // Execute all polls in parallel
-        let results = join_all(futures).await;
-
-        // Filter to only successful results
-        let mut batch = GroupPollBatch {
-            secret_healthy: false,
-            results: Vec::new(),
-            mailbox_count,
-            timed_out: 0,
-            failed: 0,
-        };
-        for (group_id, secret, result) in results {
-            match result {
-                Ok(Ok(poll_result)) => {
-                    batch.secret_healthy |= secret;
-                    batch.results.push((group_id, poll_result));
-                }
-                Ok(Err(e)) => {
-                    batch.failed += 1;
-                    tracing::warn!(%group_id, error = %e, "Failed to poll group mailbox");
-                }
-                Err(()) => {
-                    batch.timed_out += 1;
-                    tracing::warn!(%group_id, "Group mailbox poll timed out after 95 seconds");
-                }
-            }
-        }
-
-        Ok(batch)
+        Ok((mailbox_count, stream::iter(futures).buffer_unordered(4)))
     }
 
     /// Internal helper for polling a single group mailbox.
