@@ -130,6 +130,7 @@ export component UserProfileModal inherits Rectangle {
     in-out property <string> shared-tab: "";
     in property <[SharedContentItem]> shared-items: [];
     in property <bool> shared-loading: false;
+    in property <string> shared-error: "";
 
     property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
     property <length> avatar-size: root.mobile-mode ? 112px : 96px;
@@ -160,6 +161,7 @@ export component UserProfileModal inherits Rectangle {
     callback start-call(bool /* is-video */);
     callback shared-tab-selected(string /* category */);
     callback shared-load-more();
+    callback shared-retry();
     callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */, string /* selected-url */);
 
     pure function shared-icon(id: string) -> image {
@@ -582,6 +584,12 @@ export component UserProfileModal inherits Rectangle {
                         }
                     }
 
+                    if !root.is-self && !root.shared-page-open && root.shared-error != "": VerticalLayout {
+                        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
+                        Text { text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                        Button { text: "Retry shared content"; clicked => { root.shared-retry(); } }
+                    }
+
                     // Shared categories remain a compact card until one is opened.
                     if !root.is-self && root.shared-tabs.length > 0: HorizontalLayout {
                         padding-left: Spacing.md; padding-right: Spacing.md;
@@ -648,7 +656,12 @@ export component UserProfileModal inherits Rectangle {
                             open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
                         }
                         if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
-                        if !root.shared-loading && root.shared-items.length == 0: Text { text: "Nothing shared yet."; color: Colors.text-muted; font-size: Typography.sm; }
+                        if root.shared-error != "": VerticalLayout {
+                            spacing: Spacing.sm;
+                            Text { text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                            Button { text: "Retry"; clicked => { root.shared-retry(); } }
+                        }
+                        if !root.shared-loading && root.shared-error == "" && root.shared-items.length == 0: Text { text: "Nothing shared yet."; color: Colors.text-muted; font-size: Typography.sm; }
                     }
                 }
             }

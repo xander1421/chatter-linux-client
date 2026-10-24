@@ -269,6 +269,8 @@ pub fn open_user_profile_in_conversation(
     w.global::<crate::ModalHostState>()
         .set_profile_shared_tab("".into());
     w.global::<crate::ModalHostState>()
+        .set_profile_shared_error("".into());
+    w.global::<crate::ModalHostState>()
         .set_profile_last_seen("".into());
     w.global::<crate::ModalHostState>()
         .set_profile_is_muted(false);

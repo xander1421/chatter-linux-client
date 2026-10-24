@@ -133,6 +133,7 @@ export component AppTabScreens inherits Rectangle {
         group-invite-error-id: ModalHostState.group-invite-error-id;
         group-invite-error: ModalHostState.group-invite-error;
         channel-invites: ModalHostState.friends-channel-invites;
+        requests-error: ModalHostState.friends-requests-error;
         blocked-users: ModalHostState.friends-blocked-users;
         loading: ModalHostState.friends-loading;
         // Friend code (privacy-first discovery)
@@ -149,6 +150,7 @@ export component AppTabScreens inherits Rectangle {
         switch-tab(tab) => {
             ModalHostState.friends-modal-switch-tab(tab);
         }
+        requests-retry => { ModalHostState.friends-requests-retry(); }
         view-profile(user-id) => {
             ModalHostState.friends-view-profile(user-id);
         }

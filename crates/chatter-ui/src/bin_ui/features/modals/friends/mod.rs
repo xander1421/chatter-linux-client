@@ -27,6 +27,11 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Tab switch → refresh that tab's data (push events keep lists fresh too;
     // this covers anything missed while the modal was closed).
     wire_switch_tab(window, ui_ctx);
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    window.global::<crate::ModalHostState>().on_friends_requests_retry(move || {
+        refresh_requests(weak.clone(), client.clone());
+    });
 
     // Friend requests (accept, decline, cancel)
     requests::wire_accept_request(window, ui_ctx);
@@ -63,14 +68,7 @@ fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     );
                 }
                 "requests" => {
-                    let ui_ctx = ui_ctx.clone();
-                    let weak = weak.clone();
-                    tokio::spawn(async move {
-                        private_requests::refresh_private_requests(weak, &ui_ctx).await;
-                        // Emits FriendRequestsUpdated; the domain handler rebuilds
-                        // the Received/Sent rows.
-                        ui_ctx.refresh_friend_requests().await;
-                    });
+                    refresh_requests(weak.clone(), ui_ctx.clone());
                 }
                 "blocked" => {
                     let weak = weak.clone();
@@ -109,4 +107,19 @@ fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 _ => {}
             }
         });
+}
+
+fn refresh_requests(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>) {
+    tokio::spawn(async move {
+        private_requests::refresh_private_requests(weak.clone(), &client).await;
+        // Emits FriendRequestsUpdated; the domain handler rebuilds the rows.
+        let result = client.refresh_friend_requests().await;
+        if let Err(error) = &result { tracing::warn!(%error, "Could not refresh friend requests"); }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                window.global::<crate::ModalHostState>()
+                    .set_friends_requests_error(result.is_err());
+            }
+        });
+    });
 }

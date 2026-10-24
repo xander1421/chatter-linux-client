@@ -52,7 +52,9 @@ impl ChatterClient {
         let result = self.users().connect_via_friend_code(code, message).await?;
         let client = Arc::clone(self);
         tokio::spawn(async move {
-            client.refresh_and_emit_friend_requests().await;
+            if let Err(error) = client.refresh_and_emit_friend_requests().await {
+                tracing::debug!(%error, "Could not refresh friend requests after code redemption");
+            }
         });
         Ok(result)
     }

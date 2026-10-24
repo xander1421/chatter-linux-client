@@ -7,6 +7,7 @@ import { Colors } from "../theme/colors.slint";
 import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
 
 component StatusRow inherits Rectangle {
     in property <string> title;
@@ -194,7 +195,12 @@ export component ActivitySheet inherits Rectangle {
                             font-size: Typography.sm; horizontal-alignment: center;
                             height: 160px; vertical-alignment: center;
                         }
-                        if !ActivityGlobal.loading && ActivityGlobal.items.length == 0: VerticalLayout {
+                        if !ActivityGlobal.loading && ActivityGlobal.read-error: VerticalLayout {
+                            alignment: center; spacing: Spacing.sm; height: 160px;
+                            Text { text: "Could not load activity."; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; }
+                            Button { text: "Retry"; clicked => { ActivityGlobal.retry(); } }
+                        }
+                        if !ActivityGlobal.loading && !ActivityGlobal.read-error && ActivityGlobal.items.length == 0: VerticalLayout {
                             alignment: center; spacing: Spacing.sm; height: 160px;
                             HorizontalLayout { alignment: center;
                                 Rectangle { width: 52px; height: 52px; border-radius: Spacing.radius-full;

@@ -439,7 +439,17 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // is the single source of truth — see the empty `received_ui`/`sent_ui`
     // above.
     if session_owner.is_current() {
-        ui_ctx.refresh_friend_requests().await;
+        let result = ui_ctx.refresh_friend_requests().await;
+        if let Err(error) = &result { tracing::warn!(%error, "Could not refresh friend requests"); }
+        let weak = window_weak.clone();
+        let owner = session_owner.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if !owner.is_current() { return; }
+            if let Some(window) = weak.upgrade() {
+                window.global::<crate::ModalHostState>()
+                    .set_friends_requests_error(result.is_err());
+            }
+        });
     }
 
     tracing::info!("Initial data load complete");

@@ -11,6 +11,8 @@ import { Avatar } from "../components/avatar.slint";
 export component RequestsTab inherits VerticalLayout {
     in property <bool> mobile-mode;
     in property <bool> loading;
+    in property <bool> read-error;
+    callback retry();
     in property <length> bottom-inset;
     in-out property <string> requests-sub-tab;
     in property <[FriendRequestData]> received-requests;
@@ -35,6 +37,12 @@ export component RequestsTab inherits VerticalLayout {
     vertical-stretch: 1;
     spacing: Spacing.sm;
 
+    if root.read-error: HorizontalLayout {
+        spacing: Spacing.sm;
+        Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; }
+        Button { text: "Retry"; clicked => { root.retry(); } }
+    }
+
     // Sub-tab bar
     RequestTabs {
         requests-sub-tab <=> root.requests-sub-tab;
@@ -54,7 +62,7 @@ export component RequestsTab inherits VerticalLayout {
     if root.requests-sub-tab == "received": VerticalLayout {
         vertical-stretch: 1;
 
-        if root.received-requests.length == 0: VerticalLayout {
+        if root.received-requests.length == 0 && !root.read-error: VerticalLayout {
             alignment: center;
 
             Text {
@@ -173,7 +181,7 @@ export component RequestsTab inherits VerticalLayout {
     if root.requests-sub-tab == "sent": VerticalLayout {
         vertical-stretch: 1;
 
-        if root.sent-requests.length == 0: VerticalLayout {
+        if root.sent-requests.length == 0 && !root.read-error: VerticalLayout {
             alignment: center;
 
             Text {
