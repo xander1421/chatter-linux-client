@@ -22,6 +22,7 @@ use super::{MessageError, MessageService};
 pub(crate) const DELIVERY_UNCONFIRMED: &str = "Delivery unconfirmed";
 pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
     "Shield is getting ready — will send automatically";
+pub(crate) const BOOTSTRAP_TIMED_OUT: &str = "Secure channel setup timed out. Tap Retry";
 
 impl MessageError {
     /// User-facing label for a send that did not land.

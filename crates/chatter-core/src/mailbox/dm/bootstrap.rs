@@ -277,11 +277,8 @@ impl DmBootstrap {
             // the SAME mailbox and key again. No token, no new mailbox, and a
             // peer that already holds this key takes it as an idempotent
             // re-delivery, so repeating it is safe while a RESPONSE is due.
-            if let (false, Some(mailbox), Some(key)) = (
-                conv.needs_bootstrap(),
-                &conv.our_mailbox,
-                &conv.conversation_key,
-            ) {
+            if let (Some(mailbox), Some(key)) = (&conv.our_mailbox, &conv.conversation_key) {
+                if !mailbox.is_expired() {
                 tracing::info!(peer_id = %peer_id, "DM bootstrap: re-announcing our live mailbox");
                 return Ok(BootstrapResult {
                     our_mailbox: mailbox.clone(),
@@ -289,6 +286,7 @@ impl DmBootstrap {
                     bootstrap_message: self.build_bootstrap_message(mailbox, key, &peer_id)?,
                     peer_id,
                 });
+                }
             }
         } else {
             tracing::debug!(peer_id = %peer_id, "DM bootstrap: no existing conversation");
