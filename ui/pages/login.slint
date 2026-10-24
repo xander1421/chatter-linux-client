@@ -310,7 +310,7 @@ export component LoginPage inherits Rectangle {
                             text: "Link to an existing account on another device";
                             color: Colors.primary;
                             font-size: Typography.xs;
-                            height: Spacing.touch-target-min;
+                            min-height: Spacing.touch-target-min;
                             vertical-alignment: center;
                             accessible-role: button;
                             accessible-action-default => { root.go-to-link-device(); }

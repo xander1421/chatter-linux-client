@@ -274,17 +274,19 @@ export component MeshInfoSheet inherits Rectangle {
         TouchArea { clicked => { root.confirm-kind = ""; } }
         Rectangle {
             width: min(parent.width - Spacing.lg * 2, 420px);
-            height: root.confirm-kind == "member" ? 188px : 150px;
+            height: max(root.confirm-kind == "member" ? 188px : 150px, confirm-shell.preferred-height);
             x: (parent.width - self.width) / 2;
             y: parent.height - self.height - Spacing.lg;
-            VerticalLayout {
+            confirm-shell := VerticalLayout {
                 spacing: Spacing.sm;
                 Rectangle {
-                    height: root.confirm-kind == "member" ? 132px : 94px;
+                    min-height: root.confirm-kind == "member" ? 132px : 94px;
+                    preferred-height: max(self.min-height, confirm-body.preferred-height);
                     border-radius: Spacing.radius-md;
                     background: Colors.surface-section;
-                    VerticalLayout {
+                    confirm-body := VerticalLayout {
                         padding-left: Spacing.md; padding-right: Spacing.md;
+                        padding-top: Spacing.xs; padding-bottom: Spacing.xs;
                         Text {
                             text: root.confirm-kind == "member"
                                 ? "Remove " + root.selected-member-name + "? The group key will rotate."
