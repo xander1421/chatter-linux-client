@@ -92,11 +92,19 @@ impl CbcRangeDecryptor {
         if off >= self.plaintext_size || len == 0 {
             return Vec::new();
         }
-        let end = off.saturating_add(len).min(self.plaintext_size);
+        let mut result = vec![0; len.min(self.plaintext_size - off)];
+        self.read_range_into(off, &mut result);
+        result
+    }
+
+    /// Fill a caller-owned buffer from an authenticated attachment range.
+    pub fn read_range_into(&self, off: usize, output: &mut [u8]) -> usize {
+        if off >= self.plaintext_size || output.is_empty() {
+            return 0;
+        }
+        let end = off.saturating_add(output.len()).min(self.plaintext_size);
         let start_block = off / AES_BLOCK;
         let end_block = (end - 1) / AES_BLOCK; // inclusive; end <= encrypted_len so in range
-
-        let mut window = Vec::with_capacity((end_block - start_block + 1) * AES_BLOCK);
         for b in start_block..=end_block {
             let mut blk = [0u8; AES_BLOCK];
             blk.copy_from_slice(self.cipher_block(b));
@@ -105,13 +113,13 @@ impl CbcRangeDecryptor {
             for i in 0..AES_BLOCK {
                 blk[i] ^= chain[i];
             }
-            window.extend_from_slice(&blk);
+            let block_start = b * AES_BLOCK;
+            let from = off.max(block_start);
+            let to = end.min(block_start + AES_BLOCK);
+            output[from - off..to - off].copy_from_slice(&blk[from - block_start..to - block_start]);
+            blk.fill(0);
         }
-
-        // Slice the requested sub-range out of the block-aligned window.
-        let lo = off - start_block * AES_BLOCK;
-        let hi = lo + (end - off);
-        window[lo..hi].to_vec()
+        end - off
     }
 }
 
@@ -223,6 +231,8 @@ mod tests {
         ];
         for &(off, len) in cases {
             let got = dec.read_range(off, len);
+            let mut into = vec![0; len];
+            let filled = dec.read_range_into(off, &mut into);
             let end = (off + len).min(plaintext.len());
             let want = if off >= plaintext.len() {
                 &[][..]
@@ -230,6 +240,7 @@ mod tests {
                 &plaintext[off..end]
             };
             assert_eq!(got.as_slice(), want, "mismatch at off={off} len={len}");
+            assert_eq!(&into[..filled], want, "direct read mismatch at off={off} len={len}");
         }
 
         // A spread of deterministic pseudo-random windows (no rng dep).

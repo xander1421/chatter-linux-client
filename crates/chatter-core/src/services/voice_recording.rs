@@ -138,19 +138,15 @@ fn record(
         .tempfile_in(cache)
         .map_err(|e| e.to_string())?;
     let encode_start = std::time::Instant::now();
-    let samples = recorder.pcm_i16();
     let duration_ms =
-        samples.len() as u64 * 1000 / (recorder.sample_rate() as u64 * recorder.channels() as u64);
+        recorder.sample_count() as u64 * 1000 / (recorder.sample_rate() as u64 * recorder.channels() as u64);
     if duration_ms < 300 {
         return Err("Recording is too short".into());
     }
     #[cfg(target_os = "android")]
-    super::android_aac::encode(
-        file.path(),
-        &samples,
-        recorder.sample_rate(),
-        recorder.channels(),
-    )?;
+    let samples = recorder.take_pcm_i16();
+    #[cfg(target_os = "android")]
+    super::android_aac::encode(file.path(), &samples, recorder.sample_rate(), recorder.channels())?;
     #[cfg(not(target_os = "android"))]
     recorder.save(file.path()).map_err(|e| e.to_string())?;
     tracing::info!(
@@ -158,10 +154,10 @@ fn record(
         "voice recording: encoded"
     );
     let waveform_start = std::time::Instant::now();
-    let waveform = waveform(
-        &samples,
-        recorder.sample_rate() as usize * recorder.channels() as usize,
-    );
+    #[cfg(target_os = "android")]
+    let waveform = waveform(&samples, recorder.sample_rate() as usize * recorder.channels() as usize);
+    #[cfg(not(target_os = "android"))]
+    let waveform = recorder.waveform_i16();
     tracing::info!(
         elapsed_ms = waveform_start.elapsed().as_millis(),
         "voice recording: waveform ready"

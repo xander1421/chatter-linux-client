@@ -1,7 +1,6 @@
 //! JNI bridge to Android's PdfRenderer. Call from a worker thread only.
 use super::activity;
-use jni::objects::{JIntArray, JLongArray, JValue};
-use zeroize::Zeroize;
+use jni::objects::{JByteArray, JLongArray, JValue};
 
 fn with_pdf_jni<T>(
     f: impl FnOnce(&mut jni::Env<'_>, &jni::objects::JObject<'_>) -> Result<T, String>,
@@ -50,7 +49,7 @@ pub fn render(token: i64, page: i32) -> Result<(u32, u32, Vec<u8>), String> {
             .call_method(
                 activity,
                 jni::jni_str!("renderViewerPdfPage"),
-                jni::jni_sig!("(JI)[I"),
+                jni::jni_sig!("(JI)[B"),
                 &[JValue::Long(token), JValue::Int(page)],
             )
             .and_then(|v| v.l())
@@ -59,36 +58,30 @@ pub fn render(token: i64, page: i32) -> Result<(u32, u32, Vec<u8>), String> {
             return Err("Failed to render PDF page".into());
         }
         let array = env
-            .cast_local::<JIntArray>(value)
+            .cast_local::<JByteArray>(value)
             .map_err(|e| e.to_string())?;
         let len = array.len(env).map_err(|e| e.to_string())? as usize;
-        if len < 3 || len > 2 + 1200 * 2400 {
+        if len < 12 || len > 8 + 1200 * 2400 * 4 {
             return Err("Invalid PDF page dimensions".into());
         }
-        let mut pixels = vec![0i32; len];
-        array
-            .get_region(env, 0, &mut pixels)
-            .map_err(|e| e.to_string())?;
-        let width = u32::try_from(pixels[0]).map_err(|_| "Invalid PDF width")?;
-        let height = u32::try_from(pixels[1]).map_err(|_| "Invalid PDF height")?;
+        let mut rgba = env.convert_byte_array(&array).map_err(|e| e.to_string())?;
+        let width = u32::from_be_bytes(rgba[0..4].try_into().unwrap());
+        let height = u32::from_be_bytes(rgba[4..8].try_into().unwrap());
         if width == 0
             || height == 0
-            || (width as usize).checked_mul(height as usize) != Some(len - 2)
+            || (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)) != Some(len - 8)
         {
             return Err("Invalid PDF page dimensions".into());
         }
-        let mut rgba = Vec::with_capacity((len - 2) * 4);
-        for &pixel in pixels.iter().skip(2) {
-            let argb = pixel as u32;
-            rgba.extend_from_slice(&[
-                (argb >> 16) as u8,
-                (argb >> 8) as u8,
-                argb as u8,
-                (argb >> 24) as u8,
-            ]);
+        rgba.copy_within(8.., 0);
+        rgba.truncate(len - 8);
+        let zeros = [0i8; 4096];
+        for offset in (0..len).step_by(zeros.len()) {
+            if array.set_region(env, offset as i32, &zeros[..(len - offset).min(zeros.len())]).is_err() {
+                let _ = env.exception_clear();
+                break;
+            }
         }
-        pixels.zeroize();
-        let _ = array.set_region(env, 0, &pixels);
         Ok((width, height, rgba))
     })
 }

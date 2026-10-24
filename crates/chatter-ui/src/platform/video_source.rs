@@ -24,16 +24,26 @@ impl VideoSource {
             Self::Range(d) => d.plaintext_size(),
         }
     }
+    #[cfg(test)]
     pub fn read(&self, position: i64, count: usize) -> Option<Vec<u8>> {
+        let mut bytes = vec![0; count.min(1024 * 1024)];
+        let len = self.read_into(position, &mut bytes)?;
+        bytes.truncate(len);
+        Some(bytes)
+    }
+    pub fn read_into(&self, position: i64, output: &mut [u8]) -> Option<usize> {
         let offset = usize::try_from(position).ok()?;
         if offset >= self.len() {
-            return Some(Vec::new());
+            return Some(0);
         }
         // Bound every native decoder request, including malicious media inputs.
-        let count = count.min(1024 * 1024).min(self.len() - offset);
+        let count = output.len().min(1024 * 1024).min(self.len() - offset);
         Some(match self {
-            Self::Memory(b) => b.as_slice()[offset..offset + count].to_vec(),
-            Self::Range(d) => d.read_range(offset, count),
+            Self::Memory(b) => {
+                output[..count].copy_from_slice(&b.as_slice()[offset..offset + count]);
+                count
+            }
+            Self::Range(d) => d.read_range_into(offset, &mut output[..count]),
         })
     }
 }
@@ -68,14 +78,22 @@ impl ThumbnailSource {
     pub fn len(&self) -> Option<usize> {
         ((self.owner)() && std::time::Instant::now() < self.deadline).then(|| self.video.len())
     }
+    #[cfg(test)]
     pub fn read(&mut self, position: i64, count: usize) -> Option<Vec<u8>> {
+        let mut bytes = vec![0; count.min(1024 * 1024)];
+        let len = self.read_into(position, &mut bytes)?;
+        bytes.truncate(len);
+        Some(bytes)
+    }
+    pub fn read_into(&mut self, position: i64, output: &mut [u8]) -> Option<usize> {
         if self.len().is_none() || self.remaining_reads == 0 || self.remaining_bytes == 0 {
             return None;
         }
         self.remaining_reads -= 1;
-        let bytes = self.video.read(position, count.min(self.remaining_bytes))?;
-        self.remaining_bytes -= bytes.len();
-        Some(bytes)
+        let limit = output.len().min(self.remaining_bytes);
+        let len = self.video.read_into(position, &mut output[..limit])?;
+        self.remaining_bytes -= len;
+        Some(len)
     }
 }
 #[cfg(test)]

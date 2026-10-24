@@ -528,6 +528,7 @@ fn rms(start: usize, end: usize, sample: &impl Fn(usize) -> f32) -> f32 {
 mod tests {
     use super::*;
 
+
     #[test]
     fn repair_detects_flat_and_absolute_scale_metadata() {
         assert!(needs_waveform_repair(None));

@@ -1,10 +1,11 @@
 //! Thumbnail decoder source is independent of the active playback source.
 use super::activity;
 use crate::platform::video_source::{ThumbnailSource, VideoSource};
+use std::cell::RefCell;
 use chatter_core::media::VideoMetadata;
 use chatter_core::services::attachment::{CbcRangeDecryptor, ImageDecodeResult, ThumbnailOwner};
 use jni::{
-    objects::{JByteArray, JClass, JObject, JValue},
+    objects::{Global, JByteArray, JClass, JObject, JValue},
     sys::{jint, jlong},
 };
 use std::sync::{
@@ -20,6 +21,41 @@ struct Source {
 }
 static SOURCE: Mutex<Option<Source>> = Mutex::new(None);
 static NEXT: AtomicI64 = AtomicI64::new(1);
+static HELPER: Mutex<Option<Arc<Global<JObject<'static>>>>> = Mutex::new(None);
+thread_local! { static READ_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) }; }
+
+fn with_helper<T>(
+    env: &mut jni::Env<'_>,
+    call: impl FnOnce(&mut jni::Env<'_>, &JObject<'_>) -> jni::errors::Result<T>,
+) -> jni::errors::Result<T> {
+    let mut slot = HELPER.lock().map_err(|_| jni::errors::Error::NullPtr("video helper lock"))?;
+    if slot.is_none() {
+        let loader = env
+            .call_method(
+                activity::activity()
+                    .map_err(|_| jni::errors::Error::NullPtr("activity"))?
+                    .as_obj(),
+                jni::jni_str!("getClassLoader"),
+                jni::jni_sig!("()Ljava/lang/ClassLoader;"),
+                &[],
+            )?
+            .l()?;
+        let name = env.new_string("com.chatter.client.VideoThumbnail")?;
+        let class = env
+            .call_method(
+                loader,
+                jni::jni_str!("loadClass"),
+                jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                &[JValue::Object(name.as_ref())],
+            )?
+            .l()?;
+        let helper = env.new_object(env.cast_local::<JClass>(class)?, jni::jni_sig!("()V"), &[])?;
+        *slot = Some(Arc::new(env.new_global_ref(helper)?));
+    }
+    let helper = Arc::clone(slot.as_ref().unwrap());
+    drop(slot);
+    call(env, helper.as_obj())
+}
 
 pub fn init() {
     chatter_core::services::attachment::register_video_thumbnail_extractor(extract);
@@ -30,36 +66,15 @@ fn extract_file(path: &std::path::Path) -> Result<VideoMetadata, String> {
     let path = path.to_str().ok_or("video path is not UTF-8")?;
     let packed = activity::with_jni_env(|env| {
         let result = env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
-            let loader = env
-                .call_method(
-                    activity::activity()
-                        .map_err(|_| jni::errors::Error::NullPtr("activity"))?
-                        .as_obj(),
-                    jni::jni_str!("getClassLoader"),
-                    jni::jni_sig!("()Ljava/lang/ClassLoader;"),
-                    &[],
-                )?
-                .l()?;
-            let name = env.new_string("com.chatter.client.VideoThumbnail")?;
-            let class = env
-                .call_method(
-                    loader,
-                    jni::jni_str!("loadClass"),
-                    jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                    &[JValue::Object(name.as_ref())],
-                )?
-                .l()?;
-            let helper =
-                env.new_object(env.cast_local::<JClass>(class)?, jni::jni_sig!("()V"), &[])?;
             let jpath = env.new_string(path)?;
-            let bytes = env
+            let bytes = with_helper(env, |env, helper| env
                 .call_method(
                     helper,
                     jni::jni_str!("extractFile"),
                     jni::jni_sig!("(Ljava/lang/String;)[B"),
                     &[JValue::Object(jpath.as_ref())],
                 )?
-                .l()?;
+                .l())?;
             if bytes.is_null() {
                 return Err(jni::errors::Error::NullPtr("video metadata unavailable"));
             }
@@ -130,36 +145,14 @@ fn extract(
 fn extract_jni(token: i64) -> Result<ImageDecodeResult, String> {
     activity::with_jni_env(|env| {
         let result = env.with_local_frame(16, |env| -> jni::errors::Result<Vec<u8>> {
-            // Native worker threads cannot FindClass app classes: use the Activity loader.
-            let loader = env
-                .call_method(
-                    activity::activity()
-                        .map_err(|_| jni::errors::Error::NullPtr("activity"))?
-                        .as_obj(),
-                    jni::jni_str!("getClassLoader"),
-                    jni::jni_sig!("()Ljava/lang/ClassLoader;"),
-                    &[],
-                )?
-                .l()?;
-            let name = env.new_string("com.chatter.client.VideoThumbnail")?;
-            let class = env
-                .call_method(
-                    loader,
-                    jni::jni_str!("loadClass"),
-                    jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                    &[JValue::Object(name.as_ref())],
-                )?
-                .l()?;
-            let helper =
-                env.new_object(env.cast_local::<JClass>(class)?, jni::jni_sig!("()V"), &[])?;
-            let bytes = env
+            let bytes = with_helper(env, |env, helper| env
                 .call_method(
                     helper,
                     jni::jni_str!("extract"),
                     jni::jni_sig!("(J)[B"),
                     &[JValue::Long(token)],
                 )?
-                .l()?;
+                .l())?;
             if bytes.is_null() {
                 return Err(jni::errors::Error::NullPtr("video preview unavailable"));
             }
@@ -226,29 +219,27 @@ pub extern "system" fn Java_com_chatter_client_VideoThumbnail_nativeRead(
             if offset as usize > capacity || count as usize > capacity - offset as usize {
                 return -1;
             }
-            let Some(mut bytes) = SOURCE.lock().ok().and_then(|mut slot| {
-                let s = slot.as_mut()?;
-                if s.token != token {
-                    return None;
+            READ_SCRATCH.with(|scratch| {
+                let mut bytes = scratch.borrow_mut();
+                bytes.resize((count as usize).min(1024 * 1024), 0);
+                let Some(len) = SOURCE.lock().ok().and_then(|mut slot| {
+                    let s = slot.as_mut()?;
+                    if s.token != token { return None; }
+                    s.video.read_into(position, &mut bytes)
+                }) else {
+                    return -1;
+                };
+                if len == 0 {
+                    return if count == 0 { 0 } else { -1 };
                 }
-                s.video.read(position, count as usize)
-            }) else {
-                return -1;
-            };
-            if bytes.is_empty() {
-                return if count == 0 { 0 } else { -1 };
-            }
-            let signed =
-                unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), bytes.len()) };
-            let result = buffer.set_region(env, offset, signed);
-            let len = bytes.len() as jint;
-            bytes.zeroize();
-            if result.is_ok() {
-                len
-            } else {
-                let _ = env.exception_clear();
-                -1
-            }
+                let signed = unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), len) };
+                let result = buffer.set_region(env, offset, signed);
+                bytes[..len].zeroize();
+                if result.is_ok() { len as jint } else {
+                    let _ = env.exception_clear();
+                    -1
+                }
+            })
         })()))
     })
     .resolve::<jni::errors::LogErrorAndDefault>()

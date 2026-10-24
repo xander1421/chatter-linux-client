@@ -1,6 +1,7 @@
 //! In-process native browser/video bridges. Video sources never cross an Intent.
 use super::activity;
 use crate::platform::video_source::VideoSource;
+use std::cell::RefCell;
 use jni::{
     objects::{JByteArray, JObject, JValue},
     sys::{jint, jlong},
@@ -15,6 +16,7 @@ use zeroize::Zeroize;
 static SOURCE: LazyLock<Mutex<Option<(i64, VideoSource)>>> = LazyLock::new(|| Mutex::new(None));
 static NEXT: AtomicI64 = AtomicI64::new(1);
 static SOURCE_REQUEST: AtomicU64 = AtomicU64::new(0);
+thread_local! { static READ_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) }; }
 
 pub fn open_web_link(url: &str) -> Result<(), ()> {
     activity::with_jni_env(|env| {
@@ -175,28 +177,27 @@ pub extern "system" fn Java_com_chatter_client_VideoPlaybackActivity_nativeReadV
             if count == 0 {
                 return 0;
             }
-            let Some(mut bytes) = SOURCE.lock().ok().and_then(|s| {
-                s.as_ref()
-                    .filter(|(id, _)| *id == token)
-                    .and_then(|(_, s)| s.read(position, count as usize))
-            }) else {
-                return -1;
-            };
-            if bytes.is_empty() {
-                return -1;
-            }
-            // JNI takes signed bytes; preserve the exact bit pattern without another copy.
-            let signed =
-                unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), bytes.len()) };
-            let result = buffer.set_region(env, offset, signed);
-            let len = bytes.len() as jint;
-            bytes.zeroize();
-            if result.is_ok() {
-                len
-            } else {
-                let _ = env.exception_clear();
-                -1
-            }
+            READ_SCRATCH.with(|scratch| {
+                let mut bytes = scratch.borrow_mut();
+                bytes.resize((count as usize).min(1024 * 1024), 0);
+                let Some(len) = SOURCE.lock().ok().and_then(|s| {
+                    s.as_ref()
+                        .filter(|(id, _)| *id == token)
+                        .and_then(|(_, s)| s.read_into(position, &mut bytes))
+                }) else {
+                    return -1;
+                };
+                if len == 0 {
+                    return -1;
+                }
+                let signed = unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), len) };
+                let result = buffer.set_region(env, offset, signed);
+                bytes[..len].zeroize();
+                if result.is_ok() { len as jint } else {
+                    let _ = env.exception_clear();
+                    -1
+                }
+            })
         })()))
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
