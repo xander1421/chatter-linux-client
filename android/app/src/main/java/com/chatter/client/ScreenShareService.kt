@@ -58,6 +58,7 @@ class ScreenShareService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
+        val start = intent ?: return START_NOT_STICKY
         token = requestedToken
         try {
             val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
@@ -75,10 +76,10 @@ class ScreenShareService : Service() {
             val manager = getSystemService(MediaProjectionManager::class.java)
             @Suppress("DEPRECATION")
             val consent = if (Build.VERSION.SDK_INT >= 33)
-                intent.getParcelableExtra(DATA, Intent::class.java)
-                else intent.getParcelableExtra(DATA)
+                start.getParcelableExtra(DATA, Intent::class.java)
+                else start.getParcelableExtra(DATA)
             val granted = consent ?: error("Missing projection consent")
-            val projection = manager.getMediaProjection(intent.getIntExtra(RESULT, 0), granted)
+            val projection = manager.getMediaProjection(start.getIntExtra(RESULT, 0), granted)
                 ?: error("MediaProjection unavailable")
             this.projection = projection
             val metrics = DisplayMetrics()
