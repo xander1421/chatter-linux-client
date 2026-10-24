@@ -1,3 +1,5 @@
+import { ActivityUi } from "../activity/activity_bell.slint";
+import { ActivityGlobal } from "../activity/activity_global.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -117,6 +119,29 @@ export component SidebarFooter inherits GlassSurface {
                         mesh-touch := TouchArea { clicked => { root.tab-selected("mesh"); } }
                     }
                 }
+                // Activity: mentions, replies and server status (ActivityUi
+                // bridges to the modal host). The status dot lives here now.
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
+                        background: bell-touch.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: ActivityGlobal.unread-count > 0 ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+                        accessible-action-default => { ActivityUi.open(); }
+                        border-width: bell-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
+                        bell-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; } return reject; }
+                        }
+                        Image { source: Icons.bell; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        if root.server-unreachable || ActivityGlobal.unread-count > 0: Rectangle {
+                            x: parent.width - self.width - 1px; y: 1px;
+                            width: 7px; height: 7px; border-radius: 3.5px;
+                            border-width: 1px; border-color: Colors.surface;
+                            background: root.server-unreachable ? Colors.error : Colors.primary;
+                        }
+                        bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
+                    }
+                }
                 // The gear opens the account menu (Settings is pushed from
                 // there, app.slint), like the avatar beside it. Not on mobile:
                 // the tab bar's Profile tab is the same menu.
@@ -132,14 +157,6 @@ export component SidebarFooter inherits GlassSurface {
                         }
 
                         Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        if root.server-unreachable: Rectangle {
-                            x: parent.width - self.width - 1px; y: 1px;
-                            width: 7px; height: 7px; border-radius: 3.5px;
-                            border-width: 1px; border-color: Colors.surface;
-                            background: Colors.error;
-                            accessible-role: text;
-                            accessible-label: "Server unreachable";
-                        }
                         sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
                     }
                 }

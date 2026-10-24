@@ -75,13 +75,13 @@ export component SidebarHeader inherits GlassSurface {
                 label: "Create";
                 clicked => { root.create-clicked(); }
             }
-            ActivityBell {
+            // Phones only: the two-pane sidebar is too narrow for a third
+            // header control beside Search, so desktop's bell is in the footer.
+            if root.mobile-mode: ActivityBell {
                 touch: root.touch;
                 server-unreachable: root.server-unreachable;
                 connection-status: root.connection-status;
-                x: root.mobile-mode
-                    ? parent.width - self.width * 2 - Spacing.sm - Spacing.header-action-gap
-                    : parent.width - self.width * 3 - Spacing.sm - Spacing.header-action-gap * 2;
+                x: parent.width - self.width * 2 - Spacing.sm - Spacing.header-action-gap;
                 y: (parent.height - self.height) / 2;
             }
             // Shield toggle — the chat list's own header control (owner decision
