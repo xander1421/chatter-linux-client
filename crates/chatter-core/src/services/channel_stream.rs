@@ -21,7 +21,7 @@
 //!   server auto-subscribes from its own membership list when `channel_ids`
 //!   is empty, which is what makes a restart recover),
 //! - a reconnect loop with capped backoff,
-//! - a durable catch-up (`SyncService::trigger_sync`) on every connect, so
+//! - a durable message catch-up on every connect, so
 //!   correctness never depends on the live stream having been up, and
 //! - a resume cursor (`event_id`) persisted across runs so a short drop
 //!   replays from the server's event log instead of relying on the catch-up.
@@ -413,7 +413,7 @@ impl ChannelStreamService {
         //
         // Forced, not rate-limited: MIN_CATCHUP_INTERVAL is 15s and a
         // reconnecting client has usually synced within that, so the throttled
-        // call above would skip precisely the one sync that closes the window.
+        // call above would skip precisely the message pass that closes the window.
         // Duplicates are free — the message store inserts with
         // INSERT OR IGNORE on the message id.
         let catch_up_started = std::time::Instant::now();
@@ -458,27 +458,26 @@ impl ChannelStreamService {
         }
     }
 
-    /// Pull anything missed from the durable store (channel list, then
-    /// messages per channel). Rate-limited so a flapping stream cannot spam
-    /// the server: skipped when any sync cycle finished recently.
+    /// A failed subscribe leaves the normal full sync available as an
+    /// opportunistic fallback, subject to its rate limiter.
     async fn catch_up(&self) {
         self.sync_service.sync_if_stale(MIN_CATCHUP_INTERVAL).await;
     }
 
-    /// A durable sync that always runs, whatever the rate limiter thinks.
+    /// A durable message pass that always runs after subscribe.
     ///
-    /// Used once per successful subscribe (§103). The throttle exists to stop a
-    /// flapping stream hammering the server; it must not be able to skip the
-    /// sync that closes the subscribe window. The engine coalesces it with a
-    /// cycle already in flight, but only into one that STARTED after this call,
-    /// so the window is still covered.
+    /// Used once per successful subscribe (§103). It waits for a full sync
+    /// already in flight, then reads from each local channel's message cursor,
+    /// so even a sync begun before subscribe cannot leave a stream gap.
     async fn catch_up_now(&self) {
-        if let Some(result) = self.sync_service.trigger_sync().await {
-            tracing::info!(
-                channels = result.channels.synced,
-                messages = result.messages.total_inserted,
+        match self.sync_service.catch_up_messages().await {
+            Ok(result) => tracing::info!(
+                channels = result.channels_synced,
+                messages = result.total_inserted,
+                errors = result.errors.len(),
                 "Channel stream catch-up complete"
-            );
+            ),
+            Err(error) => tracing::warn!(%error, "Channel stream catch-up could not list local memberships"),
         }
     }
 

@@ -4,6 +4,42 @@ use crate::{error::StorageError, storage::database::Database};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
+/// Refresh after every pending-state write. If that read fails, retain an
+/// immediate hint so the next healthy mailbox cycle retries the SQL read.
+/// The lock prevents a concurrent refresh from overwriting a newer write.
+fn schedule_changed(db: &Database, owner: &str) {
+    let mut due = db.retained_retry_due.lock();
+    due.insert(owner.to_owned(), read_next_due(db, owner).unwrap_or(Some(0)));
+}
+
+fn read_next_due(db: &Database, owner: &str) -> Result<Option<i64>, StorageError> {
+    let conn = db.read_connection()?;
+    conn.query_row(
+        "SELECT MIN(CASE WHEN json_extract(value,'$.next_attempt') > json_extract(value,'$.lease_until') THEN json_extract(value,'$.next_attempt') ELSE json_extract(value,'$.lease_until') END) FROM settings WHERE key LIKE 'send.anonymous.v1:%' AND json_extract(value,'$.owner')=?1 AND json_extract(value,'$.ciphertext') IS NOT NULL AND json_extract(value,'$.confirmed')=0",
+        [owner],
+        |row| row.get(0),
+    ).map_err(Into::into)
+}
+
+fn retry_is_due(db: &Database, owner: &str) -> Result<bool, StorageError> {
+    let mut due = db.retained_retry_due.lock();
+    let next = match due.get(owner) {
+        Some(next) => *next,
+        None => {
+            let next = read_next_due(db, owner)?;
+            due.insert(owner.to_owned(), next);
+            next
+        }
+    };
+    Ok(next.is_some_and(|time| time <= chrono::Utc::now().timestamp()))
+}
+
+fn refresh_retry_due(db: &Database, owner: &str) -> Result<(), StorageError> {
+    let mut due = db.retained_retry_due.lock();
+    due.insert(owner.to_owned(), read_next_due(db, owner)?);
+    Ok(())
+}
+
 pub(crate) enum Admission {
     First(String),
     Confirmed,
@@ -98,6 +134,7 @@ pub(crate) fn retain_deposit(
         .then(|| crate::services::anon_group::send_ledger::key(&owner, &conversation, inner));
     conn.execute("UPDATE settings SET value=json_set(value,'$.mailbox',json(?2),'$.row',?3,'$.ledger',?4,'$.conversation',?5,'$.kind',?6,'$.lease_until',?7) WHERE key=?1 AND json_extract(value,'$.ciphertext') IS NULL AND json_extract(value,'$.confirmed')=0", params![key,serde_json::to_string(mailbox).unwrap(),row,ledger,conversation,kind,chrono::Utc::now().timestamp()+90])?;
     drop(conn);
+    schedule_changed(db, &owner);
     // Destination first, bytes last: recovery never sees an envelope without
     // the destination and completion identity needed to replay it.
     ciphertext(db, key, ciphertext_bytes)
@@ -106,7 +143,11 @@ pub(crate) fn retain_deposit(
 pub(crate) fn ciphertext(db: &Database, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
     let value = serde_json::to_string(bytes)
         .map_err(|_| StorageError::InvalidData("Cannot retain anonymous ciphertext".into()))?;
-    db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.ciphertext',json(?2)) WHERE key=?1 AND json_extract(value,'$.ciphertext') IS NULL AND json_extract(value,'$.confirmed')=0",params![key,value])?;
+    let conn = db.connection()?;
+    let owner: String = conn.query_row("SELECT json_extract(value,'$.owner') FROM settings WHERE key=?1", [key], |r| r.get(0))?;
+    conn.execute("UPDATE settings SET value=json_set(value,'$.ciphertext',json(?2)) WHERE key=?1 AND json_extract(value,'$.ciphertext') IS NULL AND json_extract(value,'$.confirmed')=0",params![key,value])?;
+    drop(conn);
+    schedule_changed(db, &owner);
     Ok(())
 }
 
@@ -138,6 +179,9 @@ pub(crate) async fn retry_pending(
     row: Option<&str>,
     events: Option<&tokio::sync::broadcast::Sender<crate::inbox::handlers::DomainEvent>>,
 ) -> Result<(), StorageError> {
+    if row.is_none() && !retry_is_due(db, owner)? {
+        return Ok(());
+    }
     let entries = {
         let conn = db.read_connection()?;
         let mut stmt = conn.prepare("SELECT key FROM settings WHERE key LIKE 'send.anonymous.v1:%' AND json_extract(value,'$.owner')=?1 AND json_extract(value,'$.ciphertext') IS NOT NULL AND (?2 IS NULL OR json_extract(value,'$.row')=?2) AND (?2 IS NOT NULL OR json_extract(value,'$.next_attempt')<=?3) AND json_extract(value,'$.lease_until')<=?3 ORDER BY updated_at LIMIT 8")?;
@@ -163,6 +207,7 @@ pub(crate) async fn retry_pending(
             conn.query_row("UPDATE settings SET value=json_set(value,'$.lease_until',?2+90,'$.attempts',json_extract(value,'$.attempts')+1) WHERE key=?1 AND json_extract(value,'$.lease_until')<=?2 AND json_extract(value,'$.confirmed')=0 RETURNING value", params![key,chrono::Utc::now().timestamp()], |r|r.get(0)).optional()?
         };
         let Some(raw) = raw else { continue };
+        schedule_changed(db, owner);
         let record: RetainedDeposit = serde_json::from_str(&raw)
             .map_err(|_| StorageError::InvalidData("Invalid retained submission".into()))?;
         let mailbox = record.mailbox;
@@ -220,6 +265,7 @@ pub(crate) async fn retry_pending(
         {
             let attempts = record.attempts.min(5);
             db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.next_attempt',?2,'$.lease_until',0) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",params![key,chrono::Utc::now().timestamp()+ (10i64 << attempts)])?;
+            schedule_changed(db, owner);
             break; // one failing route per health notification, never a busy loop
         }
         // Commit recipient receipt and row settlement before pruning ciphertext.
@@ -256,13 +302,17 @@ pub(crate) async fn retry_pending(
         }
         confirm(db, &key)?;
     }
-    Ok(())
+    refresh_retry_due(db, owner)
 }
 
 /// The original request completed without a receipt. Its ciphertext stays
 /// immutable, but a tap may now take the lease immediately.
 pub(crate) fn retry_later(db: &Database, key: &str) -> Result<(), StorageError> {
-    db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.lease_until',0,'$.next_attempt',?2) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",params![key,chrono::Utc::now().timestamp()+20])?;
+    let conn = db.connection()?;
+    let owner: String = conn.query_row("SELECT json_extract(value,'$.owner') FROM settings WHERE key=?1", [key], |r| r.get(0))?;
+    conn.execute("UPDATE settings SET value=json_set(value,'$.lease_until',0,'$.next_attempt',?2) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",params![key,chrono::Utc::now().timestamp()+20])?;
+    drop(conn);
+    schedule_changed(db, &owner);
     Ok(())
 }
 
@@ -271,10 +321,15 @@ pub(crate) fn retained_row(db: &Database, owner: &str, row: &str) -> bool {
 }
 pub(crate) fn confirm(db: &Database, key: &str) -> Result<(), StorageError> {
     let conn = db.connection()?;
+    let owner: Option<String> = conn.query_row("SELECT json_extract(value,'$.owner') FROM settings WHERE key=?1", [key], |r| r.get(0))?;
     conn.execute(
         "UPDATE settings SET value=json_object('confirmed',json('true')) WHERE key=?1",
         params![key],
     )?;
+    drop(conn);
+    if let Some(owner) = owner {
+        schedule_changed(db, &owner);
+    }
     Ok(())
 }
 

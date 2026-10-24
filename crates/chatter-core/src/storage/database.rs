@@ -11,7 +11,7 @@ use crate::error::StorageError;
 use crate::storage::migrations::default_migrations;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -32,6 +32,8 @@ pub struct Database {
     /// One core consumer of committed message inserts, independent of UI events.
     message_stores:
         Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::domain::message::Message>>>,
+    /// Earliest retry time per owner for retained anonymous submissions.
+    pub(crate) retained_retry_due: Mutex<HashMap<String, Option<i64>>>,
 }
 
 /// Pool of read-only connections for concurrent database reads.
@@ -291,6 +293,7 @@ impl Database {
 
         Ok(Self {
             message_stores: Mutex::new(None),
+            retained_retry_due: Mutex::new(HashMap::new()),
             writer: Arc::new(Mutex::new(conn)),
             readers,
             path: path.to_path_buf(),

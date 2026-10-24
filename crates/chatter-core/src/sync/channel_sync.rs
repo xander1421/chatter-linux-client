@@ -44,6 +44,18 @@ pub struct ChannelSyncResult {
 }
 
 impl ChannelSync {
+    /// Local memberships define the channels covered by a successful global
+    /// subscription until the next periodic channel-list reconciliation.
+    pub(crate) fn local_channel_ids(&self) -> Result<Vec<ChannelId>, SyncError> {
+        let me = self
+            .settings_repo
+            .current_user_id()
+            .map_err(|e| SyncError::Storage(e.to_string()))?;
+        self.channel_repo
+            .list_channels_for_user(&me)
+            .map_err(|e| SyncError::Storage(e.to_string()))
+    }
+
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
         channel_repo: Arc<ChannelRepository>,

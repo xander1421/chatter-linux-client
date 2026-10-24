@@ -4,6 +4,7 @@
 //! Fetches messages since the last sync timestamp for each channel.
 
 use std::sync::Arc;
+use futures::stream::{self, StreamExt};
 
 use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -170,13 +171,17 @@ impl MessageSync {
     /// Sync messages for all given channels.
     pub async fn sync_all(&self, channel_ids: &[ChannelId]) -> FullMessageSyncResult {
         let mut full_result = FullMessageSyncResult::default();
-
-        for channel_id in channel_ids {
-            let mut result = MessageSyncResult {
-                channel_id: channel_id.to_string(),
-                ..Default::default()
-            };
-            let outcome = self.sync_channel_into(channel_id, &mut result).await;
+        let mut channels = stream::iter(channel_ids.iter().copied())
+            .map(|channel_id| async move {
+                let mut result = MessageSyncResult {
+                    channel_id: channel_id.to_string(),
+                    ..Default::default()
+                };
+                let outcome = self.sync_channel_into(&channel_id, &mut result).await;
+                (result, outcome)
+            })
+            .buffer_unordered(4);
+        while let Some((result, outcome)) = channels.next().await {
             full_result.record_channel(result, outcome);
         }
 

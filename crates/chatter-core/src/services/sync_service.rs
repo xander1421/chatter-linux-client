@@ -87,6 +87,10 @@ impl SyncService {
         self.engine.trigger_sync().await
     }
 
+    pub async fn catch_up_messages(&self) -> Result<crate::sync::message_sync::FullMessageSyncResult, String> {
+        self.engine.catch_up_messages().await
+    }
+
     /// Sync unless a cycle finished within `max_age`.
     pub async fn sync_if_stale(&self, max_age: std::time::Duration) -> Option<SyncCycleResult> {
         self.engine.sync_if_stale(max_age).await
