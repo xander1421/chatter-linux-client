@@ -641,10 +641,11 @@ export component ThreadPanel inherits Rectangle {
         show: true;
         touch: root.mobile;
         x: max(0px, root.width - self.width - Spacing.sm);
-        y: max(Spacing.header-height, root.height - composer.height - self.height - Spacing.sm);
+        y: max(root.mobile ? Spacing.header-height-touch : Spacing.header-height,
+            root.height - composer.height - self.height - Spacing.sm);
         max-picker-width: min(280px, root.width - 2 * Spacing.sm);
         max-picker-height: max(0px, min(320px,
-            root.height - composer.height - Spacing.header-height - Spacing.sm));
+            root.height - composer.height - (root.mobile ? Spacing.header-height-touch : Spacing.header-height) - Spacing.sm));
         emoji-list: root.emoji-list;
         selected-category <=> root.emoji-category;
         search-query <=> root.emoji-search;
@@ -658,9 +659,11 @@ export component ThreadPanel inherits Rectangle {
     if root.mention-visible: MentionAutocomplete {
         show: root.mention-visible;
         x: Spacing.sm;
-        y: max(Spacing.header-height, root.height - composer.height - self.height);
+        y: max(root.mobile ? Spacing.header-height-touch : Spacing.header-height,
+            root.height - composer.height - self.height);
         max-popup-width: min(240px, root.width - 2 * Spacing.sm);
-        max-popup-height: max(0px, root.height - composer.height - Spacing.header-height);
+        max-popup-height: max(0px, root.height - composer.height
+            - (root.mobile ? Spacing.header-height-touch : Spacing.header-height));
         suggestions: root.mention-suggestions;
         selected-index: root.mention-selected-index;
         suggestion-selected(id, display) => { root.mention-selected(id, display); }
