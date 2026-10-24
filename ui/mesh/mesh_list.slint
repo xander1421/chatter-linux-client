@@ -1,9 +1,9 @@
-// Mesh destination list. Setup lives in MeshSetupSheet.
 import { Colors } from "../theme/colors.slint";
-import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Toggle } from "../components/toggle.slint";
+import { ModalHostState } from "../app_modal_host_state.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { MeshListItem } from "mesh_list_item.slint";
 
@@ -11,223 +11,265 @@ export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> touch: false;
     callback setup-requested();
-    property <bool> expanded: true;
-    property <string> status: !MeshGlobal.mesh-on ? "Stopped"
-        : !MeshGlobal.radio-running ? "Unavailable"
-        : MeshGlobal.peer-count == 0 ? "0 nearby"
-        : MeshGlobal.peer-count == 1 ? "1 nearby"
-        : MeshGlobal.peer-count + " nearby";
+    property <string> device-count: MeshGlobal.peer-count == 1 ? "1 device nearby"
+        : MeshGlobal.peer-count + " devices nearby";
+    property <string> relay-count: MeshGlobal.relay-count == 1 ? "1 relay"
+        : MeshGlobal.relay-count + " relays";
+    property <string> status-title: !MeshGlobal.mesh-on ? "Mesh Off"
+        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth Off" : "Mesh On";
+    property <string> status-detail: !MeshGlobal.mesh-on ? "Radio off · " + root.relay-count
+        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off · " + root.relay-count
+        : !MeshGlobal.radio-running ? "Radio unavailable · " + root.relay-count
+        : root.device-count + " · " + root.relay-count;
 
-    VerticalLayout {
-        spacing: Spacing.xxs;
-        if !root.collapsed: Rectangle {
-            height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.xs;
-                spacing: Spacing.xs;
-                Rectangle {
-                    horizontal-stretch: 1;
-                    border-radius: Spacing.radius-md;
-                    background: header-touch.has-hover ? Colors.surface-hover : transparent;
-                    transform-scale-x: header-touch.pressed ? 98% : 100%;
-                    transform-scale-y: header-touch.pressed ? 96% : 100%;
-                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-                    HorizontalLayout {
-                        padding-left: Spacing.xs;
-                        spacing: Spacing.sm;
-                        VerticalLayout {
-                            alignment: center;
-                            Image {
-                                source: Icons.chevron-right;
-                                width: 11px; height: 11px;
-                                colorize: Colors.text-muted;
-                                transform-rotation: root.expanded ? 90deg : 0deg;
-                                animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
-                            }
-                        }
-                        Text {
-                            text: "Conversations";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: 600;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                    }
-                    header-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        accessible-role: button;
-                        accessible-label: root.expanded ? "Collapse mesh conversations" : "Expand mesh conversations";
-                        clicked => { root.expanded = !root.expanded; }
-                    }
-                }
-                // The status is read-only and outside every switch hit target.
-                Text {
-                    text: root.status;
-                    color: MeshGlobal.mesh-on && !MeshGlobal.radio-running ? Colors.warning : Colors.text-secondary;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    max-width: 78px;
-                }
-                Rectangle {
-                    width: root.touch ? Spacing.touch-target-min : Spacing.button-height;
-                    height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
-                    border-radius: Spacing.radius-md;
-                    border-width: 1px;
-                    border-color: Colors.border;
-                    background: switch-touch.has-hover ? Colors.surface-hover : transparent;
-                    Text {
-                        text: MeshGlobal.mesh-on ? "On" : "Off";
-                        color: MeshGlobal.mesh-on ? Colors.primary : Colors.text-primary;
-                        font-size: Typography.xs;
-                        font-weight: 600;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                    switch-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        accessible-role: button;
-                        accessible-label: MeshGlobal.mesh-on ? "Turn mesh off" : "Turn mesh on";
-                        clicked => { MeshGlobal.set-mesh-on(!MeshGlobal.mesh-on); }
-                    }
-                }
-                Rectangle {
-                    width: root.touch ? Spacing.touch-target-min : Spacing.button-height;
-                    border-radius: Spacing.radius-md;
-                    background: setup-touch.has-hover ? Colors.surface-hover : transparent;
-                    transform-scale-x: setup-touch.pressed ? 90% : 100%;
-                    transform-scale-y: setup-touch.pressed ? 90% : 100%;
-                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-                    Image {
-                        source: Icons.settings;
-                        width: Spacing.button-icon;
-                        height: Spacing.button-icon;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: setup-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                    }
-                    setup-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        accessible-role: button;
-                        accessible-label: "Mesh setup";
-                        clicked => { root.setup-requested(); }
-                    }
-                }
-            }
-        }
+    height: content.preferred-height;
+    background: transparent;
+    content := VerticalLayout {
+        spacing: Spacing.lg;
         if root.collapsed: Rectangle {
             height: Spacing.touch-target-min;
             border-radius: Spacing.radius-md;
             background: rail-touch.has-hover ? Colors.surface-hover : transparent;
             Image {
-                source: Icons.radio;
-                width: Spacing.button-icon;
-                height: Spacing.button-icon;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                source: Icons.radio; width: Spacing.button-icon; height: Spacing.button-icon;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                 colorize: MeshGlobal.mesh-on ? Colors.primary : Colors.text-muted;
             }
             rail-touch := TouchArea {
-                mouse-cursor: pointer;
-                accessible-role: button;
-                accessible-label: "Mesh setup, " + root.status;
-                clicked => { root.setup-requested(); }
+                mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh setup";
+                clicked => { MeshGlobal.open-setup(); }
             }
         }
-        if !root.collapsed && root.expanded && !MeshGlobal.mesh-on: Rectangle {
-            height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
-            border-radius: Spacing.radius-md;
-            background: turn-on-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-            transform-scale-x: turn-on-touch.pressed ? 98% : 100%;
-            transform-scale-y: turn-on-touch.pressed ? 96% : 100%;
-            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+        if !root.collapsed: VerticalLayout {
+            spacing: Spacing.lg;
             HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                Text { text: "Turn on mesh"; color: Colors.text-primary; font-size: Typography.sm; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
-                Text { text: "Set up  ›"; color: Colors.primary; font-size: Typography.sm; vertical-alignment: center; }
-            }
-            turn-on-touch := TouchArea {
-                mouse-cursor: pointer;
-                accessible-role: button;
-                accessible-label: "Turn on mesh, open setup";
-                clicked => { root.setup-requested(); }
-            }
-        }
-        if root.expanded: VerticalLayout {
-            padding-left: Spacing.xs;
-            padding-right: Spacing.xs;
-            spacing: Spacing.xxs;
-            for item in MeshGlobal.conversations: MeshListItem {
-                title: item.title;
-                kind: item.kind;
-                scope: item.scope;
-                timestamp: item.timestamp;
-                unread-count: item.unread-count;
-                reachable: item.reachable;
-                verified: item.verified;
-                muted: item.muted;
-                blocked: item.blocked;
-                binding-label: item.binding-label;
-                selected: item.is-selected;
-                collapsed: root.collapsed;
-                touch: root.touch;
-                clicked => { MeshGlobal.conversation-selected(item.id); }
-                leave => { MeshGlobal.leave-channel(item.scope); }
-                toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
-            }
-        }
-        if !root.collapsed && root.expanded && MeshGlobal.mesh-on && MeshGlobal.conversations.length == 0: Rectangle {
-            height: empty-text.preferred-height + Spacing.md * 2;
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                empty-text := Text {
-                    text: "No mesh conversations yet. Open mesh setup to find nearby people or join a channel.";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
+                padding-left: Spacing.lg; padding-right: Spacing.sm; spacing: Spacing.xs;
+                Text {
+                    text: "Mesh"; color: Colors.text-primary; font-size: Typography.xxxl;
+                    font-weight: Typography.bold; vertical-alignment: center; horizontal-stretch: 1;
                 }
-            }
-        }
-        if !root.collapsed && MeshGlobal.nearby-peers.length > 0: VerticalLayout {
-            padding-left: Spacing.sm;
-            padding-right: Spacing.sm;
-            spacing: Spacing.xxs;
-            Text {
-                text: "Nearby people";
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                font-weight: 600;
-            }
-            for peer in MeshGlobal.nearby-peers: Rectangle {
-                height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-md;
-                background: peer-touch.has-hover ? Colors.surface-hover : transparent;
-                HorizontalLayout {
-                    padding-left: Spacing.sm;
-                    padding-right: Spacing.sm;
-                    spacing: Spacing.sm;
-                    VerticalLayout {
-                        alignment: center;
-                        Image { source: Icons.radio; width: 18px; height: 18px; colorize: Colors.text-muted; }
+                Rectangle {
+                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    border-radius: Spacing.radius-full;
+                    background: compose-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Image {
+                        source: Icons.plus; width: Spacing.header-glyph; height: Spacing.header-glyph;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
                     }
-                    // The name keeps its width; the binding label elides first in a narrow sidebar.
-                    Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
-                        min-width: min(self.preferred-width, 120px); }
-                    Text { text: peer.binding-label; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; overflow: elide; }
+                    compose-touch := TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh conversation";
+                        clicked => { ModalHostState.nav-push("mesh-compose"); }
+                    }
                 }
-                peer-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    accessible-role: button;
-                    accessible-label: "Open nearby mesh peer " + peer.name;
-                    clicked => { MeshGlobal.open-peer(peer.id); }
+                Rectangle {
+                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    border-radius: Spacing.radius-full;
+                    background: setup-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Image {
+                        source: Icons.settings; width: Spacing.header-glyph; height: Spacing.header-glyph;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-secondary;
+                    }
+                    setup-touch := TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh settings";
+                        clicked => { MeshGlobal.open-setup(); }
+                    }
                 }
+            }
+            VerticalLayout {
+                padding-left: Spacing.lg; padding-right: Spacing.lg;
+                Rectangle {
+                    height: status-content.preferred-height;
+                    border-radius: Spacing.radius-lg; background: Colors.surface-section;
+                    status-content := VerticalLayout {
+                        padding: Spacing.md; spacing: Spacing.sm;
+                        HorizontalLayout {
+                            spacing: Spacing.md; alignment: center;
+                            Rectangle {
+                                width: 40px; height: 40px; border-radius: Spacing.radius-full;
+                                background: Colors.tint-weak;
+                                Image {
+                                    source: Icons.radio; width: 20px; height: 20px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                    colorize: Colors.primary;
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1; spacing: Spacing.xxs;
+                                Text {
+                                    text: root.status-title; color: Colors.text-primary;
+                                    font-size: Typography.base; font-weight: Typography.semibold;
+                                }
+                                Text {
+                                    text: root.status-detail;
+                                    color: Colors.text-muted; font-size: Typography.sm; overflow: elide;
+                                }
+                            }
+                            Toggle {
+                                checked: MeshGlobal.mesh-on;
+                                accessible-text: "Mesh radio";
+                                toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                            }
+                        }
+                        if MeshGlobal.notice != "": Text {
+                            text: MeshGlobal.notice; color: Colors.text-muted;
+                            font-size: Typography.xs; wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+            if MeshGlobal.pending-private-id != "": VerticalLayout {
+                padding-left: Spacing.lg; padding-right: Spacing.lg;
+                Rectangle {
+                    height: invitation-content.preferred-height;
+                    border-radius: Spacing.radius-lg; background: Colors.surface-section;
+                    invitation-content := VerticalLayout {
+                        padding: Spacing.md; spacing: Spacing.md;
+                        Text {
+                            text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
+                            color: Colors.text-primary; font-size: Typography.sm;
+                            font-weight: Typography.semibold; wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            Rectangle {
+                                height: Spacing.button-height; horizontal-stretch: 1;
+                                border-radius: Spacing.radius-md;
+                                background: decline-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                                Text { text: "Decline"; color: Colors.text-secondary; font-size: Typography.sm;
+                                    horizontal-alignment: center; vertical-alignment: center; }
+                                decline-touch := TouchArea {
+                                    mouse-cursor: pointer; accessible-role: button; accessible-label: "Decline mesh invitation";
+                                    clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, false); }
+                                }
+                            }
+                            Rectangle {
+                                height: Spacing.button-height; horizontal-stretch: 1;
+                                border-radius: Spacing.radius-md; background: Colors.action-fill;
+                                Text { text: "Join"; color: Colors.on-action; font-size: Typography.sm;
+                                    font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
+                                TouchArea {
+                                    mouse-cursor: pointer; accessible-role: button; accessible-label: "Join mesh invitation";
+                                    clicked => { MeshGlobal.decide-private-invitation(MeshGlobal.pending-private-id, true); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if MeshGlobal.nearby-peers.length > 0: VerticalLayout {
+                spacing: Spacing.sm;
+                HorizontalLayout {
+                    padding-left: Spacing.lg;
+                    Text {
+                        text: "NEARBY"; color: Colors.text-muted; font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                    }
+                }
+                Flickable {
+                    height: 80px;
+                    viewport-width: nearby-row.preferred-width + Spacing.lg * 2;
+                    nearby-row := HorizontalLayout {
+                        x: Spacing.lg; spacing: Spacing.md;
+                        for peer[index] in MeshGlobal.nearby-peers: VerticalLayout {
+                            width: 64px; spacing: Spacing.xs; alignment: start;
+                            Rectangle {
+                                width: 52px; height: 52px; border-radius: Spacing.radius-full;
+                                background: index % 3 == 0 ? Colors.avatar-teal
+                                    : index % 3 == 1 ? Colors.avatar-blue : Colors.avatar-purple;
+                                Text {
+                                    text: peer.name.to-upper-case();
+                                    width: 16px; height: 28px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                    color: Colors.on-action; font-size: Typography.xxl;
+                                    font-weight: Typography.semibold; overflow: clip;
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer; accessible-role: button;
+                                    accessible-label: "Open nearby mesh peer " + peer.name;
+                                    clicked => { MeshGlobal.open-peer(peer.id); }
+                                }
+                            }
+                            Text {
+                                text: peer.name; width: 64px; color: Colors.text-secondary;
+                                font-size: Typography.xs; overflow: elide; horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+            if MeshGlobal.conversations.length == 0: VerticalLayout {
+                padding-left: Spacing.lg; padding-right: Spacing.lg;
+                spacing: Spacing.md; alignment: center;
+                Rectangle {
+                    width: 64px; height: 64px; border-radius: Spacing.radius-full;
+                    background: Colors.tint-weak;
+                    Image {
+                        source: Icons.message-circle; width: 30px; height: 30px;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+                }
+                Text { text: "No mesh conversations"; color: Colors.text-primary;
+                    font-size: Typography.base; font-weight: Typography.semibold; horizontal-alignment: center; }
+                Text { text: "Create a group or start a nearby conversation.";
+                    color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; wrap: word-wrap; }
+                Rectangle {
+                    height: Spacing.button-height; border-radius: Spacing.radius-md;
+                    background: Colors.action-fill;
+                    Text { text: "New Group"; color: Colors.on-action; font-size: Typography.sm;
+                        font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
+                    TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh group";
+                        clicked => { ModalHostState.nav-push("mesh-compose"); }
+                    }
+                }
+            }
+            if MeshGlobal.conversations.length > 0: VerticalLayout {
+                spacing: Spacing.lg;
+                for section in ["private-channel", "channel", "dm"]: VerticalLayout {
+                    visible: section-rows.preferred-height > 0px;
+                    padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
+                    Text {
+                        text: section == "private-channel" ? "GROUPS"
+                            : section == "channel" ? "CHANNELS" : "DIRECT MESSAGES";
+                        color: Colors.text-muted; font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                    }
+                    Rectangle {
+                        height: section-rows.preferred-height;
+                        border-radius: Spacing.radius-lg; clip: true;
+                        background: Colors.surface-section;
+                        section-rows := VerticalLayout {
+                            for item in MeshGlobal.conversations: MeshListItem {
+                                visible: section == "private-channel" ? item.kind == "private-channel"
+                                    : section == "channel" ? item.kind == "room" || item.kind == "channel" || item.kind == "geohash"
+                                    : item.kind == "dm";
+                                title: item.title; kind: item.kind; scope: item.scope;
+                                timestamp: item.timestamp; unread-count: item.unread-count;
+                                reachable: item.reachable; verified: item.verified; muted: item.muted;
+                                blocked: item.blocked; binding-label: item.binding-label;
+                                selected: item.is-selected; touch: root.touch;
+                                clicked => { MeshGlobal.conversation-selected(item.id); }
+                                leave => { MeshGlobal.leave-channel(item.scope); }
+                                toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if root.collapsed: VerticalLayout {
+            for item in MeshGlobal.conversations: MeshListItem {
+                title: item.title; kind: item.kind; scope: item.scope;
+                timestamp: item.timestamp; unread-count: item.unread-count;
+                reachable: item.reachable; verified: item.verified; muted: item.muted;
+                blocked: item.blocked; binding-label: item.binding-label;
+                selected: item.is-selected; collapsed: true; touch: root.touch;
+                clicked => { MeshGlobal.conversation-selected(item.id); }
             }
         }
     }
