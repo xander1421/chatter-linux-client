@@ -1,6 +1,62 @@
 use super::*;
 
 impl AnonGroupRepository {
+    pub fn pending_invite_epoch(
+        &self,
+        group: &AnonGroupId,
+        invitee: &UserId,
+    ) -> Result<Option<u64>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let epoch: Option<i64> = conn.query_row(
+            "SELECT o.admitted_at FROM anon_group_member_order o
+             JOIN anon_group_members m ON m.group_id=o.group_id AND m.user_id=o.user_id
+             JOIN anon_group_pending p ON p.group_id=o.group_id AND p.user_id=o.user_id AND p.action='invite'
+             WHERE o.group_id=?1 AND o.user_id=?2 AND m.is_active=1 AND m.mailbox_pk IS NULL
+             AND o.admitted_at>o.removed_at AND p.expires_at>?3",
+            params![group.to_string(), invitee.to_string(), Utc::now().to_rfc3339()],
+            |row| row.get(0),
+        ).optional()?;
+        epoch.map(|value| u64::try_from(value).map_err(|_| StorageError::InvalidData("Invalid invitation epoch".into()))).transpose()
+    }
+
+    /// An authenticated invitee can withdraw only its exact pending admission.
+    pub fn apply_invite_decline(
+        &self,
+        group: &AnonGroupId,
+        invitee: &UserId,
+        owner: &UserId,
+        epoch: u64,
+    ) -> Result<bool, StorageError> {
+        let epoch = membership_timestamp(epoch)?;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let matches: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM anon_groups g
+             JOIN anon_group_members m ON m.group_id=g.id AND m.user_id=?2
+             JOIN anon_group_member_order o ON o.group_id=m.group_id AND o.user_id=m.user_id
+             JOIN anon_group_pending p ON p.group_id=m.group_id AND p.user_id=m.user_id AND p.action='invite'
+             WHERE g.id=?1 AND g.owner_id=?3 AND g.my_role=?4
+             AND m.is_active=1 AND m.mailbox_pk IS NULL
+             AND o.admitted_at=?5 AND o.admitted_at>o.removed_at AND p.expires_at>?6)",
+            params![group.to_string(), invitee.to_string(), owner.to_string(),
+                AnonGroupRole::Owner.to_i32(), epoch, Utc::now().to_rfc3339()],
+            |row| row.get(0),
+        )?;
+        if !matches { return Ok(false); }
+        let removed_at = Utc::now().timestamp_nanos_opt().unwrap_or(0).max(epoch.checked_add(1)
+            .ok_or_else(|| StorageError::InvalidData("Invitation clock exhausted".into()))?);
+        tx.execute("UPDATE anon_group_member_order SET removed_at=?3,changed_at=?3 WHERE group_id=?1 AND user_id=?2",
+            params![group.to_string(),invitee.to_string(),removed_at])?;
+        tx.execute("UPDATE anon_group_members SET is_active=0,mailbox_pk=NULL,device_id=NULL WHERE group_id=?1 AND user_id=?2",
+            params![group.to_string(),invitee.to_string()])?;
+        tx.execute("DELETE FROM anon_group_pending WHERE group_id=?1 AND user_id=?2",
+            params![group.to_string(),invitee.to_string()])?;
+        tx.execute("DELETE FROM pending_anon_group_messages WHERE group_id=?1 AND recipient_user_id=?2",
+            params![group.to_string(),invitee.to_string()])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn current_recipient(
         &self,
         group: &AnonGroupId,

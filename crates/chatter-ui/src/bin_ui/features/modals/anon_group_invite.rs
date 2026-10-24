@@ -167,7 +167,7 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 let weak = weak.clone();
                 let ui_ctx = ui_ctx.clone();
                 tokio::spawn(async move {
-                    let result = ui_ctx.decline_pending_anon_group_invite(&group_id);
+                    let result = ui_ctx.decline_pending_anon_group_invite(&group_id).await;
                     if result.is_ok() {
                         refresh_group_invites(&weak, &ui_ctx);
                     }

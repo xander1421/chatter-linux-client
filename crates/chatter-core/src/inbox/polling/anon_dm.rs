@@ -554,6 +554,7 @@ pub async fn process_anon_dm_results(
                             group_id,
                             group_name,
                             inviter_mailbox_pk,
+                            timestamp,
                             profile_key,
                             encrypted_display_name,
                             ..
@@ -576,7 +577,7 @@ pub async fn process_anon_dm_results(
                                         .ok()
                                     });
                                 let invite = crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
-                                    group_id, group_name: group_name.clone(), inviter_id: *peer_id,
+                                    group_id, invite_epoch: *timestamp, group_name: group_name.clone(), inviter_id: *peer_id,
                                     inviter_device_id: *sender_device_id, inviter_mailbox_pk: mailbox_pk,
                                     profile_key: key, inviter_display_name: name, inviter_avatar: None,
                                 };

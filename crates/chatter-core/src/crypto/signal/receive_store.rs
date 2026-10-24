@@ -328,6 +328,7 @@ fn control_kind(
         Body::AnonGroupKick(_) => Some(Kind::Kick),
         Body::AnonGroupLeave(_) => Some(Kind::Leave),
         Body::AnonGroupJoinAck(_) => Some(Kind::JoinAck),
+        Body::AnonGroupDecline(_) => Some(Kind::JoinAck),
         Body::AnonGroupProfileShare(_) | Body::AnonDmProfileUpdate(_) => Some(Kind::Profile),
         _ => None,
     }

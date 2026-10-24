@@ -7,19 +7,21 @@ impl AnonGroupRepository {
         tx.execute("DELETE FROM pending_anon_group_invites WHERE received_at < datetime('now', '-30 days')", [])?;
         tx.execute("INSERT INTO pending_anon_group_invites
             (group_id, group_name, inviter_id, inviter_device_id, inviter_mailbox_pk,
-             profile_key, inviter_display_name, inviter_avatar)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             profile_key, inviter_display_name, inviter_avatar, invite_epoch)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(group_id) DO UPDATE SET
                 group_name=excluded.group_name, inviter_device_id=excluded.inviter_device_id,
                 inviter_mailbox_pk=excluded.inviter_mailbox_pk, profile_key=excluded.profile_key,
+                invite_epoch=excluded.invite_epoch,
                 inviter_display_name=excluded.inviter_display_name,
                 inviter_avatar=COALESCE(excluded.inviter_avatar, pending_anon_group_invites.inviter_avatar),
                 received_at=CURRENT_TIMESTAMP
-            WHERE inviter_id=excluded.inviter_id",
+            WHERE inviter_id=excluded.inviter_id
+              AND excluded.invite_epoch >= pending_anon_group_invites.invite_epoch",
             params![invite.group_id.to_string(), invite.group_name, invite.inviter_id.to_string(),
                 invite.inviter_device_id, invite.inviter_mailbox_pk.as_slice(),
                 invite.profile_key.as_ref().map(|v| v.as_slice()), invite.inviter_display_name,
-                invite.inviter_avatar])?;
+                invite.inviter_avatar, invite.invite_epoch])?;
         tx.execute("DELETE FROM pending_anon_group_invites WHERE group_id IN (
             SELECT group_id FROM pending_anon_group_invites
             ORDER BY received_at DESC, group_id DESC LIMIT -1 OFFSET 256
@@ -33,7 +35,7 @@ impl AnonGroupRepository {
         conn.execute("DELETE FROM pending_anon_group_invites WHERE received_at < datetime('now', '-30 days')", [])?;
         let mut stmt = conn.prepare(
             "SELECT group_id, group_name, inviter_id, inviter_device_id,
-            inviter_mailbox_pk, profile_key, inviter_display_name, inviter_avatar
+            inviter_mailbox_pk, profile_key, inviter_display_name, inviter_avatar, invite_epoch
             FROM pending_anon_group_invites ORDER BY received_at ASC, group_id ASC LIMIT 256",
         )?;
         let rows = stmt.query_map([], invite_columns)?;
@@ -45,7 +47,7 @@ impl AnonGroupRepository {
         conn.execute("DELETE FROM pending_anon_group_invites WHERE received_at < datetime('now', '-30 days')", [])?;
         let mut stmt = conn.prepare(
             "SELECT group_id, group_name, inviter_id, inviter_device_id,
-            inviter_mailbox_pk, profile_key, inviter_display_name, inviter_avatar
+            inviter_mailbox_pk, profile_key, inviter_display_name, inviter_avatar, invite_epoch
             FROM pending_anon_group_invites WHERE group_id = ?1",
         )?;
         let mut rows = stmt.query_map([group_id.to_string()], invite_columns)?;
@@ -77,7 +79,7 @@ impl AnonGroupRepository {
 }
 
 type InviteColumns = (
-    String, String, String, u32, Vec<u8>, Option<Vec<u8>>, Option<String>, Option<Vec<u8>>,
+    String, String, String, u32, Vec<u8>, Option<Vec<u8>>, Option<String>, Option<Vec<u8>>, u64,
 );
 
 fn invite_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<InviteColumns> {
@@ -94,6 +96,7 @@ fn invite_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<InviteColumns> {
         profile,
         row.get::<_, Option<String>>(6)?,
         row.get::<_, Option<Vec<u8>>>(7)?,
+        row.get::<_, u64>(8)?,
     ))
 }
 
@@ -107,11 +110,13 @@ fn decode_invite(row: InviteColumns) -> Result<PendingAnonGroupInvite, StorageEr
         profile_key,
         inviter_display_name,
         inviter_avatar,
+        invite_epoch,
     ) = row;
     Ok(PendingAnonGroupInvite {
         group_id: group_id
             .parse()
             .map_err(|_| StorageError::NotFound("Invalid invite group ID".into()))?,
+        invite_epoch,
         group_name,
         inviter_id: inviter_id
             .parse()

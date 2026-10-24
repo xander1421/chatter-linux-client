@@ -36,6 +36,10 @@ impl AnonGroupService {
         inviter_mailbox_pk: &[u8; 32],
     ) -> Result<(), AnonGroupError> {
         self.require_invitation_owner(&group_id)?;
+        let invite_epoch = self
+            .anon_group_repo
+            .pending_invite_epoch(&group_id, &invitee)?
+            .ok_or_else(|| AnonGroupError::InvalidData("Invitation is no longer pending".into()))?;
         let profile_key = self.get_my_profile_key();
         let mut encrypted_display_name = None;
         let mut avatar = None;
@@ -56,7 +60,7 @@ impl AnonGroupService {
                     group_id: group_id.to_vec(),
                     group_name: group_name.to_string(),
                     inviter_mailbox_pk: inviter_mailbox_pk.to_vec(),
-                    timestamp: TimestampNanos::now().as_u64(),
+                    timestamp: invite_epoch,
                     profile_key: profile_key.map(|k| k.to_vec()),
                     encrypted_display_name,
                     avatar,

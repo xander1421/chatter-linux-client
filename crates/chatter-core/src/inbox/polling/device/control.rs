@@ -77,6 +77,7 @@ pub(super) fn dispatch_secret_chat_bootstrap(
         group_id,
         group_name,
         inviter_mailbox_pk,
+        timestamp,
         profile_key,
         encrypted_display_name,
         ..
@@ -98,6 +99,7 @@ pub(super) fn dispatch_secret_chat_bootstrap(
             anon_group_repo.save_pending_invite(
                 &crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
                     group_id,
+                    invite_epoch: *timestamp,
                     group_name: group_name.clone(),
                     inviter_id: *peer_id,
                     inviter_device_id: *sender_device_id,

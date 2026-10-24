@@ -10,7 +10,7 @@ impl InboxEventProcessor {
                 group_id,
                 group_name,
                 inviter_mailbox_pk,
-                timestamp: _,
+                timestamp,
                 profile_key,
                 encrypted_display_name,
                 avatar,
@@ -21,6 +21,7 @@ impl InboxEventProcessor {
                     group_id,
                     group_name,
                     inviter_mailbox_pk,
+                    *timestamp,
                     profile_key,
                     encrypted_display_name,
                     avatar,
@@ -275,6 +276,7 @@ impl InboxEventProcessor {
         group_id: &[u8],
         group_name: &str,
         inviter_mailbox_pk: &[u8],
+        invite_epoch: u64,
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
         avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
@@ -342,6 +344,7 @@ impl InboxEventProcessor {
         let group_name = group_name.to_string();
         let invite = crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
             group_id: anon_group_id,
+            invite_epoch,
             group_name: group_name.clone(),
             inviter_id: peer_id,
             inviter_device_id: sender_device_id,
@@ -508,6 +511,22 @@ impl InboxEventProcessor {
                 return;
             }
         };
+
+        if let Some(crate::proto::content_v1::content::Content::AnonGroupDecline(decline)) =
+            inner_content.content.as_ref()
+        {
+            if decline.group_id != group_id {
+                return;
+            }
+            let service = self.anon_group_service.clone();
+            let epoch = decline.invite_epoch;
+            tokio::spawn(async move {
+                if let Err(error) = service.handle_decline_ordered(anon_group_id, peer_id, epoch).await {
+                    tracing::warn!(%error, "Failed to apply secret group invite decline");
+                }
+            });
+            return;
+        }
 
         tracing::debug!(
             peer_id = %peer_id,

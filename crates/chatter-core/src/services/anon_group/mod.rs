@@ -83,10 +83,37 @@ impl AnonGroupService {
         Ok(self.anon_group_repo.list_pending_invites()?)
     }
 
-    pub fn decline_pending_invite(
+    pub async fn decline_pending_invite(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Result<(), AnonGroupError> {
+        let invite = self
+            .anon_group_repo
+            .get_pending_invite(group_id)?
+            .ok_or_else(|| AnonGroupError::InvalidData("Invitation no longer pending".into()))?;
+        if invite.invite_epoch == 0 {
+            return Err(AnonGroupError::InvalidData(
+                "Invitation has no admission epoch".into(),
+            ));
+        }
+        let content = crate::proto::content_v1::Content {
+            content: Some(crate::proto::content_v1::content::Content::AnonGroupDecline(
+                crate::proto::content_v1::AnonGroupDecline {
+                    group_id: group_id.to_vec(),
+                    invite_epoch: invite.invite_epoch,
+                },
+            )),
+            ephemeral_reply_to: None,
+            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+            padding: Self::generate_padding(160),
+        };
+        self.send_to_anon_mailbox(
+            &invite.inviter_id,
+            Some(invite.inviter_device_id),
+            &invite.inviter_mailbox_pk,
+            content,
+        )
+        .await?;
         self.anon_group_repo.remove_pending_invite(group_id)?;
         Ok(())
     }
@@ -122,7 +149,7 @@ impl AnonGroupService {
                 invite.inviter_avatar,
             )
             .await?;
-        self.decline_pending_invite(&group_id)?;
+        self.anon_group_repo.remove_pending_invite(&group_id)?;
         Ok(group)
     }
     /// Create a new AnonGroupService.

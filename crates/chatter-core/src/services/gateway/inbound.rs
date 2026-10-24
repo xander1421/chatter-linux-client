@@ -72,6 +72,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::GroupCallSignal(_)) => "GroupCallSignal",
         Some(content::Content::AnonGroupInvite(_)) => "AnonGroupInvite",
         Some(content::Content::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
+        Some(content::Content::AnonGroupDecline(_)) => "AnonGroupDecline",
         Some(content::Content::AnonGroupMemberList(_)) => "AnonGroupMemberList",
         Some(content::Content::AnonGroupLeave(_)) => "AnonGroupLeave",
         Some(content::Content::AnonGroupKick(_)) => "AnonGroupKick",

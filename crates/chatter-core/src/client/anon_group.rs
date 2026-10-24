@@ -397,11 +397,11 @@ impl ChatterClient {
         self.anon_groups().accept_pending_invite(group_id).await
     }
 
-    pub fn decline_pending_anon_group_invite(
+    pub async fn decline_pending_anon_group_invite(
         &self,
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Result<(), crate::services::anon_group::AnonGroupError> {
-        self.anon_groups().decline_pending_invite(group_id)
+        self.anon_groups().decline_pending_invite(group_id).await
     }
 }
 
