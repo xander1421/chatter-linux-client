@@ -349,10 +349,11 @@ mod tests {
     fn push_test_frame(data: &[u8], width: u32, height: u32, rotation: i32, ts_us: i64) {
         push_frame(CameraFormat::I420, width, height, rotation, ts_us, |y, u, v| {
             let Some(v) = v else { return false };
-            if data.len() < y.len() + u.len() + v.len() { return false; }
-            y.copy_from_slice(&data[..y.len()]);
-            u.copy_from_slice(&data[y.len()..y.len() + u.len()]);
-            v.copy_from_slice(&data[y.len() + u.len()..y.len() + u.len() + v.len()]);
+            let (y_len, u_len, v_len) = (y.len(), u.len(), v.len());
+            if data.len() < y_len + u_len + v_len { return false; }
+            y.copy_from_slice(&data[..y_len]);
+            u.copy_from_slice(&data[y_len..y_len + u_len]);
+            v.copy_from_slice(&data[y_len + u_len..y_len + u_len + v_len]);
             true
         });
     }
