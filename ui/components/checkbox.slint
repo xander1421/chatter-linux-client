@@ -10,8 +10,8 @@ export component Checkbox inherits Rectangle {
     callback toggled(bool);
     property <float> mark-progress: checked ? 1 : 0;
     animate mark-progress { duration: Materials.motion-standard; easing: Materials.glide; }
-    width: Spacing.button-height;
-    height: Spacing.button-height;
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
     accessible-role: checkbox;
     accessible-label: root.label;
     accessible-enabled: root.enabled;
@@ -41,7 +41,7 @@ export component Checkbox inherits Rectangle {
         y: (parent.height - self.height) / 2;
         border-radius: Spacing.radius-sm;
         border-width: Spacing.stroke;
-        border-color: keys.has-focus ? Colors.primary : root.checked ? Colors.action-fill : Colors.text-muted;
+        border-color: keys.has-focus ? Colors.focus-ring : root.checked ? Colors.action-fill : Colors.text-muted;
         background: root.checked ? (touch.pressed ? Colors.action-active : Colors.action-fill)
             : touch.pressed || touch.has-hover ? Colors.surface-hover : transparent;
         opacity: root.enabled ? 1 : 0.38;

@@ -37,6 +37,22 @@ export component ComposeFab inherits GlassSurface {
     accessible-role: button;
     accessible-label: "Create";
     accessible-action-default => { root.create-clicked(); }
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.create-clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle {
+        border-width: 2px;
+        border-color: Colors.focus-ring;
+        border-radius: self.width / 2;
+    }
     Image {
         source: Icons.plus;
         width: 24px;

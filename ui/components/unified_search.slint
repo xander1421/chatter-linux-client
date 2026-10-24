@@ -59,6 +59,21 @@ component ConvRow inherits Rectangle {
     // them the whole trip — and at 40px this was the shortest target on screen.
     height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(root.item-id, root.conv-type); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked(root.item-id, root.conv-type);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
     background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale-x: touch.pressed ? 98% : 100%;
@@ -145,6 +160,21 @@ component MsgRow inherits Rectangle {
     height: 56px * Appearance.text-grow;
     clip: true;
     border-radius: Spacing.radius-sm;
+    accessible-role: button;
+    accessible-label: root.sender-name + " in " + root.channel-name + ": " + root.content-preview;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(root.message-id); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked(root.message-id);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
     background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale-x: touch.pressed ? 98% : 100%;
@@ -209,6 +239,21 @@ component PersonRow inherits Rectangle {
 
     height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
+    accessible-role: button;
+    accessible-label: root.name + ", @" + root.handle;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.interactive;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: root.border-radius; }
     background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale-x: touch.pressed ? 98% : 100%;
@@ -466,6 +511,12 @@ export component UnifiedSearch inherits Rectangle {
                         width: Spacing.touch-target-min; height: Spacing.touch-target-min;
                         border-radius: self.width / 2;
                         background: clear-touch.pressed ? Materials.pressed : clear-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Clear search";
+                        accessible-action-default => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); }
+                        clear-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: clear-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
                         clear-touch := TouchArea { mouse-cursor: pointer; clicked => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); } }
                         Text { text: "×"; color: Colors.text-secondary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -473,6 +524,12 @@ export component UnifiedSearch inherits Rectangle {
                         width: 72px; height: Spacing.touch-target-min;
                         border-radius: Spacing.radius-lg;
                         background: cancel-touch.pressed ? Materials.pressed : cancel-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Cancel search";
+                        accessible-action-default => { root.cancel(); }
+                        cancel-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.cancel(); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: cancel-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                         cancel-touch := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(); } }
                         Text { text: "Cancel"; color: Colors.primary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -636,12 +693,24 @@ export component UnifiedSearch inherits Rectangle {
                 for recent in root.recent-searches: Rectangle {
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
                     background: recent-touch.pressed ? Materials.pressed : recent-touch.has-hover ? Materials.hover : transparent;
+                    accessible-role: button; accessible-label: "Search for " + recent;
+                    accessible-action-default => { root.recent-selected(recent); search-input.focus(); }
+                    recent-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-selected(recent); search-input.focus(); return accept; } return reject; }
+                    }
+                    Rectangle { border-width: recent-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
                     recent-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-selected(recent); search-input.focus(); } }
                     Text { text: recent; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; width: parent.width - Spacing.touch-target-min - Spacing.md; vertical-alignment: center; height: 100%; overflow: elide; }
                     Rectangle {
                         x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min;
                         border-radius: self.width / 2;
                         background: remove-touch.pressed ? Materials.pressed : remove-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Remove recent search " + recent;
+                        accessible-action-default => { root.recent-remove(recent); }
+                        remove-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-remove(recent); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: remove-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
                         remove-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-remove(recent); } }
                         Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -902,6 +971,21 @@ export component UnifiedSearch inherits Rectangle {
                     width: max(70px, choice-label.preferred-width + 20px);
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
                     background: choice-touch.pressed ? Materials.pressed : choice-touch.has-hover ? Materials.hover : transparent;
+                    accessible-role: button; accessible-label: choice;
+                    accessible-action-default => {
+                        root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
+                        root.date-sheet-open = false;
+                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                    }
+                    choice-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return {
+                            root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
+                            root.date-sheet-open = false;
+                            root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            return accept;
+                        } return reject; }
+                    }
+                    Rectangle { border-width: choice-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
                     choice-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
                         root.date-sheet-open = false;
@@ -915,12 +999,24 @@ export component UnifiedSearch inherits Rectangle {
                     height: Spacing.touch-target-min;
                     Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                         background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Materials.hover : Colors.inset;
+                        accessible-role: button; accessible-label: "Previous month";
+                        accessible-action-default => { root.calendar-shift(-1); }
+                        prev-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.calendar-shift(-1); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: prev-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                         prev-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(-1); } }
                         Text { text: "‹"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     Text { text: root.calendar-month; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
                     Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                         background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Materials.hover : Colors.inset;
+                        accessible-role: button; accessible-label: "Next month";
+                        accessible-action-default => { root.calendar-shift(1); }
+                        next-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.calendar-shift(1); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: next-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                         next-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(1); } }
                         Text { text: "›"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -947,6 +1043,36 @@ export component UnifiedSearch inherits Rectangle {
                         transform-scale-y: day-touch.pressed ? 90% : 100%;
                         animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        accessible-role: button; accessible-label: day.date;
+                        accessible-action-default => {
+                            if (root.custom-start == "" || root.custom-end != "") {
+                                root.custom-start = day.date; root.custom-end = "";
+                            } else {
+                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; }
+                                else { root.custom-end = day.date; }
+                                root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
+                                root.date-sheet-open = false;
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            }
+                        }
+                        day-keys := FocusScope { width: 0px; height: 0px; enabled: root.date-sheet-open;
+                            key-pressed(event) => {
+                                if event.text == Key.Space || event.text == Key.Return {
+                                    if (root.custom-start == "" || root.custom-end != "") {
+                                        root.custom-start = day.date; root.custom-end = "";
+                                    } else {
+                                        if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; }
+                                        else { root.custom-end = day.date; }
+                                        root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
+                                        root.date-sheet-open = false;
+                                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                                    }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        if day-keys.has-focus: Rectangle { border-width: 2px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                         day-touch := TouchArea { mouse-cursor: pointer;
                             pointer-event(event) => {
                                 if (event.kind == PointerEventKind.down) {
