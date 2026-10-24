@@ -453,6 +453,7 @@ pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
             if named && row.is_typing != is_typing {
                 row.is_typing = is_typing;
                 model.set_row_data(i, row);
+                crate::bin_ui::features::sidebar::refresh_flat_rows(window);
             }
         }
     }

@@ -40,6 +40,7 @@ pub(crate) fn update_unread_count(
             if row.conversation_id.as_str() == channel_id {
                 row.unread_count = count as i32;
                 rows.set_row_data(i, row);
+                crate::bin_ui::features::sidebar::refresh_flat_rows(window);
                 recompute_total_unread(window, ui_ctx);
                 return;
             }

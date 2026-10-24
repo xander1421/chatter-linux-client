@@ -15,8 +15,10 @@ import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
-import { ChatList, ChatRowData } from "chat_list.slint";
-import { CustomSectionList, CustomSectionData } from "custom_section_list.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
+import { CustomSectionHeader, CustomSectionData } from "custom_section_list.slint";
+import { EmptyState } from "../components/empty_state.slint";
+import { ChatListSkeleton } from "../components/skeleton.slint";
 import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
@@ -31,12 +33,20 @@ import { ActivityBell } from "../activity/activity_bell.slint";
 
 export { ChatRowData, CustomSectionData }
 
+export struct SidebarRowData {
+    key: string,
+    kind: string,
+    chat: ChatRowData,
+    section: CustomSectionData,
+}
+
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
     // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
     in property <[ChatRowData]> chat-rows: [];
     in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
+    in property <[SidebarRowData]> flat-rows: [];
 
     // ── Properties: User profile ──
     in property <string> user-display-name: "User";
@@ -84,7 +94,9 @@ export component Sidebar inherits Rectangle {
         if (now-visible != root.requests-row-was-visible) {
             // A row inserted above the visible conversations must not move
             // the content already under the user's finger.
-            if (root.active-tab == "chats" && central-scroll.viewport-y < -requests-anchor.y) {
+            if (root.active-tab == "chats" && central-scroll.viewport-y < -((root.collapsed
+                    ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none)
+                    : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm))) {
                 central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
             }
             root.requests-row-was-visible = now-visible;
@@ -273,28 +285,30 @@ export component Sidebar inherits Rectangle {
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
-        central-scroll := Flickable {
+        central-scroll := ListView {
+            visible: root.active-tab != "mesh";
             width: root.width;
             height: root.height;
-            viewport-height: central-layout.preferred-height;
+            immediate-child-press: true;
 
-            central-layout := VerticalLayout {
-                // No gap under the pinned Search row on a phone: it and Saved
-                // Messages are one list.
-                padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm);
-                padding-bottom: root.mobile-mode ? Spacing.none
-                    : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
-                        + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md;
-
-                requests-anchor := Rectangle { height: 0px; }
-                if root.active-tab != "mesh": VerticalLayout {
-                    spacing: 0px;
-                // QUICK LINKS (top navigation)
-
-                // Search's rail slot. The expanded row is pinned above the
-                // scroll; the rail has no room to pin anything, so here it is
-                // an ordinary slot at the head of the stack.
-                if root.collapsed: Rectangle {
+            for entry[idx] in root.flat-rows: VerticalLayout {
+                width: central-scroll.width;
+                height: self.preferred-height;
+                spacing: 0px;
+                // The pinned title and the floating footer stay outside the
+                // virtualized content; only their scroll clearance is a row.
+                padding-top: idx == 0
+                    ? (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                        + (root.mobile-mode ? Spacing.none : Spacing.sm)
+                    : Spacing.none;
+                padding-bottom: entry.kind == "bottom"
+                    ? (root.mobile-mode
+                        ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
+                            + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
+                        : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
+                            + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md)
+                    : Spacing.none;
+                if entry.kind == "search" && root.collapsed: Rectangle {
                     height: root.quick-link-height;
                     opacity: root.search-overlay-open ? 0 : 1;
                     animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
@@ -308,7 +322,8 @@ export component Sidebar inherits Rectangle {
                     TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
                 }
 
-                if !AnonMode.enabled : Rectangle {
+
+                if entry.kind == "saved" && !AnonMode.enabled: Rectangle {
                     height: root.quick-link-height;
                     property <bool> press-active: false;
                     property <length> press-x: 0px;
@@ -355,8 +370,9 @@ export component Sidebar inherits Rectangle {
                 // Hidden on mobile: the bottom tab bar's Contacts tab opens the
                 // very same modal, and two permanent entry points to one screen
                 // is the duplication that made the phone layout read as two
-                // navigation systems running at once.
-                if !root.mobile-mode: Rectangle {
+                // navigation systems at once.
+
+                if entry.kind == "friends" && !root.mobile-mode: Rectangle {
                     height: root.quick-link-height;
                     background: friends-touch.pressed ? Colors.surface-control-hover
                         : friends-touch.has-hover ? Colors.surface-hover : transparent;
@@ -382,7 +398,8 @@ export component Sidebar inherits Rectangle {
                 // Calls tab is the entry (hidden here for the same reason as
                 // Friends); on a two-pane tablet or desktop there is no tab
                 // bar, and this row is the only way in.
-                if !root.mobile-mode: Rectangle {
+
+                if entry.kind == "calls" && !root.mobile-mode: Rectangle {
                     height: root.quick-link-height;
                     background: calls-touch.pressed ? Colors.surface-control-hover
                         : calls-touch.has-hover ? Colors.surface-hover : transparent;
@@ -446,7 +463,8 @@ export component Sidebar inherits Rectangle {
                 // as tabs already built into the Friends modal's Requests
                 // tab (requests-sub-tab: received/sent/private/groups/
                 // channels) — nothing lost, just not all surfaced at once.
-                if root.total-pending-requests > 0: Rectangle {
+
+                if entry.kind == "requests" && root.total-pending-requests > 0: Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
                     accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
@@ -521,8 +539,9 @@ export component Sidebar inherits Rectangle {
                 // newer activity never rose above a DM; creating a chat or a
                 // channel lives in the top row's Create menu (and the phone's
                 // floating button), not in per-block headers.
-                // Collapsed channel-action rail: find / new-channel / new-section
-                if root.collapsed && !AnonMode.enabled : VerticalLayout {
+                // Collapsed channel-action rail: new-channel / new-section.
+
+                if entry.kind == "channel-actions" && root.collapsed && !AnonMode.enabled: VerticalLayout {
                     spacing: Spacing.xs;
                     padding-top: Spacing.xs;
                     padding-bottom: Spacing.xs;
@@ -552,90 +571,123 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                ChatList {
-                    vertical-stretch: 0;
-                    rows: root.chat-rows;
-                    loading: root.chat-rows-loading;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.touch;
-                    has-sibling-content: root.custom-sections.length > 0;
-                    row-selected(id, kind) => {
-                        if kind == ConversationKind.channel || kind == ConversationKind.saved-messages {
-                            root.channel-selected(id);
-                        } else if kind == ConversationKind.anon-group {
-                            root.private-group-selected(id);
-                        } else {
-                            root.dm-selected(id);
+
+                if entry.kind == "empty" && !root.collapsed && !root.chat-rows-loading: VerticalLayout {
+                    padding-top: Spacing.md;
+                    padding-bottom: Spacing.md;
+                    spacing: Spacing.xs;
+                    EmptyState {
+                        icon: Icons.message-circle;
+                        message: "No conversations";
+                        cta-text: "Add a friend";
+                        cta-clicked => { root.friends-clicked(); }
+                    }
+                    if !AnonMode.enabled: HorizontalLayout {
+                        height: Spacing.touch-target-min;
+                        alignment: center;
+                        Text {
+                            text: "Browse channels";
+                            color: browse-touch.has-hover ? Colors.primary-hover : Colors.primary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            browse-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.join-channel-clicked(); }
+                            }
                         }
                     }
-                    row-pin-requested(id, pinned) => { root.set-conversation-pinned(id, pinned); }
-                    add-friend-clicked => { root.friends-clicked(); }
-                    // FEAT-8: app.slint turns this into the join tab of
-                    // CreateChannelModal.
-                    join-channel-clicked() => { root.join-channel-clicked(); }
-                    row-context-menu-requested(row, x, y) => {
-                        root.ctx-menu-conv-id = row.conversation-id;
-                        // The row's own kind, as core built it — not the
-                        // current mode, which a row need not share.
-                        root.ctx-menu-conv-type = row.conversation-type;
-                        root.ctx-menu-is-pinned = row.is-pinned;
-                        root.ctx-menu-can-leave = row.can-leave;
-                        root.ctx-menu-can-delete-channel = row.can-delete;
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-show = true;
+                }
+                if entry.kind == "loading" && root.chat-rows-loading && root.chat-rows.length == 0 && !root.collapsed: VerticalLayout {
+                    spacing: Spacing.xxs;
+                    for placeholder in [0, 1, 2, 3, 4]: ChatListSkeleton { mobile-mode: root.touch; }
+                }
+                if entry.kind == "chat": Rectangle {
+                    height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
+                    chat-row := ChatRow {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * Spacing.xs;
+                        data: entry.chat;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.touch;
+                        clicked => {
+                            if entry.chat.conversation-type == ConversationKind.channel || entry.chat.conversation-type == ConversationKind.saved-messages {
+                                root.channel-selected(entry.chat.conversation-id);
+                            } else if entry.chat.conversation-type == ConversationKind.anon-group {
+                                root.private-group-selected(entry.chat.conversation-id);
+                            } else {
+                                root.dm-selected(entry.chat.conversation-id);
+                            }
+                        }
+                        pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
+                        context-menu-requested(x, y) => {
+                            root.ctx-menu-conv-id = entry.chat.conversation-id;
+                            root.ctx-menu-conv-type = entry.chat.conversation-type;
+                            root.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            root.ctx-menu-can-leave = entry.chat.can-leave;
+                            root.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            root.ctx-menu-x = x;
+                            root.ctx-menu-y = y;
+                            root.ctx-menu-current-section-id = "";
+                            root.ctx-menu-show = true;
+                        }
                     }
                 }
-
-                // CUSTOM SECTIONS — user-created server conversation folders
-                CustomSectionList {
-                    vertical-stretch: 0;
-                    sections: root.custom-sections;
+                if entry.kind == "section-header": CustomSectionHeader {
+                    section-id: entry.section.section-id;
+                    name: entry.section.name;
+                    icon-emoji: entry.section.icon-emoji;
+                    is-expanded: entry.section.is-expanded;
+                    unread-count: entry.section.unread-count;
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
-                    section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
-                    section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
-                    section-conversation-pin-requested(conv-id, pinned) => { root.set-conversation-pinned(conv-id, pinned); }
-                    delete-section-clicked(id) => { root.delete-section-clicked(id); }
-                    rename-section-clicked(id) => { root.rename-section-clicked(id); }
-                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, can-leave, can-delete, x, y) => {
-                        root.ctx-menu-conv-id = conv-id;
-                        root.ctx-menu-can-leave = can-leave;
-                        root.ctx-menu-can-delete-channel = can-delete;
-                        root.ctx-menu-conv-type = conv-type;
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = section-id;
-                        root.ctx-menu-is-pinned = pinned;
-                        root.ctx-menu-show = true;
-                    }
-                    section-header-context-menu-requested(section-id, sort-mode, x, y) => {
-                        root.section-header-ctx-menu-section-id = section-id;
+                    toggle-expanded => { root.section-toggle-expanded(entry.section.section-id); }
+                    rename-clicked => { root.rename-section-clicked(entry.section.section-id); }
+                    delete-clicked => { root.delete-section-clicked(entry.section.section-id); }
+                    context-menu-requested(x, y) => {
+                        root.section-header-ctx-menu-section-id = entry.section.section-id;
                         root.section-header-ctx-menu-x = x;
                         root.section-header-ctx-menu-y = y;
-                        // Carried up from the row rather than looked up: Slint
-                        // has no way to search a model from a callback body.
-                        root.section-header-ctx-menu-sort-mode = sort-mode;
+                        root.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
                         root.section-header-ctx-menu-show = true;
                     }
                 }
-
+                if entry.kind == "section-chat": Rectangle {
+                    height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
+                    ChatRow {
+                        x: Spacing.xs;
+                        width: parent.width - 2 * Spacing.xs;
+                        data: entry.chat;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.touch;
+                        clicked => { root.section-conversation-selected(entry.chat.conversation-id, entry.chat.conversation-type); }
+                        pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
+                        context-menu-requested(x, y) => {
+                            root.ctx-menu-conv-id = entry.chat.conversation-id;
+                            root.ctx-menu-can-leave = entry.chat.can-leave;
+                            root.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            root.ctx-menu-conv-type = entry.chat.conversation-type;
+                            root.ctx-menu-x = x;
+                            root.ctx-menu-y = y;
+                            root.ctx-menu-current-section-id = entry.section.section-id;
+                            root.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            root.ctx-menu-show = true;
+                        }
+                    }
                 }
-
-                if root.active-tab == "mesh" && MeshGlobal.enabled: MeshList {
-                    vertical-stretch: 0;
+            }
+        }
+        if root.active-tab == "mesh" && MeshGlobal.enabled: Flickable {
+            width: root.width;
+            height: root.height;
+            viewport-height: mesh-content.preferred-height;
+            mesh-content := VerticalLayout {
+                padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height)
+                    + (root.mobile-mode ? Spacing.none : Spacing.sm);
+                padding-bottom: root.bottom-inset + Spacing.md;
+                MeshList {
                     collapsed: root.collapsed;
                     touch: root.touch;
                     setup-requested => { root.mesh-setup-clicked(); }
-                }
-
-                Rectangle { vertical-stretch: 1; }
-                // An actual scroll-content item keeps the final row or folder
-                // control above the floating create button at the scroll limit.
-                if root.mobile-mode: Rectangle {
-                    height: root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
-                        + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none);
                 }
             }
         }

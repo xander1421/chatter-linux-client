@@ -1,6 +1,6 @@
 import { Colors } from "theme/colors.slint";
 import { AvatarOption } from "components/avatar_picker.slint";
-import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { ChatRowData, CustomSectionData, SidebarRowData } from "sidebar/sidebar.slint";
 import { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { EmojiData } from "components/emoji_picker.slint";
@@ -24,6 +24,7 @@ export global SidebarPane {
     in property <[ChatRowData]> chat-rows: [];
     in-out property <bool> chat-rows-loading: true;
     in property <[CustomSectionData]> custom-sections: [];
+    in property <[SidebarRowData]> flat-rows: [];
     in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
     in property <image> user-avatar-source;
