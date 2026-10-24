@@ -1162,6 +1162,8 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .await;
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id()
+                        != channel_id.as_str() || !settings_on_stack(&w) { return; }
                     match result {
                         Ok(m) => {
                             w.global::<crate::ModalHostState>()
@@ -1182,7 +1184,7 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::warn!(error = %e, "Failed to change member role");
                             w.global::<crate::ModalHostState>()
                                 .set_channel_settings_error(
-                                    format!("Couldn't change role: {e}").into(),
+                                    "Couldn't change this member's role. Please try again.".into(),
                                 );
                         }
                     }
@@ -1229,9 +1231,13 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::warn!(error = %e, "Failed to remove member");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.global::<crate::ModalHostState>().set_channel_settings_error(
-                                format!("Couldn't remove member: {e}").into(),
-                            );
+                            if conv.channel_id().is_some_and(|id| {
+                                w.global::<crate::ModalHostState>().get_channel_settings_id() == id.to_string().as_str()
+                            }) && settings_on_stack(&w) {
+                                w.global::<crate::ModalHostState>().set_channel_settings_error(
+                                    "Couldn't remove this member. Please try again.".into(),
+                                );
+                            }
                         }
                     });
                 }

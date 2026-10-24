@@ -79,14 +79,17 @@ pub(super) fn wire_moderation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                             ModAction::Mute(_) => "mute",
                             ModAction::Unmute => "unmute",
                         };
-                        format!("Couldn't {verb}: {e}")
+                        format!("Couldn't {verb} this member. Please try again.")
                     }
                 };
                 let weak_err = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_err.upgrade() {
-                        w.global::<crate::ModalHostState>()
-                            .set_channel_settings_error(error.into());
+                        if w.global::<crate::ModalHostState>().get_channel_settings_id()
+                            == channel_id.to_string().as_str() && settings_on_stack(&w) {
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error(error.into());
+                        }
                     }
                 });
                 refresh_member_lists(weak, ui_ctx, channel_id);
@@ -170,10 +173,11 @@ pub(super) fn wire_transfer_ownership(window: &MainWindow, ui_ctx: &Arc<ChatterC
                         }
                         Err(e) => {
                             tracing::warn!(%channel_uuid, error = %e, "Ownership transfer failed");
-                            w.global::<crate::ModalHostState>()
-                                .set_channel_settings_error(
-                                    format!("Couldn't transfer ownership: {e}").into(),
-                                );
+                            if w.global::<crate::ModalHostState>().get_channel_settings_id()
+                                == channel_id.as_str() && settings_on_stack(&w) {
+                                w.global::<crate::ModalHostState>()
+                                    .set_channel_settings_error("Couldn't transfer ownership. Please try again.".into());
+                            }
                         }
                     }
                 });
@@ -232,10 +236,11 @@ fn change_group_block(
             tracing::warn!(error = %e, "Group block change failed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.global::<crate::ModalHostState>()
-                        .set_channel_settings_error(
-                            format!("Couldn't change the block: {e}").into(),
-                        );
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id()
+                        == group_id.to_string().as_str() && settings_on_stack(&w) {
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_error("Couldn't change the block. Please try again.".into());
+                    }
                 }
             });
         }
