@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use ed25519_dalek::{Signer, SigningKey};
-use futures::{stream, Stream, StreamExt};
+use futures::{future::join_all, stream, Stream, StreamExt};
 use tokio::sync::Mutex;
 
 use crate::domain::{ChannelId, UserId};
