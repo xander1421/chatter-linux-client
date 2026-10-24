@@ -419,13 +419,19 @@ impl MeshService {
         if state.creator != self.identity.peer_id().as_str() {
             return Ok(Vec::new());
         }
+        // Nearby names carry the `#xxxx` suffix that tells same-named peers apart.
+        let nearby = self.state.peers();
         Ok(state
             .members
             .iter()
             .filter(|member| member.peer != state.creator)
             .map(|member| {
                 let peer = PeerId::from_str(&member.peer);
-                let known_name = self.nickname_for(&peer);
+                let known_name = nearby
+                    .iter()
+                    .find(|nearby| nearby.peer == peer)
+                    .map(|nearby| nearby.nickname.clone())
+                    .unwrap_or_else(|| self.nickname_for(&peer));
                 let display_name = if known_name != member.peer && !known_name.trim().is_empty() {
                     known_name
                 } else {
@@ -440,9 +446,9 @@ impl MeshService {
                     status_label: if state.unanswered_expired.contains(&member.peer) {
                         "Invite not answered"
                     } else if state.awaiting_rekey.contains(&member.peer) {
-                        "Update pending"
+                        "Waiting for the new key"
                     } else {
-                        "Current epoch"
+                        "Has the current key"
                     },
                 }
             })

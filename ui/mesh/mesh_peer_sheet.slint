@@ -187,17 +187,59 @@ export component MeshPeerSheet inherits Rectangle {
                     }
                     if MeshGlobal.private-invitable-channels.length > 0: VerticalLayout {
                         spacing: Spacing.sm;
-                        Text { text: "GROUPS"; color: Colors.text-muted; font-size: Typography.xs;
+                        Text { text: "ADD TO GROUP"; color: Colors.text-muted; font-size: Typography.xs;
                             font-weight: Typography.semibold; letter-spacing: 0.4px; }
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
-                                for channel in MeshGlobal.private-invitable-channels: VerticalLayout {
-                                    SettingsRow { icon: Icons.users; title: "Add to " + channel.name;
-                                        action-label: "Invite"; show-chevron: false; touch: root.touch;
-                                        clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); } }
-                                    SettingsRow { icon: Icons.image; title: "Invite QR";
-                                        show-chevron: false; touch: root.touch;
-                                        clicked => { MeshGlobal.invite-private-channel(channel.id, MeshGlobal.sheet-peer-id); } }
+                                for channel[i] in MeshGlobal.private-invitable-channels: Rectangle {
+                                    height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
+                                    HorizontalLayout {
+                                        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 32px; height: 32px; border-radius: Spacing.radius-md;
+                                                background: Colors.group-accent;
+                                                Image { source: Icons.lock; width: 16px; height: 16px;
+                                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                                    colorize: Colors.on-action; }
+                                            }
+                                        }
+                                        Text { text: channel.name; color: Colors.text-primary; font-size: Typography.base;
+                                            vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 40px; height: 30px; border-radius: Spacing.radius-full;
+                                                background: qr-touch.pressed ? Colors.surface-control-hover : Colors.surface-control;
+                                                Text { text: "QR"; color: Colors.primary; font-size: Typography.xs; font-weight: 600;
+                                                    horizontal-alignment: center; vertical-alignment: center; }
+                                                qr-touch := TouchArea {
+                                                    mouse-cursor: pointer; accessible-role: button;
+                                                    accessible-label: "Invite to " + channel.name + " with QR";
+                                                    clicked => { MeshGlobal.invite-private-channel(channel.id, MeshGlobal.sheet-peer-id); }
+                                                }
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 72px; height: 30px; border-radius: Spacing.radius-full;
+                                                background: Colors.action-fill;
+                                                Text { text: "Invite"; color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
+                                                    horizontal-alignment: center; vertical-alignment: center; }
+                                                TouchArea {
+                                                    mouse-cursor: pointer; accessible-role: button;
+                                                    accessible-label: "Invite to " + channel.name;
+                                                    clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if i < MeshGlobal.private-invitable-channels.length - 1: Rectangle {
+                                        x: Spacing.md + 32px + Spacing.sm; y: parent.height - 1px;
+                                        width: parent.width - self.x; height: 1px; background: Colors.divider;
+                                    }
                                 }
                             }
                         }

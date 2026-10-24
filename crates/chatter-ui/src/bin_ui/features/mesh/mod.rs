@@ -350,15 +350,28 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             mesh.set_pending_private_peer("".into());
             match result {
                 Ok(()) => {
-                    mesh.set_notice(
-                        if join {
-                            "Private group joined."
-                        } else {
-                            "Invitation declined."
-                        }
-                        .into(),
-                    );
                     refresh_rows(&w, &ui_ctx);
+                    // A joined group opens, as a created one does.
+                    let joined = join
+                        .then(|| {
+                            core_api::rows(&ui_ctx).into_iter().find(|row| {
+                                row.kind == "private-channel" && row.scope == id.as_str()
+                            })
+                        })
+                        .flatten();
+                    if let Some(row) = joined {
+                        crate::bin_ui::features::back::close(&w, "mesh-setup");
+                        conversation::open(&w, &ui_ctx, &row.id);
+                    } else {
+                        mesh.set_notice(
+                            if join {
+                                "Private group joined."
+                            } else {
+                                "Invitation declined."
+                            }
+                            .into(),
+                        );
+                    }
                 }
                 Err(error) => mesh.set_notice(error.to_string().into()),
             }
