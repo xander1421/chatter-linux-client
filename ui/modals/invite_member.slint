@@ -63,19 +63,24 @@ export component InviteMemberModal inherits Rectangle {
                     text: "Invite to";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
+                    vertical-alignment: center;
                 }
-                Image {
-                    source: root.private-channel ? Icons.lock : Icons.hash;
-                    width: 16px;
-                    height: 16px;
-                    colorize: Colors.text-secondary;
-                    accessible-label: root.private-channel ? "Private channel" : "Public channel";
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: root.private-channel ? Icons.lock : Icons.hash;
+                        width: 16px;
+                        height: 16px;
+                        colorize: Colors.text-secondary;
+                        accessible-label: root.private-channel ? "Private channel" : "Public channel";
+                    }
                 }
                 Text {
                     text: root.channel-name;
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     overflow: elide;
+                    vertical-alignment: center;
                 }
             }
 

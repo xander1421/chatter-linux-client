@@ -42,11 +42,14 @@ export component ChannelAccessChoices inherits VerticalLayout {
 
                 HorizontalLayout {
                     spacing: Spacing.xs;
-                    Image {
-                        source: Icons.globe;
-                        width: 16px;
-                        height: 16px;
-                        colorize: root.access-mode == "open" ? Colors.primary : Colors.text-secondary;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: Icons.globe;
+                            width: 16px;
+                            height: 16px;
+                            colorize: root.access-mode == "open" ? Colors.primary : Colors.text-secondary;
+                        }
                     }
                     Text {
                         text: "Open";
@@ -90,11 +93,14 @@ export component ChannelAccessChoices inherits VerticalLayout {
 
                 HorizontalLayout {
                     spacing: Spacing.xs;
-                    Image {
-                        source: Icons.lock;
-                        width: 16px;
-                        height: 16px;
-                        colorize: root.access-mode == "invite" ? Colors.primary : Colors.text-secondary;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: Icons.lock;
+                            width: 16px;
+                            height: 16px;
+                            colorize: root.access-mode == "invite" ? Colors.primary : Colors.text-secondary;
+                        }
                     }
                     Text {
                         text: "Invite-only";
@@ -138,11 +144,14 @@ export component ChannelAccessChoices inherits VerticalLayout {
 
                 HorizontalLayout {
                     spacing: Spacing.xs;
-                    Image {
-                        source: Icons.shield;
-                        width: 16px;
-                        height: 16px;
-                        colorize: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-secondary;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: Icons.shield;
+                            width: 16px;
+                            height: 16px;
+                            colorize: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-secondary;
+                        }
                     }
                     Text {
                         text: "Anon group";

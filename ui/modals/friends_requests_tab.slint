@@ -39,7 +39,7 @@ export component RequestsTab inherits VerticalLayout {
 
     if root.read-error: HorizontalLayout {
         spacing: Spacing.sm;
-        Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; }
+        Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
         Button { text: "Retry"; clicked => { root.retry(); } }
     }
 
@@ -662,11 +662,14 @@ export component RequestsTab inherits VerticalLayout {
                                     name: invite.display-name;
                                 }
 
-                                Image {
-                                    source: invite.private-channel ? Icons.lock : Icons.hash;
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: Colors.text-muted;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: invite.private-channel ? Icons.lock : Icons.hash;
+                                        width: 16px;
+                                        height: 16px;
+                                        colorize: Colors.text-muted;
+                                    }
                                 }
                                 VerticalLayout {
                                     horizontal-stretch: 1;
