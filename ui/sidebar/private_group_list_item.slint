@@ -179,23 +179,14 @@ export component PrivateGroupListItem inherits Rectangle {
                 spacing: Spacing.xs;
                 alignment: start;
 
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: accent-color.with-alpha(root.dot-opacity(0));
-                }
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: accent-color.with-alpha(root.dot-opacity(1));
-                }
-                Rectangle {
-                    width: 4px;
-                    height: 4px;
-                    border-radius: 2px;
-                    background: accent-color.with-alpha(root.dot-opacity(2));
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: Spacing.xs;
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(0)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(1)); }
+                        Rectangle { width: 4px; height: 4px; border-radius: 2px; background: accent-color.with-alpha(root.dot-opacity(2)); }
+                    }
                 }
 
                 Text {
