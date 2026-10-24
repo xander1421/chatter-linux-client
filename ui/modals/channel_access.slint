@@ -89,7 +89,6 @@ export component ChannelAccessSection inherits VerticalLayout {
         }
 
         ToggleRow {
-            height: Spacing.touch-target-min;
             checked <=> root.link-needs-approval;
             accessible-text: "Require approval";
             Text {

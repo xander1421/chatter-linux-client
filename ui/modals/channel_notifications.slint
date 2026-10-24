@@ -26,7 +26,6 @@ export component ChannelNotificationsSection inherits VerticalLayout {
 
     // Mute toggle
     ToggleRow {
-        height: Spacing.touch-target-min;
         checked <=> root.is-muted;
         accessible-text: root.is-private-group ? "Mute Group" : "Mute Channel";
         toggled(value) => {
