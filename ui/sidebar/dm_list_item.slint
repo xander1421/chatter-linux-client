@@ -24,6 +24,7 @@ export component DMListItem inherits Rectangle {
     in property <string> last-message: "";
     in property <string> timestamp: "";
     in property <int> unread-count: 0;
+    in property <int> mention-count: 0;
     in property <bool> is-typing: false;
     in property <bool> is-pinned: false;
     in property <bool> selected: false;
@@ -299,6 +300,14 @@ export component DMListItem inherits Rectangle {
                 animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
                 animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 alignment: end;
+
+                if root.mention-count > 0: Text {
+                    text: root.mention-count > 99 ? "@99+" : "@" + root.mention-count;
+                    color: Colors.primary;
+                    font-size: Typography.xs2;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
 
                 Rectangle {
                     width: max(root.badge-size, badge-text.preferred-width + 12px);

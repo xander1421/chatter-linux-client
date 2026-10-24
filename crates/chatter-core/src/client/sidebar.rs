@@ -1,6 +1,51 @@
 use super::*;
 
 impl ChatterClient {
+    const ARCHIVE_PREFIX: &'static str = "conv.archived.";
+
+    /// Archive is a personal, device-local sidebar preference for every chat
+    /// kind. ChannelService's archive RPC is owner-only channel management,
+    /// so it cannot represent a member's personal chat archive.
+    pub fn archived_conversation_ids(&self) -> std::collections::HashSet<String> {
+        self.channels().settings_repo.get_all().unwrap_or_default().into_iter()
+            .filter_map(|(key, value)| {
+                (value.trim() == "true").then(|| key.strip_prefix(Self::ARCHIVE_PREFIX))
+                    .flatten().map(str::to_owned)
+            }).collect()
+    }
+
+    pub fn set_conversation_archived(
+        &self,
+        conversation_id: &str,
+        archived: bool,
+    ) -> Result<(), crate::error::StorageError> {
+        let key = format!("{}{conversation_id}", Self::ARCHIVE_PREFIX);
+        if archived {
+            self.channels().settings_repo.set_bool(&key, true)
+        } else {
+            self.channels().settings_repo.delete(&key).map(|_| ())
+        }
+    }
+
+    /// A new message returns an unmuted chat to the main list. Muted chats
+    /// keep their place in Archive until explicitly unarchived.
+    pub fn unarchive_on_incoming_message(
+        self: &std::sync::Arc<Self>,
+        message: &crate::domain::message::Message,
+    ) -> Result<(), crate::error::StorageError> {
+        let id = message.conversation_id.to_string();
+        let key = format!("{}{id}", Self::ARCHIVE_PREFIX);
+        if !self.channels().settings_repo.get_bool(&key)?.unwrap_or(false) {
+            return Ok(());
+        }
+        let Some(conversation) = self.resolve_row_conversation(&id, &message.conversation_type) else {
+            return Ok(());
+        };
+        if self.is_conversation_muted(conversation).unwrap_or(true) {
+            return Ok(());
+        }
+        self.set_conversation_archived(&id, false)
+    }
     // ── Sidebar sections (custom grouping) façade ────────────────────────
 
     /// Custom folders with their rows, already ordered by each folder's sort
@@ -17,10 +62,12 @@ impl ChatterClient {
         crate::services::section_service::SectionError,
     > {
         let mut sections = self.sections().list_sections_with_conversations()?;
+        let archived = self.archived_conversation_ids();
         for section in sections.iter_mut() {
             section.conversations.retain(|c| {
                 self.visible_in_mode(&c.conversation_type)
                     && !self.is_blocked_conversation(&c.conversation_type, &c.conversation_id)
+                    && !archived.contains(&c.conversation_id)
             });
             for conversation in &mut section.conversations {
                 if conversation.conversation_type == crate::domain::message::ConversationType::ServerDm {

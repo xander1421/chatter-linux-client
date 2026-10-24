@@ -18,6 +18,7 @@ export component PrivateGroupListItem inherits Rectangle {
     in property <string> name;
     in property <int> member-count: 0;
     in property <int> unread-count: 0;
+    in property <int> mention-count: 0;
     // Core-composed preview of the latest activity: text, "🖼️ Photo",
     // "📎 report.pdf", "📌 …" for a pinned one. Never assembled here.
     in property <string> last-message: "";
@@ -244,6 +245,14 @@ export component PrivateGroupListItem inherits Rectangle {
                 animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
                 animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 alignment: end;
+
+                if root.mention-count > 0: Text {
+                    text: root.mention-count > 99 ? "@99+" : "@" + root.mention-count;
+                    color: Colors.primary;
+                    font-size: Typography.xs2;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
 
                 Rectangle {
                     width: max(self.height, unread-text.preferred-width + 8px);

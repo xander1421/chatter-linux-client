@@ -22,6 +22,8 @@ import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData,
 export global SidebarPane {
     // ========== Sidebar properties ==========
     in property <[ChatRowData]> chat-rows: [];
+    in property <[ChatRowData]> archived-rows: [];
+    in-out property <bool> archive-open: false;
     in-out property <bool> chat-rows-loading: true;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];
@@ -68,6 +70,8 @@ export global SidebarPane {
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback set-conversation-archived(/* conversation-id */ string, /* archived */ bool);
+    callback archive-view-changed();
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);

@@ -31,6 +31,7 @@ export struct ChatRowData {
     private-channel: bool,       // channel rows: invite-only (lock glyph)
     member-count: int,           // private-group rows
     unread-count: int,
+    mention-count: int,
     is-typing: bool,
     is-pinned: bool,             // local-only pin; core sorts these first
     can-leave: bool,             // core: `can_leave_channel`; private groups always
@@ -166,6 +167,7 @@ export component ChatRow inherits Rectangle {
         last-message: root.data.last-message;
         timestamp: root.data.timestamp;
         unread-count: root.data.unread-count;
+        mention-count: root.data.mention-count;
         is-typing: root.data.is-typing;
         selected: root.data.is-selected;
         collapsed: root.collapsed;
@@ -181,6 +183,7 @@ export component ChatRow inherits Rectangle {
         name: root.data.display-name;
         channel-type: root.data.private-channel ? "private" : "public";
         unread-count: root.data.unread-count;
+        mention-count: root.data.mention-count;
         last-message: root.data.last-message;
         timestamp: root.data.timestamp;
         is-typing: root.data.is-typing;
@@ -202,6 +205,7 @@ export component ChatRow inherits Rectangle {
         member-count: root.data.member-count;
         avatar-source: root.data.avatar-source;
         unread-count: root.data.unread-count;
+        mention-count: root.data.mention-count;
         last-message: root.data.last-message;
         timestamp: root.data.timestamp;
         is-typing: root.data.is-typing;
