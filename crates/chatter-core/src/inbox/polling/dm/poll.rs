@@ -34,6 +34,7 @@ pub async fn poll_dm_mailboxes(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     deduplicator: &MessageDeduplicator,
     retry_budget: &ack_policy::RetryBudget,
+    mailbox_timeout: std::time::Duration,
 ) {
     // Get current user ID for DM channel derivation
     let current_user_id: Option<UserId> = settings_repo
@@ -61,7 +62,7 @@ pub async fn poll_dm_mailboxes(
         }
     }
 
-    match two_way.poll_all_mailboxes(&mut client).await {
+    match two_way.poll_all_mailboxes(&mut client, mailbox_timeout).await {
         Ok((poll_results, failures)) => {
             let mut total_messages = 0u32;
 

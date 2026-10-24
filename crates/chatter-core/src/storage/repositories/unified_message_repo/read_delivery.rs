@@ -137,29 +137,32 @@ impl UnifiedMessageRepository {
         if timestamps.is_empty() {
             return Ok(0);
         }
-        let conn = self.db.connection()?;
+        let mut conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
+        let transaction = conn.transaction()?;
+        let mut statement = transaction.prepare_cached(
+            "UPDATE messages SET delivery_status = ?1, updated_at = ?2
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5
+               AND CASE delivery_status
+                     WHEN 'read' THEN 4 WHEN 'delivered' THEN 3
+                     WHEN 'sent' THEN 2 ELSE 0 END
+                   <= CASE ?1
+                     WHEN 'read' THEN 4 WHEN 'delivered' THEN 3
+                     WHEN 'sent' THEN 2 ELSE 0 END",
+        )?;
         let mut total = 0;
         for &ts in timestamps {
-            let rows = conn.execute(
-                "UPDATE messages SET delivery_status = ?1, updated_at = ?2
-                 WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5
-                   AND CASE delivery_status
-                         WHEN 'read' THEN 4 WHEN 'delivered' THEN 3
-                         WHEN 'sent' THEN 2 ELSE 0 END
-                       <= CASE ?1
-                         WHEN 'read' THEN 4 WHEN 'delivered' THEN 3
-                         WHEN 'sent' THEN 2 ELSE 0 END",
-                params![
+            let rows = statement.execute(params![
                     status,
                     now,
                     channel_id.to_string(),
                     conversation_type.as_str(),
                     ts as i64
-                ],
-            )?;
+                ])?;
             total += rows;
         }
+        drop(statement);
+        transaction.commit()?;
         Ok(total)
     }
 

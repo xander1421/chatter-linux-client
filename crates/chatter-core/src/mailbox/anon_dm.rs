@@ -153,56 +153,6 @@ impl AnonDmPoller {
         })
     }
 
-    /// Poll all anonymous DM mailboxes.
-    pub async fn poll_all(
-        &self,
-        client: &mut AnonymousMailboxClient,
-    ) -> Result<Vec<AnonDmPollResult>, MailboxError> {
-        let mailbox_keys = self.get_active_mailbox_keys()?;
-
-        tracing::trace!(
-            mailbox_count = mailbox_keys.len(),
-            "[ANON_DM_POLLER] Polling all anonymous DM mailboxes"
-        );
-
-        let mut results = Vec::with_capacity(mailbox_keys.len());
-        let mut first_error = None;
-
-        for (conversation_id, _, _) in &mailbox_keys {
-            match self.poll_mailbox(conversation_id, client, None).await {
-                Ok(result) => {
-                    if result.has_messages() {
-                        tracing::debug!(
-                            conversation_id = %conversation_id,
-                            messages = result.message_count(),
-                            "Received anonymous DM messages"
-                        );
-                    }
-                    results.push(result);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to poll anonymous DM mailbox"
-                    );
-                    if first_error.is_none() {
-                        first_error = Some(e);
-                    }
-                }
-            }
-        }
-
-        // A failed single-mailbox poll must reach the provider so it can
-        // discard a stale Tor connection and retry on the next cycle.
-        if results.is_empty() {
-            if let Some(error) = first_error {
-                return Err(error);
-            }
-        }
-
-        Ok(results)
-    }
-
     /// Acknowledge messages in an anonymous DM mailbox.
     pub async fn acknowledge_messages(
         &self,

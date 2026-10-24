@@ -147,27 +147,31 @@ impl TwoWayAnonymity {
     pub async fn poll_all_mailboxes(
         &self,
         mailbox_client: &mut AnonymousMailboxClient,
+        mailbox_timeout: std::time::Duration,
     ) -> Result<(Vec<PollResult>, Vec<(UserId, MailboxError)>), MailboxError> {
         let active_keys = self.conversation_manager.get_active_mailbox_keys()?;
         let mut results = Vec::new();
         let mut failures = Vec::new();
 
         for (peer_id, public_key, private_key, mailbox_id) in active_keys {
-            match self
-                .poll_single_mailbox(
+            match tokio::time::timeout(
+                mailbox_timeout,
+                self.poll_single_mailbox(
                     mailbox_client,
                     &peer_id,
                     &public_key,
                     &private_key,
                     &mailbox_id,
-                )
-                .await
+                ),
+            )
+            .await
             {
-                Ok(result) => results.push(result),
-                Err(e) => {
+                Ok(Ok(result)) => results.push(result),
+                Ok(Err(e)) => {
                     tracing::warn!(peer_id = %peer_id, error = %e, "Failed to poll mailbox");
                     failures.push((peer_id, e));
                 }
+                Err(_) => tracing::warn!(peer_id = %peer_id, "DM mailbox poll timed out"),
             }
         }
 

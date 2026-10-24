@@ -2,6 +2,48 @@ use super::*;
 use crate::domain::message::{EncryptedContent, EncryptedMessageType};
 
 #[test]
+fn delivery_receipt_batch_rolls_back_when_a_later_update_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open(&dir.path().join("receipts.db"), "fixture-only").unwrap());
+    db.run_migrations().unwrap();
+    let repo = UnifiedMessageRepository::new(db.clone());
+    let conversation = ChannelId::new();
+    let kind = ConversationType::Channel;
+    for sent_at in [100, 200] {
+        repo.insert(&Message::new_text(
+            conversation,
+            kind.clone(),
+            Some(UserId::new()),
+            "receipt".into(),
+            sent_at,
+        ))
+        .unwrap();
+    }
+    let original: String = db
+        .read_connection()
+        .unwrap()
+        .query_row("SELECT delivery_status FROM messages WHERE sent_at=100", [], |row| row.get(0))
+        .unwrap();
+    db.connection()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_second_receipt BEFORE UPDATE OF delivery_status ON messages
+             WHEN NEW.sent_at=200 BEGIN SELECT RAISE(ABORT, 'receipt failure'); END;",
+        )
+        .unwrap();
+
+    assert!(repo
+        .update_delivery_status_by_timestamps(&conversation, &kind, &[100, 200], "delivered")
+        .is_err());
+    let after: String = db
+        .read_connection()
+        .unwrap()
+        .query_row("SELECT delivery_status FROM messages WHERE sent_at=100", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, original);
+}
+
+#[test]
 fn corrupt_message_row_does_not_hide_good_rows() {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&dir.path().join("rows.db"), "fixture-only").unwrap());
