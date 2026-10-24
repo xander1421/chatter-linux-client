@@ -17,6 +17,8 @@ export global Materials {
     // at 70% of its tint alpha (owner 2026-10-24). Flat mode stays opaque.
     out property <color> chat-chrome: Appearance.glass-effects
         ? regular.transparentize(0.3) : regular;
+    // Matching 30% cut of the backdrop darkening under that chrome.
+    out property <float> chat-darkening: 0.7;
     // Search gains contrast as its glass travels above the results.
     out property <color> search-raised: Appearance.glass-effects
         ? (Appearance.dark ? #1c2837bd : #ffffffe0)

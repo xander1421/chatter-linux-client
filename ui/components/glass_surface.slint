@@ -14,6 +14,7 @@ component GlassMaterial inherits Rectangle {
     in property <color> material-tint;
     in property <int> elevation;
     in property <bool> highlighted;
+    in property <float> darkening: 1.0;
     // Keep the same optical treatment while the underlying list scrolls.
     // Disabling the filter during scrolling caused a visible material switch.
 
@@ -51,7 +52,7 @@ component GlassMaterial inherits Rectangle {
             : root.material-level == 3 ? Materials.blur-thick : Materials.blur-regular) : 0px;
         saturation: Appearance.glass-effects ? Materials.saturation : 1.0;
         brightness: (Appearance.glass-effects && root.material-level >= 2
-            ? Materials.chrome-brightness : 0.0);
+            ? Materials.chrome-brightness * root.darkening : 0.0);
         // Liquid Glass lenses its backdrop at the edges; keep it subtle so
         // text under chrome stays legible.
         refraction: Appearance.glass-effects ? Materials.refraction : 0.0;
@@ -96,6 +97,8 @@ export component GlassSurface inherits Rectangle {
     in property <bool> backdrop-paused: false;
     // Light catches the existing optical edge on interactive glass controls.
     in property <bool> highlighted: false;
+    // Scales the chrome backdrop darkening; chat chrome uses Materials.chat-darkening.
+    in property <float> darkening: 1.0;
     in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
         : material-level == 1 ? Materials.thin
         : material-level == 3 ? Materials.thick
@@ -125,6 +128,7 @@ export component GlassSurface inherits Rectangle {
         material-tint: root.material-tint;
         elevation: root.elevation;
         highlighted: root.highlighted;
+        darkening: root.darkening;
     }
     @children
 }

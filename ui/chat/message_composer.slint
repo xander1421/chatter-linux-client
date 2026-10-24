@@ -447,6 +447,7 @@ export component MessageComposer inherits GlassSurface {
         height: root.edit-bar-height + root.format-bar-height;
         material-level: root.material-level;
         material-tint: Materials.chat-chrome;
+        darkening: Materials.chat-darkening;
         elevation: root.elevation;
         backdrop-paused: root.backdrop-paused;
     }
@@ -490,6 +491,7 @@ export component MessageComposer inherits GlassSurface {
                 border-radius: Spacing.radius-chrome;
                 material-level: root.material-level;
                 material-tint: Materials.chat-chrome;
+                darkening: Materials.chat-darkening;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
                 visible: !root.recording-here;
