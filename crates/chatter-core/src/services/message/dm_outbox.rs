@@ -164,12 +164,11 @@ pub(super) enum FirstAttempt {
 fn transient(error: &MessageError) -> bool {
     matches!(error, MessageError::Network(NetworkError::RequestNotSent(_)))
         || error.permanent_send_failure_reason().is_none()
-        || matches!(
-            error,
-            MessageError::Storage(_)
-                | MessageError::NotLoggedIn
-                | MessageError::Network(NetworkError::Unauthenticated)
-        )
+        || matches!(error, MessageError::Storage(_))
+}
+
+fn refused_before_submission(error: &MessageError, submission_started: bool) -> bool {
+    !transient(error) && !submission_started
 }
 
 impl MessageService {
@@ -477,9 +476,13 @@ impl MessageService {
             }
             Err(error) => error,
         };
-        if matches!(&error, MessageError::Network(NetworkError::RequestNotSent(_)))
-            || !transient(&error) && !crate::services::gateway::submission::submission_started() {
-            // Refused before any ratchet step or request byte: plainly failed.
+        if refused_before_submission(
+            &error,
+            crate::services::gateway::submission::submission_started(),
+        ) {
+            // A permanent refusal before submission is plainly failed.
+            // Transport failures still own the outbox, even when readiness
+            // proves that no request byte left this attempt.
             let result = Err(error);
             if !self.settle_sealed_dm(id, generation, &result, true)? {
                 return Ok(FirstAttempt::Queued);
@@ -722,6 +725,29 @@ pub(crate) fn spawn_dm_send_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_attempt_keeps_transport_failures_for_recovery() {
+        for error in [
+            NetworkError::RequestNotSent("connection refused".into()),
+            NetworkError::ConnectionFailed("connection refused".into()),
+            NetworkError::Timeout,
+            NetworkError::Unavailable,
+        ] {
+            let error = MessageError::Network(error);
+            assert!(transient(&error), "{error}");
+            assert!(!refused_before_submission(&error, false), "{error}");
+        }
+        for error in [
+            MessageError::Network(NetworkError::Unauthenticated),
+            MessageError::Network(NetworkError::PermissionDenied),
+            MessageError::Network(NetworkError::InvalidRequest("bad content".into())),
+            MessageError::InvalidContent("bad content".into()),
+        ] {
+            assert!(!transient(&error), "{error}");
+            assert!(refused_before_submission(&error, false), "{error}");
+        }
+    }
 
     /// A stored envelope is replayed only while the certificate sealed into
     /// it is still valid: never with an unknown seal time, never at or past

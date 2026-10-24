@@ -205,7 +205,7 @@ export component MessageFooter inherits HorizontalLayout {
             // "not sent" is the retry control (Signal's "tap
             // to retry"): `message-clicked` resends it, reason or not.
             if root.is-own && !root.mesh-delivery && root.delivery-status == "failed": Text {
-                text: root.failure-reason == "" ? "not sent \u{b7} retry" : "not sent \u{b7} " + root.failure-reason;
+                text: root.failure-reason == "" ? "not sent \u{b7} Retry" : "not sent \u{b7} " + root.failure-reason + " \u{b7} Retry";
                 color: Colors.error;
                 font-size: Typography.xs;
                 font-italic: true;
