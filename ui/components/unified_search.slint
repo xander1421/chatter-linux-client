@@ -740,6 +740,12 @@ export component UnifiedSearch inherits Rectangle {
                 immediate-child-press: true;
                 viewport-width: self.width;
                 viewport-height: results-list.preferred-height;
+                changed viewport-y => {
+                    if (!root.searching && root.query != "" && root.category != "chats"
+                        && self.viewport-height + self.viewport-y - self.height < self.height) {
+                        root.show-more(root.category);
+                    }
+                }
                 results-list := VerticalLayout {
                     x: 0px;
                     y: 0px;

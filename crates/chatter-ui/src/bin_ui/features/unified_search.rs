@@ -38,12 +38,13 @@ fn wire_more(window: &MainWindow) {
         .global::<crate::SearchPane>()
         .on_unified_search_show_more(move |section| {
             let Some(w) = weak.upgrade() else { return };
-            let slot = match section.as_str() {
-                "messages" => 2,
-                "media" => 3,
-                "files" => 4,
-                "links" => 5,
-                "voice" => 6,
+            let slots: &[usize] = match section.as_str() {
+                "all" => &[2, 3, 4, 5, 6],
+                "messages" => &[2],
+                "media" => &[3],
+                "files" => &[4],
+                "links" => &[5],
+                "voice" => &[6],
                 _ => return,
             };
             let mut limits = w
@@ -54,7 +55,17 @@ fn wire_more(window: &MainWindow) {
             if limits.len() != 7 {
                 return;
             }
-            limits[slot] = (limits[slot] + 50).min(500);
+            let counts = w.global::<crate::SearchPane>().get_unified_search_counts();
+            let mut changed = false;
+            for &slot in slots {
+                if counts.row_data(slot).unwrap_or_default() > limits[slot] {
+                    limits[slot] = limits[slot].saturating_add(50);
+                    changed = true;
+                }
+            }
+            if !changed {
+                return;
+            }
             w.global::<crate::SearchPane>()
                 .set_unified_search_page_limits(ModelRc::new(VecModel::from(limits)));
             w.global::<crate::SearchPane>()

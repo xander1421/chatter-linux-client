@@ -303,6 +303,21 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
+    pub fn search_local_scoped(
+        &self,
+        query: &str,
+        sender: Option<&str>,
+        conversation: Option<&str>,
+        since: Option<i64>,
+        until: Option<i64>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SearchResult>, MessageError> {
+        self.search_index
+            .search_scoped(query, sender, conversation, since, until, limit, offset)
+            .map_err(MessageError::from)
+    }
+
     /// Get thread replies from local storage.
     pub fn list_for_thread(
         &self,

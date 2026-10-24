@@ -150,13 +150,39 @@ impl ChatterClient {
             .into_iter()
             .map(|channel| channel.id.to_string())
             .collect();
-        let rows = match self.shared_content_repo().search_global(&query.text, 5000) {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::error!(%error, "shared content search");
-                return Vec::new();
+        let mut rows = Vec::new();
+        let mut offset = 0;
+        const BATCH: u32 = 250;
+        loop {
+            let batch = match self.shared_content_repo().search_global_scoped(
+                &query.text,
+                query.from.as_deref(),
+                query.in_chat.as_deref(),
+                query.since.as_ref().and_then(|date| date.timestamp_nanos_opt()),
+                query.until.as_ref().and_then(|date| date.timestamp_nanos_opt()),
+                match query.category {
+                    SearchCategory::Media => Some("media"),
+                    SearchCategory::Files => Some("files"),
+                    SearchCategory::Links => Some("links"),
+                    SearchCategory::Voice => Some("voice"),
+                    _ => None,
+                },
+                BATCH,
+                offset,
+            ) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    tracing::error!(%error, "shared content search");
+                    break;
+                }
+            };
+            let count = batch.len();
+            rows.extend(batch);
+            if count < BATCH as usize {
+                break;
             }
-        };
+            offset += BATCH;
+        }
         let candidates = rows.into_iter().filter_map(|row| {
             let message_id = row.message_id.parse().ok()?;
             let message = self.get_message_local(&message_id)?;

@@ -71,7 +71,17 @@ impl ChatterClient {
     /// only results visible in the current mode. Source methods enforce the
     /// secret-chat exclusion before either result enters this pipeline.
     pub fn search_visible(&self, request: SearchQuery, page_limits: &[i32]) -> SearchPage {
-        let messages = self.search_messages_visible(&request.text, 250);
+        let mut messages = Vec::new();
+        let mut offset = 0;
+        const BATCH: u32 = 250;
+        loop {
+            let (batch, count) = self.search_messages_visible_page(&request, BATCH, offset);
+            messages.extend(batch);
+            if count < BATCH as usize {
+                break;
+            }
+            offset += BATCH;
+        }
         let mut candidates = Vec::with_capacity(messages.len());
         let mut seen: HashSet<_> = messages.iter().map(|msg| msg.id).collect();
         for msg in messages {
@@ -113,7 +123,7 @@ impl ChatterClient {
         let mut all_request = request.clone();
         all_request.category = SearchCategory::All;
         if request.category != SearchCategory::Chats {
-            for item in self.search_shared_content_visible(&all_request, 250) {
+            for item in self.search_shared_content_visible(&all_request, usize::MAX) {
                 let Ok(id) = item.message_id.parse() else {
                     continue;
                 };
