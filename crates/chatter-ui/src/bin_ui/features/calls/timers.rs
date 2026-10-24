@@ -206,6 +206,10 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
     let first_for_cb = first_frame_logged.clone();
     let ui_busy = Arc::new(AtomicBool::new(false));
     let ui_busy_for_cb = ui_busy.clone();
+    // Frame id last handed to the UI per participant: an unchanged frame is
+    // neither copied nor re-wrapped (CPU path only).
+    #[cfg(not(target_os = "linux"))]
+    let mut pushed_ids = std::collections::HashMap::<String, u64>::new();
 
     let stop = shared_frames.subscribe(
         crate::rt_handle(),
@@ -270,12 +274,21 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 // build `slint::Image` here because it isn't `Send`. Keep the
                 // participant id with each buffer so the local self-preview
                 // frame can be split out on the UI thread.
-                let buffers: Vec<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>)> = snapshot
-                    .iter()
-                    .map(|(id, frame)| (id.clone(), slint::SharedPixelBuffer::clone_from_slice(
-                        &frame.rgba_data, frame.width, frame.height,
-                    )))
-                    .collect();
+                // `None` = this participant's frame is unchanged since the
+                // last push; the UI keeps the image it already shows.
+                let buffers: Vec<(String, Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>)> = {
+                    let pushed = &mut pushed_ids;
+                    pushed.retain(|id, _| snapshot.iter().any(|(sid, _)| sid == id));
+                    snapshot
+                        .iter()
+                        .map(|(id, frame)| {
+                            let changed = pushed.insert(id.clone(), frame.frame_id) != Some(frame.frame_id);
+                            (id.clone(), changed.then(|| slint::SharedPixelBuffer::clone_from_slice(
+                                &frame.rgba_data, frame.width, frame.height,
+                            )))
+                        })
+                        .collect()
+                };
 
                 let weak_invoke = weak.clone();
                 let first_inner = first_for_cb.clone();
@@ -300,21 +313,28 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                             .collect();
                         let mut frames: std::collections::HashMap<String, _> = buffers.into_iter().collect();
                         let (remote_ids, local_id) = tile_ids.split_at(tile_ids.len().saturating_sub(1));
-                        let local_img = local_id
-                            .first()
-                            .and_then(|id| frames.remove(id))
-                            .map(slint::Image::from_rgba8)
-                            .unwrap_or_default();
-                        let remote_images: Vec<slint::Image> = remote_ids
+                        // Some(None): frame unchanged, keep the shown image.
+                        match local_id.first().and_then(|id| frames.remove(id)) {
+                            Some(Some(buffer)) => w.global::<crate::CallView>()
+                                .set_call_local_video_frame(slint::Image::from_rgba8(buffer)),
+                            Some(None) => {}
+                            None => w.global::<crate::CallView>()
+                                .set_call_local_video_frame(slint::Image::default()),
+                        }
+                        let remote_images: Vec<Option<slint::Image>> = remote_ids
                             .iter()
-                            .map(|id| frames.remove(id).map(slint::Image::from_rgba8).unwrap_or_default())
+                            .map(|id| match frames.remove(id) {
+                                Some(Some(buffer)) => Some(slint::Image::from_rgba8(buffer)),
+                                Some(None) => None,
+                                None => Some(slint::Image::default()),
+                            })
                             .collect();
-                        w.global::<crate::CallView>().set_call_local_video_frame(local_img);
                         apply_remote_video_frames(&w, remote_images);
                     }
                     ui_busy_for_invoke.store(false, Ordering::Relaxed);
                 });
                 if dispatch.is_err() {
+                    pushed_ids.clear();
                     ui_busy_for_cb.store(false, Ordering::Relaxed);
                 }
             }
@@ -339,7 +359,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
 ///
 /// CPU path only; on Linux the GL texture path owns its own model.
 #[cfg(not(target_os = "linux"))]
-fn apply_remote_video_frames(w: &MainWindow, images: Vec<slint::Image>) {
+fn apply_remote_video_frames(w: &MainWindow, images: Vec<Option<slint::Image>>) {
     REMOTE_VIDEO_MODEL.with(|cell| {
         let mut slot = cell.borrow_mut();
         let model = match slot.as_ref() {
@@ -359,11 +379,13 @@ fn apply_remote_video_frames(w: &MainWindow, images: Vec<slint::Image>) {
         let old_len = model.row_count();
 
         // Overwrite / append.
+        // `None` keeps an existing row's image (its frame did not change).
         for (i, img) in images.into_iter().enumerate() {
-            if i < old_len {
-                model.set_row_data(i, img);
-            } else {
-                model.push(img);
+            match img {
+                Some(img) if i < old_len => model.set_row_data(i, img),
+                Some(img) => model.push(img),
+                None if i < old_len => {}
+                None => model.push(slint::Image::default()),
             }
         }
 
