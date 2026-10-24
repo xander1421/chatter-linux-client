@@ -19,7 +19,11 @@ use super::timers::{stop_call_timer, stop_video_frame_timer};
 /// flags are driven by `LiveKitRoomEvent::TrackSubscribed` in `room_events.rs`;
 /// the local user never receives that event for their own publish, so we
 /// flip it here.
-fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str, sharing: bool) {
+pub(super) fn set_local_participant_screen_sharing(
+    window: &MainWindow,
+    local_user_id: &str,
+    sharing: bool,
+) {
     // The local screen gets its OWN tile (mirroring the remote path in
     // room_events) — NOT flipping the "You" camera tile. Sharing the camera's
     // tile made screen + camera fight over one slot and render in one frame.
@@ -48,7 +52,7 @@ fn set_local_participant_screen_sharing(window: &MainWindow, local_user_id: &str
             },
         );
     }
-    data.participant_count = participants.len() as i32;
+    // A screen share is an extra tile, not another person in the count badge.
     data.participants = ModelRc::new(VecModel::from(participants));
     window
         .global::<crate::CallView>()

@@ -267,6 +267,13 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                                 .set_selected_screen_source_id(
                                                     source_id_display.into(),
                                                 );
+                                            if let Some(id) = ui_ctx.session_current_user_id() {
+                                                super::active::set_local_participant_screen_sharing(
+                                                    &w,
+                                                    &id.to_string(),
+                                                    true,
+                                                );
+                                            }
                                         }
                                     }
                                 } else {

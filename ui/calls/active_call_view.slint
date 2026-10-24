@@ -181,6 +181,8 @@ export component ActiveCallView inherits Rectangle {
     // The user's explicit focus choice: -2 = auto (follow any screen share),
     // -1 = user chose the grid, 0..n = user maximized that tile.
     property <int> user-focus: -2;
+    private property <string> displayed-call-id: call-data.call-id;
+    changed displayed-call-id => { user-focus = -2; }
     // Index of the first screen-sharing tile, else -1. Slint has no array-find
     // in expressions, so this is a bounded manual scan.
     // capped at 6 tiles — the grid renders at most 4 cameras plus a
@@ -193,10 +195,11 @@ export component ActiveCallView inherits Rectangle {
         : (call-data.participants.length > 4 && call-data.participants[4].is-screen-sharing) ? 4
         : (call-data.participants.length > 5 && call-data.participants[5].is-screen-sharing) ? 5
         : -1;
-    // Effective focus: honor the user's explicit choice, otherwise auto-focus a
-    // screen share so it comes forward big instead of a letterboxed grid cell.
+    // Effective focus uses tile count. `participant-count` counts people,
+    // while the model can also contain a ringing peer or a screen-share tile.
+    // Honor the user's explicit choice, otherwise auto-focus a screen share.
     // -1 = grid view, 0..n = that tile is maximized. Render branches read this.
-    property <int> maximized-index: user-focus >= call-data.participant-count
+    property <int> maximized-index: user-focus >= call-data.participants.length
         ? -1 : (user-focus == -2 ? screen-share-index : user-focus);
     // A new/changed screen share re-arms auto-focus even if the user had dropped
     // back to the grid, so the share always surfaces.
@@ -267,13 +270,13 @@ export component ActiveCallView inherits Rectangle {
             // Core replaces the model on call updates, so iterating that
             // model directly would recreate every tile and lose its travel.
             for slot[idx] in [0, 1, 2, 3, 4, 5]: ParticipantTile {
-                property <int> columns: call-data.participant-count >= 5 ? 3 : 2;
+                property <int> columns: call-data.participants.length >= 5 ? 3 : 2;
                 property <length> grid-width: (parent.width - 2 * Spacing.sm - (columns - 1) * Spacing.sm) / columns;
                 property <length> grid-height: (parent.height - 2 * Spacing.sm - Spacing.sm) / 2;
                 property <length> pip-width: clamp(parent.width * 0.24, 120px, 200px);
-                property <bool> full-stage: root.maximized-index >= 0 || call-data.participant-count <= 1
-                    || (call-data.participant-count == 2 && idx == 0);
-                property <bool> pip: root.maximized-index < 0 && call-data.participant-count == 2 && idx == 1;
+                property <bool> full-stage: root.maximized-index >= 0 || call-data.participants.length <= 1
+                    || (call-data.participants.length == 2 && idx == 0);
+                property <bool> pip: root.maximized-index < 0 && call-data.participants.length == 2 && idx == 1;
                 x: full-stage ? Spacing.sm
                     : pip ? parent.width - pip-width - 2 * Spacing.sm
                     : Spacing.sm + Math.mod(idx, columns) * (grid-width + Spacing.sm);
@@ -282,12 +285,11 @@ export component ActiveCallView inherits Rectangle {
                     : Spacing.sm + Math.floor(idx / columns) * (grid-height + Spacing.sm);
                 width: full-stage ? parent.width - 2 * Spacing.sm : pip ? pip-width : grid-width;
                 height: full-stage ? parent.height - 2 * Spacing.sm : pip ? pip-width * 0.62 : grid-height;
-                opacity: idx >= call-data.participant-count || idx >= call-data.participants.length
-                    || (call-data.participant-count == 2 && !root.any-video && idx == 1)
+                opacity: idx >= call-data.participants.length
+                    || (call-data.participants.length == 2 && !root.any-video && idx == 1)
                     || (root.maximized-index >= 0 && root.maximized-index != idx) ? 0 : 1;
                 animate opacity { duration: Materials.motion-standard; easing: Materials.settle; }
-                visible: (idx < call-data.participants.length && idx < call-data.participant-count)
-                    || self.opacity > 0;
+                visible: idx < call-data.participants.length || self.opacity > 0;
                 interactive: self.opacity > 0.95
                     && (root.maximized-index < 0 || root.maximized-index == idx);
                 participant: call-data.participants.length > idx
@@ -300,7 +302,7 @@ export component ActiveCallView inherits Rectangle {
 
             // Per-peer controls bar — top of the maximized tile, remote only.
             if maximized-index >= 0 && !maximized-is-local
-               && maximized-index < call-data.participant-count: GlassSurface {
+               && maximized-index < call-data.participants.length: GlassSurface {
                 material-level: 3;
                 elevation: 0;
 
