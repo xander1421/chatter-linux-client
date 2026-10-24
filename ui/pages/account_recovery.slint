@@ -134,13 +134,14 @@ export component AccountRecoveryPage inherits Rectangle {
                     }
 
                     Text {
-                        text: "8 characters, uppercase letters and digits";
+                        text: "26 letters and digits 2–9. Spaces and hyphens are OK.";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
 
                     Input {
-                        placeholder: "e.g., ABCD1234";
+                        placeholder: "Enter your recovery code";
+                        password: true;
                         text <=> root.recovery-code;
                         disabled: root.loading;
                         error: submitted && recovery-code-empty;

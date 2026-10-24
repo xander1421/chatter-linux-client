@@ -192,7 +192,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.global::<crate::AuthFlow>().on_register(
         move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString, server_url: slint::SharedString| {
-            tracing::info!("REGISTER BUTTON TAPPED: user={}, server={}", username, server_url);
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
             let username = username.to_string();
@@ -310,6 +309,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 crate::bin_ui::features::modals::load_channel_invites(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {
+                                    clear_registration_secrets(&w);
                                     let model: Vec<slint::SharedString> = codes.iter()
                                         .map(|c| slint::SharedString::from(c.as_str()))
                                         .collect();
@@ -337,6 +337,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 crate::bin_ui::features::modals::load_channel_invites(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {
+                                    clear_registration_secrets(&w);
                                     w.global::<crate::AuthFlow>().set_register_loading(false);
                                     w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                                     // Signed-in state is what app.slint gates the
@@ -355,7 +356,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         load_initial_data(weak, &ui_ctx).await;
                     }
                     Err(e) => {
-                        tracing::error!("Registration failed: {}", e);
+                        tracing::error!("Registration failed");
                         let _ = ui_ctx.cleanup_failed_registration().await;
                         let error_msg = e.user_message();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -370,4 +371,11 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }); // rt_handle().spawn
         },
     );
+}
+
+fn clear_registration_secrets(window: &MainWindow) {
+    let auth = window.global::<crate::AuthFlow>();
+    auth.set_register_password("".into());
+    auth.set_register_confirm_password("".into());
+    auth.set_register_pin("".into());
 }

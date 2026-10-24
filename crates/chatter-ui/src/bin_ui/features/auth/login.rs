@@ -125,19 +125,19 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let pin = pin.to_string();
 
         let shield = ui_ctx.anon_mode_enabled();
+        if let Some(w) = weak.upgrade() {
+            if w.global::<crate::AuthFlow>().get_login_loading() {
+                return;
+            }
+            w.global::<crate::AuthFlow>().set_login_loading(true);
+            w.global::<crate::AuthFlow>().set_login_error("".into());
+            w.global::<crate::AuthFlow>()
+                .set_login_identity_reset_available(false);
+            w.global::<crate::AnonMode>().set_onboarding_progress(
+                if shield { super::shield::CONNECTING_OVER_TOR } else { "" }.into(),
+            );
+        }
         tokio::spawn(async move {
-            // Set loading state
-            let weak_for_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_for_loading.upgrade() {
-                    w.global::<crate::AuthFlow>().set_login_loading(true);
-                    w.global::<crate::AuthFlow>().set_login_error("".into());
-                    w.global::<crate::AnonMode>().set_onboarding_progress(
-                        if shield { super::shield::CONNECTING_OVER_TOR } else { "" }.into(),
-                    );
-                }
-            });
-
             // Update server URL and connect if different from current
             if ui_ctx.endpoint() != server_url {
                 if let Err(e) = ui_ctx.set_server_url(&server_url) {
@@ -221,6 +221,10 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if let Some(w) = weak_for_view.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.global::<crate::AuthFlow>().set_login_loading(false);
+                            w.global::<crate::AuthFlow>().set_login_password("".into());
+                            w.global::<crate::AuthFlow>().set_login_pin("".into());
+                            w.global::<crate::AuthFlow>()
+                                .set_login_identity_reset_available(false);
                             w.global::<crate::AuthFlow>().set_is_signed_in(true);
                             w.set_current_view("main".into());
                         }
@@ -244,7 +248,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         _ => false,
                     };
-                    tracing::warn!("Login failed: {}", e);
+                    tracing::warn!("Login failed");
                     let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

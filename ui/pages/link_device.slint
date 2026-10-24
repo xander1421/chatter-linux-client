@@ -184,8 +184,9 @@ export component LinkDevicePage inherits Rectangle {
                             clicked => { root.cancel(); }
                         }
                         Button {
-                            text: root.linking ? "Restart" : "Generate QR";
+                            text: "Generate QR";
                             variant: "primary";
+                            disabled: root.linking;
                             clicked => { root.start(); }
                         }
                     }
@@ -199,8 +200,8 @@ export component LinkDevicePage inherits Rectangle {
                             height: Spacing.touch-target-min;
                             vertical-alignment: center;
                             accessible-role: button;
-                            accessible-action-default => { root.go-to-login(); }
-                            TouchArea { clicked => { root.go-to-login(); } }
+                            accessible-action-default => { root.cancel(); }
+                            TouchArea { clicked => { root.cancel(); } }
                         }
                     }
                 }

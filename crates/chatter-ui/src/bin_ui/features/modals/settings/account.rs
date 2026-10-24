@@ -154,13 +154,14 @@ pub(super) fn wire_profile_and_deletion(window: &MainWindow, ui_ctx: &Arc<Chatte
                                 crate::bin_ui::features::back::reset_to_chats(&w);
                                 w.global::<crate::AuthFlow>().set_login_username("".into());
                                 w.global::<crate::AuthFlow>().set_login_password("".into());
+                                w.global::<crate::AuthFlow>().set_login_pin("".into());
                                 w.global::<crate::AuthFlow>().set_login_error("".into());
                             }
                         });
                     }
                     Err(e) => {
-                        tracing::error!("Account deletion failed: {e}");
-                        let msg = format!("Deletion failed: {e}");
+                        tracing::error!("Account deletion failed");
+                        let msg = format!("Deletion failed: {}", e.user_message());
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::SettingsPane>()

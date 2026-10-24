@@ -179,11 +179,7 @@ impl AuthService {
         let identity_public_key_full = identity_key_pair.identity_key().serialize();
         // Skip the first byte (type prefix) to get the raw 32-byte Curve25519 key
         let identity_public_key = &identity_public_key_full[1..];
-        tracing::info!(
-            "Requesting registration challenge - username_hash: {}, identity_key_len: {}",
-            username_hash,
-            identity_public_key.len()
-        );
+        tracing::info!("Requesting registration challenge");
         // OPAQUE registration rides the challenge round trip: the server
         // answers our RegistrationRequest under a fresh credential identifier
         // bound to this challenge, and Register uploads the record.
