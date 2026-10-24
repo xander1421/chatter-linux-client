@@ -127,6 +127,13 @@ pub struct SelectionActions {
     pub can_forward: bool,
 }
 
+/// Complete, display-ordered selection resolved away from the UI thread.
+pub struct SelectionSnapshot {
+    pub actions: SelectionActions,
+    pub targets: Vec<(crate::domain::ids::UserId, u64)>,
+    pub copy_text: String,
+}
+
 mod channels;
 mod display;
 mod friends;

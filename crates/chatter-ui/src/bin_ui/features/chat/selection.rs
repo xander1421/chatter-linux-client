@@ -49,13 +49,44 @@ fn sync_model(w: &MainWindow, selected_ids: &HashSet<String>) {
 fn refresh_delete_everyone(
     w: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
-    selected_ids: &HashSet<String>,
+    selected_ids: &Rc<RefCell<HashSet<String>>>,
+    generation: &Rc<Cell<u64>>,
 ) {
-    let ids = selected_ids.iter().cloned().collect::<Vec<_>>();
-    let actions = ui_ctx.selection_actions(ui_ctx.active_conversation(), &ids);
+    let ids = selected_ids_in_order(w, &selected_ids.borrow());
+    let revision = generation.get();
+    let conversation = ui_ctx.active_conversation();
+    let auth = ui_ctx.auth_snapshot();
     let chrome = w.global::<crate::SelectionChrome>();
-    chrome.set_can_delete_everyone(actions.can_delete_everyone);
-    chrome.set_can_forward(actions.can_forward);
+    chrome.set_can_delete_everyone(false);
+    chrome.set_can_forward(false);
+    if ids.is_empty() || ids.len() != selected_ids.borrow().len() {
+        return;
+    }
+    let weak = w.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    let selected_ids = selected_ids.clone();
+    let generation = generation.clone();
+    if let Err(error) = slint::spawn_local(async move {
+        let snapshot = ui_ctx.selection_snapshot(conversation, ids.clone()).await;
+        let Some(w) = weak.upgrade() else { return };
+        let current_auth = ui_ctx.auth_snapshot();
+        if generation.get() != revision
+            || ui_ctx.active_conversation() != conversation
+            || current_auth.current_user_id != auth.current_user_id
+            || current_auth.session_revision != auth.session_revision
+            || selected_ids.borrow().len() != ids.len()
+            || !ids.iter().all(|id| selected_ids.borrow().contains(id))
+        {
+            return;
+        }
+        if let Some(snapshot) = snapshot {
+            let chrome = w.global::<crate::SelectionChrome>();
+            chrome.set_can_delete_everyone(snapshot.actions.can_delete_everyone);
+            chrome.set_can_forward(snapshot.actions.can_forward);
+        }
+    }) {
+        tracing::error!(%error, "Could not schedule selection snapshot");
+    }
 }
 
 /// Leave selection mode and drop the marks.
@@ -66,6 +97,7 @@ fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>, generation:
     w.global::<crate::ChatPane>().set_selection_mode(false);
     w.global::<crate::SelectionChrome>()
         .set_can_delete_everyone(false);
+    w.global::<crate::SelectionChrome>().set_can_forward(false);
 }
 
 /// Snapshot the complete selection before any asynchronous deletion begins.
@@ -94,7 +126,7 @@ fn delete_selection(
     // Preserve a missing selected row as an unavailable set. Core resolves
     // the complete selection against storage before making any changes.
     if ordered_ids.is_empty() || ordered_ids.len() != selected_ids.borrow().len() {
-        refresh_delete_everyone(w, ui_ctx, &selected_ids.borrow());
+        refresh_delete_everyone(w, ui_ctx, selected_ids, generation);
         w.set_toast_message("The selected messages are no longer available.".into());
         w.set_toast_visible(true);
         return;
@@ -115,6 +147,26 @@ fn delete_selection(
     // Keep the UI-owned selection on the event loop; network/storage work runs
     // on Tokio. Register completion before starting any destructive work.
     if let Err(error) = slint::spawn_local(async move {
+        let snapshot = ui_ctx.selection_snapshot(conversation, ordered_ids.clone()).await;
+        let current_auth = ui_ctx.auth_snapshot();
+        if current_auth.current_user_id != Some(account)
+            || current_auth.session_revision != session_revision
+            || ui_ctx.active_conversation() != conversation
+            || generation.get() != selection_revision
+            || *selected_ids.borrow() != submitted_ids
+        {
+            pending_completion.set(false);
+            return;
+        }
+        if snapshot.is_none() || (everyone && !snapshot.unwrap().actions.can_delete_everyone) {
+            pending_completion.set(false);
+            if let Some(w) = weak.upgrade() {
+                w.set_toast_message("The selected messages are no longer available for deletion.".into());
+                w.set_toast_visible(true);
+                refresh_delete_everyone(&w, &ui_ctx, &selected_ids, &generation);
+            }
+            return;
+        }
         let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
         let task_client = ui_ctx.clone();
         let task = tokio::spawn(async move {
@@ -193,7 +245,7 @@ fn delete_selection(
             };
             w.set_toast_message(message.into());
             w.set_toast_visible(true);
-            refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+            refresh_delete_everyone(&w, &ui_ctx, &selected_ids, &generation);
         }
     }) {
         pending.set(false);
@@ -239,7 +291,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     exit(&w, &selected_ids, &generation);
                 } else {
                     sync_model(&w, &selected_ids.borrow());
-                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids, &generation);
                 }
             });
     }
@@ -274,7 +326,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 } else {
                     w.global::<crate::ChatPane>().set_selection_mode(true);
                     sync_model(&w, &selected_ids.borrow());
-                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids, &generation);
                 }
             });
     }
@@ -304,22 +356,37 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .on_selection_copy_clicked(move || {
                 let Some(w) = weak.upgrade() else { return };
                 let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
-                let targets = ui_ctx
-                    .selected_message_targets(ui_ctx.active_conversation(), &ordered_ids)
-                    .unwrap_or_default();
-                let handle = ui_ctx.conversation(ui_ctx.active_conversation());
-                std::thread::spawn(move || {
-                    let texts: Vec<String> = targets
-                        .iter()
-                        .filter_map(|(sender, ts)| {
-                            handle.get_message_text(sender, *ts).ok().flatten()
-                        })
-                        .collect();
-                    if !texts.is_empty() {
-                        crate::bin_ui::features::chat::actions::copy_text(&texts.join("\n\n"));
+                if ordered_ids.is_empty() || ordered_ids.len() != selected_ids.borrow().len() {
+                    return;
+                }
+                let conversation = ui_ctx.active_conversation();
+                let revision = generation.get();
+                let auth = ui_ctx.auth_snapshot();
+                let weak = w.as_weak();
+                let selected_ids = selected_ids.clone();
+                let generation = generation.clone();
+                let ui_ctx = ui_ctx.clone();
+                if let Err(error) = slint::spawn_local(async move {
+                    let snapshot = ui_ctx.selection_snapshot(conversation, ordered_ids.clone()).await;
+                    let Some(w) = weak.upgrade() else { return };
+                    let current_auth = ui_ctx.auth_snapshot();
+                    if generation.get() != revision
+                        || ui_ctx.active_conversation() != conversation
+                        || current_auth.current_user_id != auth.current_user_id
+                        || current_auth.session_revision != auth.session_revision
+                        || selected_ids.borrow().len() != ordered_ids.len()
+                        || !ordered_ids.iter().all(|id| selected_ids.borrow().contains(id))
+                    {
+                        return;
                     }
-                });
-                exit(&w, &selected_ids, &generation);
+                    let Some(snapshot) = snapshot else { return };
+                    if !snapshot.copy_text.is_empty() {
+                        std::thread::spawn(move || super::actions::copy_text(&snapshot.copy_text));
+                    }
+                    exit(&w, &selected_ids, &generation);
+                }) {
+                    tracing::error!(%error, "Could not schedule selection copy");
+                }
             });
     }
 
@@ -335,23 +402,46 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .on_selection_forward_clicked(move || {
                 let Some(w) = weak.upgrade() else { return };
                 let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
-                let targets = ui_ctx
-                    .selected_message_targets(ui_ctx.active_conversation(), &ordered_ids)
-                    .unwrap_or_default();
-                let sources: Vec<String> = targets
-                    .iter()
-                    .map(|(sender, ts)| format!("{sender}:{ts}"))
-                    .collect();
-                if sources.is_empty() {
+                if ordered_ids.is_empty() || ordered_ids.len() != selected_ids.borrow().len() {
                     return;
                 }
-                let preview = if sources.len() == 1 {
-                    "1 message".to_string()
-                } else {
-                    format!("{} messages", sources.len())
-                };
-                exit(&w, &selected_ids, &generation);
-                super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
+                let conversation = ui_ctx.active_conversation();
+                let revision = generation.get();
+                let auth = ui_ctx.auth_snapshot();
+                let weak = w.as_weak();
+                let selected_ids = selected_ids.clone();
+                let generation = generation.clone();
+                let ui_ctx = ui_ctx.clone();
+                if let Err(error) = slint::spawn_local(async move {
+                    let snapshot = ui_ctx.selection_snapshot(conversation, ordered_ids.clone()).await;
+                    let Some(w) = weak.upgrade() else { return };
+                    let current_auth = ui_ctx.auth_snapshot();
+                    if generation.get() != revision
+                        || ui_ctx.active_conversation() != conversation
+                        || current_auth.current_user_id != auth.current_user_id
+                        || current_auth.session_revision != auth.session_revision
+                        || selected_ids.borrow().len() != ordered_ids.len()
+                        || !ordered_ids.iter().all(|id| selected_ids.borrow().contains(id))
+                    {
+                        return;
+                    }
+                    let Some(snapshot) = snapshot else { return };
+                    if !snapshot.actions.can_forward {
+                        return;
+                    }
+                    let sources: Vec<String> = snapshot.targets.iter()
+                        .map(|(sender, ts)| format!("{sender}:{ts}"))
+                        .collect();
+                    let preview = if sources.len() == 1 {
+                        "1 message".to_string()
+                    } else {
+                        format!("{} messages", sources.len())
+                    };
+                    exit(&w, &selected_ids, &generation);
+                    super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
+                }) {
+                    tracing::error!(%error, "Could not schedule selection forward");
+                }
             });
     }
 
@@ -398,7 +488,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 } else {
                     w.global::<crate::ChatPane>().set_selection_mode(true);
                     sync_model(&w, &selected_ids.borrow());
-                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids, &generation);
                 }
             });
     }

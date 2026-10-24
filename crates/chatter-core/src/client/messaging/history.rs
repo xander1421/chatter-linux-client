@@ -156,21 +156,35 @@ impl ChatterClient {
             .collect()
     }
 
-    pub fn selection_actions(
+    pub async fn selection_snapshot(
         self: &Arc<Self>,
         conversation: ActiveConversation,
-        ids: &[String],
-    ) -> SelectionActions {
-        let handle = self.conversation(conversation);
-        let targets = self.selected_message_targets(conversation, ids);
-        SelectionActions {
-            can_delete_everyone: targets.as_ref().is_some_and(|targets| {
-                targets.iter().all(|(author, ts)| {
-                    handle.can_delete_for_everyone(author, *ts).unwrap_or(false)
-                })
-            }),
-            can_forward: handle.can_forward_from(),
-        }
+        ids: Vec<String>,
+    ) -> Option<SelectionSnapshot> {
+        let client = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let targets = client.selected_message_targets(conversation, &ids)?;
+            let handle = client.conversation(conversation);
+            let can_delete_everyone = targets.iter().all(|(author, ts)| {
+                handle.can_delete_for_everyone(author, *ts).unwrap_or(false)
+            });
+            let copy_text = targets
+                .iter()
+                .filter_map(|(author, ts)| handle.get_message_text(author, *ts).ok().flatten())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            Some(SelectionSnapshot {
+                actions: SelectionActions {
+                    can_delete_everyone,
+                    can_forward: handle.can_forward_from(),
+                },
+                targets,
+                copy_text,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     pub fn get_message_local(
