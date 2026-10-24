@@ -246,15 +246,18 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
         global.on_join_channel(move |name| {
-            let Some(w) = weak.upgrade() else { return };
+            let Some(w) = weak.upgrade() else { return false };
             match ui_ctx.mesh_join_channel(name.as_str()) {
                 Ok(_) => {
                     show_success_notice(&w, "Public channel joined.");
                     refresh_rows(&w, &ui_ctx);
+                    true
                 }
-                Err(error) => w
-                    .global::<MeshGlobal>()
-                    .set_notice(format!("Could not join channel: {error}").into()),
+                Err(error) => {
+                    w.global::<MeshGlobal>()
+                        .set_notice(format!("Could not join channel: {error}").into());
+                    false
+                }
             }
         });
     }
@@ -262,24 +265,31 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
         global.on_create_private_channel(move |name| {
-            let Some(w) = weak.upgrade() else { return };
+            let Some(w) = weak.upgrade() else { return false };
             match ui_ctx.mesh_create_private_channel(name.as_str()) {
                 Ok(scope) => {
                     refresh_rows(&w, &ui_ctx);
+                    crate::bin_ui::features::back::close(&w, "mesh-compose");
                     // Land in the new group with Group Info open, where Add
                     // Members is the next step.
                     if let Some(row) = core_api::rows(&ui_ctx)
                         .into_iter()
                         .find(|row| row.kind == "private-channel" && row.scope == scope)
                     {
-                        crate::bin_ui::features::back::close(&w, "mesh-compose");
                         conversation::open(&w, &ui_ctx, &row.id);
                         crate::bin_ui::features::back::push(&w, "mesh-info");
+                    } else {
+                        w.global::<MeshGlobal>().set_notice(
+                            "Group created, but it could not be opened. Find it in the Mesh list."
+                                .into(),
+                        );
                     }
+                    true
                 }
-                Err(error) => w
-                    .global::<MeshGlobal>()
-                    .set_notice(error.to_string().into()),
+                Err(error) => {
+                    w.global::<MeshGlobal>().set_notice(error.to_string().into());
+                    false
+                }
             }
         });
     }
@@ -304,10 +314,16 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
         global.on_join_private_channel(move |qr| {
-            let Some(w) = weak.upgrade() else { return };
+            let Some(w) = weak.upgrade() else { return false };
             match ui_ctx.mesh_join_private_channel(qr.as_str()) {
-                Ok(()) => w.global::<MeshGlobal>().set_notice("Admission requested over Noise. Waiting for the creator to send the channel key.".into()),
-                Err(error) => w.global::<MeshGlobal>().set_notice(error.to_string().into()),
+                Ok(()) => {
+                    w.global::<MeshGlobal>().set_notice("Admission requested over Noise. Waiting for the creator to send the channel key.".into());
+                    true
+                }
+                Err(error) => {
+                    w.global::<MeshGlobal>().set_notice(error.to_string().into());
+                    false
+                }
             }
         });
     }
@@ -428,9 +444,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
                         match result {
-                            crate::platform::android::qr_scanner::ScanOutcome::Scanned(qr) => w
-                                .global::<MeshGlobal>()
-                                .invoke_join_private_channel(qr.trim().into()),
+                            crate::platform::android::qr_scanner::ScanOutcome::Scanned(qr) => {
+                                w.global::<MeshGlobal>()
+                                    .invoke_join_private_channel(qr.trim().into());
+                            }
                             crate::platform::android::qr_scanner::ScanOutcome::CameraDenied => {
                                 w.global::<MeshGlobal>().set_notice(
                                     "Camera access is required to scan the invite QR.".into(),
@@ -656,18 +673,20 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         global.on_join_geohash(move |cell| {
             let cell = cell.trim().to_string();
             if cell.is_empty() {
-                return;
+                return false;
             }
-            let Some(w) = weak.upgrade() else { return };
+            let Some(w) = weak.upgrade() else { return false };
             match core_api::join(&ui_ctx, &cell) {
                 Ok(()) => {
                     w.global::<MeshGlobal>().set_notice("".into());
                     refresh_rows(&w, &ui_ctx);
+                    true
                 }
                 Err(error) => {
                     tracing::warn!(%error, cell = %cell, "mesh: could not join cell");
                     w.global::<MeshGlobal>()
                         .set_notice(format!("Could not join {cell}: {error}").into());
+                    false
                 }
             }
         });
