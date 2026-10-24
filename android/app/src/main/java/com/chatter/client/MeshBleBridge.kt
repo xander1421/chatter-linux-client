@@ -162,6 +162,9 @@ object MeshBleBridge {
     private var scanDeferred = false
     private val scanResults = AtomicLong(0)
     private val lastScanResultAt = AtomicLong(0)
+    private const val DISCOVERY_REFRESH_MS = 1_000L
+    private data class RecentDiscovery(val peer: Long?, val sentAt: Long)
+    private val recentDiscoveries = HashMap<String, RecentDiscovery>()
     private var silentRestartAt = 0L
     private var watchdogRestartPending = false
     private var silentWarningLogged = false
@@ -594,18 +597,32 @@ object MeshBleBridge {
     private fun emitDiscovered(address: String, rssi: Int, peerHex: String?) =
         emit("onDiscovered") { nativeOnDiscovered(address, rssi, peerHex) }
 
-    /**
-     * The advertised peer id, or null when this sighting did not carry one.
-     *
-     * Null is routine, not an error: the scan response often lands a beat after
-     * the advertisement, so the first sighting of a device frequently has no
-     * service data. The native side treats null as "unknown", never as "not a
-     * peer".
-     */
-    private fun ScanResult.advertisedPeer(): String? {
-        val data = scanRecord?.getServiceData(SERVICE_PARCEL_UUID) ?: return null
-        if (data.size < 8) return null
-        return data.take(8).joinToString("") { "%02x".format(it) }
+    /** Preserve the first sighting and peer-id changes; refresh RSSI once a second. */
+    private fun peerHex(peer: Long): String {
+        val digits = "0123456789abcdef"
+        return CharArray(16) { index ->
+            digits[((peer ushr (60 - index * 4)) and 0xfL).toInt()]
+        }.concatToString()
+    }
+
+    private fun emitScanResult(scan: ScanResult) {
+        val address = scan.device.address
+        val data = scan.scanRecord?.getServiceData(SERVICE_PARCEL_UUID)
+        var peer: Long? = null
+        if (data != null && data.size >= 8) {
+            var value = 0L
+            for (index in 0 until 8) value = (value shl 8) or (data[index].toLong() and 0xffL)
+            peer = value
+        }
+        val now = SystemClock.elapsedRealtime()
+        synchronized(recentDiscoveries) {
+            val previous = recentDiscoveries[address]
+            if (previous != null && previous.peer == peer && now - previous.sentAt < DISCOVERY_REFRESH_MS) return
+            // Bound the cache even if a busy scan sees many rotating addresses.
+            if (recentDiscoveries.size >= 256 && previous == null) recentDiscoveries.clear()
+            recentDiscoveries[address] = RecentDiscovery(peer, now)
+        }
+        emitDiscovered(address, scan.rssi, peer?.let(::peerHex))
     }
 
     /** Sixteen hex characters to eight bytes; empty on anything else. */
@@ -774,6 +791,7 @@ object MeshBleBridge {
         }
         if (scanner != null) guard("stopScan", Unit) { scanner.stopScan(scanCallback) }
         scanActive = false
+        synchronized(recentDiscoveries) { recentDiscoveries.clear() }
         Log.i(TAG, "scan stopped: $reason")
     }
 
@@ -826,6 +844,7 @@ object MeshBleBridge {
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setReportDelay(0)
                 .build()
+            synchronized(recentDiscoveries) { recentDiscoveries.clear() }
             scanStarts.addLast(now)
             scanActive = guard("startScan", false) {
                 scanner.startScan(filters, settings, scanCallback)
@@ -843,11 +862,11 @@ object MeshBleBridge {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             val scan = result ?: return
             noteScanResult()
-            emitDiscovered(scan.device.address, scan.rssi, scan.advertisedPeer())
+            emitScanResult(scan)
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-            results?.forEach { noteScanResult(); emitDiscovered(it.device.address, it.rssi, it.advertisedPeer()) }
+            results?.forEach { noteScanResult(); emitScanResult(it) }
         }
 
         override fun onScanFailed(errorCode: Int) {

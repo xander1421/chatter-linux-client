@@ -101,6 +101,7 @@ class MainActivity : GameActivity() {
 
     private var secureScreenRequested = false
     private var activityResumed = false
+    private var messagingServiceRequested: Boolean? = null
     private var torNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private external fun nativeNetworkChanged()
 
@@ -488,7 +489,10 @@ class MainActivity : GameActivity() {
     }
 
     private fun updateMessagingService() {
-        if (messagingSignedIn && messagingBackground) {
+        val shouldRun = messagingSignedIn && messagingBackground
+        if (messagingServiceRequested == shouldRun) return
+        messagingServiceRequested = shouldRun
+        if (shouldRun) {
             MessagingService.start(this)
         } else {
             MessagingService.stop(this)
