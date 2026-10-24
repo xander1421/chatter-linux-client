@@ -3,6 +3,7 @@
 //!
 //! Subsumes the former `quick_switcher.rs` and the search half of `header.rs`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -66,6 +67,7 @@ fn wire_more(window: &MainWindow) {
 fn wire_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
+    let generation = Arc::new(AtomicU64::new(0));
     window
         .global::<crate::SearchPane>()
         .on_unified_search_picker_request(move |kind, query| {
@@ -73,27 +75,57 @@ fn wire_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if !w.global::<crate::SearchPane>().get_unified_search_open() {
                 return;
             }
-            let rows = ui_ctx
-                .search_filter_options(kind.as_str(), query.as_str())
-                .into_iter()
-                .map(|option| {
-                    let avatar = option
-                        .avatar
-                        .as_deref()
-                        .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
-                    QuickSwitcherItem {
-                        id: option.id.into(),
-                        name: option.name.into(),
-                        conv_type: option.kind.into(),
-                        presence_status: "".into(),
-                        unread_count: 0,
-                        has_avatar: avatar.is_some(),
-                        avatar: avatar.unwrap_or_default(),
-                    }
-                })
-                .collect::<Vec<_>>();
             w.global::<crate::SearchPane>()
-                .set_unified_search_picker_options(ModelRc::new(VecModel::from(rows)));
+                .set_unified_search_picker_options(ModelRc::new(VecModel::default()));
+            w.global::<crate::SearchPane>()
+                .set_unified_search_picker_searching(true);
+            let ticket = generation.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+            let generation = generation.clone();
+            let session = ui_ctx.auth_snapshot().session_revision;
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            let kind = kind.to_string();
+            let query = query.to_string();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                if generation.load(Ordering::Relaxed) != ticket
+                    || ui_ctx.auth_snapshot().session_revision != session
+                {
+                    return;
+                }
+                let rows = ui_ctx.search_filter_options(&kind, &query);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if generation.load(Ordering::Relaxed) != ticket
+                        || ui_ctx.auth_snapshot().session_revision != session
+                        || !w.global::<crate::SearchPane>().get_unified_search_open()
+                    {
+                        return;
+                    }
+                    let rows = rows
+                        .into_iter()
+                        .map(|option| {
+                            let avatar = option
+                                .avatar
+                                .as_deref()
+                                .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
+                            QuickSwitcherItem {
+                                id: option.id.into(),
+                                name: option.name.into(),
+                                conv_type: option.kind.into(),
+                                presence_status: "".into(),
+                                unread_count: 0,
+                                has_avatar: avatar.is_some(),
+                                avatar: avatar.unwrap_or_default(),
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_picker_options(ModelRc::new(VecModel::from(rows)));
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_picker_searching(false);
+                });
+            });
         });
 }
 
@@ -143,6 +175,8 @@ fn wire_filters(window: &MainWindow) {
         .global::<crate::SearchPane>()
         .on_unified_search_filters_changed(move |_, _, _, _, _| {
             if let Some(w) = weak.upgrade() {
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_selected_index(0);
                 w.global::<crate::SearchPane>()
                     .set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
                 w.global::<crate::SearchPane>()
@@ -340,6 +374,10 @@ fn wire_closed(
 }
 
 fn clear_search_rows(w: &MainWindow) {
+    w.global::<crate::SearchPane>()
+        .set_unified_search_picker_options(ModelRc::new(VecModel::default()));
+    w.global::<crate::SearchPane>()
+        .set_unified_search_picker_searching(false);
     w.global::<crate::SearchPane>()
         .set_unified_search_messages(ModelRc::new(VecModel::default()));
     w.global::<crate::SearchPane>()
@@ -670,7 +708,11 @@ fn wire_resolve(
                             .await
                             .map(|p| p.display_name)
                             .unwrap_or_default();
-                        let name = if display.is_empty() {
+                        let name = if let Some(local) =
+                            ui_ctx.contact_name(&uid).filter(|name| !name.is_empty())
+                        {
+                            local
+                        } else if display.is_empty() {
                             shown_handle.clone()
                         } else {
                             display

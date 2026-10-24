@@ -1,6 +1,6 @@
 //! Visible local search results for the unified search palette.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
@@ -148,7 +148,7 @@ impl ChatterClient {
             }
         }
         let mut shown = [0; 7];
-        let hits = candidates
+        let selected = candidates
             .into_iter()
             .filter_map(|candidate| {
                 if request.category != SearchCategory::All && request.category != candidate.category
@@ -160,6 +160,19 @@ impl ChatterClient {
                     return None;
                 }
                 shown[slot] += 1;
+                Some(candidate)
+            })
+            .collect::<Vec<_>>();
+        let messages = selected
+            .iter()
+            .map(|candidate| candidate.message.clone())
+            .collect::<Vec<_>>();
+        let sender_names = self.search_sender_display_names(&messages);
+        let mut conversation_names = HashMap::new();
+        let hits = selected
+            .into_iter()
+            .zip(sender_names)
+            .map(|(candidate, sender_name)| {
                 let msg = &candidate.message;
                 let (preview, thumbnail) = if let Some(item) = &candidate.shared {
                     let label = if item.size_bytes > 0 {
@@ -189,19 +202,22 @@ impl ChatterClient {
                             .and_then(|file| file.metadata.thumbnail.clone()),
                     )
                 };
-                Some(VisibleSearchHit {
+                VisibleSearchHit {
                     message_id: msg.id.to_string(),
                     channel_id: msg.conversation_id.to_string(),
-                    channel_name: self.search_conversation_display_name(
-                        &msg.conversation_id,
-                        &msg.conversation_type,
-                    ),
-                    sender_name: self.search_sender_display_name(msg),
+                    channel_name: conversation_names
+                        .entry((msg.conversation_id.clone(), msg.conversation_type.clone()))
+                        .or_insert_with(|| self.search_conversation_display_name(
+                            &msg.conversation_id,
+                            &msg.conversation_type,
+                        ))
+                        .clone(),
+                    sender_name,
                     preview,
                     created_at: candidate.created_at(),
                     category: candidate.category,
                     thumbnail,
-                })
+                }
             })
             .collect();
         SearchPage { hits, counts }

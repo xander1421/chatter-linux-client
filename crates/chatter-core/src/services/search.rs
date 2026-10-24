@@ -64,35 +64,46 @@ impl crate::client::ChatterClient {
         )
     }
 
-    /// Search labels use the same local sender directory as the conversation,
-    /// with a readable self label and DM fallback for sealed sender rows.
-    pub fn search_sender_display_name(&self, msg: &crate::domain::message::Message) -> String {
+    /// Resolve search labels in one directory lookup, preserving the special
+    /// labels used by mesh, self messages and sealed-sender DMs.
+    pub fn search_sender_display_names(
+        &self,
+        messages: &[crate::domain::message::Message],
+    ) -> Vec<String> {
         use crate::domain::message::ConversationType;
-        #[cfg(feature = "mesh")]
-        if matches!(
-            msg.conversation_type,
-            ConversationType::Mesh | ConversationType::MeshDm
-        ) {
-            return msg
-                .sender_id
-                .as_ref()
-                .map(|sender| {
-                    if *sender == self.mesh_local_user_id() {
-                        "You".to_string()
-                    } else {
-                        self.mesh_sender_display_name(sender)
-                            .unwrap_or_else(|| "Unknown peer".to_string())
-                    }
-                })
-                .unwrap_or_else(|| "Unknown peer".to_string());
+        let mut names = self.message_sender_display_names(messages);
+        for (message, name) in messages.iter().zip(names.iter_mut()) {
+            #[cfg(feature = "mesh")]
+            if matches!(
+                message.conversation_type,
+                ConversationType::Mesh | ConversationType::MeshDm
+            ) {
+                *name = message
+                    .sender_id
+                    .as_ref()
+                    .map(|sender| {
+                        if *sender == self.mesh_local_user_id() {
+                            "You".to_string()
+                        } else {
+                            self.mesh_sender_display_name(sender)
+                                .unwrap_or_else(|| "Unknown peer".to_string())
+                        }
+                    })
+                    .unwrap_or_else(|| "Unknown peer".to_string());
+                continue;
+            }
+            if message.sender_id.is_some() && message.sender_id == self.session_current_user_id() {
+                *name = "You".to_string();
+            } else if message.sender_id.is_none()
+                && message.conversation_type == ConversationType::ServerDm
+            {
+                *name = self.conversation_display_name(
+                    &message.conversation_id,
+                    &message.conversation_type,
+                );
+            }
         }
-        if msg.sender_id.is_some() && msg.sender_id == self.session_current_user_id() {
-            return "You".to_string();
-        }
-        if msg.sender_id.is_none() && msg.conversation_type == ConversationType::ServerDm {
-            return self.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
-        }
-        self.message_sender_display_name(msg)
+        names
     }
 }
 

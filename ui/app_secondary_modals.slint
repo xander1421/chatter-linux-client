@@ -116,6 +116,7 @@ export component AppSecondaryModals inherits Rectangle {
         from-label <=> SearchPane.unified-search-from-label;
         in-label <=> SearchPane.unified-search-in-label;
         picker-options: SearchPane.unified-search-picker-options;
+        picker-searching: SearchPane.unified-search-picker-searching;
         recent-searches: SearchPane.unified-search-recents;
         calendar-month: SearchPane.unified-search-calendar-month;
         calendar-days: SearchPane.unified-search-calendar-days;
@@ -142,26 +143,21 @@ export component AppSecondaryModals inherits Rectangle {
         person-selected(uid) => {
             SearchPane.unified-search-person-selected(uid);
             SearchPane.unified-search-open = false;
-            SearchPane.unified-search-closed();
         }
         conversation-selected(id, t) => {
             SearchPane.unified-search-conversation-selected(id, t);
             SearchPane.unified-search-open = false;
-            SearchPane.unified-search-closed();
         }
         message-selected(id) => {
             SearchPane.unified-search-message-selected(id);
             SearchPane.unified-search-open = false;
-            SearchPane.unified-search-closed();
         }
         close => {
             SearchPane.unified-search-open = false;
-            SearchPane.unified-search-closed();
         }
         cancel => {
             SearchPane.unified-search-query = "";
             SearchPane.unified-search-open = false;
-            SearchPane.unified-search-closed();
         }
     }
 
