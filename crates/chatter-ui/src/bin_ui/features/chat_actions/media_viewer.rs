@@ -134,9 +134,6 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
             .unwrap_or_default()
             .into(),
     );
-    if index.is_none() {
-        return request;
-    }
     if let Some(client) = CLIENT.get() {
         let client = client.clone();
         let weak = w.as_weak();

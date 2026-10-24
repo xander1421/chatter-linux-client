@@ -242,9 +242,10 @@ mod android_renderer {
                         pane.set_pdf_preview_error("".into());
                     }
                     Err(error) if error != "PDF preview closed" => {
+                        tracing::warn!(%error, "PDF preview failed");
                         window
                             .global::<crate::ChatPane>()
-                            .set_pdf_preview_error(error.into());
+                            .set_pdf_preview_error("Unable to preview PDF. Try Open externally.".into());
                     }
                     Err(_) => {}
                 }
@@ -292,7 +293,10 @@ mod android_renderer {
                         pane.set_pdf_preview_current_page(page + 1);
                         pane.set_pdf_preview_error("".into());
                     }
-                    Err(error) => pane.set_pdf_preview_error(error.into()),
+                    Err(error) => {
+                        tracing::warn!(%error, "PDF page render failed");
+                        pane.set_pdf_preview_error("Unable to show this PDF page. Try Open externally.".into());
+                    }
                 }
             });
         });
@@ -413,7 +417,10 @@ mod pdf_renderer {
                         pane.set_pdf_preview_image(rgba_to_slint_image(&image.rgba, image.width, image.height));
                         pane.set_pdf_preview_error("".into());
                     }
-                    Err(error) => pane.set_pdf_preview_error(error.into()),
+                    Err(error) => {
+                        tracing::warn!(%error, "PDF page render failed");
+                        pane.set_pdf_preview_error("Unable to show this PDF page. Try Open externally.".into());
+                    }
                 }
             });
         }

@@ -35,6 +35,7 @@ pub struct AttachmentDisplayData {
     /// Transfer progress fields
     pub is_uploading: bool,
     pub is_downloading: bool,
+    pub is_download_failed: bool,
     pub progress: f32,
     /// Thumbnail JPEG bytes from sender (for instant preview without download).
     pub thumbnail_bytes: Vec<u8>,
@@ -245,6 +246,7 @@ impl AttachmentDisplayData {
             duration_display: self.duration_display.clone().into(),
             is_uploading: self.is_uploading,
             is_downloading: self.is_downloading,
+            is_download_failed: self.is_download_failed,
             progress: self.progress,
         }
     }
@@ -311,6 +313,8 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
     // Determine transfer status from attachment status
     let is_uploading = attachment.status == AttachmentStatus::Uploading;
     let is_downloading = attachment.status == AttachmentStatus::Downloading;
+    let is_download_failed = attachment.status == AttachmentStatus::Failed
+        && attachment.remote_url.is_some();
 
     AttachmentDisplayData {
         id: id_str,
@@ -335,6 +339,7 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         duration_display,
         is_uploading,
         is_downloading,
+        is_download_failed,
         progress: 0.0, // Will be updated by progress callback
         // Use stored thumbnail from sender (for instant preview)
         thumbnail_bytes: {
