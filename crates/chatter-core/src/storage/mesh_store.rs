@@ -3,7 +3,8 @@
 //! Two impls of seams `chatter-mesh-store` deliberately left open:
 //!
 //! - [`MeshStorage`] — [`Storage`] over the existing SQLCipher [`Database`],
-//!   one row per [`StorageKey`] in the `mesh_store` table (migration V057).
+//!   one row per [`StorageKey`] in `mesh_store` (V057), plus keyed public
+//!   packet rows in `mesh_archive_packets` (V131).
 //! - [`MeshSealer`] — [`Sealer`], XChaCha20-Poly1305 under a key that lives in
 //!   its **own** OS-keyring entry, separate from the database passphrase.
 //!
@@ -70,7 +71,7 @@ const SEAL_KEY_LABEL: &str = "mesh-seal-key";
 
 /// [`Storage`] backed by the app's SQLCipher database.
 ///
-/// Every value written here is already sealed by [`MeshSealer`]; see the module
+/// Fixed-key blobs written here are already sealed by [`MeshSealer`]; see the module
 /// documentation for why that is not redundant with SQLCipher.
 pub struct MeshStorage {
     db: Arc<Database>,
@@ -160,6 +161,55 @@ impl Storage for MeshStorage {
         Ok(())
     }
 
+    fn load_archive_packets(&self) -> Result<Vec<([u8; 16], Vec<u8>)>, StoreError> {
+        let conn = self.db.read_connection()
+            .map_err(|e| storage_error("load", "public archive", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT packet_id, packet FROM mesh_archive_packets ORDER BY inserted_order"
+        ).map_err(|e| storage_error("load", "public archive", e))?;
+        let rows = stmt.query_map([], |row| {
+            let id: Vec<u8> = row.get(0)?;
+            let packet: Vec<u8> = row.get(1)?;
+            Ok((id, packet))
+        }).map_err(|e| storage_error("load", "public archive", e))?;
+        rows.map(|row| {
+            let (id, packet) = row.map_err(|e| storage_error("load", "public archive", e))?;
+            let id: [u8; 16] = id.try_into()
+                .map_err(|_| storage_error("load", "public archive", "invalid packet id length"))?;
+            Ok((id, packet))
+        }).collect()
+    }
+
+    fn apply_archive_changes(&self, changes: &[([u8; 16], Option<Vec<u8>>)]) -> Result<(), StoreError> {
+        if changes.is_empty() { return Ok(()); }
+        let conn = self.db.connection()
+            .map_err(|e| storage_error("save", "public archive", e))?;
+        let tx = conn.unchecked_transaction()
+            .map_err(|e| storage_error("save", "public archive", e))?;
+        for (id, packet) in changes {
+            if let Some(packet) = packet {
+                tx.execute(
+                    "INSERT INTO mesh_archive_packets (packet_id, packet, inserted_order)
+                     VALUES (?1, ?2, (SELECT COALESCE(MAX(inserted_order), 0) + 1 FROM mesh_archive_packets))
+                     ON CONFLICT(packet_id) DO UPDATE SET packet = excluded.packet",
+                    params![id.as_slice(), packet],
+                ).map_err(|e| storage_error("save", "public archive", e))?;
+            } else {
+                tx.execute("DELETE FROM mesh_archive_packets WHERE packet_id = ?1", params![id.as_slice()])
+                    .map_err(|e| storage_error("delete", "public archive", e))?;
+            }
+        }
+        tx.commit().map_err(|e| storage_error("save", "public archive", e))
+    }
+
+    fn wipe_archive(&self) -> Result<(), StoreError> {
+        let conn = self.db.connection()
+            .map_err(|e| storage_error("wipe", "public archive", e))?;
+        conn.execute("DELETE FROM mesh_archive_packets", [])
+            .map_err(|e| storage_error("wipe", "public archive", e))?;
+        Ok(())
+    }
+
     /// Panic wipe, as one statement.
     ///
     /// The default implementation loops over [`StorageKey::ALL`] and keeps going
@@ -174,9 +224,13 @@ impl Storage for MeshStorage {
             .connection()
             .map_err(|e| storage_error("wipe_all", "all", e))?;
 
-        conn.execute("DELETE FROM mesh_store", [])
+        let tx = conn.unchecked_transaction()
             .map_err(|e| storage_error("wipe_all", "all", e))?;
-
+        tx.execute("DELETE FROM mesh_store", [])
+            .map_err(|e| storage_error("wipe_all", "all", e))?;
+        tx.execute("DELETE FROM mesh_archive_packets", [])
+            .map_err(|e| storage_error("wipe_all", "all", e))?;
+        tx.commit().map_err(|e| storage_error("wipe_all", "all", e))?;
         Ok(())
     }
 }
@@ -1051,17 +1105,29 @@ mod tests {
     fn wipe_removes_only_that_key() {
         let storage = MeshStorage::new(test_db());
         storage.save(StorageKey::Outbox, b"mail").expect("save");
-        storage
-            .save(StorageKey::PublicArchive, b"history")
-            .expect("save");
+        storage.apply_archive_changes(&[([1; 16], Some(b"history".to_vec()))]).expect("save");
 
         storage.wipe(StorageKey::Outbox).expect("wipe");
 
         assert_eq!(storage.load(StorageKey::Outbox).expect("load"), None);
-        assert_eq!(
-            storage.load(StorageKey::PublicArchive).expect("load"),
-            Some(b"history".to_vec())
-        );
+        assert_eq!(storage.load_archive_packets().expect("load"), vec![([1; 16], b"history".to_vec())]);
+    }
+
+    #[test]
+    fn public_archive_rows_are_independent_and_wiped_with_mesh_state() {
+        let storage = MeshStorage::new(test_db());
+        storage.apply_archive_changes(&[
+            ([1; 16], Some(b"one".to_vec())),
+            ([2; 16], Some(b"two".to_vec())),
+        ]).expect("insert");
+        storage.apply_archive_changes(&[
+            ([1; 16], None),
+            ([2; 16], Some(b"updated".to_vec())),
+        ]).expect("update");
+        assert_eq!(storage.load_archive_packets().expect("load"),
+            vec![([2; 16], b"updated".to_vec())]);
+        storage.wipe_all().expect("wipe all");
+        assert!(storage.load_archive_packets().expect("load").is_empty());
     }
 
     #[test]

@@ -127,6 +127,7 @@ mod v126_activity_outage_resolution;
 mod v127_shared_content_categories;
 mod v128_anon_group_invite_epoch;
 mod v129_pending_dm_retry;
+mod v131_mesh_archive_packets;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -481,4 +482,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v127_shared_content_categories::V127SharedContentCategories)
         .register(v128_anon_group_invite_epoch::V128AnonGroupInviteEpoch)
         .register(v129_pending_dm_retry::V129PendingDmRetry)
+        .register(v131_mesh_archive_packets::V131MeshArchivePackets)
 }

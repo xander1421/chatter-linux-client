@@ -120,6 +120,15 @@ impl Storage for BlindStorage {
         *self.writes.lock().expect("lock") += 1;
         self.inner.wipe(key)
     }
+    fn load_archive_packets(&self) -> Result<Vec<([u8; 16], Vec<u8>)>, StoreError> {
+        self.inner.load_archive_packets()
+    }
+    fn apply_archive_changes(&self, changes: &[([u8; 16], Option<Vec<u8>>)]) -> Result<(), StoreError> {
+        self.inner.apply_archive_changes(changes)
+    }
+    fn wipe_archive(&self) -> Result<(), StoreError> {
+        self.inner.wipe_archive()
+    }
 }
 
 fn peer(name: &str) -> PeerId {
