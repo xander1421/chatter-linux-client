@@ -17,6 +17,13 @@ import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { TextFormat } from "message_composer.slint";
 
+// Slint virtualizes direct `for` children of this Flickable shape.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
+
 export component ThreadPanel inherits Rectangle {
     property <bool> entered: false;
     property <float> panel-progress: 0;
@@ -359,14 +366,73 @@ export component ThreadPanel inherits Rectangle {
                 }
             }
 
+            // Keep the load control outside the virtualized rows. It remains
+            // visible while earlier pages are available.
+            if !root.loading && root.replies.length > 0
+                    && root.replies.length < root.reply-count: Rectangle {
+                height: Spacing.button-height;
+                width: 100%;
+                Text {
+                    text: "Load earlier replies";
+                    color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                more-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        replies-view.following-tail = false;
+                        replies-view.anchor-count = root.replies.length;
+                        replies-view.anchor-first = root.replies[0].message-id;
+                        replies-view.anchor-index = replies-view.top-row();
+                        replies-view.anchor-offset = replies-view.viewport-y
+                            + replies-view.anchor-index * replies-view.viewport-height / root.replies.length;
+                        replies-view.preserving-anchor = true;
+                        root.load-more-replies();
+                    }
+                }
+            }
+
             // Replies list
-            replies-view := Flickable {
+            replies-view := ListView {
                 visible: !root.loading && root.replies.length > 0;
+                y: root.replies.length < root.reply-count ? Spacing.button-height : 0px;
+                width: 100%;
+                height: parent.height - self.y;
                 property <bool> following-tail: true;
                 property <bool> user-scrolling: false;
                 property <bool> preserving-anchor: false;
-                property <length> anchor-height: 0px;
-                property <length> anchor-y: 0px;
+                property <bool> restoring-anchor: false;
+                property <int> anchor-count: 0;
+                property <string> anchor-first: "";
+                property <int> anchor-index: 0;
+                property <length> anchor-offset: 0px;
+                pure function top-row() -> int {
+                    return root.replies.length > 0 && self.viewport-height > 0px
+                        ? Math.floor(-self.viewport-y * root.replies.length / self.viewport-height) : 0;
+                }
+                function restore-anchor() {
+                    if (!self.preserving-anchor || self.restoring-anchor
+                            || root.replies.length <= self.anchor-count
+                            || root.replies[0].message-id == self.anchor-first) { return; }
+                    let expected = self.anchor-index + root.replies.length - self.anchor-count;
+                    // Slint keeps live rows in place when history lands above
+                    // them. At the first live row it may instead expose the
+                    // new rows; use the main timeline's index correction.
+                    if (Math.abs(self.top-row() - expected) > 1) {
+                        self.restoring-anchor = true;
+                        self.viewport-y = Math.min(0px, -expected * self.viewport-height
+                            / root.replies.length + self.anchor-offset);
+                        self.restoring-anchor = false;
+                    }
+                    anchor-settled.start(); anchor-settled.restart();
+                }
+                anchor-settled := Timer {
+                    interval: 16ms;
+                    running: false;
+                    triggered => { self.running = false; replies-view.preserving-anchor = false; }
+                }
                 property <int> tail-request: root.tail-serial;
                 property <string> thread-id: root.root-message-id;
                 changed thread-id => {
@@ -392,14 +458,10 @@ export component ThreadPanel inherits Rectangle {
                 }
                 changed viewport-y => {
                     if (self.user-scrolling) { at-rest.start(); at-rest.restart(); }
+                    self.restore-anchor();
                 }
                 changed viewport-height => {
-                    // Account for all layout passes, including the removed
-                    // load button and the newly grouped page seam.
-                    if (self.preserving-anchor) {
-                        self.viewport-y = Math.min(0px, self.anchor-y - (self.viewport-height - self.anchor-height));
-                        anchor-settled.start(); anchor-settled.restart();
-                    }
+                    self.restore-anchor();
                     if (self.following-tail) { settle.start(); settle.restart(); }
                 }
                 changed height => { if (self.following-tail) { settle.start(); settle.restart(); } }
@@ -414,11 +476,6 @@ export component ThreadPanel inherits Rectangle {
                         }
                     }
                 }
-                anchor-settled := Timer {
-                    interval: 16ms;
-                    running: false;
-                    triggered => { self.running = false; replies-view.preserving-anchor = false; }
-                }
                 settle := Timer {
                     interval: 1ms;
                     running: false;
@@ -429,42 +486,15 @@ export component ThreadPanel inherits Rectangle {
                         }
                     }
                 }
-                width: 100%;
-                height: 100%;
-                viewport-height: replies-layout.preferred-height;
 
-                replies-layout := VerticalLayout {
-                    width: 100%;
-                    padding: Spacing.sm;
-                    spacing: Spacing.xxs;
-
-                    // Only the newest page loads on open; `reply-count` is the
-                    // thread's true total, so a shortfall means earlier replies.
-                    if root.replies.length < root.reply-count: Rectangle {
-                        height: Spacing.button-height;
-                        Text {
-                            text: "Load earlier replies";
-                            color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
-                            font-size: Typography.xs;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        more-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            // Pin what is on screen now; the older page grows
-                            // the content above it (`changed viewport-height`).
-                            clicked => {
-                                replies-view.anchor-height = replies-view.viewport-height;
-                                replies-view.anchor-y = replies-view.viewport-y;
-                                replies-view.preserving-anchor = true;
-                                replies-view.user-scrolling = false;
-                                replies-view.following-tail = false;
-                                root.load-more-replies();
-                            }
-                        }
-                    }
-
-                    for item in root.replies: MessageItem {
+                for item[idx] in root.replies: reply-row := VerticalLayout {
+                    width: replies-view.width;
+                    height: self.preferred-height;
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    padding-top: idx == 0 ? Spacing.sm : Spacing.none;
+                    padding-bottom: idx == root.replies.length - 1 ? Spacing.sm : Spacing.xxs;
+                    MessageItem {
                         width: 100%;
                         message-id: item.message-id;
                         sender-id: item.sender-id;
