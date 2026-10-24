@@ -102,11 +102,33 @@ impl BleRuntime {
         } else {
             NoisePayloadType::GroupKeyUpdate
         };
-        self.send_private_control(
-            peer,
-            &chatter_mesh::packet::encode_noise_payload(kind, bytes),
-        )
-        .await;
+        let payload = chatter_mesh::packet::encode_noise_payload(kind, bytes);
+        let sealed = self
+            .state
+            .with(|state| state.sessions.encrypt(peer, &payload));
+        let Ok(ciphertext) = sealed else {
+            let now = now_millis();
+            let due = self.state.with(|state| {
+                state
+                    .links
+                    .links_to(peer)
+                    .iter()
+                    .any(|link| state.links.is_writable(link))
+                    && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
+                        >= DM_HANDSHAKE_RETRY_MS
+            });
+            if due {
+                self.start_handshake(peer).await;
+            }
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::NoiseEncrypted,
+            Some(peer),
+            ciphertext,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        self.transmit(&packet, Some(peer), None).await;
     }
 
     pub(super) async fn broadcast_private_channel(&mut self, id: &str, bytes: Vec<u8>) {

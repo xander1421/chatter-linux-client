@@ -45,6 +45,14 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_private_channel_nearby_peers(
+        &self,
+        id: &str,
+    ) -> Result<Vec<(crate::services::mesh::MeshPeer, bool)>, crate::services::mesh::MeshError> {
+        self.mesh().private_channel_nearby_peers(id)
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_peer_for_sender(
         &self,
         sender: &crate::domain::ids::UserId,

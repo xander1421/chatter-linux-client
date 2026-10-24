@@ -130,14 +130,20 @@ impl MeshService {
         Ok(bytes)
     }
 
-    /// Add a live Noise peer with bitchat's native 0x06 group invitation.
+    /// Queue bitchat's native 0x06 group invitation for a verified nearby peer.
     pub fn invite_private_channel_direct(&self, id: &str, peer: &PeerId) -> Result<(), MeshError> {
-        if self.events.peer_blocked(peer) || !self.state.with(|s| s.sessions.has_session(peer)) {
+        if self.events.peer_blocked(peer) {
             return Err(self.needs_session(peer));
         }
         let (static_key, signing_key, nickname) = self.state.with(|s| {
             (
-                s.sessions.remote_static(peer),
+                s.sessions.remote_static(peer).or_else(|| {
+                    s.peers
+                        .info(peer)
+                        .filter(|p| p.verified_nickname)
+                        .and_then(|p| p.noise_public_key.as_deref())
+                        .and_then(|key| <[u8; 32]>::try_from(key).ok())
+                }),
                 s.peers
                     .info(peer)
                     .and_then(|p| p.signing_public_key.clone()),
@@ -214,6 +220,7 @@ impl MeshService {
 
     pub fn pending_private_invitations(&self) -> Vec<(String, String, String)> {
         let now = now_secs();
+        let nearby = self.state.peers();
         self.state.with(|s| {
             s.pending_group_invites
                 .retain(|_, p| now.saturating_sub(p.received_at) < DIRECT_INVITE_LIFETIME_SECS);
@@ -228,7 +235,11 @@ impl MeshService {
                     (
                         p.state.id.clone(),
                         p.state.name.clone(),
-                        p.state.members[0].nickname.clone(),
+                        nearby
+                            .iter()
+                            .find(|peer| peer.peer.as_str() == p.state.creator)
+                            .map(|peer| peer.nickname.clone())
+                            .unwrap_or_else(|| p.state.members[0].nickname.clone()),
                     )
                 })
                 .collect()
@@ -242,6 +253,10 @@ impl MeshService {
         };
         if !join {
             let state = &pending.state;
+            self.state.with(|s| {
+                s.declined_group_invites
+                    .insert(id.to_owned(), (state.epoch, now_secs()));
+            });
             let creator = PeerId::from_str(&state.creator);
             if now_secs().saturating_sub(pending.received_at) < DIRECT_INVITE_LIFETIME_SECS
                 && state.verify()
@@ -461,6 +476,29 @@ impl MeshService {
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
         Ok(state.members.len())
+    }
+
+    /// Nearby peers and their membership in the selected private group.
+    pub fn private_channel_nearby_peers(
+        &self,
+        id: &str,
+    ) -> Result<Vec<(MeshPeer, bool)>, MeshError> {
+        let channel = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        Ok(self
+            .nearby_peers()
+            .into_iter()
+            .map(|peer| {
+                let member = channel
+                    .members
+                    .iter()
+                    .any(|member| member.peer == peer.peer.as_str())
+                    && !channel.unanswered_direct_invites.contains_key(peer.peer.as_str());
+                (peer, member)
+            })
+            .collect())
     }
 
     pub fn private_channel_is_creator(&self, id: &str) -> Result<bool, MeshError> {

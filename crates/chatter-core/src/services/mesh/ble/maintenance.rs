@@ -7,6 +7,9 @@ impl BleRuntime {
         let now_ms = now_millis();
         let now_s = now_secs();
         let expired = self.state.with(|state| {
+            state.declined_group_invites.retain(|_, (_, at)| {
+                now_s.saturating_sub(*at) < super::super::DIRECT_INVITE_LIFETIME_SECS
+            });
             let expired: Vec<_> = state
                 .pending_group_invites
                 .iter()
@@ -89,7 +92,8 @@ impl BleRuntime {
                             {
                                 continue;
                             }
-                            self.send_group_state(&PeerId::from_str(peer), &bytes, false)
+                            let invite = channel.unanswered_direct_invites.contains_key(peer);
+                            self.send_group_state(&PeerId::from_str(peer), &bytes, invite)
                                 .await;
                         }
                     }
