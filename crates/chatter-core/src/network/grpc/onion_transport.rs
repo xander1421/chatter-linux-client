@@ -35,6 +35,12 @@ pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const HEDGE_DELAY: Duration = Duration::from_secs(8);
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(210);
 static ACTIVE_DIALS: AtomicUsize = AtomicUsize::new(0);
+static BOOTSTRAP_PERCENT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+pub fn bootstrap_percent() -> Option<u8> {
+    let value = BOOTSTRAP_PERCENT.load(Ordering::Acquire);
+    (value <= 100).then_some(value as u8)
+}
 
 /// Used only by the opt-in diagnostic layer; it never changes Tor behavior.
 pub fn stage_trace_active() -> bool {
@@ -343,7 +349,25 @@ pub(crate) async fn shared_bootstrap(
                 // TLS silently fails ("no CryptoProvider is installed").
                 // Idempotent — Err means another init already installed one.
                 let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-                TorClient::create_bootstrapped(config).await
+                let client = TorClient::builder()
+                    .config(config)
+                    .create_unbootstrapped_async()
+                    .await?;
+                BOOTSTRAP_PERCENT.store(0, Ordering::Release);
+                let progress_client = client.clone();
+                let progress = tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_secs(2));
+                    loop {
+                        interval.tick().await;
+                        let percent = (progress_client.bootstrap_status().as_frac() * 100.0)
+                            .round() as usize;
+                        BOOTSTRAP_PERCENT.store(percent.min(100), Ordering::Release);
+                    }
+                });
+                let result = client.bootstrap().await;
+                progress.abort();
+                BOOTSTRAP_PERCENT.store(if result.is_ok() { 100 } else { 0 }, Ordering::Release);
+                result.map(|()| client)
             });
             let result = await_tor_task(jh, BOOTSTRAP_TIMEOUT, "bootstrap").await;
             tracing::info!(

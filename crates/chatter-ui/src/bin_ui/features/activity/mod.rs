@@ -7,6 +7,19 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::{ActivityGlobal, ActivityItemData, MainWindow};
 
+fn refresh_status(window: &MainWindow, client: &ChatterClient) {
+    let status = client.activity_status();
+    let global = window.global::<ActivityGlobal>();
+    global.set_push_status(status.push.into());
+    global.set_last_connected(status.last_connected
+        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "Never".into()).into());
+    global.set_server_host(status.server_host.into());
+    global.set_tor_bootstrap(status.tor_bootstrap_percent
+        .map(|percent| format!("{percent}%"))
+        .unwrap_or_default().into());
+}
+
 fn refresh(window: &MainWindow, client: &ChatterClient) {
     let rows = client.activity_items().into_iter().map(|item| ActivityItemData {
         id: item.id.into(),
@@ -27,6 +40,21 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let mut auth = client.subscribe_auth_snapshots();
     client.start_activity_listener();
     refresh(window, client);
+    refresh_status(window, client);
+
+    let weak = window.as_weak();
+    let client_for_status = client.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            let weak = weak.clone();
+            let client = client_for_status.clone();
+            if slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() { refresh_status(&window, &client); }
+            }).is_err() { break; }
+        }
+    });
 
     let weak = window.as_weak();
     let client_for_updates = client.clone();

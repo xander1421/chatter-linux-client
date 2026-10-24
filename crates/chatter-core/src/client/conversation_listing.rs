@@ -59,6 +59,22 @@ impl ChatterClient {
             .total
     }
 
+    /// Desktop tray badge across the separate Chats and Mesh surfaces.
+    pub fn desktop_tray_unread_count(&self) -> u32 {
+        let count = self.unread_conversation_count();
+        #[cfg(feature = "mesh")]
+        {
+            count.saturating_add(
+                self.mesh_sidebar_rows().unwrap_or_default().iter()
+                    .filter(|row| row.unread_count > 0).count() as u32,
+            )
+        }
+        #[cfg(not(feature = "mesh"))]
+        {
+            count
+        }
+    }
+
     /// Absolute unread values for one sidebar row and the Chats total, from
     /// one read of the messages table. The UI sets these; it never adds to
     /// its own copy (the live `+1` and the rebuild counted differently).

@@ -134,6 +134,7 @@ impl From<crate::storage::mesh_binding_store::PeerBinding> for MeshBindingStatus
 
 mod notification;
 mod activity;
+pub use activity::ActivityStatus;
 mod picker_history;
 mod pin;
 mod profile;

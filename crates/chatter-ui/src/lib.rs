@@ -1012,26 +1012,21 @@ pub async fn app_init() -> Result<AppState, String> {
 
                 // Forward unread count changes to tray badge
                 let tray_for_unread = tray_controller.clone();
-                let weak_for_unread = window.as_weak();
-                // Poll total-unread-count periodically (Slint properties can't be
-                // observed directly from Rust; a 1-second poll is cheap and sufficient).
-                let last_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+                let client_for_unread = ui_ctx.clone();
+                // The tray counts unread conversations across Chats and Mesh.
+                let last_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
                 tokio::spawn(async move {
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
                     loop {
                         interval.tick().await;
-                        let weak = weak_for_unread.clone();
+                        let count = client_for_unread.desktop_tray_unread_count();
                         let tray = tray_for_unread.clone();
                         let last = last_count.clone();
                         let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                let count =
-                                    w.global::<crate::SidebarPane>().get_total_unread_count();
-                                let prev = last.load(std::sync::atomic::Ordering::Relaxed);
-                                if count != prev {
-                                    last.store(count, std::sync::atomic::Ordering::Relaxed);
-                                    tray.set_unread_count(count.max(0) as u32);
-                                }
+                            let prev = last.load(std::sync::atomic::Ordering::Relaxed);
+                            if count != prev {
+                                last.store(count, std::sync::atomic::Ordering::Relaxed);
+                                tray.set_unread_count(count);
                             }
                         });
                     }
