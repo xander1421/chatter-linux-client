@@ -47,6 +47,10 @@ impl UnifiedMessageRepository {
             return Ok(latest);
         }
         let conn = self.db.read_connection()?;
+        let mut message_stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages m WHERE m.id = ?1",
+            message_columns("m"),
+        ))?;
         for chunk in ids.chunks(400) {
             let placeholders = vec!["?"; chunk.len()].join(", ");
             let sql = format!(
@@ -64,17 +68,33 @@ impl UnifiedMessageRepository {
                  FROM ranked r JOIN messages candidate ON candidate.id = r.id \
                  WHERE (r.thread_id IS NULL AND r.rank <= 256 \
                    AND (r.conversation_type IN ('anon_dm', 'anon_group') \
-                     OR (json_valid(candidate.content_json) \
-                       AND json_type(candidate.content_json, '$.System.DisappearingTimerChanged') IS NULL))) \
+                     OR (CASE WHEN json_valid(candidate.content_json) \
+                       THEN json_type(candidate.content_json, '$.System.DisappearingTimerChanged') IS NULL \
+                       ELSE 0 END))) \
                    OR (r.thread_id IS NOT NULL AND r.rank = 1)) \
-                 SELECT {} FROM candidates c JOIN messages m ON m.id = c.id \
-                 WHERE c.preview_rank = 1",
-                message_columns("m"),
+                 SELECT c.id, c.conversation_id, c.conversation_type, \
+                 (m.thread_id IS NOT NULL) FROM candidates c JOIN messages m ON m.id = c.id \
+                 ORDER BY c.conversation_id, c.conversation_type, \
+                 (m.thread_id IS NOT NULL), c.preview_rank",
             );
             let mut stmt = conn.prepare(&sql)?;
             let params = chunk.iter().map(ToString::to_string).collect::<Vec<_>>();
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
-            for message in collect_messages(&mut rows)? {
+            let mut resolved = std::collections::HashSet::new();
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let conversation_id: String = row.get(1)?;
+                let kind = ConversationType::from_str_value(&row.get::<_, String>(2)?)?;
+                let is_thread: bool = row.get(3)?;
+                let candidate_key = (conversation_id, kind, is_thread);
+                if resolved.contains(&candidate_key) {
+                    continue;
+                }
+                let mut full_rows = message_stmt.query([id])?;
+                let Some(message) = collect_messages(&mut full_rows)?.into_iter().next() else {
+                    continue;
+                };
+                resolved.insert(candidate_key);
                 let key = (message.conversation_id.to_string(), message.conversation_type.clone());
                 let replace = latest.get(&key).is_none_or(|old: &Message| message.sent_at > old.sent_at);
                 if replace {
