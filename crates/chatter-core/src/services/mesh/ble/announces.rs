@@ -4,6 +4,11 @@ use super::*;
 /// direct announce from that peer restarts it.
 const KNOWN_PEER_HANDSHAKE_STALL_MS: u64 = 10_000;
 
+pub(super) fn known_peer_retry_delay_ms(attempts: u8, jitter_ms: u64) -> u64 {
+    let exponent = u32::from(attempts.saturating_sub(1).min(5));
+    KNOWN_PEER_HANDSHAKE_STALL_MS * (1u64 << exponent) + jitter_ms
+}
+
 impl BleRuntime {
     /// Returns whether the announce was accepted, which is also the answer to
     /// "may the gossip store keep this packet".
@@ -295,17 +300,29 @@ impl BleRuntime {
                 // A handshake whose reply was lost on a link that was still
                 // coming up never completes and was never retried; restart it
                 // once it is older than the stall window.
-                let stalled = state.sessions.is_handshaking(claimed)
-                    && now_millis().saturating_sub(
-                        *state.dm_handshake_at_ms.get(claimed).unwrap_or(&0),
-                    ) >= KNOWN_PEER_HANDSHAKE_STALL_MS;
+                let last_open = state.dm_handshake_at_ms.get(claimed).copied();
+                let attempts = state.known_peer_reopen_attempts.get(claimed).copied().unwrap_or(0);
+                let jitter_ms = claimed
+                    .to_routing_bytes()
+                    .map(|bytes| u64::from_be_bytes(bytes) % 1_000)
+                    .unwrap_or(0);
+                let due = last_open.is_none_or(|last| {
+                    now_ms.saturating_sub(last) >= known_peer_retry_delay_ms(attempts, jitter_ms)
+                });
                 state.peers.pinned(claimed).is_some()
                     && !state.sessions.has_session(claimed)
-                    && (!state.sessions.is_handshaking(claimed) || stalled)
+                    && due
             })
             && self.state.can_write_to(claimed)
         {
-            tracing::info!(target: "mesh::ble", peer = %claimed, "re-opening Noise with a known peer");
+            let first_attempt = self.state.with(|state| {
+                let attempts = state.known_peer_reopen_attempts.entry(claimed.clone()).or_default();
+                *attempts = attempts.saturating_add(1);
+                *attempts == 1
+            });
+            if first_attempt {
+                tracing::info!(target: "mesh::ble", peer = %claimed, "re-opening Noise with a known peer");
+            }
             self.start_handshake(claimed).await;
         }
         if is_new || newly_bound {
@@ -333,5 +350,18 @@ impl BleRuntime {
         }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn known_peer_retries_back_off_and_cap_after_first_fast_retry() {
+        assert_eq!(known_peer_retry_delay_ms(1, 0), 10_000);
+        assert_eq!(known_peer_retry_delay_ms(2, 0), 20_000);
+        assert_eq!(known_peer_retry_delay_ms(3, 250), 40_250);
+        assert_eq!(known_peer_retry_delay_ms(8, 999), 320_999);
     }
 }

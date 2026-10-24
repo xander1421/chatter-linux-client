@@ -105,11 +105,29 @@ impl BleRuntime {
                     .links_to(peer)
                     .iter()
                     .any(|link| state.links.is_writable(link))
-                && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
-                    >= DM_HANDSHAKE_RETRY_MS
+                && {
+                    let attempts = state.known_peer_reopen_attempts.get(peer).copied().unwrap_or(0);
+                    let delay = if state.peers.pinned(peer).is_some() && attempts > 0 {
+                        super::announces::known_peer_retry_delay_ms(attempts, 0)
+                    } else {
+                        DM_HANDSHAKE_RETRY_MS
+                    };
+                    now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0)) >= delay
+                }
         });
         if due {
-            tracing::info!(target: "mesh::ble", %peer, "retrying DM Noise handshake");
+            let first_attempt = self.state.with(|state| {
+                if state.peers.pinned(peer).is_some() {
+                    let attempts = state.known_peer_reopen_attempts.entry(peer.clone()).or_default();
+                    *attempts = attempts.saturating_add(1);
+                    *attempts == 1
+                } else {
+                    true
+                }
+            });
+            if first_attempt {
+                tracing::info!(target: "mesh::ble", %peer, "retrying DM Noise handshake");
+            }
             self.start_handshake(peer).await;
         }
     }

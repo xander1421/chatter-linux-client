@@ -50,6 +50,7 @@ impl BleRuntime {
         if step.established.is_some() {
             self.state.with(|state| {
                 state.dm_handshake_at_ms.remove(claimed);
+                state.known_peer_reopen_attempts.remove(claimed);
                 state.chatter_hello.forget_live(claimed);
                 state.pending_bindings.remove(claimed);
             });

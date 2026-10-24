@@ -271,7 +271,17 @@ impl BleRuntime {
             self.degraded(format!("gossip archive could not be persisted: {error}"));
         }
 
-        let _ = self.router.send(RouterCommand::Maintenance);
+        let router_due = self.state.with(|state| {
+            if state.last_router_maintenance_secs == Some(now_s) {
+                false
+            } else {
+                state.last_router_maintenance_secs = Some(now_s);
+                true
+            }
+        });
+        if router_due {
+            let _ = self.router.send(RouterCommand::Maintenance);
+        }
     }
 
     /// Drop partial inbound frames that have sat past the stall window.
@@ -443,16 +453,7 @@ impl BleRuntime {
             links
                 .into_iter()
                 .filter_map(|link| {
-                    let mut writes = state.writes.take_all(&link);
-                    if writes.is_empty() {
-                        return None;
-                    }
-                    let head = writes.remove(0);
-                    if !writes.is_empty() {
-                        // The tail goes back in order. A reordered fragment
-                        // stream is worse than a delayed one.
-                        state.writes.prepend(&link, writes);
-                    }
+                    let head = state.writes.pop_front(&link)?;
                     Some((link, head))
                 })
                 .collect::<Vec<_>>()

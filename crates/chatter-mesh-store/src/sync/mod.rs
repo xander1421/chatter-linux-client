@@ -292,6 +292,7 @@ pub struct GossipSyncManager {
     archive: Option<GossipMessageArchive>,
     archive_dirty: bool,
     last_stale_peer_cleanup_secs: Option<u64>,
+    last_expiry_cleanup_secs: Option<u64>,
 }
 
 impl core::fmt::Debug for GossipSyncManager {
@@ -341,6 +342,7 @@ impl GossipSyncManager {
             archive,
             archive_dirty: false,
             last_stale_peer_cleanup_secs: None,
+            last_expiry_cleanup_secs: None,
         };
         manager.restore_archived_messages(now_unix_secs);
         manager
@@ -391,9 +393,12 @@ impl GossipSyncManager {
                 if !is_broadcast_recipient(packet) {
                     return;
                 }
+                let id = packet.packet_id();
+                if self.messages.packets.get(&id) == Some(packet) {
+                    return;
+                }
                 let capacity = self.config.seen_capacity.max(1);
-                self.messages
-                    .insert(packet.packet_id(), packet.clone(), capacity);
+                self.messages.insert(id, packet.clone(), capacity);
                 self.archive_dirty = true;
             }
             MessageType::Fragment => {
