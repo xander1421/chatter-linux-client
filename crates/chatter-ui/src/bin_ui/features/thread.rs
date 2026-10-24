@@ -590,6 +590,15 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                         return;
                     }
                     let current = w.global::<crate::ChatPane>().get_thread_replies();
+                    // Another load may have prepended this cursor's page while
+                    // this request was in flight. Do not insert it twice.
+                    if current
+                        .row_data(0)
+                        .and_then(|row| row.message_id.parse::<MessageId>().ok())
+                        != Some(oldest)
+                    {
+                        return;
+                    }
                     let rows: Vec<MessageItemData> = display
                         .iter()
                         .map(|d| d.to_slint_with_user(&current_user_id))
@@ -777,6 +786,20 @@ pub fn load_thread_data(
     ui_ctx: Arc<ChatterClient>,
     root_message_id: MessageId,
 ) {
+    let visible_replies: std::collections::HashSet<String> = window
+        .upgrade()
+        .filter(|w| {
+            w.global::<crate::ChatPane>().get_thread_root_message_id()
+                == root_message_id.to_string().as_str()
+        })
+        .map(|w| {
+            w.global::<crate::ChatPane>()
+                .get_thread_replies()
+                .iter()
+                .map(|row| row.message_id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
     let owner = HistoryOwner::thread(&ui_ctx, root_message_id, true);
     tokio::spawn(async move {
         if !owner.is_current() {
@@ -855,14 +878,34 @@ pub fn load_thread_data(
                         .set_thread_root_sender_name(sender_name.into());
                     w.global::<crate::ChatPane>()
                         .set_thread_root_content_preview(content_preview.into());
-                    w.global::<crate::ChatPane>()
-                        .set_thread_reply_count(total_replies as i32);
                     w.global::<crate::ChatPane>().set_thread_loading(false);
                     let slint_replies: Vec<_> = display
                         .iter()
                         .map(|d| d.to_slint_with_user(&current_user_id))
                         .collect();
                     let model = VecModel::from(slint_replies);
+                    let mut count = total_replies as i32;
+                    if !switching {
+                        let pane = w.global::<crate::ChatPane>();
+                        let mut preserved_live = false;
+                        for row in pane.get_thread_replies().iter() {
+                            if !visible_replies.contains(row.message_id.as_str())
+                                && !(0..model.row_count()).any(|index| {
+                                    model.row_data(index).is_some_and(|loaded| {
+                                        loaded.message_id == row.message_id
+                                    })
+                                })
+                            {
+                                model.push(row);
+                                preserved_live = true;
+                            }
+                        }
+                        if preserved_live {
+                            count = count.max(pane.get_thread_reply_count());
+                        }
+                    }
+                    count = count.max(model.row_count() as i32);
+                    w.global::<crate::ChatPane>().set_thread_reply_count(count);
                     recompute_channel_continuations(&model);
                     w.global::<crate::ChatPane>()
                         .set_thread_replies(ModelRc::new(model));
