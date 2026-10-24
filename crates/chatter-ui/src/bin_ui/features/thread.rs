@@ -125,6 +125,7 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let text = pane.get_thread_composer_text().to_string();
             if let Some(at) = text.rfind('@') {
                 pane.set_thread_composer_text(format!("{}{} ", &text[..at], display).into());
+                pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
             }
             pane.set_thread_mention_visible(false);
             pane.set_thread_mention_query("".into());

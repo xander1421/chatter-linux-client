@@ -59,6 +59,9 @@ export global ChatPane {
     in-out property <int> unread-count: 0;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
     in-out property <string> composer-text: "";
+    // Bumped by Rust after it rewrites composer-text (mention pick) so the
+    // composer puts the caret after the inserted text.
+    in-out property <int> composer-caret-end-seq: 0;
     // The unsent draft, held while the composer is borrowed to edit a message.
     in-out property <string> composer-stash: "";
     in-out property <bool> composer-stash-held: false;
@@ -271,6 +274,7 @@ export global ChatPane {
     in property <bool> thread-loading: false;
     in property <int> thread-tail-serial: 0;
     in-out property <string> thread-composer-text: "";
+    in-out property <int> thread-composer-caret-end-seq: 0;
     in property <[PendingAttachmentData]> thread-pending-attachments: [];
     in-out property <bool> thread-composer-is-replying: false;
     in-out property <string> thread-reply-to-sender: "";

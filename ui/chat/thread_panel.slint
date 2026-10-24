@@ -90,6 +90,7 @@ export component ThreadPanel inherits Rectangle {
     in property <image> reply-thumbnail;
     in property <int> attachment-prepare-serial: 0;
     in property <int> attachment-restore-serial: 0;
+    in property <int> composer-caret-end-seq: 0;
     private property <bool> emoji-open: false;
 
     // Callbacks
@@ -617,6 +618,7 @@ export component ThreadPanel inherits Rectangle {
             picker-open: root.emoji-open;
             attachment-prepare-serial: root.attachment-prepare-serial;
             attachment-restore-serial: root.attachment-restore-serial;
+            caret-end-seq: root.composer-caret-end-seq;
             text <=> root.composer-text;
             placeholder: "Reply in thread...";
             pending-attachments: root.pending-attachments;

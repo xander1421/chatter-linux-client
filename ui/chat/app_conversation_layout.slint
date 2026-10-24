@@ -57,6 +57,7 @@ export component AppConversationLayout inherits Rectangle {
     in property <image> composer-reply-thumbnail;
     in property <string> composer-reply-to-sender-name;
     in-out property <string> composer-text;
+    in property <int> composer-caret-end-seq;
     in-out property <length> context-menu-anchor-bottom;
     in-out property <length> context-menu-anchor-left;
     in-out property <length> context-menu-anchor-right;
@@ -255,6 +256,7 @@ export component AppConversationLayout inherits Rectangle {
     attachment-prepare-serial: root.attachment-prepare-serial;
     attachment-restore-serial: root.attachment-restore-serial;
     composer-text <=> root.composer-text;
+    composer-caret-end-seq: root.composer-caret-end-seq;
     composer-placeholder: root.composer-placeholder;
     composer-notice: root.composer-notice;
     is-blocked: root.is-blocked;

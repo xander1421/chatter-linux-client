@@ -180,6 +180,7 @@ export component ChatLayout inherits Rectangle {
     // Composer properties
     in property <int> attachment-prepare-serial;
     in property <int> attachment-restore-serial;
+    in property <int> composer-caret-end-seq;
     in-out property <string> composer-text: "";
     out property <bool> composer-composing: composer.composing;
     out property <string> composer-composed-text: composer.composed-text;
@@ -659,6 +660,7 @@ export component ChatLayout inherits Rectangle {
             backdrop-paused: message-list.scrolling;
             attachment-prepare-serial: root.attachment-prepare-serial;
             attachment-restore-serial: root.attachment-restore-serial;
+            caret-end-seq: root.composer-caret-end-seq;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
             // Composer owns attachment-row geometry; keep the host reservation

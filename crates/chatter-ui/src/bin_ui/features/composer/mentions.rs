@@ -87,8 +87,9 @@ pub(crate) fn wire_mention_selected(window: &MainWindow) {
                         .to_string();
                     if let Some(at_pos) = current_text.rfind('@') {
                         let new_text = format!("{}{} ", &current_text[..at_pos], display_str);
-                        w.global::<crate::ChatPane>()
-                            .set_composer_text(new_text.into());
+                        let pane = w.global::<crate::ChatPane>();
+                        pane.set_composer_text(new_text.into());
+                        pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
                     }
                     w.global::<crate::ChatPane>()
                         .set_mention_autocomplete_visible(false);
