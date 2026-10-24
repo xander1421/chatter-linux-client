@@ -64,7 +64,7 @@ export component ChatHeaderMenu inherits Rectangle {
 
         // Keep the right edge at the ⋯ action while the card grows out of it.
         x: root.card-x + root.card-width - self.width;
-        y: root.card-y - 24px * (1 - root.menu-progress);
+        y: max(0px, root.card-y - 24px * (1 - root.menu-progress));
         width: 44px + (root.card-width - 44px) * root.menu-progress;
         height: 44px + (root.card-height - 44px) * root.menu-progress;
         border-radius: Spacing.radius-xl;

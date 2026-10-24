@@ -950,7 +950,8 @@ export component UnifiedSearch inherits Rectangle {
         GlassSurface {
             material-level: 3; elevation: 4;
             x: (parent.width - self.width) / 2;
-            y: parent.height - self.height - Spacing.md + (1 - date-layer.reveal) * 48px;
+            y: max(0px, min(parent.height - self.height - Spacing.md
+                + (1 - date-layer.reveal) * 48px, parent.height - self.height));
             width: min(420px, parent.width - 24px);
             height: min(548px, parent.height - 24px);
             border-radius: Spacing.radius-xl;
@@ -1115,7 +1116,8 @@ export component UnifiedSearch inherits Rectangle {
         GlassSurface {
             material-level: 3; elevation: 4;
             x: (parent.width - self.width) / 2;
-            y: parent.height - self.height - Spacing.md + (1 - picker-layer.reveal) * 48px;
+            y: max(0px, min(parent.height - self.height - Spacing.md
+                + (1 - picker-layer.reveal) * 48px, parent.height - self.height));
             width: min(420px, parent.width - 24px);
             height: min(560px, parent.height - 24px);
             border-radius: Spacing.radius-xl;

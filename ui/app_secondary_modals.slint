@@ -287,17 +287,14 @@ export component AppSecondaryModals inherits Rectangle {
         // "panel width minus card minus inset" came out at -8px and the
         // menu opened clipped off the left of every tablet and desktop.
         card-x: root.compact-layout
-            ? root.width - self.card-width - Spacing.xl
+            ? max(Spacing.sm, root.width - self.card-width - Spacing.xl)
             : max(Spacing.sm, min(root.width - self.card-width - Spacing.sm,
                 Spacing.sidebar-width - self.card-width - Spacing.sm));
-        // This layer is in window coordinates; the sidebar header it drops
-        // from starts below the status bar (the content layer's
-        // safe-area-top), so the inset is added here or the card covers
-        // the row that opened it.
-        card-y: root.compact-layout
+        // The parent already starts below the status bar, like the sidebar.
+        card-y: max(Spacing.sm, min(root.compact-layout
             ? root.fab-y - self.card-height - Spacing.sm
-            : root.safe-area-top + Spacing.xs
-                + (root.is-mobile-platform ? Spacing.header-height-touch : Spacing.header-height);
+            : Spacing.xs + (root.is-mobile-platform ? Spacing.header-height-touch : Spacing.header-height),
+            root.height - self.card-height - Spacing.sm));
         close => { ModalHostState.nav-close("create-menu"); }
         new-chat => {
             ModalHostState.nav-close("create-menu");
@@ -330,8 +327,10 @@ export component AppSecondaryModals inherits Rectangle {
         show-disappearing: ChatPane.conversation-kind == ConversationKind.anon-dm;
         show-pinned: true;
         pinned => { ModalHostState.nav-close("chat-menu"); ChatPane.pinned-show-clicked(); }
-        card-x: root.width - self.card-width - Spacing.sm;
-        card-y: (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs;
+        card-x: max(Spacing.sm, root.width - self.card-width - Spacing.sm);
+        card-y: max(Spacing.sm, min(
+            (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs,
+            root.height - self.card-height - Spacing.sm));
         close => { ModalHostState.nav-close("chat-menu"); }
         video-call => {
             ModalHostState.nav-close("chat-menu");

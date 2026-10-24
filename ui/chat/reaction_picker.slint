@@ -36,6 +36,7 @@ export component ReactionPicker inherits Rectangle {
     // Positioning
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    in property <length> bottom-limit: root.height;
 
     // Callbacks
     callback reaction-selected(string, string, string, string); // (sender_id, timestamp_ns, message_id, emoji)
@@ -78,9 +79,10 @@ export component ReactionPicker inherits Rectangle {
         elevation: 4;
 
         x: max(Spacing.sm, min(root.position-x, parent.width - self.width - Spacing.sm));
-        y: max(Spacing.sm, min(root.position-y, parent.height - self.height - Spacing.sm)) + self.entrance-offset;
+        y: max(Spacing.sm, min(root.position-y + self.entrance-offset,
+            root.bottom-limit - self.height - Spacing.sm));
         width: min(320px, parent.width - Spacing.xxl);
-        height: max(0px, min(400px, parent.height - Spacing.xxxl));
+        height: max(0px, min(400px, root.bottom-limit - Spacing.xxxl));
         border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks when clicking picker
