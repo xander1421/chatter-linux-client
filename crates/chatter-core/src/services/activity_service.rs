@@ -81,7 +81,7 @@ impl ActivityService {
     }
 
     pub fn list(&self, owner: UserId, show_preview: bool) -> Result<Vec<ActivityItem>, StorageError> {
-        Self::prune(&self.db.connection()?, owner)?;
+        Self::prune(&*self.db.connection()?, owner)?;
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id,kind,title,preview,created_at_ms,unread,conversation_type FROM activity_items
@@ -108,11 +108,11 @@ impl ActivityService {
                 unread: row.get::<_, i64>(5)? != 0,
             })
         })?;
-        rows.collect()
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn unread_count(&self, owner: UserId) -> Result<u32, StorageError> {
-        Self::prune(&self.db.connection()?, owner)?;
+        Self::prune(&*self.db.connection()?, owner)?;
         let conn = self.db.read_connection()?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM activity_items WHERE owner_id=?1 AND unread=1",
