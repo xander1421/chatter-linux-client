@@ -24,9 +24,6 @@ export component ToggleRow inherits Rectangle {
     in property <length> label-spacing: Spacing.none;
 
     callback toggled(bool);
-    // Keep wrapped labels from being compressed below the height the row asks for.
-    min-height: max(Spacing.touch-target-min, row-layout.preferred-height);
-    preferred-height: max(Spacing.touch-target-min, row-layout.preferred-height);
     border-radius: Spacing.radius-md;
     background: row-touch.pressed ? Materials.pressed
         : row-touch.has-hover && !root.disabled ? Materials.hover : transparent;
@@ -41,7 +38,13 @@ export component ToggleRow inherits Rectangle {
         }
     }
 
+    // No height bindings on the row itself: an explicit preferred-height on
+    // this Rectangle was evaluated without the wrapped labels' final width,
+    // so a two-line description under-reserved a line and the next control
+    // overlapped it (Channel Settings → Access on a 360dp phone). The
+    // layout's own constraints carry height-for-width up to the parent.
     row-layout := HorizontalLayout {
+        min-height: Spacing.touch-target-min;
         y: row-touch.pressed ? Spacing.xxs : 0px;
         animate y { duration: Materials.motion-quick; easing: Materials.spring; }
         padding: root.row-padding;
