@@ -124,6 +124,7 @@ mod v123_attachment_cleanup;
 mod v124_activity_center;
 mod v125_contact_names;
 mod v126_activity_outage_resolution;
+mod v127_shared_content_categories;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -475,4 +476,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v124_activity_center::V124ActivityCenter)
         .register(v125_contact_names::V125ContactNames)
         .register(v126_activity_outage_resolution::V126ActivityOutageResolution)
+        .register(v127_shared_content_categories::V127SharedContentCategories)
 }

@@ -240,6 +240,7 @@ impl SharedContentRepository {
         conversation_id: &str,
         sender: Option<&crate::domain::ids::UserId>,
     ) -> Result<Vec<(String, u32)>, StorageError> {
+        resolve_unsorted(&*self.db.connection()?, conversation_type, conversation_id)?;
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT s.category, COUNT(*) FROM shared_content s
@@ -339,6 +340,32 @@ pub(crate) fn resolve_attachment(
             meta.size as i64,
         ],
     )?;
+    Ok(())
+}
+
+/// Sort this conversation's `'unsorted'` attachment rows whose metadata has
+/// landed — rows parked before their attachment arrived and rows moved out of
+/// the retired media/music tabs by migration v127. A row whose attachment is
+/// still missing stays unsorted.
+fn resolve_unsorted(
+    conn: &Connection,
+    conversation_type: &ConversationType,
+    conversation_id: &str,
+) -> Result<(), StorageError> {
+    let ids: Vec<String> = conn
+        .prepare(
+            "SELECT DISTINCT attachment_id FROM shared_content
+             WHERE conversation_type = ?1 AND conversation_id = ?2
+               AND category = 'unsorted' AND attachment_id != ''",
+        )?
+        .query_map(params![conversation_type.as_str(), conversation_id], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        let Ok(id) = id.parse::<AttachmentId>() else { continue };
+        if let Some(meta) = load_metadata(conn, &id)? {
+            resolve_attachment(conn, &id, &meta)?;
+        }
+    }
     Ok(())
 }
 
