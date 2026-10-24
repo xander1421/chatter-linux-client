@@ -2,6 +2,33 @@ use super::*;
 use crate::domain::message::{EncryptedContent, EncryptedMessageType};
 
 #[test]
+fn sidebar_preview_skips_timer_notices_without_losing_thread_activity() {
+    use crate::domain::message::SystemMessage;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open(&dir.path().join("sidebar.db"), "fixture-only").unwrap());
+    db.run_migrations().unwrap();
+    let repo = UnifiedMessageRepository::new(db);
+    let conversation = ChannelId::new();
+    let notice_only = ChannelId::new();
+    let author = UserId::new();
+    let root = Message::new_text(conversation, ConversationType::Channel, Some(author), "root".into(), 100);
+    let mut reply = Message::new_text(conversation, ConversationType::Channel, Some(author), "reply".into(), 200);
+    reply.thread_id = Some(root.id);
+    let mut notice = Message::new_text(conversation, ConversationType::Channel, Some(author), String::new(), 300);
+    notice.content = MessageContent::System(SystemMessage::DisappearingTimerChanged { seconds: 30 });
+    let mut only_notice = Message::new_text(notice_only, ConversationType::Channel, Some(author), String::new(), 400);
+    only_notice.content = notice.content.clone();
+    for message in [&root, &reply, &notice, &only_notice] {
+        repo.insert(message).unwrap();
+    }
+
+    let previews = repo.sidebar_latest_batch(&[conversation, notice_only]).unwrap();
+    assert_eq!(previews.get(&(conversation.to_string(), ConversationType::Channel)).map(|m| m.id), Some(reply.id));
+    assert!(!previews.contains_key(&(notice_only.to_string(), ConversationType::Channel)));
+}
+
+#[test]
 fn corrupt_message_row_does_not_hide_good_rows() {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&dir.path().join("rows.db"), "fixture-only").unwrap());

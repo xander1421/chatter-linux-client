@@ -791,6 +791,14 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Called after anything that can change a row: a message, a peer change, a
 /// join, a leave, a selection.
 pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    refresh_rows_with_rows(window, ui_ctx, core_api::rows(ui_ctx));
+}
+
+fn refresh_rows_with_rows(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    rows: Vec<core_api::MeshRow>,
+) {
     use slint::Model;
 
     let peer_rows = match active() {
@@ -852,7 +860,6 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         );
     }
     let open = active();
-    let rows = core_api::rows(ui_ctx);
     let nearby: Vec<slint::SharedString> = ui_ctx
         .mesh_nearby_channels()
         .into_iter()
@@ -953,6 +960,20 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// Write the mesh rows and their per-section splits for the grouped home list.
 fn set_rows(global: &MeshGlobal, rows: Vec<MeshConversationData>) {
+    use slint::Model;
+
+    let previous = global.get_conversations();
+    if previous.row_count() == rows.len()
+        && previous.iter().zip(&rows).all(|(a, b)| {
+            a.id == b.id && a.kind == b.kind && a.binding_label == b.binding_label
+                && a.title == b.title && a.scope == b.scope && a.timestamp == b.timestamp
+                && a.unread_count == b.unread_count && a.reachable == b.reachable
+                && a.verified == b.verified && a.muted == b.muted && a.blocked == b.blocked
+                && a.is_selected == b.is_selected
+        })
+    {
+        return;
+    }
     let section = |kinds: &[&str]| {
         let rows: Vec<_> = rows
             .iter()
@@ -1098,9 +1119,10 @@ fn spawn_event_pump(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
                     // A burst outran the subscriber. The rows are rebuilt from
                     // core rather than accumulated here, so a resync is enough.
                     tracing::warn!(dropped, "mesh: event receiver lagged");
+                    let rows = core_api::rows(&ui_ctx);
                     let weak = weak.clone();
                     let ui_ctx = ui_ctx.clone();
-                    run_ui!(weak, |w| refresh_rows(&w, &ui_ctx));
+                    run_ui!(weak, |w| refresh_rows_with_rows(&w, &ui_ctx, rows));
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
@@ -1129,6 +1151,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 }
             }
 
+            let rows = core_api::rows(ui_ctx);
             let ui_ctx = ui_ctx.clone();
             crate::run_history_ui!(weak, session, |w| {
                 if is_open
@@ -1138,7 +1161,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 {
                     conversation::append_incoming(&w, &ui_ctx, &message);
                 }
-                refresh_rows(&w, &ui_ctx);
+                refresh_rows_with_rows(&w, &ui_ctx, rows);
             });
         }
         MeshEvent::Delivery {
@@ -1153,27 +1176,31 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         }
         MeshEvent::Peers(_) => {
             // Refresh the count and rows from the same nearby list.
+            let rows = core_api::rows(ui_ctx);
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| {
                 push_status(&w, &ui_ctx);
-                refresh_rows(&w, &ui_ctx);
+                refresh_rows_with_rows(&w, &ui_ctx, rows);
             });
         }
         MeshEvent::Status(status) => {
+            let rows = core_api::rows(ui_ctx);
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| {
                 apply_status(&w, &ui_ctx, status);
-                refresh_rows(&w, &ui_ctx);
+                refresh_rows_with_rows(&w, &ui_ctx, rows);
             });
         }
         MeshEvent::GeohashJoined(_)
         | MeshEvent::GeohashLeft(_)
         | MeshEvent::ChannelObserved(_)
         | MeshEvent::PrivateChannelChanged => {
+            let rows = core_api::rows(ui_ctx);
             let ui_ctx = ui_ctx.clone();
-            run_ui!(weak, |w| refresh_rows(&w, &ui_ctx));
+            run_ui!(weak, |w| refresh_rows_with_rows(&w, &ui_ctx, rows));
         }
         MeshEvent::PrivateChannelClosed(id) => {
+            let rows = core_api::rows(ui_ctx);
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| {
                 if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if *open == id)
@@ -1182,7 +1209,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                     w.global::<MeshGlobal>()
                         .set_notice("The creator removed this device from the group.".into());
                 }
-                refresh_rows(&w, &ui_ctx);
+                refresh_rows_with_rows(&w, &ui_ctx, rows);
             });
         }
         MeshEvent::PrivateChannelInvitation {

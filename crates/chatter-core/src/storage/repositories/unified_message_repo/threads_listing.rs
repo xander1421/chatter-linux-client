@@ -1,8 +1,43 @@
 use super::*;
 
 impl UnifiedMessageRepository {
+    /// Sidebar activity for all mesh conversations in one message-table read.
+    pub fn mesh_sidebar_stats(
+        &self,
+    ) -> Result<HashMap<(String, ConversationType), (Option<DateTime<Utc>>, u32)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "WITH ranked AS (SELECT conversation_id, conversation_type, created_at,
+                    is_read, is_deleted,
+                    ROW_NUMBER() OVER (PARTITION BY conversation_id, conversation_type
+                        ORDER BY is_deleted ASC, sent_at DESC) AS latest_rank
+                FROM messages WHERE conversation_type IN ('mesh', 'mesh_dm'))
+             SELECT conversation_id, conversation_type,
+                    MAX(CASE WHEN latest_rank = 1 AND is_deleted = 0 THEN created_at END),
+                    SUM(CASE WHEN is_read = 0 AND is_deleted = 0 THEN 1 ELSE 0 END)
+             FROM ranked GROUP BY conversation_id, conversation_type",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut stats = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let kind: String = row.get(1)?;
+            let kind = ConversationType::from_str_value(&kind)?;
+            let last: Option<String> = row.get(2)?;
+            let unread: i64 = row.get(3)?;
+            stats.insert(
+                (row.get(0)?, kind),
+                (
+                    last.as_deref().map(parse_datetime),
+                    u32::try_from(unread.max(0)).unwrap_or(u32::MAX),
+                ),
+            );
+        }
+        Ok(stats)
+    }
+
     /// Latest visible activity for many conversations in one reader checkout.
     /// The main-message bound matches the sidebar's eight 32-row pages.
+    /// Rank narrow rows first, then hydrate only the chosen preview per chat.
     pub fn sidebar_latest_batch(
         &self,
         ids: &[ChannelId],
@@ -15,25 +50,31 @@ impl UnifiedMessageRepository {
         for chunk in ids.chunks(400) {
             let placeholders = vec!["?"; chunk.len()].join(", ");
             let sql = format!(
-                "WITH ranked AS (SELECT {}, \
+                "WITH ranked AS (SELECT m.id, m.conversation_id, m.conversation_type, \
+                 m.thread_id, m.sent_at, m.sender_id, \
                  ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.conversation_type, \
                  (m.thread_id IS NOT NULL) ORDER BY m.sent_at DESC, m.sender_id DESC) AS rank \
                  FROM messages m WHERE m.conversation_id IN ({placeholders}) \
                  AND (m.thread_id IS NULL OR m.is_deleted = 0) \
-                 AND (m.conversation_type NOT IN ('anon_dm', 'anon_group') OR m.is_deleted = 0)) \
-                 SELECT {} FROM ranked m WHERE (m.thread_id IS NULL AND m.rank <= 256) \
-                 OR (m.thread_id IS NOT NULL AND m.rank = 1)",
-                message_columns("m"), message_columns("m"),
+                 AND (m.conversation_type NOT IN ('anon_dm', 'anon_group') OR m.is_deleted = 0)), \
+                 candidates AS (SELECT r.id, r.conversation_id, r.conversation_type, r.sent_at, r.sender_id, \
+                 ROW_NUMBER() OVER (PARTITION BY r.conversation_id, r.conversation_type, \
+                 (r.thread_id IS NOT NULL) \
+                 ORDER BY r.sent_at DESC, r.sender_id DESC) AS preview_rank \
+                 FROM ranked r JOIN messages candidate ON candidate.id = r.id \
+                 WHERE (r.thread_id IS NULL AND r.rank <= 256 \
+                   AND (r.conversation_type IN ('anon_dm', 'anon_group') \
+                     OR (json_valid(candidate.content_json) \
+                       AND json_type(candidate.content_json, '$.System.DisappearingTimerChanged') IS NULL))) \
+                   OR (r.thread_id IS NOT NULL AND r.rank = 1)) \
+                 SELECT {} FROM candidates c JOIN messages m ON m.id = c.id \
+                 WHERE c.preview_rank = 1",
+                message_columns("m"),
             );
             let mut stmt = conn.prepare(&sql)?;
             let params = chunk.iter().map(ToString::to_string).collect::<Vec<_>>();
             let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
             for message in collect_messages(&mut rows)? {
-                if !message.conversation_type.is_anon() && message.thread_id.is_none()
-                    && crate::services::disappearing::is_timer_notice(&message)
-                {
-                    continue;
-                }
                 let key = (message.conversation_id.to_string(), message.conversation_type.clone());
                 let replace = latest.get(&key).is_none_or(|old: &Message| message.sent_at > old.sent_at);
                 if replace {

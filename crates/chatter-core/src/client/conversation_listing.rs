@@ -124,9 +124,9 @@ impl ChatterClient {
         for group in self.list_anon_groups().unwrap_or_default() {
             rows.insert((group.id.to_string(), ConversationType::AnonGroup));
         }
-        for section in self.list_sections_with_conversations().unwrap_or_default() {
-            for c in section.conversations {
-                rows.insert((c.conversation_id, c.conversation_type));
+        for (id, kind) in self.sections().all_conversation_keys().unwrap_or_default() {
+            if self.visible_in_mode(&kind) && !self.is_blocked_conversation(&kind, &id) {
+                rows.insert((id, kind));
             }
         }
         rows

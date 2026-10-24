@@ -75,9 +75,10 @@ impl MeshTimeline {
     /// so a caller can merge the two lists without re-sorting either.
     pub fn conversations(&self) -> Result<Vec<UnifiedConversation>, StorageError> {
         let entries: Vec<Entry> = self.open.lock().values().cloned().collect();
+        let stats = self.messages.mesh_sidebar_stats()?;
         let mut conversations = Vec::with_capacity(entries.len());
         for entry in entries {
-            conversations.push(self.shape(&entry)?);
+            conversations.push(self.shape(&entry, &stats));
         }
         conversations.sort_by(|a, b| {
             b.last_message_at

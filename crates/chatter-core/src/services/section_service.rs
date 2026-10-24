@@ -105,10 +105,7 @@ impl SectionService {
 
     /// List all custom sections with their conversations, enriched and ordered.
     ///
-    /// Metadata (name, unread, last-message time) comes from two whole-table
-    /// queries, not one `get_conversation` per membership. That N+1 is why
-    /// folder badges could not be refreshed on message arrival without making
-    /// the sidebar crawl.
+    /// Names come from conversation tables, while message stats are read once.
     /// Conversations come back already sorted by the section's `sort_mode`,
     /// pinned first — the UI renders the order it is handed.
     pub fn list_sections_with_conversations(&self) -> Result<Vec<CustomSection>, SectionError> {
@@ -117,23 +114,18 @@ impl SectionService {
             return Ok(Vec::new());
         }
 
-        // Two queries total, regardless of how many folders or rows exist.
-        // Names come from the unified view; unread + last-message come straight
+        // Names come from conversation tables; unread + last-message come straight
         // from the messages table, which also covers channel-free server DMs —
         // those have no `channels` row, so the unified view cannot emit them and
         // a foldered DM would show no badge at all.
-        let names: std::collections::HashMap<(String, ConversationType), String> = self
-            .conversation_repo
-            .list_all()?
-            .into_iter()
-            .map(|c| ((c.id, c.conversation_type), c.name))
-            .collect();
+        let names = self.conversation_repo.conversation_names()?;
         let stats = self.conversation_repo.conversation_stats()?;
         let pinned = self.pins.pinned_ids();
+        let mut memberships_by_section = self.section_repo.all_section_conversations()?;
 
         let mut result = Vec::with_capacity(sections.len());
         for section in sections {
-            let memberships = self.section_repo.get_section_conversations(&section.id)?;
+            let memberships = memberships_by_section.remove(&section.id).unwrap_or_default();
             let mut unread_count: u32 = 0;
 
             let mut conversations: Vec<SectionConversation> = memberships
@@ -168,6 +160,18 @@ impl SectionService {
         }
 
         Ok(result)
+    }
+
+    /// Folder keys for badge visibility; row names and message stats are not
+    /// needed when the caller only asks whether a row exists.
+    pub fn all_conversation_keys(
+        &self,
+    ) -> Result<std::collections::HashSet<(String, ConversationType)>, SectionError> {
+        Ok(self.section_repo.all_section_conversations()?
+            .into_values()
+            .flatten()
+            .map(|m| (m.conversation_id, m.conversation_type))
+            .collect())
     }
 
     /// Get unified metadata for a specific conversation.
