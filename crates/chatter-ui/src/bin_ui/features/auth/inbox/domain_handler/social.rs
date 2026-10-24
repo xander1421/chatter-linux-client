@@ -243,6 +243,7 @@ pub(super) fn handle_presence_changed(
                 if dm.user_id == user_id_str {
                     dm.presence_status = presence_slint.clone();
                     dms.set_row_data(i, dm);
+                    crate::bin_ui::features::sidebar::refresh_flat_rows(&w);
                     break;
                 }
             }
@@ -335,6 +336,7 @@ pub(super) fn handle_anon_dm_profile_updated(
                             dm.display_name = name.clone().into();
                         }
                         dms.set_row_data(i, dm);
+                        crate::bin_ui::features::sidebar::refresh_flat_rows(&w);
                         break;
                     }
                 }
@@ -403,6 +405,7 @@ fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
                     dm.avatar_source = img;
                     dm.has_avatar = true;
                     dms.set_row_data(i, dm);
+                    crate::bin_ui::features::sidebar::refresh_flat_rows(w);
                 }
                 break;
             }

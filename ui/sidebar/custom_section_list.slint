@@ -1,7 +1,4 @@
-// Custom section list component
-//
-// Renders user-created sidebar sections (e.g. "Work", "Gaming") with collapsible
-// conversation lists. A folder's rows are the chat list's own rows (ChatRow).
+// Folder data and header for the virtualized sidebar list.
 
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
@@ -10,8 +7,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { TooltipArea } from "../components/tooltip.slint";
-import { ConversationKind } from "../chat/conversation_kind.slint";
-import { ChatRow, ChatRowData } from "chat_list.slint";
+import { ChatRowData } from "chat_list.slint";
 
 // ── Data structs ────────────────────────────────────────────────
 
@@ -22,16 +18,14 @@ export struct CustomSectionData {
     is-expanded: bool,
     unread-count: int,
     sort-mode: string,           // "recent" | "unread" | "alphabetical"
-    // This section's OWN rows, pre-grouped in Rust. Previously every section
-    // looped the whole flat list and hid non-matches with `visible` +
-    // `height: 0px`, which instantiated sections × conversations elements
-    // (ten folders over two hundred conversations = two thousand rows).
+    // This section's own rows, pre-grouped in Rust. The sidebar adapter
+    // flattens expanded sections into the one virtualized row model.
     conversations: [ChatRowData],
 }
 
 // ── Section header ──────────────────────────────────────────────
 
-component CustomSectionHeader inherits Rectangle {
+export component CustomSectionHeader inherits Rectangle {
     in property <string> section-id;
     in property <string> name;
     in property <string> icon-emoji;
@@ -265,73 +259,3 @@ component CustomSectionHeader inherits Rectangle {
     }
 }
 
-// ── Main component: renders all custom sections ────────────────
-
-export component CustomSectionList inherits Rectangle {
-    in property <[CustomSectionData]> sections: [];
-    in property <bool> collapsed: false;
-    in property <bool> mobile-mode: false;
-
-    callback section-toggle-expanded(/* section-id */ string);
-    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
-    callback section-conversation-pin-requested(/* conversation-id */ string, /* pinned */ bool);
-    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string, /* is-pinned */ bool, /* can-leave */ bool, /* can-delete */ bool, /* x */ length, /* y */ length);
-    callback section-header-context-menu-requested(/* section-id */ string, /* sort-mode */ string, /* x */ length, /* y */ length);
-    callback delete-section-clicked(/* section-id */ string);
-    callback rename-section-clicked(/* section-id */ string);
-
-    VerticalLayout {
-        spacing: Spacing.none;
-
-        // Render each section
-        for section in root.sections: VerticalLayout {
-            spacing: Spacing.none;
-
-            CustomSectionHeader {
-                section-id: section.section-id;
-                name: section.name;
-                icon-emoji: section.icon-emoji;
-                is-expanded: section.is-expanded;
-                unread-count: section.unread-count;
-                collapsed: root.collapsed;
-                mobile-mode: root.mobile-mode;
-
-                toggle-expanded => { root.section-toggle-expanded(section.section-id); }
-                rename-clicked => { root.rename-section-clicked(section.section-id); }
-                delete-clicked => { root.delete-section-clicked(section.section-id); }
-                context-menu-requested(x, y) => {
-                    root.section-header-context-menu-requested(section.section-id, section.sort-mode, x, y);
-                }
-            }
-
-            // Section conversations (only when expanded). The model is this
-            // section's own rows, already ordered by core.
-            Rectangle {
-                height: section.is-expanded ? section-rows.preferred-height : 0px;
-                clip: true;
-                animate height { duration: Materials.motion-standard; easing: Materials.spring; }
-
-                section-rows := VerticalLayout {
-                    width: parent.width;
-                    padding-left: Spacing.xs;
-                    padding-right: Spacing.xs;
-                    spacing: Spacing.xxs;
-
-                // A folder row is the main list's own row, so a chat looks
-                // the same filed or not; filing one used to shrink it to a
-                // one-line row with no photo, preview, time or presence.
-                    for conv in section.conversations: ChatRow {
-                        data: conv;
-                        collapsed: root.collapsed;
-                        mobile-mode: root.mobile-mode;
-                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
-                        pin-requested(pinned) => { root.section-conversation-pin-requested(conv.conversation-id, pinned); }
-                        context-menu-requested(x, y) => {
-                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}

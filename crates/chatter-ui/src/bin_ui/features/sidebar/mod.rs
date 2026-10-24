@@ -25,9 +25,88 @@ fn next_arrival_serial() -> i32 {
     NEXT_ARRIVAL_SERIAL.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Project the two retained source models into the one virtualized sidebar
+/// model. Core owns the ordering and expanded-folder policy; this adapter
+/// only attaches Slint values to those slots.
+pub(crate) fn refresh_flat_rows(window: &MainWindow) {
+    use chatter_core::ui::sidebar_data::{sidebar_slots, SidebarSlot};
+    use slint::{Model, ModelRc, VecModel};
+
+    let pane = window.global::<crate::SidebarPane>();
+    let chats = pane.get_chat_rows();
+    let sections = pane.get_custom_sections();
+    let sections: Vec<_> = sections.iter().collect();
+    let shape: Vec<_> = sections.iter().map(|s| (s.is_expanded, s.conversations.row_count())).collect();
+    let rows: Vec<crate::SidebarRowData> = sidebar_slots(chats.row_count(), &shape)
+        .into_iter()
+        .map(|slot| {
+            let (kind, chat, section) = match slot {
+                SidebarSlot::Search => ("search", None, None),
+                SidebarSlot::Saved => ("saved", None, None),
+                SidebarSlot::Friends => ("friends", None, None),
+                SidebarSlot::Calls => ("calls", None, None),
+                SidebarSlot::Requests => ("requests", None, None),
+                SidebarSlot::ChannelActions => ("channel-actions", None, None),
+                SidebarSlot::Empty => ("empty", None, None),
+                SidebarSlot::Loading => ("loading", None, None),
+                SidebarSlot::Chat(index) => ("chat", chats.row_data(index), None),
+                SidebarSlot::SectionHeader(index) => ("section-header", None, sections.get(index).cloned()),
+                SidebarSlot::SectionChat(index, row) => ("section-chat", sections[index].conversations.row_data(row), sections.get(index).cloned()),
+                SidebarSlot::Bottom => ("bottom", None, None),
+            };
+            let key = match slot {
+                SidebarSlot::Chat(_) => format!("chat:{}", chat.as_ref().map_or("", |r| r.conversation_id.as_str())),
+                SidebarSlot::SectionHeader(_) => format!("section:{}", section.as_ref().map_or("", |s| s.section_id.as_str())),
+                SidebarSlot::SectionChat(_, _) => format!("section-chat:{}:{}",
+                    section.as_ref().map_or("", |s| s.section_id.as_str()),
+                    chat.as_ref().map_or("", |r| r.conversation_id.as_str())),
+                _ => kind.to_string(),
+            };
+            crate::SidebarRowData {
+                key: key.into(),
+                kind: kind.into(),
+                chat: chat.unwrap_or_default(),
+                section: section.unwrap_or_default(),
+            }
+        })
+        .collect();
+    let model = pane.get_flat_rows();
+    if let Some(vec) = model.as_any().downcast_ref::<VecModel<crate::SidebarRowData>>() {
+        let target_len = rows.len();
+        let mut keys = (0..vec.row_count()).filter_map(|i| vec.row_data(i)
+            .map(|row| row.key.to_string())).collect::<Vec<_>>();
+        let mut positions = keys.iter().enumerate()
+            .map(|(i, key)| (key.clone(), i)).collect::<std::collections::HashMap<_, _>>();
+        for (target, row) in rows.into_iter().enumerate() {
+            let key = row.key.to_string();
+            if positions.get(&key).copied() == Some(target) {
+                if vec.row_data(target).is_some_and(|old| old != row) {
+                    vec.set_row_data(target, row);
+                }
+                continue;
+            }
+            if let Some(from) = positions.get(&key).copied().filter(|&from| from > target) {
+                vec.remove(from);
+                keys.remove(from);
+            }
+            vec.insert(target, row);
+            keys.insert(target, key);
+            for i in target..keys.len() {
+                positions.insert(keys[i].clone(), i);
+            }
+        }
+        while vec.row_count() > target_len {
+            vec.remove(vec.row_count() - 1);
+        }
+    } else {
+        pane.set_flat_rows(ModelRc::new(VecModel::from(rows)));
+    }
+}
+
 /// Clear only the marked incarnation: a newer message may promote the same row
 /// before the prior animation's first frame has rendered.
 fn settle_arrivals(
+    weak: slint::Weak<MainWindow>,
     model: slint::ModelRc<crate::ChatRowData>,
     arrivals: Vec<(slint::SharedString, i32)>,
 ) {
@@ -47,6 +126,9 @@ fn settle_arrivals(
                     model.set_row_data(index, row);
                 }
             }
+        }
+        if let Some(window) = weak.upgrade() {
+            refresh_flat_rows(&window);
         }
     });
 }
@@ -148,6 +230,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     sections::wire_section_callbacks(window, ui_ctx);
     sections::load_sections(window, ui_ctx);
     anon_mode::wire(window, ui_ctx);
+    refresh_flat_rows(window);
 }
 
 /// Tell the message list where to open.
@@ -275,6 +358,7 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
             }
         }
     }
+    refresh_flat_rows(window);
 }
 
 /// Does this chat-list or folder row point at the currently open conversation?
@@ -481,8 +565,9 @@ fn update_sidebar_row(
         let arrival = (row.conversation_id.clone(), row.arrival_serial);
         vec.remove(i);
         vec.insert(slot, row);
-        settle_arrivals(model.clone(), vec![arrival]);
+        settle_arrivals(window.as_weak(), model.clone(), vec![arrival]);
     }
+    refresh_flat_rows(window);
     true
 }
 
@@ -525,6 +610,7 @@ pub(crate) fn apply_chat_list(
             .set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
     }
     settle_arrivals(
+        window.as_weak(),
         window.global::<crate::SidebarPane>().get_chat_rows(),
         arrivals,
     );

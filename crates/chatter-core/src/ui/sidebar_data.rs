@@ -2,6 +2,44 @@
 
 use crate::domain::message::ConversationType;
 
+/// The display order of the scrollable sidebar. Folder children are present
+/// only while expanded, so the UI can virtualize one contiguous model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidebarSlot {
+    Search,
+    Saved,
+    Friends,
+    Calls,
+    Requests,
+    ChannelActions,
+    Empty,
+    Loading,
+    Chat(usize),
+    SectionHeader(usize),
+    SectionChat(usize, usize),
+    Bottom,
+}
+
+pub fn sidebar_slots(chat_count: usize, sections: &[(bool, usize)]) -> Vec<SidebarSlot> {
+    use SidebarSlot as S;
+    let mut slots = vec![S::Search, S::Saved, S::Friends, S::Calls, S::Requests, S::ChannelActions];
+    if chat_count == 0 && sections.is_empty() {
+        slots.push(S::Empty);
+    }
+    if chat_count == 0 {
+        slots.push(S::Loading);
+    }
+    slots.extend((0..chat_count).map(S::Chat));
+    for (section, &(expanded, count)) in sections.iter().enumerate() {
+        slots.push(S::SectionHeader(section));
+        if expanded {
+            slots.extend((0..count).map(|chat| S::SectionChat(section, chat)));
+        }
+    }
+    slots.push(S::Bottom);
+    slots
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChatRowLabel {
     #[default]
