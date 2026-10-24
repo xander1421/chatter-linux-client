@@ -22,6 +22,23 @@ impl ChatterClient {
                 self.visible_in_mode(&c.conversation_type)
                     && !self.is_blocked_conversation(&c.conversation_type, &c.conversation_id)
             });
+            for conversation in &mut section.conversations {
+                if conversation.conversation_type == crate::domain::message::ConversationType::ServerDm {
+                    if let Ok(peer) = conversation.conversation_id.parse::<crate::domain::ids::UserId>() {
+                        conversation.display_name = self.display_name(&peer);
+                    }
+                } else if conversation.conversation_type == crate::domain::message::ConversationType::AnonDm {
+                    if let Ok(id) = conversation.conversation_id.parse::<crate::domain::anon_dm::AnonDmId>() {
+                        if let Some(dm) = self.get_anon_dm_conversation(&id) {
+                            conversation.display_name = self.anon_dm_peer_name(&dm);
+                        }
+                    }
+                }
+            }
+            crate::services::section_service::sort_conversations(
+                &mut section.conversations,
+                section.sort_mode,
+            );
             // The aggregate badge counts what the folder actually shows.
             section.unread_count = section.conversations.iter().map(|c| c.unread_count).sum();
         }

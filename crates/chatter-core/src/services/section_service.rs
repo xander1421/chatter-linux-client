@@ -305,7 +305,7 @@ impl SectionService {
 
 /// Order one section's conversations. Pinned rows always come first; the mode
 /// decides the order within each group.
-fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSortMode) {
+pub(crate) fn sort_conversations(conversations: &mut [SectionConversation], mode: SectionSortMode) {
     conversations.sort_by(|a, b| {
         b.is_pinned
             .cmp(&a.is_pinned)
