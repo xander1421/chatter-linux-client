@@ -4,6 +4,8 @@ import { MessageItemData } from "chat/chat_layout.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 
 export component AppThreadPanel inherits Rectangle {
+    out property <length> composer-top: thread-panel.composer-top;
+    changed composer-top => { ChatPane.thread-composer-top = root.composer-top; }
     in-out property <length> context-menu-anchor-bottom;
     in-out property <length> context-menu-anchor-left;
     in-out property <length> context-menu-anchor-right;
@@ -19,7 +21,7 @@ export component AppThreadPanel inherits Rectangle {
     in-out property <int> reply-focus-serial;
     in-out property <length> viewer-origin-width;
     background: transparent;
-    ThreadPanel {
+    thread-panel := ThreadPanel {
         width: 100%;
         height: 100%;
         // Same expression `thread-panel-w` uses to give the panel

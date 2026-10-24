@@ -124,8 +124,10 @@ export component DevicePicker inherits Rectangle {
         elevation: 4;
 
         x: (parent.width - self.width) / 2;
-        y: (parent.width < 600px ? parent.height - self.height - Spacing.lg
-            : (parent.height - self.height) / 2) + (1 - root.card-arrival) * 28px;
+        y: max(Spacing.sm, min(
+            (parent.width < 600px ? parent.height - self.height - Spacing.lg
+                : (parent.height - self.height) / 2) + (1 - root.card-arrival) * 28px,
+            parent.height - self.height - Spacing.sm));
         width: min(420px, parent.width - 24px);
         height: min(520px, min(parent.height - 32px, content.preferred-height + 80px));
         border-radius: Spacing.radius-sheet;

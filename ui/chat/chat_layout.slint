@@ -60,6 +60,7 @@ export component ChatLayout inherits Rectangle {
     out property <length> content-top: root.absolute-position.y
         + (root.hide-header ? 0px
            : root.mobile ? Spacing.header-height-touch : Spacing.header-height);
+    out property <length> composer-top: bottom-chrome.absolute-position.y;
     out property <length> menu-anchor-top: message-list.menu-anchor-top;
     out property <length> menu-anchor-bottom: message-list.menu-anchor-bottom;
     out property <length> menu-anchor-left: message-list.menu-anchor-left;

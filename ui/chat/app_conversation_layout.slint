@@ -1,4 +1,5 @@
 import { ChatLayout } from "chat_layout.slint";
+import { ChatPane } from "../app_chat_pane.slint";
 import { MessageItemData, PendingAttachmentData } from "../chat/chat_layout.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
 import { MessageContextMenu } from "../chat/message_context_menu.slint";
@@ -8,6 +9,8 @@ import { EmojiData } from "../components/mod.slint";
 
 // Conversation view wiring stays close to ChatLayout, while MainWindow owns state.
 export component AppConversationLayout inherits Rectangle {
+    out property <length> composer-top: chat-layout.composer-top;
+    changed composer-top => { ChatPane.mention-composer-top = root.composer-top; }
     in property <bool> active-call-fullscreen;
     in property <bool> active-call-visible;
     in property <string> active-channel-call-id;
@@ -182,7 +185,7 @@ export component AppConversationLayout inherits Rectangle {
     callback visible-media-rows(int, int);
     callback watch-composer-keyboard();
     background: transparent;
-    ChatLayout {
+    chat-layout := ChatLayout {
         width: 100%;
         height: 100%;
     hide-header: root.selection-mode;

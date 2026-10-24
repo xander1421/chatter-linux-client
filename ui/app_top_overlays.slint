@@ -1,4 +1,5 @@
 import { SidebarPane } from "app_sidebar_pane.slint";
+import { Spacing } from "theme/spacing.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { ChatPane } from "app_chat_pane.slint";
 import { CallView } from "app_call_view.slint";
@@ -19,6 +20,9 @@ import { IncomingCallModal, DevicePicker, IncomingCallData, AudioDeviceData, Scr
 
 // Call, media and message-action surfaces above the modal stack.
 export component AppTopOverlays inherits Rectangle {
+    property <length> popup-bottom-limit: (ChatPane.thread-panel-visible
+        ? min(ChatPane.thread-composer-top, ChatPane.mention-composer-top)
+        : ChatPane.mention-composer-top) - root.safe-area-top;
     in property <string> active-modal;
     in property <length> context-menu-anchor-bottom;
     in property <length> context-menu-anchor-left;
@@ -42,7 +46,6 @@ export component AppTopOverlays inherits Rectangle {
     in property <length> viewer-origin-width;
     in property <length> viewer-origin-x;
     in property <length> viewer-origin-y;
-    in property <length> window-height;
     function is-presented(name: string) -> bool {
         return root.presented-modal == name || root.exiting-modal == name;
     }
@@ -204,11 +207,12 @@ export component AppTopOverlays inherits Rectangle {
         emoji-list: ChatPane.reaction-picker-emojis;
         selected-category <=> ChatPane.reaction-picker-selected-category;
         search-query <=> ChatPane.reaction-picker-search-query;
+        bottom-limit: max(0px, root.popup-bottom-limit);
         // Anchor near button. Flip above if no space below. Clamp horizontally.
         position-x: max(8px, min(ChatPane.reaction-picker-anchor-x, root.width - 288px));
-        position-y: ChatPane.reaction-picker-anchor-y + 360px > root.window-height
-            ? max(8px, ChatPane.reaction-picker-anchor-y - 360px)
-            : ChatPane.reaction-picker-anchor-y + 4px;
+        position-y: ChatPane.reaction-picker-anchor-y - root.safe-area-top + 360px > root.popup-bottom-limit
+            ? max(8px, ChatPane.reaction-picker-anchor-y - root.safe-area-top - 360px)
+            : ChatPane.reaction-picker-anchor-y - root.safe-area-top + 4px;
 
         reaction-selected(sender-id, timestamp-ns, msg-id, emoji) => {
             ChatPane.reaction-picker-visible = false;
@@ -234,9 +238,12 @@ export component AppTopOverlays inherits Rectangle {
         suggestions: ChatPane.mention-suggestions;
         selected-index: ChatPane.mention-selected-index;
         max-popup-width: min(240px, root.width - 32px);
-        // Position above the composer
-        x: SidebarPane.sidebar-hidden ? 16px : (SidebarPane.sidebar-collapsed ? 80px : 280px);
-        y: root.window-height - 80px - (Math.min(ChatPane.mention-suggestions.length, 8) * 40px + 16px);
+        max-popup-height: max(0px, ChatPane.mention-composer-top - root.safe-area-top - 2 * Spacing.sm);
+        // The composer edge is measured in window coordinates; this overlay
+        // starts below the status bar and shrinks with the keyboard.
+        x: max(Spacing.sm, min(SidebarPane.sidebar-hidden ? 16px
+            : (SidebarPane.sidebar-collapsed ? 80px : 280px), root.width - self.width - Spacing.sm));
+        y: max(Spacing.sm, ChatPane.mention-composer-top - root.safe-area-top - self.height - Spacing.sm);
 
         suggestion-selected(id, display) => {
             ChatPane.mention-autocomplete-visible = false;
@@ -255,6 +262,7 @@ export component AppTopOverlays inherits Rectangle {
 
     MessageContextMenu {
         show: ChatPane.context-menu-visible;
+        content-bottom: max(0px, root.popup-bottom-limit);
         sender-id: ChatPane.context-menu-sender-id;
         timestamp-ns: ChatPane.context-menu-timestamp-ns;
         message-id: ChatPane.context-menu-message-id;

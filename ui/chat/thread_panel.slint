@@ -26,6 +26,7 @@ component ListView inherits Flickable {
 }
 
 export component ThreadPanel inherits Rectangle {
+    out property <length> composer-top: composer.absolute-position.y;
     property <bool> entered: false;
     property <float> panel-progress: 0;
     animate panel-progress { duration: Materials.motion-standard; easing: Materials.glide; }
@@ -641,6 +642,9 @@ export component ThreadPanel inherits Rectangle {
         touch: root.mobile;
         x: max(0px, root.width - self.width - Spacing.sm);
         y: max(Spacing.header-height, root.height - composer.height - self.height - Spacing.sm);
+        max-picker-width: min(280px, root.width - 2 * Spacing.sm);
+        max-picker-height: max(0px, min(320px,
+            root.height - composer.height - Spacing.header-height - Spacing.sm));
         emoji-list: root.emoji-list;
         selected-category <=> root.emoji-category;
         search-query <=> root.emoji-search;
@@ -655,6 +659,8 @@ export component ThreadPanel inherits Rectangle {
         show: root.mention-visible;
         x: Spacing.sm;
         y: max(Spacing.header-height, root.height - composer.height - self.height);
+        max-popup-width: min(240px, root.width - 2 * Spacing.sm);
+        max-popup-height: max(0px, root.height - composer.height - Spacing.header-height);
         suggestions: root.mention-suggestions;
         selected-index: root.mention-selected-index;
         suggestion-selected(id, display) => { root.mention-selected(id, display); }
