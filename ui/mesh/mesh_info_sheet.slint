@@ -30,7 +30,7 @@ component InfoActionRow inherits Rectangle {
             if root.detail != "": Text { text: root.detail; color: Colors.text-muted;
                 font-size: Typography.xs; overflow: elide; }
         }
-        if !root.destructive: Image { source: Icons.chevron-right; width: 16px; height: 16px;
+        if !root.destructive: Image { source: Icons.chevron-right; width: 16px; image-fit: contain;
             colorize: Colors.text-muted; vertical-alignment: center; }
     }
     row-touch := TouchArea {
@@ -121,7 +121,7 @@ export component MeshInfoSheet inherits Rectangle {
                                         Text { text: member.status-label; color: Colors.text-muted;
                                             font-size: Typography.xs; overflow: elide; }
                                     }
-                                    Image { source: Icons.chevron-right; width: 16px; height: 16px;
+                                    Image { source: Icons.chevron-right; width: 16px; image-fit: contain;
                                         colorize: Colors.text-muted; vertical-alignment: center; }
                                 }
                                 member-touch := TouchArea {

@@ -259,7 +259,7 @@ impl MeshTimeline {
             Some(entry) => {
                 if let Some(label) = dm_label(conversation, nickname).or_else(|| {
                     matches!(conversation, MeshConversation::PrivateChannel(_))
-                        .then(|| nickname.map(|n| format!("🔒 {n}")))
+                        .then(|| nickname.map(str::to_string))
                         .flatten()
                 }) {
                     entry.label = label;
@@ -309,7 +309,7 @@ fn label_for(conversation: &MeshConversation, nickname: Option<&str>) -> String 
         MeshConversation::Geohash(cell) => format!("#{cell}"),
         MeshConversation::Channel(name) => format!("#{name}"),
         MeshConversation::PrivateChannel(_) => {
-            format!("🔒 {}", nickname.unwrap_or("Private channel"))
+            nickname.unwrap_or("Private channel").to_string()
         }
         MeshConversation::Dm(peer) => {
             dm_label(conversation, nickname).unwrap_or_else(|| peer.as_str().to_string())

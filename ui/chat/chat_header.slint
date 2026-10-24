@@ -520,7 +520,7 @@ export component ChatHeader inherits GlassSurface {
                         font-size: Typography.base;
                         font-weight: Typography.semibold;
                         overflow: elide;
-                        horizontal-alignment: center;
+                        horizontal-alignment: left;
                         min-width: 0px;
                     }
                     Text {
@@ -534,7 +534,7 @@ export component ChatHeader inherits GlassSurface {
                         color: MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
                         font-size: Typography.xs;
                         overflow: elide;
-                        horizontal-alignment: center;
+                        horizontal-alignment: left;
                         min-width: 0px;
                     }
                 }

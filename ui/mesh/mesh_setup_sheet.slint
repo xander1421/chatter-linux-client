@@ -41,7 +41,7 @@ component NearbyPeerRow inherits Rectangle {
                 font-weight: Typography.semibold; overflow: elide; }
             Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
         }
-        Image { source: Icons.chevron-right; width: Spacing.button-icon; height: Spacing.button-icon;
+        Image { source: Icons.chevron-right; width: Spacing.button-icon; image-fit: contain;
             colorize: Colors.text-muted; }
     }
     row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }

@@ -42,7 +42,7 @@ component ComposeMenuRow inherits Rectangle {
                 font-weight: Typography.semibold; overflow: elide; }
             Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
         }
-        Image { source: Icons.chevron-right; width: Spacing.button-icon; height: Spacing.button-icon;
+        Image { source: Icons.chevron-right; width: Spacing.button-icon; image-fit: contain;
             colorize: Colors.text-muted; }
     }
     row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
@@ -108,7 +108,7 @@ export component MeshComposeSheet inherits Rectangle {
                     accessible-action-default => { root.go-back(); }
                     HorizontalLayout {
                         alignment: start;
-                        if root.page != "menu": Image { source: Icons.chevron-left; width: Spacing.button-icon; height: Spacing.button-icon; colorize: Colors.primary; }
+                        if root.page != "menu": Image { source: Icons.chevron-left; width: Spacing.button-icon; image-fit: contain; colorize: Colors.primary; }
                         Text { text: root.page == "menu" ? "Cancel" : "Back"; color: Colors.primary; font-size: Typography.base; vertical-alignment: center; }
                     }
                     TouchArea { mouse-cursor: pointer; clicked => { root.go-back(); } }
