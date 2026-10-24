@@ -382,7 +382,7 @@ fn request_is_current(
 /// Raw decoded frames (Send-safe).
 struct RawGifFrames {
     id: String,
-    frames: Vec<(Vec<u8>, u32, u32, u64)>,
+    frames: Vec<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)>,
 }
 
 async fn fetch_full_gif_frames(
@@ -433,7 +433,10 @@ async fn fetch_full_gif_frames(
         let (width, height) = buffer.dimensions();
         let raw_data = buffer.into_raw();
 
-        frames.push((raw_data, width, height, delay_ms));
+        let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            &raw_data, width, height,
+        );
+        frames.push((pixels, delay_ms));
 
         // Limit frames for picker performance
         if frames.len() >= 30 {
@@ -524,12 +527,7 @@ fn spawn_previews(
                     update_gif_rows(&w, &gif_id, |gif| gif.failed = true);
                     return;
                 };
-                let (frame_bytes, width, height, _) = decoded.frames.first().unwrap();
-                let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                    frame_bytes,
-                    *width,
-                    *height,
-                );
+                let first_image = slint::Image::from_rgba8(decoded.frames[0].0.clone());
                 update_gif_rows(&w, &gif_id, |gif| {
                     gif.preview = first_image.clone();
                     gif.failed = false;

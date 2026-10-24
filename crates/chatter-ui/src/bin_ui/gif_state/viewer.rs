@@ -8,8 +8,7 @@ use std::time::Duration;
 
 use slint::{Image, Timer, TimerMode, Weak};
 
-use crate::bin_ui::slint_conversions::gif_frame_to_slint_image;
-use chatter_core::media::gif::{decode_first_frame_only, is_gpu_acceleration_available};
+use chatter_core::media::gif::{decode_first_frame_only, MAX_UI_GIF_BYTES};
 use tokio::sync::mpsc;
 
 use super::MAX_VIEWER_FRAMES;
@@ -58,15 +57,31 @@ impl ViewerGifState {
     }
 }
 
+/// Decode the first frame and copy its pixels on a background thread.
+pub fn prepare_first_gif_frame(
+    data: &[u8],
+) -> Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)> {
+    let frame = match decode_first_frame_only(data) {
+        Ok(Some(frame)) => frame,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!("Failed to decode GIF first frame: {:?}", e);
+            return None;
+        }
+    };
+    let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        &frame.data, frame.width, frame.height,
+    );
+    Some((pixels, frame.delay.as_millis() as u64))
+}
+
 /// Start GIF animation in viewer AND register for inline animation.
 ///
-/// Uses **streaming progressive** decoding with automatic backend selection:
-/// 1. Try GStreamer + GL (GPU accelerated) - if available
-/// 2. Fall back to GStreamer + CPU - if GL not available
-/// 3. Fall back to pure Rust `image` crate - if GStreamer unavailable
+/// Uses progressive decoding with a bounded GStreamer CPU path on desktop
+/// and the `image` crate when GStreamer is unavailable.
 ///
 /// For all backends:
-/// 1. Decode first frame synchronously (~16ms for any size)
+/// 1. Receive a first frame prepared on the decrypt worker
 /// 2. Start animation IMMEDIATELY (even with just 1 frame)
 /// 3. Background decoder sends frames via channel as they decode
 /// 4. Animation progressively gets smoother as frames arrive
@@ -77,31 +92,14 @@ pub fn start_gif_animation_and_inline(
     data: &[u8],
     window: &Weak<MainWindow>,
     attachment_id: &str,
+    first_frame: Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)>,
 ) -> Option<Image> {
-    let start = std::time::Instant::now();
-    let gpu_available = is_gpu_acceleration_available();
-
-    // Fast path: decode first frame only (instant)
-    let first_frame = match decode_first_frame_only(data) {
-        Ok(Some(frame)) => frame,
-        Ok(None) => {
-            tracing::debug!("Not a GIF or empty");
-            return None;
-        }
-        Err(e) => {
-            tracing::warn!("Failed to decode GIF first frame: {:?}", e);
-            return None;
-        }
-    };
-
-    let first_frame_image = gif_frame_to_slint_image(&first_frame);
-    let first_delay = first_frame.delay.as_millis() as u64;
+    let (pixels, first_delay) = first_frame?;
+    let first_frame_image = Image::from_rgba8(pixels);
 
     tracing::info!(
-        "GIF first frame decoded in {:?}, delay {}ms - starting animation immediately (GPU: {})",
-        start.elapsed(),
-        first_delay,
-        gpu_available
+        "GIF first frame ready, delay {}ms - starting animation immediately",
+        first_delay
     );
 
     // Store initial state with just first frame - animation starts NOW
@@ -130,12 +128,11 @@ pub fn start_gif_animation_and_inline(
     });
 
     // Spawn background decoder - streams frames as they decode
-    // Uses GPU acceleration when available (GStreamer + GL)
     let data_vec = data.to_vec();
     std::thread::spawn(move || {
         let bg_start = std::time::Instant::now();
 
-        // Try GPU-accelerated decoder first, fall back to CPU
+        // Try GStreamer CPU decode, then the image crate.
         let decode_result = decode_gif_with_best_backend(&data_vec, &tx);
 
         match decode_result {
@@ -144,7 +141,7 @@ pub fn start_gif_animation_and_inline(
                     "GIF streaming decode complete: {} frames sent in {:?} (backend: {})",
                     frame_count,
                     bg_start.elapsed(),
-                    if gpu_available { "GPU" } else { "CPU" }
+                    "CPU"
                 );
             }
             Err(e) => {
@@ -162,23 +159,20 @@ pub fn start_gif_animation_and_inline(
 
 /// Decode GIF using the best available backend.
 ///
-/// Tries in order:
-/// 1. GStreamer + GL (GPU accelerated)
-/// 2. GStreamer + CPU
-/// 3. Pure Rust `image` crate
+/// Tries GStreamer CPU decode, then the pure Rust `image` crate.
 fn decode_gif_with_best_backend(data: &[u8], tx: &mpsc::Sender<RawFrame>) -> Result<usize, String> {
-    // Fast, reliable CPU GStreamer decode (stride-honored, ~0.15s, no flaky GL).
-    // Decodes all frames up front, then streams them to the animation channel.
+    // GStreamer honors stride and stops at the frame and byte budget.
+    // The bounded result is then sent to the animation channel.
     #[cfg(feature = "desktop-gstreamer")]
     {
-        match chatter_core::media::gif::decode_all_frames_cpu(data) {
+        match chatter_core::media::gif::decode_frames_cpu_bounded(data, MAX_VIEWER_FRAMES, MAX_UI_GIF_BYTES) {
             Ok(frames) if frames.len() > 1 => {
                 let mut sent = 0;
-                // Skip frame 0 — already shown synchronously.
-                for frame in frames.iter().skip(1) {
+                // Skip frame 0 — already prepared on the decrypt worker.
+                for frame in frames.into_iter().skip(1) {
                     if tx
                         .blocking_send((
-                            frame.data.clone(),
+                            frame.data,
                             frame.width,
                             frame.height,
                             frame.delay.as_millis() as u64,
@@ -213,9 +207,10 @@ fn decode_gif_with_image_crate(data: &[u8], tx: &mpsc::Sender<RawFrame>) -> Resu
 
     let frames_iter = decoder.into_frames();
     let mut frame_count = 0;
+    let mut decoded_bytes = 0usize;
 
     for (idx, frame_result) in frames_iter.enumerate() {
-        // Skip first frame (already decoded synchronously)
+        // Skip first frame (already prepared on the decrypt worker)
         if idx == 0 {
             continue;
         }
@@ -240,6 +235,13 @@ fn decode_gif_with_image_crate(data: &[u8], tx: &mpsc::Sender<RawFrame>) -> Resu
         let buffer = frame.into_buffer();
         let (width, height) = buffer.dimensions();
         let frame_data = buffer.into_raw();
+
+        if frame_count + 1 >= MAX_VIEWER_FRAMES
+            || frame_data.len() > MAX_UI_GIF_BYTES.saturating_sub(decoded_bytes)
+        {
+            break;
+        }
+        decoded_bytes += frame_data.len();
 
         // Send frame immediately
         if tx
