@@ -147,6 +147,20 @@ impl BleRuntime {
                 // Warn: this was a message, and over the mesh there is no server
                 // copy to fetch again. The plaintext is gone.
                 tracing::warn!(target: "mesh::ble", peer = %claimed, %error, "decrypt failed");
+                // The peer restarted or re-keyed and our session no longer
+                // matches theirs; until one side re-opens Noise every later
+                // message is lost the same way. Open a new handshake, at most
+                // once per retry window. The current session stays until the
+                // new one completes, so forged ciphertext cannot tear it down.
+                let due = self.state.with(|state| {
+                    !state.sessions.is_handshaking(claimed)
+                        && now_millis().saturating_sub(
+                            *state.dm_handshake_at_ms.get(claimed).unwrap_or(&0),
+                        ) >= DM_HANDSHAKE_RETRY_MS
+                });
+                if due {
+                    self.start_handshake(claimed).await;
+                }
                 return;
             }
         };
