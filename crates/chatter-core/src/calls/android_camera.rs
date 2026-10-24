@@ -2,12 +2,12 @@
 //!
 //! Slint/Rust can't drive the camera on Android, and the UI crate has no
 //! LiveKit dependency in its `mobile` build — so the platform layer (chatter-ui,
-//! via CameraX over JNI) captures frames and hands us tightly-packed I420, which
+//! via CameraX over JNI) captures frames and hands us tightly-packed I420 or NV12, which
 //! we push into the LiveKit `NativeVideoSource`. The webrtc types stay on this
 //! side of the crate boundary.
 //!
 //! Flow: video-capture loop → `run_capture` registers the sink + asks the
-//! platform to `start()` CameraX → each frame arrives via `push_frame_i420` →
+//! platform to `start()` CameraX → each frame arrives via `push_frame` →
 //! `NativeVideoSource::capture_frame` and the local Slint preview store. CameraX uses the modern Camera2 stack
 //! (not the deprecated `android.hardware.Camera`).
 
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::calls::video_capture::LocalPreview;
 
-use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
+use livekit::webrtc::video_frame::{I420Buffer, NV12Buffer, VideoBuffer, VideoFrame, VideoRotation};
 use livekit::webrtc::video_source::native::NativeVideoSource;
 
 /// Implemented by the platform layer (chatter-ui) to start/stop CameraX.
@@ -39,6 +39,11 @@ struct ActiveCapture {
     captured_frames: u32,
     preview_frames: u32,
     ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    rgba_spare: Option<Arc<Vec<u8>>>,
+    oriented_previous: Option<Arc<Vec<u8>>>,
+    oriented_spare: Vec<Arc<Vec<u8>>>,
+    push_total: Duration,
+    preview_total: Duration,
     last_frame: Instant,
     received_frame: bool,
 }
@@ -83,6 +88,11 @@ pub fn run_capture(
         captured_frames: 0,
         preview_frames: 0,
         ready_tx: Some(ready_tx),
+        rgba_spare: None,
+        oriented_previous: None,
+        oriented_spare: Vec::with_capacity(3),
+        push_total: Duration::ZERO,
+        preview_total: Duration::ZERO,
         last_frame: Instant::now(),
         received_frame: false,
     });
@@ -114,175 +124,191 @@ pub fn run_capture(
     true
 }
 
-/// Push one tightly-packed I420 frame from the platform camera callback.
-/// `rotation_degrees` is the CameraX sensor rotation (0/90/180/270); we forward
-/// it as LiveKit frame metadata. The local CPU preview rotates its own pixels.
-pub fn push_frame_i420(data: &[u8], width: u32, height: u32, rotation_degrees: i32, ts_us: i64) {
+/// Format of the tightly packed bytes supplied by CameraX.
+#[derive(Clone, Copy)]
+pub enum CameraFormat {
+    I420,
+    Nv12,
+}
+
+/// Copy CameraX bytes directly into libwebrtc's native planes and publish them.
+/// The callback returns false on a failed JNI copy, before the frame is sent.
+pub fn push_frame<F>(
+    format: CameraFormat,
+    width: u32,
+    height: u32,
+    rotation_degrees: i32,
+    ts_us: i64,
+    copy: F,
+) where
+    F: FnOnce(&mut [u8], &mut [u8], Option<&mut [u8]>) -> bool,
+{
     let mut guard = ACTIVE_SINK.lock().unwrap();
-    let Some(capture) = guard.as_mut() else {
-        return; // capture not active
-    };
-
-    // CameraX produces even-sized YUV420 frames. Reject invalid JNI dimensions
-    // before allocating a native buffer or copying differently-sized planes.
-    if width == 0
-        || height == 0
-        || width % 2 != 0
-        || height % 2 != 0
-        || width > i32::MAX as u32
-        || height > i32::MAX as u32
-    {
-        return;
-    }
-    let Some(y_size) = (width as usize).checked_mul(height as usize) else {
-        return;
-    };
-    let Some(uv_size) = (width as usize / 2).checked_mul(height as usize / 2) else {
-        return;
-    };
-    let Some(frame_size) = uv_size.checked_mul(2).and_then(|uv| y_size.checked_add(uv)) else {
-        return;
-    };
-    // The preview needs four bytes per pixel; check that size on 32-bit JNI too.
-    if y_size.checked_mul(4).is_none() {
-        return;
-    }
-    if data.len() < frame_size {
-        tracing::warn!(
-            "Android camera: short frame ({} < {})",
-            data.len(),
-            frame_size
-        );
-        return;
-    }
-
-    let mut buffer = I420Buffer::new(width, height);
-    {
-        let (y, u, v) = buffer.data_mut();
-        // Tightly-packed source → planes are width-strided (matches the
-        // Windows capture path); copy plane by plane.
-        y.copy_from_slice(&data[..y_size]);
-        u.copy_from_slice(&data[y_size..y_size + uv_size]);
-        v.copy_from_slice(&data[y_size + uv_size..y_size + 2 * uv_size]);
-    }
-
-    let rotation = match rotation_degrees {
-        90 => VideoRotation::VideoRotation90,
-        180 => VideoRotation::VideoRotation180,
-        270 => VideoRotation::VideoRotation270,
-        _ => VideoRotation::VideoRotation0,
-    };
-
-    let mut frame = VideoFrame {
-        rotation,
-        timestamp_us: ts_us,
-        frame_metadata: None,
-        buffer,
-    };
-    capture.sink.capture_frame(&frame);
-    capture.last_frame = Instant::now();
-    capture.received_frame = true;
-    capture.captured_frames += 1;
-    if let Some(ready_tx) = capture.ready_tx.take() {
-        let _ = ready_tx.send(());
-    }
-    capture.publish_preview(&mut frame.buffer, width, height, rotation_degrees);
-    let elapsed = capture.stats_started.elapsed();
-    if elapsed >= Duration::from_secs(5) {
-        tracing::info!(
-            "Android camera preview: capture_fps={:.1} preview_fps={:.1} source={}x{}",
-            capture.captured_frames as f64 / elapsed.as_secs_f64(),
-            capture.preview_frames as f64 / elapsed.as_secs_f64(),
-            width,
-            height,
-        );
-        capture.stats_started = Instant::now();
-        capture.captured_frames = 0;
-        capture.preview_frames = 0;
+    let Some(capture) = guard.as_mut() else { return };
+    if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0
+        || width > i32::MAX as u32 || height > i32::MAX as u32
+    { return; }
+    let Some(y_size) = (width as usize).checked_mul(height as usize) else { return };
+    let Some(frame_size) = y_size.checked_add(y_size / 2) else { return };
+    if frame_size > i32::MAX as usize || y_size.checked_mul(4).is_none() { return; }
+    let push_started = Instant::now();
+    match format {
+        CameraFormat::I420 => {
+            let mut buffer = I420Buffer::new(width, height);
+            let (y, u, v) = buffer.data_mut();
+            if !copy(y, u, Some(v)) { return; }
+            capture.finish_frame(buffer, width, height, rotation_degrees, ts_us, push_started,
+                |capture, buffer| capture.publish_preview_i420(buffer, width, height, rotation_degrees));
+        }
+        CameraFormat::Nv12 => {
+            let mut buffer = NV12Buffer::new(width, height);
+            let (y, uv) = buffer.data_mut();
+            if !copy(y, uv, None) { return; }
+            capture.finish_frame(buffer, width, height, rotation_degrees, ts_us, push_started,
+                |capture, buffer| capture.publish_preview_nv12(buffer, width, height, rotation_degrees));
+        }
     }
 }
 
 impl ActiveCapture {
-    fn publish_preview(&mut self, buffer: &mut I420Buffer, width: u32, height: u32, rotation: i32) {
-        let Some(preview) = self.preview.as_ref() else {
-            return;
+    fn finish_frame<B: AsRef<dyn VideoBuffer>, P: FnOnce(&mut Self, &mut B) -> bool>(
+        &mut self,
+        buffer: B,
+        width: u32,
+        height: u32,
+        rotation_degrees: i32,
+        ts_us: i64,
+        push_started: Instant,
+        publish: P,
+    ) {
+        let rotation = match rotation_degrees {
+            90 => VideoRotation::VideoRotation90,
+            180 => VideoRotation::VideoRotation180,
+            270 => VideoRotation::VideoRotation270,
+            _ => VideoRotation::VideoRotation0,
         };
-        let now = Instant::now();
-        if self
-            .last_preview
-            .is_some_and(|last| now.duration_since(last) < PREVIEW_INTERVAL)
-        {
-            return;
+        let mut frame = VideoFrame { rotation, timestamp_us: ts_us, frame_metadata: None, buffer };
+        self.sink.capture_frame(&frame);
+        self.push_total += push_started.elapsed();
+        self.last_frame = Instant::now();
+        self.received_frame = true;
+        self.captured_frames += 1;
+        if let Some(ready_tx) = self.ready_tx.take() { let _ = ready_tx.send(()); }
+        let preview_started = Instant::now();
+        if publish(self, &mut frame.buffer) {
+            self.preview_total += preview_started.elapsed();
         }
-        // Scale only the preview after LiveKit has received the original frame.
-        // libwebrtc's I420 scaler avoids a full-size RGBA conversion and cuts
-        // Android's per-frame Slint buffer copy and texture upload as well.
-        let (preview_width, preview_height) = if width.max(height) > PREVIEW_MAX_EDGE {
-            let divisor = width.max(height);
-            let scaled_width =
-                ((width as u64 * PREVIEW_MAX_EDGE as u64 / divisor as u64) as u32 & !1).max(2);
-            let scaled_height =
-                ((height as u64 * PREVIEW_MAX_EDGE as u64 / divisor as u64) as u32 & !1).max(2);
-            (scaled_width, scaled_height)
-        } else {
-            (width, height)
-        };
+        let elapsed = self.stats_started.elapsed();
+        if elapsed >= Duration::from_secs(5) {
+            tracing::info!(
+                "Android camera preview: capture_fps={:.1} preview_fps={:.1} source={}x{} push_avg_us={:.0} publish_preview_avg_us={:.0}",
+                self.captured_frames as f64 / elapsed.as_secs_f64(),
+                self.preview_frames as f64 / elapsed.as_secs_f64(),
+                width, height,
+                self.push_total.as_micros() as f64 / self.captured_frames.max(1) as f64,
+                self.preview_total.as_micros() as f64 / self.preview_frames.max(1) as f64,
+            );
+            self.stats_started = Instant::now();
+            self.captured_frames = 0;
+            self.preview_frames = 0;
+            self.push_total = Duration::ZERO;
+            self.preview_total = Duration::ZERO;
+        }
+    }
+}
+
+impl ActiveCapture {
+    fn preview_dimensions(&self, width: u32, height: u32) -> Option<(u32, u32, Instant)> {
+        self.preview.as_ref()?;
+        let now = Instant::now();
+        if self.last_preview.is_some_and(|last| now.duration_since(last) < PREVIEW_INTERVAL) {
+            return None;
+        }
+        let (out_width, out_height) = if width.max(height) > PREVIEW_MAX_EDGE {
+            let divisor = width.max(height) as u64;
+            (((width as u64 * PREVIEW_MAX_EDGE as u64 / divisor) as u32 & !1).max(2),
+             ((height as u64 * PREVIEW_MAX_EDGE as u64 / divisor) as u32 & !1).max(2))
+        } else { (width, height) };
+        Some((out_width, out_height, now))
+    }
+
+    fn publish_preview_i420(&mut self, buffer: &mut I420Buffer, width: u32, height: u32, rotation: i32) -> bool {
+        let Some((preview_width, preview_height, now)) = self.preview_dimensions(width, height) else { return false };
         let scaled = (preview_width != width || preview_height != height)
             .then(|| buffer.scale(preview_width as i32, preview_height as i32));
-        let preview_buffer = scaled.as_ref().unwrap_or(buffer);
-        let rgba = crate::calls::video_playback::convert_i420_into(
-            None,
-            preview_buffer,
-            preview_width,
-            preview_height,
-            preview_width as usize * preview_height as usize * 4,
-        );
-        // Android's Slint CPU image consumer does not apply rotation metadata.
-        // Rotate pixels upright and mirror only the front-camera self view;
-        // the published LiveKit frame above retains its original sensor metadata.
-        let (rgba, width, height) =
-            orient_preview(&rgba, preview_width, preview_height, rotation, self.front);
-        preview.shared.set_frame(
-            preview.local_id.clone(),
-            Arc::new(rgba),
-            width,
-            height,
-            false,
-        );
+        let source = scaled.as_ref().unwrap_or(buffer);
+        let rgba_len = preview_width as usize * preview_height as usize * 4;
+        let recycled = self.rgba_spare.take().filter(|arc| arc.len() == rgba_len);
+        let rgba = crate::calls::video_playback::convert_i420_into(recycled, source, preview_width, preview_height, rgba_len);
+        self.finish_preview(rgba, preview_width, preview_height, rotation, now);
+        true
+    }
+
+    fn publish_preview_nv12(&mut self, buffer: &mut NV12Buffer, width: u32, height: u32, rotation: i32) -> bool {
+        let Some((preview_width, preview_height, now)) = self.preview_dimensions(width, height) else { return false };
+        let scaled = (preview_width != width || preview_height != height)
+            .then(|| buffer.scale(preview_width as i32, preview_height as i32));
+        let source = scaled.as_ref().unwrap_or(buffer);
+        let rgba_len = preview_width as usize * preview_height as usize * 4;
+        let recycled = self.rgba_spare.take().filter(|arc| arc.len() == rgba_len);
+        let rgba = crate::calls::video_playback::convert_nv12_into(recycled, source, preview_width, preview_height, rgba_len);
+        self.finish_preview(rgba, preview_width, preview_height, rotation, now);
+        true
+    }
+
+    fn finish_preview(&mut self, rgba: Arc<Vec<u8>>, width: u32, height: u32, rotation: i32, now: Instant) {
+        let rgba_len = rgba.len();
+        let mut recycled = None;
+        let mut index = 0;
+        while index < self.oriented_spare.len() {
+            if self.oriented_spare[index].len() == rgba_len
+                && Arc::get_mut(&mut self.oriented_spare[index]).is_some()
+            {
+                recycled = Some(self.oriented_spare.swap_remove(index));
+                break;
+            }
+            index += 1;
+        }
+        let (oriented, out_width, out_height) = orient_preview(&rgba, width, height, rotation, self.front, recycled);
+        self.rgba_spare = Some(rgba);
+        if let Some(preview) = self.preview.as_ref() {
+            preview.shared.set_frame(preview.local_id.clone(), oriented.clone(), out_width, out_height, false);
+        }
+        if let Some(previous) = self.oriented_previous.replace(oriented) {
+            if self.oriented_spare.len() < 3 { self.oriented_spare.push(previous); }
+        }
         self.last_preview = Some(now);
         self.preview_frames += 1;
     }
 }
 
 fn orient_preview(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    rotation: i32,
-    mirror: bool,
-) -> (Vec<u8>, u32, u32) {
-    let (out_width, out_height) = match rotation {
-        90 | 270 => (height, width),
-        _ => (width, height),
-    };
-    let mut out = vec![0; rgba.len()];
-    for y in 0..height {
-        for x in 0..width {
+    rgba: &[u8], width: u32, height: u32, rotation: i32, mirror: bool,
+    recycled: Option<Arc<Vec<u8>>>,
+) -> (Arc<Vec<u8>>, u32, u32) {
+    let (out_width, out_height) = match rotation { 90 | 270 => (height, width), _ => (width, height) };
+    let mut out = recycled.unwrap_or_else(|| Arc::new(vec![0; rgba.len()]));
+    let dst = Arc::get_mut(&mut out).expect("preview buffer uniquely owned");
+    assert_eq!(dst.len(), rgba.len());
+    let out_width = out_width as usize;
+    let width = width as usize;
+    let height = height as usize;
+    // Work with complete pixels, so each source pixel is bounds checked only once.
+    for (y, row) in rgba.chunks_exact(width * 4).enumerate() {
+        for (x, pixel) in row.chunks_exact(4).enumerate() {
             let (mut dx, dy) = match rotation {
                 90 => (height - 1 - y, x),
                 180 => (width - 1 - x, height - 1 - y),
                 270 => (y, width - 1 - x),
                 _ => (x, y),
             };
-            if mirror {
-                dx = out_width - 1 - dx;
-            }
-            let src = (y as usize * width as usize + x as usize) * 4;
-            let dst = (dy as usize * out_width as usize + dx as usize) * 4;
-            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+            if mirror { dx = out_width - 1 - dx; }
+            let dst_pos = (dy * out_width + dx) * 4;
+            // The transform maps each source pixel into the same-size output.
+            unsafe { std::ptr::copy_nonoverlapping(pixel.as_ptr(), dst.as_mut_ptr().add(dst_pos), 4) };
         }
     }
-    (out, out_width, out_height)
+    (out, out_width as u32, if rotation == 90 || rotation == 270 { width as u32 } else { height as u32 })
 }
 
 #[cfg(test)]
@@ -302,7 +328,7 @@ mod tests {
             (270, vec![3, 6, 2, 5, 1, 4], vec![6, 3, 5, 2, 4, 1]),
         ] {
             for (front, expected) in [(false, expected), (true, mirrored)] {
-                let (out, w, h) = orient_preview(&pixels, 3, 2, rotation, front);
+                let (out, w, h) = orient_preview(&pixels, 3, 2, rotation, front, None);
                 assert_eq!(
                     (w, h),
                     if rotation == 90 || rotation == 270 {
@@ -318,6 +344,17 @@ mod tests {
                 assert!(out.chunks_exact(4).all(|p| p[3] == 255));
             }
         }
+    }
+
+    fn push_test_frame(data: &[u8], width: u32, height: u32, rotation: i32, ts_us: i64) {
+        push_frame(CameraFormat::I420, width, height, rotation, ts_us, |y, u, v| {
+            let Some(v) = v else { return false };
+            if data.len() < y.len() + u.len() + v.len() { return false; }
+            y.copy_from_slice(&data[..y.len()]);
+            u.copy_from_slice(&data[y.len()..y.len() + u.len()]);
+            v.copy_from_slice(&data[y.len() + u.len()..y.len() + u.len() + v.len()]);
+            true
+        });
     }
 
     #[test]
@@ -361,7 +398,7 @@ mod tests {
         let mut data = vec![16, 235, 16, 235, 235, 16, 235, 16];
         data.extend([128; 4]);
         // This is the same entry point the production JNI camera callback uses.
-        push_frame_i420(&data, 4, 2, 90, 1000);
+        push_test_frame(&data, 4, 2, 90, 1000);
         runtime
             .block_on(tokio::time::timeout(Duration::from_secs(5), ready_rx))
             .expect("first frame must signal readiness promptly")
@@ -379,7 +416,7 @@ mod tests {
         // Clockwise rotation plus front self-view mirror maps row0 x0 first.
         assert!(first.rgba_data[0] < 5);
         assert!(first.rgba_data[4] > 250);
-        push_frame_i420(&data, 4, 2, 90, 2000);
+        push_test_frame(&data, 4, 2, 90, 2000);
         assert_eq!(
             shared.get_frame("synthetic-local-camera").unwrap().frame_id,
             first.frame_id,
@@ -387,17 +424,17 @@ mod tests {
         );
         ACTIVE_SINK.lock().unwrap().as_mut().unwrap().last_preview =
             Some(Instant::now() - PREVIEW_INTERVAL);
-        push_frame_i420(&data[..3], 4, 2, 90, 3000);
-        push_frame_i420(&data, 3, 2, 90, 3000);
-        push_frame_i420(&data, u32::MAX - 1, u32::MAX - 1, 90, 3000);
-        push_frame_i420(&data, i32::MAX as u32 - 1, i32::MAX as u32 - 1, 90, 3000);
-        push_frame_i420(&data, 0, 2, 90, 3000);
+        push_test_frame(&data[..3], 4, 2, 90, 3000);
+        push_test_frame(&data, 3, 2, 90, 3000);
+        push_test_frame(&data, u32::MAX - 1, u32::MAX - 1, 90, 3000);
+        push_test_frame(&data, i32::MAX as u32 - 1, i32::MAX as u32 - 1, 90, 3000);
+        push_test_frame(&data, 0, 2, 90, 3000);
         assert_eq!(
             shared.get_frame("synthetic-local-camera").unwrap().frame_id,
             first.frame_id,
             "invalid JNI frame must not publish"
         );
-        push_frame_i420(&data, 4, 2, 90, 4000);
+        push_test_frame(&data, 4, 2, 90, 4000);
         assert!(shared.get_frame("synthetic-local-camera").unwrap().frame_id > first.frame_id);
         running.store(false, Ordering::SeqCst);
         assert!(worker.join().unwrap());
@@ -406,7 +443,7 @@ mod tests {
             shared.get_frame("synthetic-local-camera").is_none(),
             "stop must release self-preview pixels"
         );
-        push_frame_i420(&data, 4, 2, 90, 5000);
+        push_test_frame(&data, 4, 2, 90, 5000);
         assert!(shared.get_frame("synthetic-local-camera").is_none());
     }
 }

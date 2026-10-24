@@ -624,8 +624,9 @@ pub(crate) fn convert_i420_into(
     }
 }
 
-/// Convert an NV12 buffer to RGBA, reusing `recycled` in place when present.
-fn convert_nv12_into(
+/// Convert an NV12 buffer to RGBA for playback or camera preview, reusing
+/// `recycled` in place when present.
+pub(crate) fn convert_nv12_into(
     recycled: Option<Arc<Vec<u8>>>,
     buffer: &livekit::webrtc::video_frame::NV12Buffer,
     width: u32,

@@ -970,10 +970,11 @@ class MainActivity : GameActivity() {
         runOnUiThread { QrScanner(this).show() }
     }
 
-    // --- Camera capture (CameraX → I420 → Rust/LiveKit) ------------------------
+    // --- Camera capture (CameraX → I420/NV12 → Rust/LiveKit) -------------------
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraAnalysis: ImageAnalysis? = null
     private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private var cameraFrameBytes = ByteArray(0)
 
     /** Called from Rust (JNI) when a call starts publishing video. */
     @Suppress("unused", "UNUSED_PARAMETER")
@@ -997,13 +998,27 @@ class MainActivity : GameActivity() {
                 cameraAnalysis = analysis
                 analysis.setAnalyzer(cameraExecutor) { image ->
                     try {
-                        val i420 = yuv420ToI420(image)
+                        val uPlane = image.planes[1]
+                        val vPlane = image.planes[2]
+                        val chromaRows = image.height / 2
+                        val lastUvRow = (chromaRows - 1) * uPlane.rowStride
+                        val format = if (uPlane.pixelStride == 2 && vPlane.pixelStride == 2 &&
+                            image.width >= 4 &&
+                            uPlane.rowStride == vPlane.rowStride &&
+                            uPlane.rowStride >= image.width &&
+                            uPlane.buffer.limit() >= lastUvRow + image.width - 1 &&
+                            vPlane.buffer.limit() >= lastUvRow + image.width - 1 &&
+                            (0 until minOf(8, image.width / 2 - 1)).all { sample ->
+                                uPlane.buffer.get(sample * 2 + 1) == vPlane.buffer.get(sample * 2)
+                            }) 1 else 0
+                        val frame = yuv420ToI420(image, format)
                         nativeOnCameraFrame(
-                            i420,
+                            frame,
                             image.width,
                             image.height,
                             image.imageInfo.rotationDegrees,
                             image.imageInfo.timestamp / 1000, // ns → µs
+                            format,
                         )
                     } catch (e: Exception) {
                         Log.e(TAG, "frame convert failed", e)
@@ -1038,16 +1053,35 @@ class MainActivity : GameActivity() {
         }
     }
 
-    /** Convert a YUV_420_888 ImageProxy to tightly-packed I420 (Y, then U, V). */
-    private fun yuv420ToI420(image: ImageProxy): ByteArray {
+    /** Pack CameraX planes as I420 or NV12 into the analyzer's reusable array. */
+    private fun yuv420ToI420(image: ImageProxy, format: Int): ByteArray {
         val w = image.width
         val h = image.height
         val ySize = w * h
         val cSize = (w / 2) * (h / 2)
-        val out = ByteArray(ySize + 2 * cSize)
+        val size = ySize + 2 * cSize
+        if (cameraFrameBytes.size != size) cameraFrameBytes = ByteArray(size)
+        val out = cameraFrameBytes
         copyPlane(image.planes[0], w, h, out, 0)
-        copyPlane(image.planes[1], w / 2, h / 2, out, ySize)
-        copyPlane(image.planes[2], w / 2, h / 2, out, ySize + cSize)
+        if (format == 1) {
+            val u = image.planes[1].buffer
+            val v = image.planes[2].buffer
+            val rowStride = image.planes[1].rowStride
+            for (r in 0 until h / 2) {
+                val rowStart = r * rowStride
+                val available = minOf(w, u.limit() - rowStart)
+                u.position(rowStart)
+                u.get(out, ySize + r * w, available)
+                // Android's overlapping U/V views often omit the last V byte.
+                if (available < w) {
+                    v.position(rowStart + available - 1)
+                    out[ySize + r * w + available] = v.get()
+                }
+            }
+        } else {
+            copyPlane(image.planes[1], w / 2, h / 2, out, ySize)
+            copyPlane(image.planes[2], w / 2, h / 2, out, ySize + cSize)
+        }
         return out
     }
 
@@ -1063,11 +1097,11 @@ class MainActivity : GameActivity() {
                 outPos += width
             }
         } else {
-            // Interleaved chroma (pixelStride 2): pick every Nth byte per row.
-            val rowBuf = ByteArray(rowStride)
+            // Unusual planar layout with gaps; the common semi-planar case uses NV12 above.
+            val rowBuf = ByteArray(width * pixelStride)
             for (r in 0 until height) {
                 buffer.position(r * rowStride)
-                val toRead = minOf(rowStride, buffer.remaining())
+                val toRead = minOf(rowBuf.size, buffer.remaining())
                 buffer.get(rowBuf, 0, toRead)
                 var i = 0
                 var c = 0
@@ -1080,13 +1114,14 @@ class MainActivity : GameActivity() {
         }
     }
 
-    /** Implemented in Rust (libchatter_ui.so). Delivers one I420 camera frame. */
+    /** Implemented in Rust (libchatter_ui.so). Format 0=I420, 1=NV12. */
     private external fun nativeOnCameraFrame(
         i420: ByteArray,
         width: Int,
         height: Int,
         rotation: Int,
         timestampUs: Long,
+        format: Int,
     )
 
     private companion object {
