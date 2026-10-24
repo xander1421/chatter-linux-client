@@ -33,6 +33,18 @@ pub mod timers;
 /// Note: call_service is passed separately because it's initialized post-boot
 /// via AppContext.init_call_service() and stored in a OnceLock.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    use slint::{ComponentHandle, Model, ModelRc, VecModel};
+    window.global::<crate::CallView>().on_select_call_tile_indices(|participants, pinned_id| {
+        let tiles: Vec<crate::CallParticipantData> = participants.iter().collect();
+        let indices = chatter_core::calls::tiles::select_visible_tiles(
+            &tiles,
+            pinned_id.as_str(),
+            |tile| tile.user_id.as_str(),
+            |tile| tile.is_screen_sharing,
+            |tile| tile.is_speaking,
+        );
+        ModelRc::new(VecModel::from(indices.into_iter().map(|index| index as i32).collect::<Vec<_>>()))
+    });
     outgoing::wire_start_call(window, ui_ctx);
     incoming::wire_incoming_call(window, ui_ctx);
     incoming::wire_orchestrator_events(window, ui_ctx);

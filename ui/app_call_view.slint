@@ -40,6 +40,7 @@ export global CallView {
     // Bound to ActiveCallView.fullscreen. Hides the ChatLayout sibling.
     in-out property <bool> active-call-fullscreen: false;
     in property <ActiveCallData> active-call-data;
+    pure callback select-call-tile-indices([CallParticipantData], string) -> [int];
     in-out property <bool> call-is-muted: false;
     in-out property <bool> call-is-video-enabled: true;
     in-out property <bool> call-is-screen-sharing: false;
@@ -87,7 +88,8 @@ export global CallView {
     in-out property <string> selected-audio-device-id: "";
     in property <[AudioDeviceData]> audio-output-devices: [];
     in-out property <string> selected-audio-output-id: "";
-    in property <[ScreenSourceData]> screen-sources: [];
+    in property <[ScreenSourceData]> screen-monitors: [];
+    in property <[ScreenSourceData]> screen-windows: [];
     in-out property <string> selected-screen-source-id: "";
     // ========== Call callbacks ==========
     callback calls-tab-clicked();  // mobile nav "Calls" tab — loads call history

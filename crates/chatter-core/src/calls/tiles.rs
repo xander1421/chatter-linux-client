@@ -25,6 +25,41 @@ pub fn local_screen_slot(tiles: usize) -> usize {
     tiles.saturating_sub(1)
 }
 
+/// Select up to six tiles while keeping the local camera visible. A pinned
+/// participant, screen share and speaking participants take the next slots.
+/// Returned indices retain roster order so video frames stay aligned.
+pub fn select_visible_tiles<T>(
+    tiles: &[T],
+    pinned_id: &str,
+    id: impl Fn(&T) -> &str,
+    sharing: impl Fn(&T) -> bool,
+    speaking: impl Fn(&T) -> bool,
+) -> Vec<usize> {
+    const CAPACITY: usize = 6;
+    if tiles.len() <= CAPACITY {
+        return (0..tiles.len()).collect();
+    }
+    let local = tiles.len() - 1;
+    let mut chosen = vec![local];
+    let mut include = |index: usize| {
+        if chosen.len() < CAPACITY && !chosen.contains(&index) {
+            chosen.push(index);
+        }
+    };
+    if let Some(index) = tiles.iter().position(|tile| id(tile) == pinned_id) {
+        include(index);
+    }
+    for (index, tile) in tiles.iter().enumerate() {
+        if sharing(tile) { include(index); }
+    }
+    for (index, tile) in tiles.iter().enumerate() {
+        if speaking(tile) { include(index); }
+    }
+    for index in 0..tiles.len() { include(index); }
+    chosen.sort_unstable();
+    chosen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

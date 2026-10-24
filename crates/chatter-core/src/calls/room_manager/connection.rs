@@ -434,6 +434,7 @@ impl RoomManager {
         {
             let audio = self.audio_capture.read();
             audio.signal_stop();
+            self.microphone_track_sid.write().take();
         }
         {
             let video = self.video_capture.read();
