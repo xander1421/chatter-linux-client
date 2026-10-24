@@ -95,64 +95,78 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client_for_open = client.clone();
     window.global::<ActivityGlobal>().on_open_item(move |id| {
-        let Some(window) = weak.upgrade() else { return };
-        if let Some(target) = client_for_open.activity_target(id.as_str()) {
-            let modal = window.global::<crate::ModalHostState>();
-            let sidebar = window.global::<crate::SidebarPane>();
-            match target.kind.as_str() {
-                "contact-request" => {
-                    super::back::reset_to_chats(&window);
-                    modal.set_friends_modal_tab("requests".into());
-                    modal.set_friends_requests_sub_tab("received".into());
-                    sidebar.set_active_tab("contacts".into());
-                }
-                "invite" => {
-                    super::back::reset_to_chats(&window);
-                    modal.set_friends_modal_tab("requests".into());
-                    modal.set_friends_requests_sub_tab(if target.conversation_type.as_deref() == Some("anon_group") { "groups" } else { "channels" }.into());
-                    sidebar.set_active_tab("contacts".into());
-                }
-                "mesh-invite" => {
-                    super::back::reset_to_chats(&window);
-                    sidebar.set_active_tab("mesh".into());
-                }
-                "missed-call" => {
-                    super::back::reset_to_chats(&window);
-                    sidebar.set_active_tab("calls".into());
-                }
-                "device-linked" => {
-                    super::back::reset_to_chats(&window);
-                    modal.invoke_nav_push("settings".into());
-                    modal.invoke_nav_push("sessions".into());
-                }
-                "server" | "server-ok" => {}
-                _ => {
-                    if let (Some(conversation_type), Some(conversation_id)) =
-                        (target.conversation_type.as_deref(), target.conversation_id.as_deref())
-                    {
-                        if let Some(conversation) = client_for_open.call_history_conversation(conversation_type, conversation_id) {
+        let weak = weak.clone();
+        let client = client_for_open.clone();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let target = client.activity_target(&id);
+            client.activity_mark_read(&id);
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if let Some(target) = target {
+                    let modal = window.global::<crate::ModalHostState>();
+                    let sidebar = window.global::<crate::SidebarPane>();
+                    match target.kind.as_str() {
+                        "contact-request" => {
                             super::back::reset_to_chats(&window);
-                            sidebar.set_active_tab("chats".into());
-                            sidebar.set_mobile_show_chat(true);
-                            if let Some(message_id) = target.message_id {
-                                super::header::jump_to_conversation_message(&window, &client_for_open, conversation, &message_id);
-                            } else {
-                                super::sidebar::select_conversation(&window, conversation);
+                            modal.set_friends_modal_tab("requests".into());
+                            modal.set_friends_requests_sub_tab("received".into());
+                            sidebar.set_active_tab("contacts".into());
+                        }
+                        "invite" => {
+                            super::back::reset_to_chats(&window);
+                            modal.set_friends_modal_tab("requests".into());
+                            modal.set_friends_requests_sub_tab(if target.conversation_type.as_deref() == Some("anon_group") { "groups" } else { "channels" }.into());
+                            sidebar.set_active_tab("contacts".into());
+                        }
+                        "mesh-invite" => {
+                            super::back::reset_to_chats(&window);
+                            sidebar.set_active_tab("mesh".into());
+                        }
+                        "missed-call" => {
+                            super::back::reset_to_chats(&window);
+                            sidebar.set_active_tab("calls".into());
+                        }
+                        "device-linked" => {
+                            super::back::reset_to_chats(&window);
+                            modal.invoke_nav_push("settings".into());
+                            modal.invoke_nav_push("sessions".into());
+                        }
+                        "server" | "server-ok" => {}
+                        _ => {
+                            if let (Some(conversation_type), Some(conversation_id)) =
+                                (target.conversation_type.as_deref(), target.conversation_id.as_deref())
+                            {
+                                if let Some(conversation) = client.call_history_conversation(conversation_type, conversation_id) {
+                                    super::back::reset_to_chats(&window);
+                                    sidebar.set_active_tab("chats".into());
+                                    sidebar.set_mobile_show_chat(true);
+                                    if let Some(message_id) = target.message_id {
+                                        super::header::jump_to_conversation_message(&window, &client, conversation, &message_id);
+                                    } else {
+                                        super::sidebar::select_conversation(&window, conversation);
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
-        client_for_open.activity_mark_read(id.as_str());
-        refresh(&window, &client_for_open);
+                refresh(&window, &client);
+            });
+        });
     });
 
     let weak = window.as_weak();
     let client_for_all = client.clone();
     window.global::<ActivityGlobal>().on_mark_all_read(move || {
-        client_for_all.activity_mark_all_read();
-        if let Some(window) = weak.upgrade() { refresh(&window, &client_for_all); }
+        let weak = weak.clone();
+        let client = client_for_all.clone();
+        tokio::task::spawn_blocking(move || {
+            client.activity_mark_all_read();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() { refresh(&window, &client); }
+            });
+        });
     });
 
     let weak = window.as_weak();
