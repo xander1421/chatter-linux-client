@@ -65,6 +65,9 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         ui_ctx.chat_snapshot().attachment_revision,
     );
     apply_header(window, ui_ctx, &row);
+    window.global::<crate::ChatPane>().set_messages(ModelRc::new(
+        VecModel::from(Vec::<MessageItemData>::new()),
+    ));
     super::refresh_rows(window, ui_ctx);
 
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::begin(
@@ -89,9 +92,11 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             Ok(messages) => messages,
             Err(error) => {
                 tracing::error!(%error, "mesh: could not load the conversation");
-                crate::run_history_ui!(weak, owner, |w| w
-                    .global::<crate::ChatPane>()
-                    .set_loading_messages(false));
+                crate::run_history_ui!(weak, owner, |w| {
+                    w.global::<crate::ChatPane>().set_loading_messages(false);
+                    w.global::<MeshGlobal>()
+                        .set_notice("Could not load this mesh conversation. Open it again to retry.".into());
+                });
                 return;
             }
         };

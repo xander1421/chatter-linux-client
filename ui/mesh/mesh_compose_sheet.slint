@@ -65,21 +65,24 @@ export component MeshComposeSheet inherits Rectangle {
     }
     function submit() {
         if root.page == "group" && root.group-draft != "" {
-            MeshGlobal.create-private-channel(root.group-draft);
-            root.group-draft = "";
-            root.close();
+            if MeshGlobal.create-private-channel(root.group-draft) {
+                root.group-draft = "";
+            }
         } else if root.page == "channel" && root.channel-draft != "" {
-            MeshGlobal.join-channel(root.channel-draft);
-            root.channel-draft = "";
-            root.close();
+            if MeshGlobal.join-channel(root.channel-draft) {
+                root.channel-draft = "";
+                root.close();
+            }
         } else if root.page == "invite" && root.invite-draft != "" {
-            MeshGlobal.join-private-channel(root.invite-draft);
-            root.invite-draft = "";
-            root.close();
+            if MeshGlobal.join-private-channel(root.invite-draft) {
+                root.invite-draft = "";
+                root.close();
+            }
         } else if root.page == "cell" && root.cell-draft != "" {
-            MeshGlobal.join-geohash(root.cell-draft);
-            root.cell-draft = "";
-            root.close();
+            if MeshGlobal.join-geohash(root.cell-draft) {
+                root.cell-draft = "";
+                root.close();
+            }
         }
     }
     property <bool> can-submit: root.page == "group" ? root.group-draft != ""
@@ -186,7 +189,7 @@ export component MeshComposeSheet inherits Rectangle {
                             VerticalLayout {
                                 for name in MeshGlobal.nearby-channels: SettingsRow {
                                     icon: Icons.hash; title: "#" + name; touch: root.touch;
-                                    clicked => { MeshGlobal.join-channel(name); root.close(); }
+                                    clicked => { if MeshGlobal.join-channel(name) { root.close(); } }
                                 }
                             }
                         }

@@ -83,12 +83,12 @@ export global MeshGlobal {
     in-out property <bool> sheet-peer-blocked: false;
     in-out property <bool> sheet-peer-muted: false;
     callback toggle-peer-mute(string);
-    callback join-channel(string);
+    callback join-channel(string) -> bool;
     callback leave-channel(string);
     callback toggle-channel-mute(string);
     callback toggle-peer-block(string);
-    callback create-private-channel(string);
-    callback join-private-channel(string);
+    callback create-private-channel(string) -> bool;
+    callback join-private-channel(string) -> bool;
     callback open-private-scanner();
     callback invite-private-channel(string, string);
     callback invite-private-channel-direct(string, string);
@@ -177,7 +177,7 @@ export global MeshGlobal {
 
     // ── Actions, handled in Rust ──
     callback conversation-selected(/* conversation id */ string);
-    callback join-geohash(/* cell */ string);
+    callback join-geohash(/* cell */ string) -> bool;
     callback leave-geohash(/* cell */ string);
     // Destroy everything this device holds about the mesh (identity, mail,
     // history). Not the chatter account — see `ChatterClient::mesh_panic_wipe`.
