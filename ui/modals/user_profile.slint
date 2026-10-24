@@ -731,20 +731,20 @@ export component UserProfileModal inherits Rectangle {
             }
         }
     }
-    Modal {
+    edit-contact-modal := Modal {
         show: root.edit-contact-open;
         title: "Edit contact";
         modal-width: 400px;
         show-close: false;
-        close => { root.edit-contact-open = false; }
+        close => { edit-contact-modal.release-focus(); root.edit-contact-open = false; }
         VerticalLayout {
             spacing: Spacing.md;
             Input { text <=> root.contact-draft; placeholder: "Contact name"; control-height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height; }
             HorizontalLayout {
                 spacing: Spacing.sm;
-                Button { text: "Cancel"; variant: "secondary"; clicked => { root.edit-contact-open = false; } }
-                Button { text: "Reset"; variant: "secondary"; clicked => { root.edit-contact-open = false; root.edit-contact(""); } }
-                Button { text: "Save"; variant: "primary"; clicked => { root.edit-contact-open = false; root.edit-contact(root.contact-draft); } }
+                Button { text: "Cancel"; variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; } }
+                Button { text: "Reset"; variant: "secondary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(""); } }
+                Button { text: "Save"; variant: "primary"; clicked => { edit-contact-modal.release-focus(); root.edit-contact-open = false; root.edit-contact(root.contact-draft); } }
             }
         }
     }
