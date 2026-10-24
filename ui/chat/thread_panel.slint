@@ -394,6 +394,33 @@ export component ThreadPanel inherits Rectangle {
                 }
             }
 
+            anchor-settled := Timer {
+                interval: 16ms;
+                running: false;
+                triggered => { self.running = false; replies-view.preserving-anchor = false; }
+            }
+            at-rest := Timer {
+                interval: 120ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (replies-view.user-scrolling) {
+                        replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 6px;
+                        replies-view.user-scrolling = false;
+                    }
+                }
+            }
+            settle := Timer {
+                interval: 1ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (replies-view.following-tail) {
+                        replies-view.viewport-y = Math.min(0px, replies-view.height - replies-view.viewport-height);
+                    }
+                }
+            }
+
             // Replies list
             replies-view := ListView {
                 visible: !root.loading && root.replies.length > 0;
@@ -428,11 +455,6 @@ export component ThreadPanel inherits Rectangle {
                     }
                     anchor-settled.start(); anchor-settled.restart();
                 }
-                anchor-settled := Timer {
-                    interval: 16ms;
-                    running: false;
-                    triggered => { self.running = false; replies-view.preserving-anchor = false; }
-                }
                 property <int> tail-request: root.tail-serial;
                 property <string> thread-id: root.root-message-id;
                 changed thread-id => {
@@ -465,27 +487,6 @@ export component ThreadPanel inherits Rectangle {
                     if (self.following-tail) { settle.start(); settle.restart(); }
                 }
                 changed height => { if (self.following-tail) { settle.start(); settle.restart(); } }
-                at-rest := Timer {
-                    interval: 120ms;
-                    running: false;
-                    triggered => {
-                        self.running = false;
-                        if (replies-view.user-scrolling) {
-                            replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 6px;
-                            replies-view.user-scrolling = false;
-                        }
-                    }
-                }
-                settle := Timer {
-                    interval: 1ms;
-                    running: false;
-                    triggered => {
-                        self.running = false;
-                        if (replies-view.following-tail) {
-                            replies-view.viewport-y = Math.min(0px, replies-view.height - replies-view.viewport-height);
-                        }
-                    }
-                }
 
                 for item[idx] in root.replies: reply-row := VerticalLayout {
                     width: replies-view.width;

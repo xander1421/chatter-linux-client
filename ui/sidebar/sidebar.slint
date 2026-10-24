@@ -40,6 +40,14 @@ export struct SidebarRowData {
     section: CustomSectionData,
 }
 
+// Bare Flickable named ListView so the compiler virtualizes its `for`, as in
+// chat/message_list.slint.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
+
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
     // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
