@@ -270,6 +270,7 @@ export component SectionContextMenu inherits Rectangle {
     in property <length> position-x: 0;
     in property <length> position-y: 0;
     in property <bool> mobile-mode: false;
+    in property <length> bottom-inset: 0px;
 
     // Conversation being acted on
     in property <string> conversation-id: "";
@@ -334,7 +335,7 @@ export component SectionContextMenu inherits Rectangle {
         elevation: 4;
 
         x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: (min(root.position-y, parent.height - self.height - Spacing.md)) + self.entrance-offset;
+        y: max(Spacing.md, min(root.position-y, parent.height - root.bottom-inset - self.height - Spacing.md)) + self.entrance-offset;
         width: 220px;
         height: menu-layout.preferred-height + Spacing.sm * 2;
         border-radius: Spacing.radius-xl;
