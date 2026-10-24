@@ -18,12 +18,15 @@ export component AppShortcuts inherits FocusScope {
 
     key-pressed(event) => {
         // Ctrl+J: open the local AI channel
-        if (JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
+        if (root.active-modal == "none" && !SearchPane.unified-search-open
+            && JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
+            SidebarPane.active-tab = "chats";
+            SidebarPane.mobile-show-chat = true;
             SidebarPane.channel-selected("00000000-0000-0000-0000-000000000000");
             return accept;
         }
         // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
-        if (event.modifiers.control
+        if (root.active-modal == "none" && event.modifiers.control
             && ((event.text == "k" && SearchPane.search-shortcut-pref != "f")
              || (event.text == "f" && SearchPane.search-shortcut-pref != "k"))) {
             SearchPane.unified-search-selected-index = 0;
@@ -32,13 +35,15 @@ export component AppShortcuts inherits FocusScope {
             return accept;
         }
         // Ctrl+,: Open settings
-        if (event.modifiers.control && event.text == ",") {
+        if (root.active-modal == "none" && !SearchPane.unified-search-open
+            && event.modifiers.control && event.text == ",") {
             ModalHostState.nav-push("settings");
             SidebarPane.settings-clicked();
             return accept;
         }
         // Ctrl+/: Toggle keyboard shortcuts help
-        if (event.modifiers.control && event.text == "/") {
+        if (event.modifiers.control && event.text == "/"
+            && (root.active-modal == "none" || root.active-modal == "keyboard-shortcuts")) {
             if (root.active-modal == "keyboard-shortcuts") {
                 ModalHostState.nav-close("keyboard-shortcuts");
             } else {
@@ -53,11 +58,17 @@ export component AppShortcuts inherits FocusScope {
                 return accept;
             }
             if (root.active-modal != "none") {
-                ModalHostState.nav-pop();
+                root.back-pressed();
                 return accept;
             }
-            if (SidebarPane.active-tab != "chats") {
-                SidebarPane.active-tab = "chats";
+            if (SearchPane.unified-search-open || ChatPane.thread-panel-visible
+                || ChatPane.context-menu-visible || ChatPane.reaction-picker-visible
+                || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
+                || ChatPane.pdf-preview-visible || ChatPane.code-preview-visible
+                || ChatPane.video-player-visible || ChatPane.image-viewer-visible
+                || ChatPane.selection-mode
+                || SidebarPane.active-tab != "chats") {
+                root.back-pressed();
                 return accept;
             }
         }

@@ -73,14 +73,23 @@ fn handle_dropped_file(
     chat_state: &Arc<ChatterClient>,
     weak: &slint::Weak<MainWindow>,
 ) {
-    tracing::info!("File dropped: {:?}", path);
+    let Some(window) = weak.upgrade() else { return };
+    if window.get_current_view().as_str() != "main"
+        || window.get_active_modal().as_str() != "none"
+        || window.global::<crate::SearchPane>().get_unified_search_open()
+        || window.global::<crate::SidebarPane>().get_active_tab().as_str() != "chats"
+        || window.global::<crate::ChatPane>().get_thread_panel_visible()
+    {
+        show_drop_error(weak, "Open a chat to attach a file.");
+        return;
+    }
 
     let snapshot = chat_state.chat_snapshot();
     let conversation = snapshot.active_conversation;
     let revision = snapshot.attachment_revision;
     // Check if we have an active conversation
     if matches!(conversation, ActiveConversation::None) {
-        tracing::warn!("File dropped but no active conversation - ignoring");
+        show_drop_error(weak, "Open a conversation before dropping a file.");
         return;
     }
 
@@ -92,7 +101,19 @@ fn handle_dropped_file(
         if let Err(e) =
             process_and_add_file(path, None, &chat_state, conversation, revision, &weak).await
         {
-            tracing::error!("Failed to process dropped file: {}", e);
+            tracing::warn!("Dropped file could not be staged: {e}");
+            show_drop_error(&weak, "Couldn't attach that file. Check that it is still available and try again.");
+        }
+    });
+}
+
+fn show_drop_error(weak: &slint::Weak<MainWindow>, message: &'static str) {
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = weak.upgrade() {
+            window.set_toast_message(message.into());
+            window.set_toast_variant("error".into());
+            window.set_toast_visible(true);
         }
     });
 }
