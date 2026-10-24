@@ -22,6 +22,7 @@ import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData,
 export global ModalHostState {
     // ========== Channel settings callbacks ==========
     callback channel-settings-save(string, string);  // name, description
+    callback channel-settings-clear-error();
     callback channel-settings-pick-icon();  // opens native file picker for the channel icon
     callback channel-settings-change-notification(string);   // preference
     callback channel-settings-toggle-mute(bool);

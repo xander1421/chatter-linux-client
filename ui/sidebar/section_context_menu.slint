@@ -114,6 +114,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
     in property <string> section-id: "";
     in property <string> section-sort-mode: "recent";
     in property <bool> mobile-mode: false;
+    in property <length> bottom-inset: 0px;
 
     callback rename-section(/* section-id */ string);
     callback remove-section(/* section-id */ string);
@@ -144,7 +145,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
         elevation: 4;
 
         x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: (min(root.position-y, parent.height - self.height - Spacing.md)) + self.entrance-offset;
+        y: max(Spacing.md, min(root.position-y, parent.height - root.bottom-inset - self.height - Spacing.md)) + self.entrance-offset;
         width: 220px;
         height: header-menu-layout.preferred-height + Spacing.sm * 2;
         border-radius: Spacing.radius-xl;

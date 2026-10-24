@@ -205,6 +205,8 @@ export component AppSecondaryModals inherits Rectangle {
         loading: ModalHostState.channel-settings-loading;
         saving: ModalHostState.channel-settings-saving;
         error-message: ModalHostState.channel-settings-error;
+        clear-error => { ModalHostState.channel-settings-clear-error(); }
+        pinned-messages => { ChatPane.pinned-show-clicked(); }
 
         close => {
             ModalHostState.nav-close("channel-settings");
@@ -326,8 +328,7 @@ export component AppSecondaryModals inherits Rectangle {
         show-settings: ChatPane.chat-menu-settings;
         show-secret-chat: ChatPane.chat-menu-secret-chat;
         show-disappearing: ChatPane.conversation-kind == ConversationKind.anon-dm;
-        show-pinned: ChatPane.pinned-total-count > 0
-            || ChatPane.conversation-kind == ConversationKind.saved-messages;
+        show-pinned: true;
         pinned => { ModalHostState.nav-close("chat-menu"); ChatPane.pinned-show-clicked(); }
         card-x: root.width - self.card-width - Spacing.sm;
         card-y: (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs;
