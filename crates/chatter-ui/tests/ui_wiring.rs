@@ -1749,12 +1749,12 @@ fn profile_shared_content_drawer_is_wired() {
 
     // Property alias liveness through MainWindow.
     w.global::<chatter_ui::ModalHostState>()
-        .set_profile_shared_tab("media".into());
+        .set_profile_shared_tab("photo".into());
     assert_eq!(
         w.global::<chatter_ui::ModalHostState>()
             .get_profile_shared_tab()
             .as_str(),
-        "media",
+        "photo",
         "profile-shared-tab does not round-trip on the window"
     );
     w.global::<chatter_ui::ModalHostState>()
@@ -1780,7 +1780,7 @@ fn profile_shared_content_drawer_is_wired() {
     w.global::<chatter_ui::ModalHostState>()
         .invoke_profile_shared_load_more();
     w.global::<chatter_ui::ModalHostState>()
-        .invoke_profile_open_shared_item("msg-1".into(), "".into(), "media".into(), "".into());
+        .invoke_profile_open_shared_item("msg-1".into(), "".into(), "photo".into(), "".into());
     w.global::<chatter_ui::ModalHostState>()
         .invoke_profile_toggle_mute();
 

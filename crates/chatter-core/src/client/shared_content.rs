@@ -1,5 +1,4 @@
-//! Shared-content façade — the profile screen's Media / Files / Links / Voice
-//! / GIFs / Music tabs.
+//! Shared-content façade for Photos, Videos, Audio, Links, Voice, GIFs, and Files.
 //!
 //! Reads the `shared_content` index (migration v064) and returns display-ready
 //! rows. Categorisation, ordering and paging all happen below this line; the
@@ -229,20 +228,11 @@ impl ChatterClient {
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
             match client.shared_content_repo().list_scoped(
-                &conv_type,
-                &conv_id,
-                category,
-                limit,
-                offset,
-                sender.as_ref(),
+                &conv_type, &conv_id, category, limit, offset, sender.as_ref(),
             ) {
                 Ok(rows) => rows.iter().map(|row| {
                     let mut item = SharedContentItemData::from(row);
-                    if let Ok(id) = row.attachment_id.parse() {
-                        item.is_video = client
-                            .get_attachment_metadata(&id)
-                            .is_some_and(|attachment| attachment.metadata.is_video());
-                    }
+                    item.is_video = category == SharedCategory::Video;
                     item
                 }).collect(),
                 Err(e) => {
@@ -299,8 +289,7 @@ impl ChatterClient {
         tokio::task::spawn_blocking(move || {
             backfill_once(&repo, &db, &conv_type, &conv_id);
             crate::ui::shared_tabs(
-                &repo
-                    .counts_scoped(&conv_type, &conv_id, sender.as_ref())
+                &repo.counts_scoped(&conv_type, &conv_id, sender.as_ref())
                     .unwrap_or_default(),
             )
         })

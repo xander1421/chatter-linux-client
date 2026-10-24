@@ -229,9 +229,12 @@ impl ChatterClient {
     }
 
     fn activity_sender_name(&self, sender: crate::domain::UserId) -> String {
-        self.get_profile_local(&sender).map(|p| p.display_name)
-            .or_else(|| self.get_user_local(&sender).map(|u| u.username))
-            .unwrap_or_else(|| "Someone".to_owned())
+        let name = self.display_name(&sender);
+        if name == crate::services::user::friend_display_name_placeholder(&sender) {
+            "Someone".to_owned()
+        } else {
+            name
+        }
     }
 
     fn capture_message(&self, owner: crate::domain::UserId, message: &Message) {

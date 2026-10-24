@@ -22,7 +22,7 @@ pub fn attachment_preview(metadata: &[Option<FileMetadata>]) -> String {
             Some(meta) => match SharedCategory::of(meta) {
                 SharedCategory::Voice => 0,
                 SharedCategory::Gif => 3,
-                SharedCategory::Music => 4,
+                SharedCategory::Audio => 4,
                 _ => match FileCategory::from_mime_and_filename(&meta.mime_type, &meta.name) {
                     FileCategory::Image => 1,
                     FileCategory::Video => 2,

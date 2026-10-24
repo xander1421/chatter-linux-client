@@ -1,6 +1,6 @@
 //! Shared-content index repository.
 //!
-//! Backs the profile screen's Media / Files / Links / Voice / GIFs / Music
+//! Backs the profile screen's Photos / Videos / Audio / Links / Voice / GIFs / Files
 //! tabs. `shared_content` (migration v064) is a per-conversation index of
 //! every shareable item a message carried, so a tab is one range scan instead
 //! of deserializing every message's bincode attachment list.
@@ -488,7 +488,7 @@ mod tests {
             // Interleave another sender; the highest timestamp is in another chat.
             // All supported attachment tabs must apply the identical scope.
             for (category_index, (name, mime, waveform, category)) in [
-                ("photo.jpg", "image/jpeg", false, SharedCategory::Media),
+                ("photo.jpg", "image/jpeg", false, SharedCategory::Photo),
                 ("spec.pdf", "application/pdf", false, SharedCategory::File),
                 ("voice.ogg", "audio/ogg", true, SharedCategory::Voice),
                 ("wave.gif", "image/gif", false, SharedCategory::Gif),
@@ -576,10 +576,10 @@ mod tests {
     #[test]
     fn categorises_by_mime_waveform_and_extension() {
         let cases: &[(&str, &str, bool, SharedCategory)] = &[
-            ("cat.jpg", "image/jpeg", false, SharedCategory::Media),
-            ("clip.mp4", "video/mp4", false, SharedCategory::Media),
+            ("cat.jpg", "image/jpeg", false, SharedCategory::Photo),
+            ("clip.mp4", "video/mp4", false, SharedCategory::Video),
             ("wave.gif", "image/gif", false, SharedCategory::Gif),
-            // GIF wins over Media even when the MIME lies.
+            // GIF wins over Photo even when the MIME lies.
             (
                 "wave.gif",
                 "application/octet-stream",
@@ -587,7 +587,7 @@ mod tests {
                 SharedCategory::Gif,
             ),
             ("note.ogg", "audio/ogg", true, SharedCategory::Voice),
-            ("song.mp3", "audio/mpeg", false, SharedCategory::Music),
+            ("song.mp3", "audio/mpeg", false, SharedCategory::Audio),
             ("spec.pdf", "application/pdf", false, SharedCategory::File),
             ("main.rs", "text/plain", false, SharedCategory::File),
         ];
@@ -673,23 +673,28 @@ mod tests {
             .list(
                 &ConversationType::ServerDm,
                 &conv.to_string(),
-                SharedCategory::Media,
+                SharedCategory::Photo,
                 10,
                 0,
             )
             .unwrap();
-        assert_eq!(page.len(), 3, "only this conversation's media");
-        assert_eq!(page[0].title, "c.mp4", "newest first");
-        assert_eq!(page[2].title, "a.jpg");
+        assert_eq!(page.len(), 2, "only this conversation's photos");
+        assert_eq!(page[0].title, "b.png", "newest first");
+        assert_eq!(page[1].title, "a.jpg");
+        let videos = shared.list(
+            &ConversationType::ServerDm, &conv.to_string(), SharedCategory::Video, 10, 0,
+        ).unwrap();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].title, "c.mp4");
 
         // Paging.
         let page2 = shared
             .list(
                 &ConversationType::ServerDm,
                 &conv.to_string(),
-                SharedCategory::Media,
-                2,
-                2,
+                SharedCategory::Photo,
+                1,
+                1,
             )
             .unwrap();
         assert_eq!(page2.len(), 1);
@@ -712,7 +717,8 @@ mod tests {
         let counts = shared
             .counts(&ConversationType::ServerDm, &conv.to_string())
             .unwrap();
-        assert_eq!(counts.iter().find(|(c, _)| c == "media").unwrap().1, 3);
+        assert_eq!(counts.iter().find(|(c, _)| c == "photo").unwrap().1, 2);
+        assert_eq!(counts.iter().find(|(c, _)| c == "video").unwrap().1, 1);
         assert_eq!(counts.iter().find(|(c, _)| c == "file").unwrap().1, 1);
     }
 
@@ -740,7 +746,7 @@ mod tests {
                 .list(
                     &ConversationType::ServerDm,
                     &conv.to_string(),
-                    SharedCategory::Media,
+                    SharedCategory::Photo,
                     10,
                     0
                 )
@@ -755,7 +761,7 @@ mod tests {
             .list(
                 &ConversationType::ServerDm,
                 &conv.to_string(),
-                SharedCategory::Media,
+                SharedCategory::Photo,
                 10,
                 0,
             )
@@ -794,7 +800,7 @@ mod tests {
                 .list(
                     &ConversationType::ServerDm,
                     &conv.to_string(),
-                    SharedCategory::Media,
+                    SharedCategory::Photo,
                     10,
                     0
                 )
@@ -812,7 +818,7 @@ mod tests {
             .list(
                 &ConversationType::ServerDm,
                 &conv.to_string(),
-                SharedCategory::Media,
+                SharedCategory::Photo,
                 10,
                 0,
             )
@@ -829,7 +835,7 @@ mod tests {
                 .list(
                     &ConversationType::ServerDm,
                     &conv.to_string(),
-                    SharedCategory::Media,
+                    SharedCategory::Photo,
                     10,
                     0
                 )

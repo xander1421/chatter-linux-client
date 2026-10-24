@@ -145,8 +145,8 @@ impl FileCategory {
 /// voice notes and music the way every messenger's media drawer does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SharedCategory {
-    /// Photos and videos — the grid.
-    Media,
+    Photo,
+    Video,
     /// Any other attachment: documents, archives, code.
     File,
     /// A URL found in message text. Has no attachment record behind it.
@@ -154,8 +154,8 @@ pub enum SharedCategory {
     /// An audio attachment recorded in-app — it carries a waveform.
     Voice,
     /// An audio attachment that is not a voice note.
-    Music,
-    /// `image/gif`, split out of Media the way every messenger does.
+    Audio,
+    /// `image/gif`, split out of photos.
     Gif,
     /// Transient: an attachment whose `attachments` row has not landed yet,
     /// so its MIME type is not known. Never rendered — `AttachmentRepository`
@@ -170,11 +170,12 @@ impl SharedCategory {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Media => "media",
+            Self::Photo => "photo",
+            Self::Video => "video",
             Self::File => "file",
             Self::Link => "link",
             Self::Voice => "voice",
-            Self::Music => "music",
+            Self::Audio => "audio",
             Self::Gif => "gif",
             Self::Unsorted => "unsorted",
         }
@@ -185,11 +186,12 @@ impl SharedCategory {
     #[must_use]
     pub fn from_str_value(s: &str) -> Option<Self> {
         Some(match s {
-            "media" => Self::Media,
+            "photo" => Self::Photo,
+            "video" => Self::Video,
             "file" => Self::File,
             "link" => Self::Link,
             "voice" => Self::Voice,
-            "music" => Self::Music,
+            "audio" => Self::Audio,
             "gif" => Self::Gif,
             "unsorted" => Self::Unsorted,
             _ => return None,
@@ -198,8 +200,8 @@ impl SharedCategory {
 
     /// Which tab an attachment belongs in.
     ///
-    /// Order matters: GIF is checked before Media (a GIF is an image), and
-    /// the waveform check before Music (a voice note is audio).
+    /// Order matters: GIF is checked before photo, and waveform separates
+    /// voice messages from audio files.
     #[must_use]
     pub fn of(meta: &FileMetadata) -> Self {
         if meta.is_gif() {
@@ -211,11 +213,12 @@ impl SharedCategory {
             return if meta.waveform_samples.is_some() {
                 Self::Voice
             } else {
-                Self::Music
+                Self::Audio
             };
         }
         match FileCategory::from_mime_and_filename(&meta.mime_type, &meta.name) {
-            FileCategory::Image | FileCategory::Video => Self::Media,
+            FileCategory::Image => Self::Photo,
+            FileCategory::Video => Self::Video,
             _ => Self::File,
         }
     }
@@ -471,7 +474,7 @@ impl FileMetadata {
         match SharedCategory::of(self) {
             SharedCategory::Voice => "\u{1F3A4} Voice message".to_string(),
             SharedCategory::Gif => "\u{1F39E}\u{FE0F} GIF".to_string(),
-            SharedCategory::Music => format!("{} Audio", icon),
+            SharedCategory::Audio => format!("{} Audio", icon),
             _ => match category {
                 FileCategory::Image => format!("{} Photo", icon),
                 FileCategory::Video => format!("{} Video", icon),

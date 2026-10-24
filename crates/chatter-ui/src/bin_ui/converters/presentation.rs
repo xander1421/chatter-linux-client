@@ -89,17 +89,6 @@ pub fn shared_content_lines(row: &SharedContentItemData) -> (String, String, boo
     (title, subtitle, is_video)
 }
 
-pub fn shared_tab_label(id: &str) -> &'static str {
-    match id {
-        "media" => "Media",
-        "file" => "Files",
-        "link" => "Links",
-        "voice" => "Voice",
-        "gif" => "GIFs",
-        "music" => "Music",
-        _ => "",
-    }
-}
 
 fn link_host(url: &str) -> String {
     url.split("://")

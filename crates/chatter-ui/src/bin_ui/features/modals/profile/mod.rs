@@ -9,6 +9,7 @@ use slint::ComponentHandle;
 use std::sync::Arc;
 
 mod avatar_edit;
+mod contact;
 mod navigation;
 mod open;
 mod relationship;
@@ -28,6 +29,7 @@ pub(crate) fn retire_avatar_edit() {
 
 pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_share_link(window, ui_ctx);
+    contact::wire(window, ui_ctx);
     wire_shared_content(window, ui_ctx);
     navigation::wire(window, ui_ctx);
     relationship::wire(window, ui_ctx);
