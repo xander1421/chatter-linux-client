@@ -386,6 +386,8 @@ impl ChatterClient {
         drop(drafts);
         let tray = self.chat_state().take_attachment_tray_for(conversation);
         self.release_staged_files(&tray);
+        let thread_trays = self.chat_state().take_thread_attachment_trays_for(message_ids);
+        self.release_staged_files(&thread_trays);
         let mut parked = self.parked_sends.lock();
         parked.retain(|send| {
             if send.conversation == conversation {
@@ -438,6 +440,14 @@ impl ChatterClient {
                 id.to_string(),
                 attachments.iter().map(StagedAttachment::from).collect(),
             );
+        }
+        for (root, attachments) in &chat.thread_attachment_trays {
+            if !attachments.is_empty() {
+                recovery.thread_trays.insert(
+                    root.to_string(),
+                    attachments.iter().map(StagedAttachment::from).collect(),
+                );
+            }
         }
         recovery.parked = parked.iter().filter_map(ParkedSend::of).collect();
         recovery
@@ -511,6 +521,19 @@ impl ChatterClient {
                     revision,
                     attachment,
                 );
+            }
+        }
+        for (id, attachments) in recovery.thread_trays {
+            let Ok(root) = id.parse::<MessageId>() else {
+                tracing::warn!(tray = %id, "unparsable thread tray key; recovery row protected");
+                self.composer_recovery_unread.store(true, Ordering::SeqCst);
+                continue;
+            };
+            for attachment in attachments.into_iter()
+                .filter(|attachment| self.restorable_staged_file(&attachment.path))
+                .map(StagedAttachment::into_pending)
+            {
+                chat.add_thread_attachment_for(root, revision, attachment);
             }
         }
         let mut parked = self.parked_sends.lock();

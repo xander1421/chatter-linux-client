@@ -26,12 +26,16 @@ export global TextFormat {
     pure callback wrap(string, string, int, int) -> string;
     pure callback replace(string, string, int, int) -> string;
     pure callback byte-length(string) -> int;
+    pure callback mention-query(string) -> string;
 }
 
 import { PendingAttachmentData } from "composer_types.slint";
 export { PendingAttachmentData }
 
 export component MessageComposer inherits GlassSurface {
+    in property <string> composer-scope: "main";
+    in property <string> thread-root-id: "";
+    property <bool> recording-here: VoiceRecording.active && VoiceRecording.owner == root.composer-scope;
     material-enabled: false;
     background: transparent;
     material-level: 2;
@@ -43,8 +47,8 @@ export component MessageComposer inherits GlassSurface {
     in property <bool> collapsed: false;
     in property <bool> keyboard-open: false;
     visible: !root.collapsed;
-    clip: VoiceRecording.active;
-    property <float> recording-reveal: VoiceRecording.active ? 1 : 0;
+    clip: root.recording-here;
+    property <float> recording-reveal: root.recording-here ? 1 : 0;
     animate recording-reveal {
         duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard;
         easing: Materials.spring;
@@ -128,6 +132,8 @@ export component MessageComposer inherits GlassSurface {
     function start-recording() {
         root.suspend-input();
         root.input-focused();
+        VoiceRecording.owner = root.composer-scope;
+        VoiceRecording.thread-root = root.thread-root-id;
         VoiceRecording.start();
     }
     // Properties
@@ -242,7 +248,7 @@ export component MessageComposer inherits GlassSurface {
             + (is-replying ? reply-row-height + Spacing.xs : 0px));
     // The host already pads by the measured composer height, including the
     // attachment and reply rows. Add only the circle row as it lifts.
-    out property <length> list-clearance-extra: root.collapsed || VoiceRecording.active
+    out property <length> list-clearance-extra: root.collapsed || root.recording-here
         ? 0px : lift-layout * (Spacing.touch-target-min + Spacing.xs);
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     // Reserve the inline terminal only when a mic actually occupies it. In
@@ -422,7 +428,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(80px, Spacing.touch-target-min + row-padding * 2);
-    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
+    height: root.collapsed ? 0px : root.recording-here ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
@@ -436,7 +442,7 @@ export component MessageComposer inherits GlassSurface {
         // material to its indicators, or an edit paints a full-width empty bar
         // behind the raised action row instead of behind the edit indicator.
         y: 0px;
-        visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
+        visible: root.raised-actions && !root.recording-here && self.height > 0px;
         width: root.width;
         height: root.edit-bar-height + root.format-bar-height;
         material-level: root.material-level;
@@ -486,7 +492,7 @@ export component MessageComposer inherits GlassSurface {
                 material-tint: Materials.chat-chrome;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
-                visible: !VoiceRecording.active;
+                visible: !root.recording-here;
             }
             composer-silhouette := LiquidComposerSilhouette {
                 width: parent.width;
@@ -495,7 +501,7 @@ export component MessageComposer inherits GlassSurface {
                 velocity: root.lift-velocity;
                 field-top: root.raised-toolbar-height / 1px;
                 trailing-drop: root.show-attachment-action;
-                visible: !VoiceRecording.active;
+                visible: !root.recording-here;
             }
 
             DropletNeck {
@@ -504,7 +510,7 @@ export component MessageComposer inherits GlassSurface {
                 rise: root.lift-geometry;
                 field-top: root.raised-toolbar-height / 1px;
                 circle-bottom: (parent.action-y + root.droplet-bob + Spacing.touch-target-min) / 1px;
-                visible: !VoiceRecording.active;
+                visible: !root.recording-here;
             }
             if root.show-attachment-action: DropletNeck {
                 x: parent.width - root.row-padding * (1 - root.lift-layout)
@@ -513,7 +519,7 @@ export component MessageComposer inherits GlassSurface {
                 rise: root.lift-geometry;
                 field-top: root.raised-toolbar-height / 1px;
                 circle-bottom: (parent.action-y + root.droplet-bob + Spacing.touch-target-min) / 1px;
-                visible: !VoiceRecording.active;
+                visible: !root.recording-here;
             }
 
             // Reply preview directly above the field, beneath the raised
@@ -653,7 +659,7 @@ export component MessageComposer inherits GlassSurface {
                         color: Colors.text-primary;
                         font-size: Typography.base;
                         text <=> root.text;
-                        enabled: !root.disabled && !root.collapsed && !VoiceRecording.active;
+                        enabled: !root.disabled && !root.collapsed && !root.recording-here;
                         wrap: word-wrap;
                         single-line: false;
 
@@ -669,7 +675,7 @@ export component MessageComposer inherits GlassSurface {
                             // Shift+Enter remains a newline. Phone keyboards keep
                             // Enter for multi-line messages and use the send button.
                             if (event.text == "\n" && !event.modifiers.shift && root.enter-sends) {
-                                if (root.can-send && !VoiceRecording.active) {
+                                if (root.can-send && !root.recording-here) {
                                     if (root.is-editing) {
                                         root.send-edit(root.edit-message-id, root.outgoing-text);
                                         root.reset-after-send();
@@ -691,6 +697,8 @@ export component MessageComposer inherits GlassSurface {
                         edited => {
                             if (self.text != "") {
                                 root.check-mention-trigger(self.text);
+                            } else {
+                                root.mention-triggered("");
                             }
                             root.typing-changed(self.text != "");
                         }
@@ -769,7 +777,7 @@ export component MessageComposer inherits GlassSurface {
                 }
 
                 send-touch := TouchArea {
-                    enabled: !root.disabled && root.can-send && !VoiceRecording.active;
+                    enabled: !root.disabled && root.can-send && !root.recording-here;
                     mouse-cursor: pointer;
                     clicked => {
                         if (root.is-editing) {
@@ -787,15 +795,10 @@ export component MessageComposer inherits GlassSurface {
     // Internal function to check for @ mention trigger
     // Called when text is edited
     function check-mention-trigger(t: string) {
-        // Simple implementation: check if there's an @ near the end
-        // A more sophisticated implementation would track cursor position
-        // For now, we'll emit mention-triggered if text contains @
-        // and there's content after it (no space before the @'s content)
-
-        // This is a basic heuristic - in practice, you'd want cursor position tracking
-        // to properly detect when user types @
+        root.mention-triggered(TextFormat.mention-query(t));
     }
     ComposerRecordingPanel {
+        recording-here: root.recording-here;
         width: parent.width;
         height: parent.height;
         recording-reveal: root.recording-reveal;

@@ -658,6 +658,16 @@ pub fn composer_reply(w: &MainWindow) -> Option<ComposerReply> {
     (!reply.sender_id.is_empty() && !reply.timestamp.is_empty()).then_some(reply)
 }
 
+/// Prepare the same quote intent for main and thread composer sends.
+pub(crate) fn quote_intent(reply: Option<&ComposerReply>) -> Option<gateway::QuoteIntent> {
+    let parsed = super::helpers::parse_reply_context(&reply?.sender_id, &reply?.timestamp)?;
+    Some(gateway::QuoteIntent {
+        target_author_id: parsed.sender_id,
+        target_timestamp: parsed.timestamp,
+        target_preview: None,
+    })
+}
+
 pub(crate) fn clear_reply(w: &MainWindow) {
     w.global::<crate::ChatPane>()
         .set_composer_is_replying(false);
@@ -841,20 +851,8 @@ async fn deliver_inner(
         .as_ref()
         .map(|r| (r.sender_name.clone(), r.preview.clone()))
         .unwrap_or_default();
-    let quote = match &reply {
-        Some(r) => {
-            let parsed = match super::helpers::parse_reply_context(&r.sender_id, &r.timestamp) {
-                Some(p) => p,
-                None => return false,
-            };
-            Some(gateway::QuoteIntent {
-                target_author_id: parsed.sender_id,
-                target_timestamp: parsed.timestamp,
-                target_preview: None,
-            })
-        }
-        None => None,
-    };
+    let quote = quote_intent(reply.as_ref());
+    if reply.is_some() && quote.is_none() { return false; }
 
     // Scale timeout for attachments: base 10s + 30s per attachment.
     let send_timeout = if matches!(conversation, ActiveConversation::Channel(_)) {

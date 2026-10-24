@@ -6,6 +6,8 @@ import { Appearance } from "../theme/appearance.slint";
 // are owned by chatter-core's recording session.
 export global VoiceRecording {
     in-out property <bool> active: false;
+    in-out property <string> owner: "";
+    in-out property <string> thread-root: "";
     in-out property <bool> busy: false;
     // Kept for API compatibility with older layout harnesses. The recording
     // bar no longer has a lock control or a slide-to-lock interaction.

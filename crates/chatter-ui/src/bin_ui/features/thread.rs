@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::client::ChatterClient;
+use chatter_core::client::{ChatterClient, ComposerReply};
 use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
 use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continuation};
@@ -12,7 +12,7 @@ use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continu
 use super::chat::recompute_channel_continuations;
 use super::history_owner::HistoryOwner;
 use crate::bin_ui::converters::messages_to_display_batch;
-use crate::{MainWindow, MessageItemData};
+use crate::{EmojiData, MainWindow, MentionSuggestion, MessageItemData};
 
 fn grouping_row(message: &MessageItemData) -> ChannelGroupingRow<'_> {
     ChannelGroupingRow {
@@ -40,6 +40,263 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_close_thread(window, ui_ctx);
     wire_send_thread_reply(window, ui_ctx);
     wire_load_more_thread_replies(window, ui_ctx);
+    wire_thread_composer(window, ui_ctx);
+}
+
+fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    window.global::<crate::ChatPane>().on_thread_paste_image({
+        let weak = window.as_weak(); let client = ui_ctx.clone();
+        move || {
+            let Some(thread) = client.active_thread() else { return };
+            let revision = client.chat_snapshot().attachment_revision;
+            let weak = weak.clone(); let client = client.clone();
+            tokio::spawn(async move {
+                let Ok(Ok(path)) = tokio::task::spawn_blocking(
+                    crate::bin_ui::features::composer::read_clipboard_image
+                ).await else { return };
+                let staged = client.stage_owned_file(path.clone());
+                if staged == path { let _ = tokio::fs::remove_file(path).await; return; }
+                if let Err(error) = add_thread_file(&client, thread.root_message_id, revision, staged.clone()).await {
+                    tracing::warn!(%error, "thread clipboard image preparation failed");
+                    client.release_staged_files(&[chatter_core::state::PendingAttachment::new(
+                        chatter_core::domain::ids::AttachmentId::new(),
+                        String::new(), staged, 0, String::new(),
+                    )]);
+                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ChatPane>().get_thread_root_message_id().as_str() == thread.root_message_id.to_string() {
+                        render_thread_attachments(&w, &client.thread_pending_attachments(&thread.root_message_id));
+                    }
+                });
+            });
+        }
+    });
+    refresh_thread_emoji(window, ui_ctx);
+    window.global::<crate::ChatPane>().on_thread_emoji_category_changed({
+        let weak = window.as_weak(); let client = ui_ctx.clone();
+        move |_| { if let Some(w) = weak.upgrade() { refresh_thread_emoji(&w, &client); } }
+    });
+    window.global::<crate::ChatPane>().on_thread_emoji_search_changed({
+        let weak = window.as_weak(); let client = ui_ctx.clone();
+        move |_| { if let Some(w) = weak.upgrade() { refresh_thread_emoji(&w, &client); } }
+    });
+    window.global::<crate::ChatPane>().on_thread_emoji_skin_tone_changed({
+        let weak = window.as_weak(); let client = ui_ctx.clone();
+        move |_| { if let Some(w) = weak.upgrade() { refresh_thread_emoji(&w, &client); } }
+    });
+    window.global::<crate::ChatPane>().on_thread_mention_triggered({
+        let weak = window.as_weak(); let client = ui_ctx.clone();
+        move |query: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            w.global::<crate::ChatPane>().set_thread_mention_query(query.clone());
+            if query.is_empty() {
+                w.global::<crate::ChatPane>().set_thread_mention_visible(false);
+                return;
+            }
+            let Some(thread) = client.active_thread() else { return };
+            let requested = query.clone();
+            let weak = weak.clone(); let client = client.clone();
+            tokio::spawn(async move {
+                let suggestions = client.search_mention_suggestions(&thread.channel_id, &query).await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ChatPane>().get_thread_root_message_id().as_str() != thread.root_message_id.to_string() { return; }
+                    if w.global::<crate::ChatPane>().get_thread_mention_query() != requested { return; }
+                    let rows: Vec<_> = suggestions.into_iter().map(|suggestion| MentionSuggestion {
+                        id: suggestion.id.into(), name: suggestion.display.into(),
+                        mention_type: suggestion.kind.as_str().into(),
+                        avatar: slint::Image::default(), has_avatar: suggestion.has_avatar,
+                    }).collect();
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_thread_mention_visible(!rows.is_empty());
+                    pane.set_thread_mention_suggestions(ModelRc::new(VecModel::from(rows)));
+                    pane.set_thread_mention_selected_index(0);
+                });
+            });
+        }
+    });
+    window.global::<crate::ChatPane>().on_thread_mention_selected({
+        let weak = window.as_weak();
+        move |_id: SharedString, display: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let pane = w.global::<crate::ChatPane>();
+            let text = pane.get_thread_composer_text().to_string();
+            if let Some(at) = text.rfind('@') {
+                pane.set_thread_composer_text(format!("{}{} ", &text[..at], display).into());
+            }
+            pane.set_thread_mention_visible(false);
+            pane.set_thread_mention_query("".into());
+        }
+    });
+    window.global::<crate::ChatPane>().on_thread_cancel_reply({
+        let weak = window.as_weak();
+        let client = ui_ctx.clone();
+        move || {
+            if let Some(thread) = client.active_thread() {
+                client.set_thread_draft_reply(&thread.root_message_id, None);
+            }
+            if let Some(w) = weak.upgrade() { clear_thread_reply(&w); }
+        }
+    });
+    window.global::<crate::ChatPane>().on_thread_remove_attachment({
+        let weak = window.as_weak();
+        let client = ui_ctx.clone();
+        move |id: SharedString| {
+            let Some(thread) = client.active_thread() else { return };
+            let Ok(id) = id.parse() else { return };
+            let removed: Vec<_> = client.thread_pending_attachments(&thread.root_message_id)
+                .into_iter().filter(|attachment| attachment.id == id).collect();
+            client.remove_thread_pending_attachment(thread.root_message_id, id);
+            client.release_staged_files(&removed);
+            if let Some(w) = weak.upgrade() {
+                render_thread_attachments(&w, &client.thread_pending_attachments(&thread.root_message_id));
+            }
+        }
+    });
+    window.global::<crate::ChatPane>().on_thread_attachment_clicked({
+        let weak = window.as_weak();
+        let client = ui_ctx.clone();
+        move || {
+            let Some(thread) = client.active_thread() else { return };
+            let Some(w) = weak.upgrade() else { return };
+            let revision = client.chat_snapshot().attachment_revision;
+            let pane = w.global::<crate::ChatPane>();
+            pane.set_thread_attachment_prepare_serial(pane.get_thread_attachment_prepare_serial().wrapping_add(1));
+            let weak = weak.clone();
+            let client = client.clone();
+            tokio::spawn(async move {
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                let selected = {
+                    use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
+                    FilePicker::pick_files(FilePickerConfig::new()
+                        .with_title("Select Attachment")
+                        .with_filter(FileFilter::all())
+                        .with_multiple(true)).await
+                };
+                #[cfg(target_os = "android")]
+                let selected = crate::platform::android::file_picker::pick_files(&["*/*"]).await;
+                #[cfg(target_os = "ios")]
+                let selected: Vec<std::path::PathBuf> = Vec::new();
+                for path in selected {
+                    #[cfg(target_os = "android")]
+                    let path = {
+                        let staged = client.stage_owned_file(path.clone());
+                        if staged == path { continue; }
+                        staged
+                    };
+                    if let Err(error) = add_thread_file(&client, thread.root_message_id, revision, path.clone()).await {
+                        tracing::warn!(%error, "thread attachment preparation failed");
+                        #[cfg(target_os = "android")]
+                        client.release_staged_files(&[chatter_core::state::PendingAttachment::new(
+                            chatter_core::domain::ids::AttachmentId::new(),
+                            String::new(), path, 0, String::new(),
+                        )]);
+                    }
+                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    let pane = w.global::<crate::ChatPane>();
+                    if pane.get_thread_root_message_id().as_str() == thread.root_message_id.to_string() {
+                        render_thread_attachments(&w, &client.thread_pending_attachments(&thread.root_message_id));
+                        pane.set_thread_attachment_restore_serial(pane.get_thread_attachment_restore_serial().wrapping_add(1));
+                    }
+                });
+            });
+        }
+    });
+}
+
+fn refresh_thread_emoji(w: &MainWindow, client: &ChatterClient) {
+    use chatter_core::ui::emoji_data;
+    let pane = w.global::<crate::ChatPane>();
+    let query = pane.get_thread_emoji_search();
+    let emojis = if query.is_empty() {
+        let recent = client.picker_history_scope().map(|scope| client.recent_emoji(scope)).unwrap_or_default();
+        emoji_data::listing(pane.get_thread_emoji_category(), pane.get_thread_emoji_skin_tone(), &recent)
+    } else {
+        emoji_data::search(&query)
+    };
+    let rows: Vec<_> = emojis.into_iter().map(|emoji| EmojiData {
+        emoji: emoji.emoji.into(), name: emoji.name.into(), category: emoji.category,
+    }).collect();
+    pane.set_thread_emoji_list(ModelRc::new(VecModel::from(rows)));
+}
+
+async fn add_thread_file(
+    client: &ChatterClient,
+    root: MessageId,
+    revision: u64,
+    path: std::path::PathBuf,
+) -> Result<(), String> {
+    let metadata = tokio::fs::metadata(&path).await.map_err(|error| error.to_string())?;
+    let filename = path.file_name().and_then(|name| name.to_str()).unwrap_or("unknown").to_owned();
+    let mime = mime_guess::from_path(&path).first_or_octet_stream().to_string();
+    let size = client.staged_file_size(&path).unwrap_or(metadata.len());
+    client.add_thread_pending_attachment_for(root, revision,
+        chatter_core::state::PendingAttachment::new(
+            chatter_core::domain::ids::AttachmentId::new(), filename, path, size, mime,
+        ));
+    Ok(())
+}
+
+fn thread_composer_reply(w: &MainWindow) -> Option<ComposerReply> {
+    let pane = w.global::<crate::ChatPane>();
+    if !pane.get_thread_composer_is_replying() { return None; }
+    let reply = ComposerReply {
+        sender_id: pane.get_thread_reply_to_sender().to_string(),
+        timestamp: pane.get_thread_reply_to_timestamp().to_string(),
+        sender_name: pane.get_thread_reply_to_sender_name().to_string(),
+        preview: pane.get_thread_reply_preview().to_string(),
+        thumbnail: pane.get_thread_reply_has_thumbnail().then(|| pane.get_thread_reply_thumbnail().to_rgba8())
+            .flatten().map(|pixels| (pixels.as_bytes().to_vec(), pixels.width(), pixels.height())),
+    };
+    (!reply.sender_id.is_empty() && !reply.timestamp.is_empty()).then_some(reply)
+}
+
+pub(crate) fn show_thread_reply(w: &MainWindow, client: &ChatterClient, reply: ComposerReply) {
+    let thumbnail = reply.thumbnail.as_ref().map(|(bytes, width, height)| {
+        slint::Image::from_rgba8(
+            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(bytes, *width, *height),
+        )
+    });
+    show_thread_reply_image(w, client, reply, thumbnail);
+}
+
+pub(crate) fn show_thread_reply_image(
+    w: &MainWindow,
+    client: &ChatterClient,
+    reply: ComposerReply,
+    thumbnail: Option<slint::Image>,
+) {
+    if let Some(thread) = client.active_thread() {
+        client.set_thread_draft_reply(&thread.root_message_id, Some(reply.clone()));
+    }
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_thread_reply_to_sender(reply.sender_id.into());
+    pane.set_thread_reply_to_timestamp(reply.timestamp.into());
+    pane.set_thread_reply_to_sender_name(reply.sender_name.into());
+    pane.set_thread_reply_preview(reply.preview.into());
+    pane.set_thread_reply_has_thumbnail(thumbnail.is_some());
+    pane.set_thread_reply_thumbnail(thumbnail.unwrap_or_default());
+    pane.set_thread_composer_is_replying(true);
+}
+
+fn clear_thread_reply(w: &MainWindow) {
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_thread_composer_is_replying(false);
+    pane.set_thread_reply_to_sender("".into());
+    pane.set_thread_reply_to_timestamp("".into());
+    pane.set_thread_reply_to_sender_name("".into());
+    pane.set_thread_reply_preview("".into());
+    pane.set_thread_reply_has_thumbnail(false);
+    pane.set_thread_reply_thumbnail(slint::Image::default());
+}
+
+pub(crate) fn render_thread_attachments(w: &MainWindow, attachments: &[chatter_core::state::PendingAttachment]) {
+    let rows: Vec<_> = attachments.iter().map(crate::bin_ui::converters::pending_attachment_to_slint).collect();
+    w.global::<crate::ChatPane>().set_thread_pending_attachments(ModelRc::new(VecModel::from(rows)));
 }
 
 fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -59,6 +316,8 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .set_thread_root_message_id(SharedString::default());
                 w.global::<crate::ChatPane>()
                     .set_thread_composer_text(SharedString::default());
+                clear_thread_reply(&w);
+                render_thread_attachments(&w, &[]);
             }
             if let Some(thread) = client.active_thread() {
                 client.close_thread(thread.root_message_id);
@@ -84,46 +343,77 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<crate::ChatPane>()
         .on_send_thread_reply(move |text: SharedString| {
             let text = text.to_string();
-            if text.trim().is_empty() {
-                return;
-            }
+            let Some(w) = weak_window.upgrade() else { return false };
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
             let Some(thread) = ui_ctx.active_thread() else {
-                return;
+                return false;
             };
+            let reply = thread_composer_reply(&w);
+            let quote = super::chat::send_message::quote_intent(reply.as_ref());
+            if reply.is_some() && quote.is_none() {
+                w.set_toast_message("The quoted message is unavailable.".into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+                return false;
+            }
+            let send = match ui_ctx.begin_thread_composer_send(thread.root_message_id, text, reply) {
+                Ok(send) => send,
+                Err(message) => {
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                    return false;
+                }
+            };
+            let text = send.text.clone();
+            if send.reply.is_some() {
+                ui_ctx.set_thread_draft_reply(&thread.root_message_id, None);
+                clear_thread_reply(&w);
+            }
+            render_thread_attachments(&w, &[]);
             // The panel cleared its composer on tap: the persisted draft goes
             // now, not after the autosave delay, so a restart cannot resend it.
             // A reply that then fails is given back below.
             ui_ctx.set_thread_draft(&thread.root_message_id, "");
-            let session_revision = ui_ctx.auth_snapshot().session_revision;
+            let session_revision = send.session_revision;
             let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
             tokio::spawn(async move {
                 if !owner.is_current() {
                     // Not sent, but the draft is already cleared: give it back.
-                    ui_ctx.park_failed_thread_reply(
+                    ui_ctx.park_failed_thread_composer_reply(
                         &thread.root_message_id,
                         &text,
+                        send.reply.clone(),
                         session_revision,
                     );
+                    for attachment in send.attachments {
+                        ui_ctx.add_thread_pending_attachment_for(
+                            thread.root_message_id,
+                            ui_ctx.chat_snapshot().attachment_revision,
+                            attachment,
+                        );
+                    }
                     return;
                 }
-                let sent = ui_ctx
-                    .send_channel_message(
-                        None,
-                        &thread.channel_id,
-                        &text,
-                        vec![],
-                        vec![],
-                        Some(&thread.root_message_id),
-                        vec![],
-                        false,
-                    )
-                    .await;
-                if let Err(e) = &sent {
+                let sent = ui_ctx.send_thread_composer_message(
+                    &send, thread.root_message_id, quote,
+                ).await;
+                if let Err(error) = &sent {
+                    tracing::error!(%error, "thread reply send failed");
+                }
+                let sent_message = sent.ok();
+                if sent_message.is_none() {
+                    let failed_reply = send.reply.clone();
+                    for attachment in send.attachments {
+                        ui_ctx.add_thread_pending_attachment_for(
+                            thread.root_message_id,
+                            ui_ctx.chat_snapshot().attachment_revision,
+                            attachment,
+                        );
+                    }
                     // The panel cleared its composer on tap. A reply that did not
                     // leave must say so and give the text back — it used to vanish.
-                    tracing::error!(error = %e, "thread reply send failed");
                     let root = thread.root_message_id;
                     let _ = slint::invoke_from_event_loop(move || {
                         if !ui_ctx.composer_session_is_current(session_revision) {
@@ -140,19 +430,25 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 .get_thread_root_message_id()
                                 .as_str()
                                 == root.to_string();
+                        if shown {
+                            render_thread_attachments(&w, &ui_ctx.thread_pending_attachments(&root));
+                        }
                         let message = if shown
                             && w.global::<crate::ChatPane>()
                                 .get_thread_composer_text()
                                 .is_empty()
                         {
-                            ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
+                            ui_ctx.park_failed_thread_composer_reply(&root, &text, failed_reply.clone(), session_revision);
                             if let Some(restored) = ui_ctx.take_failed_thread_reply(&root) {
                                 w.global::<crate::ChatPane>()
                                     .set_thread_composer_text(restored.into());
                             }
+                            if let Some(reply) = ui_ctx.thread_draft_reply(&root) {
+                                show_thread_reply(&w, &ui_ctx, reply);
+                            }
                             "Couldn't send your reply. Try again."
                         } else {
-                            ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
+                            ui_ctx.park_failed_thread_composer_reply(&root, &text, failed_reply, session_revision);
                             if ui_ctx.has_failed_thread_reply(&root) {
                                 // Parked behind newer text; it comes back once
                                 // the box and the draft are empty.
@@ -167,10 +463,13 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                     return;
                 }
+                if sent_message.is_some() {
+                    ui_ctx.release_staged_files(&send.attachments);
+                }
                 if !owner.is_current() {
                     return;
                 }
-                if let Ok(msg) = sent {
+                if let Some(msg) = sent_message {
                     ui_ctx
                         .update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
                     // Show our own reply in the panel immediately — the send path
@@ -211,6 +510,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                 }
             });
+            true
         });
 }
 
@@ -223,6 +523,9 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
     };
     w.global::<crate::ChatPane>()
         .set_thread_composer_text(text.into());
+    if let Some(reply) = ui_ctx.thread_draft_reply(root) {
+        show_thread_reply(w, ui_ctx, reply);
+    }
     w.set_toast_message("Your earlier reply that didn't send is back in the box.".into());
     w.set_toast_variant("info".into());
     w.set_toast_visible(true);
@@ -509,6 +812,7 @@ pub fn load_thread_data(
                 .map(|id| id.to_string())
                 .unwrap_or_default();
             let draft = ui_ctx.thread_draft(&root_message_id);
+            let draft_reply = ui_ctx.thread_draft_reply(&root_message_id);
             let ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if !owner.is_current() {
@@ -531,6 +835,13 @@ pub fn load_thread_data(
                     if switching {
                         w.global::<crate::ChatPane>()
                             .set_thread_composer_text(draft.into());
+                        clear_thread_reply(&w);
+                        w.global::<crate::ChatPane>().set_thread_mention_visible(false);
+                        w.global::<crate::ChatPane>().set_thread_mention_query("".into());
+                        if let Some(reply) = draft_reply {
+                            show_thread_reply(&w, &ctx, reply);
+                        }
+                        render_thread_attachments(&w, &ctx.thread_pending_attachments(&root_message_id));
                         // Nothing typed for this thread: a reply that failed
                         // behind newer text, if any, comes back into the box.
                         if w.global::<crate::ChatPane>()

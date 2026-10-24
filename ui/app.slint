@@ -412,6 +412,8 @@ export component MainWindow inherits Window {
     changed observed-thread-composer-text => { ChatPane.thread-draft-changed(); }
     private property <bool> observed-thread-panel-visible: ChatPane.thread-panel-visible;
     changed observed-thread-panel-visible => { VoiceRecording.cancel(); }
+    private property <string> observed-thread-root: ChatPane.thread-root-message-id;
+    changed observed-thread-root => { VoiceRecording.cancel(); }
     private property <string> observed-active-tab: SidebarPane.active-tab;
     changed observed-active-tab => { CallView.calls-more-menu-visible = false; CallView.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); root.refresh-screen-protection(); }
     changed current-view => {

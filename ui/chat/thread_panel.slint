@@ -1,4 +1,3 @@
-import { IconAction } from "../components/icon_action.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Thread panel component for viewing replies to a message
 //
@@ -15,7 +14,9 @@ import { MessageItem } from "message_item.slint";
 import { ConversationKind } from "conversation_kind.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
-import { TextFormat } from "message_composer.slint";
+import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
+import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+import { MentionAutocomplete, MentionSuggestion } from "../components/mention_autocomplete.slint";
 
 // Slint virtualizes direct `for` children of this Flickable shape.
 component ListView inherits Flickable {
@@ -72,25 +73,36 @@ export component ThreadPanel inherits Rectangle {
 
     // Composer text (two-way binding)
     in-out property <string> composer-text;
-
-    // As the main composer (`message_composer.slint` reset-after-send): send
-    // the text with the input method's in-flight word spliced in, then make
-    // the input method finish composing so that word cannot come back.
-    function send-composed() {
-        let text = TextFormat.replace(root.composer-text, composer-input.preedit-text,
-            composer-input.cursor-position-byte-offset, composer-input.cursor-position-byte-offset);
-        if text == "" { return; }
-        root.send-reply(text);
-        root.composer-text = "";
-        if composer-input.preedit-text != "" {
-            composer-input.clear-focus();
-            composer-input.focus();
-        }
-    }
+    in property <[PendingAttachmentData]> pending-attachments: [];
+    in property <bool> keyboard-open: false;
+    in property <[EmojiData]> emoji-list: [];
+    in-out property <int> emoji-category: 0;
+    in-out property <string> emoji-search: "";
+    in-out property <int> emoji-skin-tone: 0;
+    in property <[MentionSuggestion]> mention-suggestions: [];
+    in property <bool> mention-visible: false;
+    in-out property <int> mention-selected-index: 0;
+    in-out property <bool> is-replying: false;
+    in property <string> reply-to-sender-name: "";
+    in property <string> reply-preview: "";
+    in property <bool> reply-has-thumbnail: false;
+    in property <image> reply-thumbnail;
+    in property <int> attachment-prepare-serial: 0;
+    in property <int> attachment-restore-serial: 0;
+    private property <bool> emoji-open: false;
 
     // Callbacks
     callback close-clicked;
-    callback send-reply(string);
+    callback send-reply(string) -> bool;
+    callback attachment-clicked();
+    callback remove-attachment(string);
+    callback paste-image();
+    callback mention-triggered(string);
+    callback mention-selected(string, string);
+    callback cancel-reply();
+    callback emoji-category-changed(int);
+    callback emoji-search-changed(string);
+    callback emoji-skin-tone-changed(int);
     callback load-more-replies;
     callback open-message-link(string);
     callback message-clicked(string);
@@ -119,7 +131,7 @@ export component ThreadPanel inherits Rectangle {
 
     // Panel sizing — adjustable width with drag handle
     in-out property <length> panel-width: Spacing.thread-panel-width;
-    property <length> min-panel-width: 240px;
+    property <length> min-panel-width: 320px;
     property <length> max-panel-width: 500px;
 
     width: root.panel-width;
@@ -592,65 +604,60 @@ export component ThreadPanel inherits Rectangle {
             }
         }
 
-        // Composer at bottom (simplified)
-        Rectangle {
-            height: Spacing.button-height + Spacing.sm * 2;
-            background: Colors.surface;
-
-            // Top border
-            Rectangle {
-                height: 1px;
-                background: Colors.divider;
-            }
-
-            HorizontalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.sm;
-
-                // Text input area
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: Spacing.button-height;
-                    background: Colors.background;
-                    border-radius: Spacing.radius-md;
-                    border-width: Spacing.stroke;
-                    border-color: composer-input.has-focus ? Colors.primary : Colors.border;
-
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-
-                        composer-input := TextInput {
-                            horizontal-stretch: 1;
-                            height: parent.height;
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            vertical-alignment: center;
-                            text <=> root.composer-text;
-
-                            accepted => { root.send-composed(); }
-                        }
-                    }
-
-                    // Placeholder
-                    if root.composer-text == "": Text {
-                        x: Spacing.sm;
-                        text: "Reply in thread...";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        vertical-alignment: center;
-                    }
-                }
-
-                // Send button
-                IconAction {
-                    icon: Icons.send;
-                    label: "Send reply";
-                    active: true;
-                    enabled: root.composer-text != "" || composer-input.preedit-text != "";
-                    clicked => { root.send-composed(); }
-                }
-            }
+        composer := MessageComposer {
+            width: 100%;
+            vertical-stretch: 0;
+            mobile: root.mobile;
+            enter-sends: !root.mobile;
+            keyboard-open: root.keyboard-open;
+            available-pane-height: root.height;
+            composer-scope: "thread";
+            thread-root-id: root.root-message-id;
+            picker-open: root.emoji-open;
+            attachment-prepare-serial: root.attachment-prepare-serial;
+            attachment-restore-serial: root.attachment-restore-serial;
+            text <=> root.composer-text;
+            placeholder: "Reply in thread...";
+            pending-attachments: root.pending-attachments;
+            is-replying: root.is-replying;
+            reply-to-sender: root.reply-to-sender-name;
+            reply-to-preview: root.reply-preview;
+            reply-has-thumbnail: root.reply-has-thumbnail;
+            reply-thumbnail: root.reply-thumbnail;
+            send(text) => { return root.send-reply(text); }
+            cancel-reply => { root.cancel-reply(); }
+            attachment-clicked => { root.attachment-clicked(); }
+            remove-attachment(id) => { root.remove-attachment(id); }
+            paste-image => { root.paste-image(); }
+            emoji-clicked => { root.emoji-open = !root.emoji-open; }
+            input-focused => { root.emoji-open = false; }
+            mention-triggered(query) => { root.mention-triggered(query); }
         }
+        if root.mobile: Rectangle { height: Spacing.sm; }
+    }
+
+    if root.emoji-open: EmojiPicker {
+        show: true;
+        touch: root.mobile;
+        x: max(0px, root.width - self.width - Spacing.sm);
+        y: max(Spacing.header-height, root.height - composer.height - self.height - Spacing.sm);
+        emoji-list: root.emoji-list;
+        selected-category <=> root.emoji-category;
+        search-query <=> root.emoji-search;
+        selected-skin-tone <=> root.emoji-skin-tone;
+        emoji-selected(emoji) => { composer.insert-emoji(emoji); root.emoji-open = false; }
+        close => { root.emoji-open = false; }
+        category-changed(category) => { root.emoji-category-changed(category); }
+        search-changed(query) => { root.emoji-search-changed(query); }
+        skin-tone-changed(tone) => { root.emoji-skin-tone-changed(tone); }
+    }
+    if root.mention-visible: MentionAutocomplete {
+        show: root.mention-visible;
+        x: Spacing.sm;
+        y: max(Spacing.header-height, root.height - composer.height - self.height);
+        suggestions: root.mention-suggestions;
+        selected-index: root.mention-selected-index;
+        suggestion-selected(id, display) => { root.mention-selected(id, display); }
+        close => { root.mention-triggered(""); }
     }
 }

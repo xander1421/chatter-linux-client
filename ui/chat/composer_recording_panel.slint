@@ -8,12 +8,13 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 
 export component ComposerRecordingPanel inherits Rectangle {
+in property <bool> recording-here: false;
 in property <float> recording-reveal;
 in property <length> row-padding;
 in property <int> surface-material-level;
 in property <int> surface-elevation;
 in property <bool> surface-backdrop-paused;
-    visible: VoiceRecording.active;
+    visible: root.recording-here;
     opacity: min(1, max(0, root.recording-reveal));
     background: transparent;
     TouchArea { }

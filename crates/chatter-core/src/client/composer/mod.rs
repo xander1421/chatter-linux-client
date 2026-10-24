@@ -201,6 +201,7 @@ struct ComposerRecovery {
     /// Staged attachments per conversation id (the tray key), the active
     /// conversation's tray included.
     trays: HashMap<String, Vec<StagedAttachment>>,
+    thread_trays: HashMap<String, Vec<StagedAttachment>>,
     parked: Vec<ParkedSend>,
 }
 
@@ -215,7 +216,7 @@ struct StagingCrypto {
 
 impl ComposerRecovery {
     fn is_empty(&self) -> bool {
-        self.trays.is_empty() && self.parked.is_empty()
+        self.trays.is_empty() && self.thread_trays.is_empty() && self.parked.is_empty()
     }
 }
 
@@ -261,6 +262,23 @@ impl ChatterClient {
 
     pub fn add_pending_attachment(&self, attachment: crate::state::PendingAttachment) {
         self.services.chat_state.add_pending_attachment(attachment);
+    }
+
+    pub fn thread_pending_attachments(&self, root: &MessageId) -> Vec<PendingAttachment> {
+        self.services.chat_state.thread_pending_attachments(root)
+    }
+
+    pub fn add_thread_pending_attachment_for(
+        &self,
+        root: MessageId,
+        revision: u64,
+        attachment: PendingAttachment,
+    ) {
+        self.services.chat_state.add_thread_attachment_for(root, revision, attachment);
+    }
+
+    pub fn remove_thread_pending_attachment(&self, root: MessageId, id: AttachmentId) {
+        self.services.chat_state.remove_thread_attachment(root, id);
     }
 
     pub fn clear_pending_attachments(&self) {
@@ -329,6 +347,50 @@ impl ChatterClient {
         })
     }
 
+    /// Freeze a thread composer without touching the main conversation's tray.
+    pub fn begin_thread_composer_send(
+        &self,
+        root: MessageId,
+        text: String,
+        reply: Option<ComposerReply>,
+    ) -> Result<ComposerSend, String> {
+        let thread = self.active_thread().filter(|thread| thread.root_message_id == root)
+            .ok_or_else(|| "The thread changed. Nothing was sent.".to_string())?;
+        let chat = self.chat_state().get();
+        let conversation = chat.active_conversation;
+        if conversation.channel_id() != Some(thread.channel_id) {
+            return Err("The conversation changed. Nothing was sent.".into());
+        }
+        if let ActiveConversation::Channel(channel) = conversation {
+            let notice = self.channel_send_notice(&channel);
+            if !notice.is_empty() { return Err(notice); }
+            if self.is_former_channel(&channel) {
+                return Err("You can no longer post in this channel.".into());
+            }
+        }
+        let text = text.trim().to_owned();
+        let attachments = self.chat_state().thread_pending_attachments(&root);
+        if text.is_empty() && attachments.is_empty() {
+            return Err("Add a message or attachment first.".into());
+        }
+        self.ensure_send_available(conversation).map_err(|e| e.to_string())?;
+        let session_revision = self.auth_state().get().session_revision;
+        if !self.composer_session_is_current(session_revision) {
+            return Err("The account session changed. Nothing was sent.".into());
+        }
+        let attachments = self.chat_state()
+            .take_thread_attachments_for(root, chat.attachment_revision)
+            .ok_or_else(|| "The thread changed. Nothing was sent.".to_string())?;
+        Ok(ComposerSend {
+            attempt_id: uuid::Uuid::new_v4(),
+            session_revision,
+            conversation,
+            text,
+            reply,
+            attachments,
+        })
+    }
+
     pub fn composer_session_is_current(&self, revision: u64) -> bool {
         self.auth_state().get().session_revision == revision
     }
@@ -359,6 +421,34 @@ impl ChatterClient {
             )
             .await,
         )
+    }
+
+    pub async fn send_thread_composer_message(
+        &self,
+        send: &ComposerSend,
+        root: MessageId,
+        quote: Option<crate::services::gateway::QuoteIntent>,
+    ) -> Result<crate::domain::message::Message, String> {
+        if !self.composer_session_is_current(send.session_revision) {
+            return Err("The account session changed. Nothing was sent.".into());
+        }
+        let channel = send.conversation.channel_id()
+            .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
+        let uploaded = super::upload_attachments(
+            &send.attachments,
+            &self.attachments().for_conversation(&send.conversation),
+            Some(self),
+        ).await.map_err(|error| error.to_string())?;
+        if !self.composer_session_is_current(send.session_revision) {
+            return Err("The account session changed. Nothing was sent.".into());
+        }
+        let ids = uploaded.pointers.iter()
+            .map(|pointer| AttachmentId::from_cdn_key(&pointer.cdn_key))
+            .collect();
+        self.send_channel_message_with_quote(
+            None, &channel, &send.text, ids, uploaded.pointers,
+            Some(&root), vec![], false, quote.as_ref(),
+        ).await.map_err(|error| error.to_string())
     }
 
     /// Account-local drafts and failed sends never survive sign-out, on disk
@@ -699,6 +789,22 @@ impl ChatterClient {
             .unwrap_or_default()
     }
 
+    pub fn thread_draft_reply(&self, root: &MessageId) -> Option<ComposerReply> {
+        let (drafts, _) = self.composer_drafts_for_session();
+        drafts.get(&Self::thread_draft_key(root)).and_then(|draft| draft.reply.clone())
+    }
+
+    pub fn set_thread_draft_reply(&self, root: &MessageId, reply: Option<ComposerReply>) {
+        let (mut drafts, changed_session) = self.composer_drafts_for_session();
+        if changed_session { return; }
+        let key = Self::thread_draft_key(root);
+        let draft = drafts.entry(key.clone()).or_default();
+        if draft.reply == reply { return; }
+        draft.reply = reply;
+        if draft.is_empty() { drafts.remove(&key); }
+        self.persist_composer_drafts(&drafts);
+    }
+
     /// Store the thread panel's text for `root`; empty text clears it. A
     /// save after the session moved on is dropped, like an autosave.
     pub fn set_thread_draft(&self, root: &MessageId, text: &str) {
@@ -707,26 +813,16 @@ impl ChatterClient {
             return;
         }
         let key = Self::thread_draft_key(root);
-        let same = drafts.get(&key).map_or(text.is_empty(), |held| {
-            held.text == text && held.reply.is_none()
-        });
+        let same = drafts.get(&key).map_or(text.is_empty(), |held| held.text == text);
         if same {
             if self.composer_drafts_dirty.load(Ordering::SeqCst) {
                 self.persist_composer_drafts(&drafts);
             }
             return;
         }
-        if text.is_empty() {
-            drafts.remove(&key);
-        } else {
-            drafts.insert(
-                key,
-                ComposerDraft {
-                    text: text.to_owned(),
-                    reply: None,
-                },
-            );
-        }
+        let draft = drafts.entry(key.clone()).or_default();
+        draft.text = text.to_owned();
+        if draft.is_empty() { drafts.remove(&key); }
         self.persist_composer_drafts(&drafts);
     }
 
@@ -749,7 +845,7 @@ impl ChatterClient {
         text: &str,
         session_revision: u64,
     ) -> bool {
-        self.keep_failed_thread_reply(root, text, session_revision, false)
+        self.keep_failed_thread_reply(root, text, None, session_revision, false)
     }
 
     /// The UI's box may contain newer text that has not reached autosave.
@@ -760,13 +856,24 @@ impl ChatterClient {
         text: &str,
         session_revision: u64,
     ) -> bool {
-        self.keep_failed_thread_reply(root, text, session_revision, true)
+        self.keep_failed_thread_reply(root, text, None, session_revision, true)
+    }
+
+    pub fn park_failed_thread_composer_reply(
+        &self,
+        root: &MessageId,
+        text: &str,
+        reply: Option<ComposerReply>,
+        session_revision: u64,
+    ) -> bool {
+        self.keep_failed_thread_reply(root, text, reply, session_revision, true)
     }
 
     fn keep_failed_thread_reply(
         &self,
         root: &MessageId,
         text: &str,
+        reply: Option<ComposerReply>,
         session_revision: u64,
         always_park: bool,
     ) -> bool {
@@ -778,21 +885,23 @@ impl ChatterClient {
             return false;
         }
         let key = Self::thread_draft_key(root);
-        if always_park || drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
+        if always_park || drafts.get(&key).is_some_and(|held| !held.is_empty()) {
             let parked = drafts
                 .entry(Self::failed_thread_reply_key(root))
                 .or_default();
             if !parked.text.is_empty() {
                 parked.text.push_str("\n\n");
+                parked.reply = None;
+            } else {
+                parked.reply = reply;
             }
             parked.text.push_str(text);
-            parked.reply = None;
         } else {
             drafts.insert(
                 key,
                 ComposerDraft {
                     text: text.to_owned(),
-                    reply: None,
+                    reply,
                 },
             );
         }
@@ -816,7 +925,7 @@ impl ChatterClient {
     pub fn take_failed_thread_reply(&self, root: &MessageId) -> Option<String> {
         let (mut drafts, _) = self.composer_drafts_for_session();
         let key = Self::thread_draft_key(root);
-        if drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
+        if drafts.get(&key).is_some_and(|held| !held.is_empty()) {
             return None;
         }
         let parked = drafts.remove(&Self::failed_thread_reply_key(root))?;

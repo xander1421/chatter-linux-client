@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::ids::{AttachmentId, ChannelId};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 
 use super::{ActiveConversation, ChatState, ChatStateData};
 
@@ -65,6 +65,60 @@ impl PendingAttachment {
 }
 
 impl ChatState {
+    pub fn thread_pending_attachments(&self, root: &MessageId) -> Vec<PendingAttachment> {
+        self.store.get().thread_attachment_trays.get(root).cloned().unwrap_or_default()
+    }
+
+    pub fn add_thread_attachment_for(
+        &self,
+        root: MessageId,
+        revision: u64,
+        attachment: PendingAttachment,
+    ) {
+        self.store.update(|state| {
+            if state.attachment_revision == revision {
+                state.thread_attachment_trays.entry(root).or_default().push(attachment);
+            }
+        });
+    }
+
+    pub fn take_thread_attachments_for(
+        &self,
+        root: MessageId,
+        revision: u64,
+    ) -> Option<Vec<PendingAttachment>> {
+        let mut taken = None;
+        self.store.update(|state| {
+            if state.attachment_revision == revision
+                && state.open_threads.iter().any(|thread| thread.root_message_id == root)
+            {
+                taken = Some(state.thread_attachment_trays.remove(&root).unwrap_or_default());
+            }
+        });
+        taken
+    }
+
+    pub fn remove_thread_attachment(&self, root: MessageId, id: AttachmentId) {
+        self.store.update(|state| {
+            if let Some(tray) = state.thread_attachment_trays.get_mut(&root) {
+                tray.retain(|attachment| attachment.id != id);
+                if tray.is_empty() { state.thread_attachment_trays.remove(&root); }
+            }
+        });
+    }
+
+    pub fn take_thread_attachment_trays_for(&self, roots: &[MessageId]) -> Vec<PendingAttachment> {
+        let mut taken = Vec::new();
+        self.store.update(|state| {
+            for root in roots {
+                if let Some(mut attachments) = state.thread_attachment_trays.remove(root) {
+                    taken.append(&mut attachments);
+                }
+            }
+        });
+        taken
+    }
+
     pub(super) fn switch_attachment_tray(state: &mut ChatStateData, entering: Option<ChannelId>) {
         if state.active_channel_id == entering {
             return;
@@ -83,6 +137,7 @@ impl ChatState {
         self.store.update(|state| {
             state.pending_attachments.clear();
             state.attachment_trays.clear();
+            state.thread_attachment_trays.clear();
             state.attachment_revision = state.attachment_revision.wrapping_add(1);
         });
     }

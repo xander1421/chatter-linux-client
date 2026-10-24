@@ -151,7 +151,13 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Get reply info directly from the UI message model (works for all message types)
-            let messages = w.global::<crate::ChatPane>().get_messages();
+            let thread_rows = w.global::<crate::ChatPane>().get_thread_replies();
+            let in_thread = w.global::<crate::ChatPane>().get_thread_panel_visible()
+                && thread_rows.iter().any(|row| row.sender_id.as_str() == sender_id_str
+                    && row.timestamp_ns.as_str() == timestamp_str);
+            let messages = if in_thread { thread_rows } else {
+                w.global::<crate::ChatPane>().get_messages()
+            };
             let mut sender_name = String::new();
             let mut reply_preview = String::new();
             let mut reply_thumbnail = slint::Image::default();
@@ -200,17 +206,24 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 sender_name = ui_ctx.quote_author_name(&author, || sender_name);
             }
 
-            crate::bin_ui::features::chat::send_message::show_reply_image(
+            let reply = chatter_core::client::ComposerReply {
+                sender_id: sender_id_str,
+                timestamp: timestamp_str,
+                sender_name,
+                preview: reply_preview,
+                thumbnail: None,
+            };
+            if in_thread {
+                crate::bin_ui::features::thread::show_thread_reply_image(
+                    &w, &ui_ctx, reply, reply_has_thumbnail.then_some(reply_thumbnail),
+                );
+            } else {
+                crate::bin_ui::features::chat::send_message::show_reply_image(
                 &w,
-                chatter_core::client::ComposerReply {
-                    sender_id: sender_id_str,
-                    timestamp: timestamp_str,
-                    sender_name,
-                    preview: reply_preview,
-                    thumbnail: None,
-                },
+                reply,
                 reply_has_thumbnail.then_some(reply_thumbnail),
             );
+            }
             tracing::debug!(has_thumbnail = %reply_has_thumbnail, "Reply mode activated");
         },
     );

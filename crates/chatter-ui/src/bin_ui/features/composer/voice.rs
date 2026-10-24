@@ -255,12 +255,33 @@ async fn send_recording(
             g.invoke_cancel();
             return;
         }
+        let thread_root = if g.get_owner().as_str() == "thread" {
+            let root = g.get_thread_root();
+            if w.global::<crate::ChatPane>().get_thread_root_message_id() != root {
+                g.invoke_cancel();
+                return;
+            }
+            match root.parse::<chatter_core::domain::ids::MessageId>() {
+                Ok(root) => Some(root),
+                Err(_) => { g.invoke_cancel(); return; }
+            }
+        } else { None };
         match result {
             Ok(pending) => {
                 ready.lock().unwrap().take();
                 g.set_active(false);
-                client.add_pending_attachment(pending);
-                w.global::<crate::ChatPane>().invoke_send("".into());
+                if let Some(root) = thread_root {
+                    client.add_thread_pending_attachment_for(
+                        root, client.chat_snapshot().attachment_revision, pending,
+                    );
+                    crate::bin_ui::features::thread::render_thread_attachments(
+                        &w, &client.thread_pending_attachments(&root),
+                    );
+                    w.global::<crate::ChatPane>().invoke_send_thread_reply("".into());
+                } else {
+                    client.add_pending_attachment(pending);
+                    w.global::<crate::ChatPane>().invoke_send("".into());
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, "Voice upload failed; recording retained for retry");

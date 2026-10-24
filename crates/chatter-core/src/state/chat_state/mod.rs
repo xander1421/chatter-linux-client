@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::state::store::Store;
 
 mod attachments;
@@ -48,6 +48,8 @@ pub struct ChatStateData {
     pub active_thread_index: Option<usize>,
     /// Pending attachments for the current message being composed.
     pub pending_attachments: Vec<PendingAttachment>,
+    /// Thread composers keep their staged files apart from the main composer.
+    pub thread_attachment_trays: HashMap<MessageId, Vec<PendingAttachment>>,
     /// Inactive conversation trays; navigation swaps these atomically.
     pub attachment_trays: HashMap<Option<ChannelId>, Vec<PendingAttachment>>,
     /// Invalidates asynchronous file selections when the account session resets.

@@ -48,6 +48,14 @@ fn replace_selection(text: &str, replacement: &str, start: usize, end: usize) ->
 }
 
 pub(crate) fn wire_format_text(window: &MainWindow) {
+    window.global::<TextFormat>().on_mention_query(|text| {
+        let query = text.rsplit('@').next().unwrap_or_default();
+        if query.is_empty() || query.chars().any(char::is_whitespace) || !text.contains('@') {
+            "".into()
+        } else {
+            query.into()
+        }
+    });
     window
         .global::<TextFormat>()
         .on_replace(|text, replacement, start, end| {

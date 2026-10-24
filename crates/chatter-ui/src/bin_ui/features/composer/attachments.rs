@@ -434,7 +434,7 @@ pub(crate) fn wire_paste_image(
 /// path so it can flow through the normal attachment pipeline. Errors (incl.
 /// "no image on clipboard") are returned as strings for the caller to log.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn read_clipboard_image() -> Result<PathBuf, String> {
+pub(crate) fn read_clipboard_image() -> Result<PathBuf, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let img = clipboard.get_image().map_err(|e| e.to_string())?;
 

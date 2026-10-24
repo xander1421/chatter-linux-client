@@ -46,6 +46,25 @@ impl ChatterClient {
         mentioned_integrations: Vec<crate::domain::ids::IntegrationId>,
         targets_ai_bot: bool,
     ) -> Result<crate::domain::message::Message, crate::services::message::MessageError> {
+        self.send_channel_message_with_quote(
+            group_fanout, channel_id, text, attachment_ids, attachment_pointers,
+            thread_id, mentioned_integrations, targets_ai_bot, None,
+        ).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn send_channel_message_with_quote(
+        &self,
+        group_fanout: Option<&crate::mailbox::group::GroupFanout>,
+        channel_id: &crate::domain::ids::ChannelId,
+        text: &str,
+        attachment_ids: Vec<crate::domain::ids::AttachmentId>,
+        attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
+        thread_id: Option<&crate::domain::ids::MessageId>,
+        mentioned_integrations: Vec<crate::domain::ids::IntegrationId>,
+        targets_ai_bot: bool,
+        quote: Option<&crate::services::gateway::QuoteIntent>,
+    ) -> Result<crate::domain::message::Message, crate::services::message::MessageError> {
         let message = self
             .messages()
             .send(
@@ -57,7 +76,7 @@ impl ChatterClient {
                 thread_id,
                 mentioned_integrations,
                 targets_ai_bot,
-                None, // thread replies use parent_id, not a reply quote
+                quote,
             )
             .await?;
         // A received thread reply moves the chat-list row; a sent one does too.

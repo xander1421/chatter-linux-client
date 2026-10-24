@@ -27,6 +27,20 @@ pub fn wire_reply_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak_window.upgrade() else {
                 return;
             };
+            if w.global::<crate::ChatPane>().get_thread_panel_visible() {
+                let replies = w.global::<crate::ChatPane>().get_thread_replies();
+                if let Some(row) = replies.iter().find(|row| row.sender_id.as_str() == sender_id_str
+                    && row.timestamp_ns.as_str() == timestamp_ns_str) {
+                    super::super::thread::show_thread_reply(&w, &ui_ctx, chatter_core::client::ComposerReply {
+                        sender_id: sender_id_str,
+                        timestamp: timestamp_ns_str,
+                        sender_name: row.sender_name.to_string(),
+                        preview: row.content.to_string(),
+                        thumbnail: None,
+                    });
+                    return;
+                }
+            }
             // Get reply info directly from UI message model (works for all message types)
             let messages = w.global::<crate::ChatPane>().get_messages();
             let mut display_name = String::new();

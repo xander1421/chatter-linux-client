@@ -15,6 +15,7 @@ export component AppThreadPanel inherits Rectangle {
     in-out property <length> context-menu-preview-row-x;
     in-out property <length> context-menu-preview-row-y;
     in property <bool> is-small-screen;
+    in property <bool> keyboard-open;
     in-out property <int> reply-focus-serial;
     in-out property <length> viewer-origin-width;
     background: transparent;
@@ -35,9 +36,34 @@ export component AppThreadPanel inherits Rectangle {
         loading: ChatPane.thread-loading;
         tail-serial: ChatPane.thread-tail-serial;
         composer-text <=> ChatPane.thread-composer-text;
+        pending-attachments: ChatPane.thread-pending-attachments;
+        keyboard-open: root.keyboard-open;
+        emoji-list: ChatPane.thread-emoji-list;
+        emoji-category <=> ChatPane.thread-emoji-category;
+        emoji-search <=> ChatPane.thread-emoji-search;
+        emoji-skin-tone <=> ChatPane.thread-emoji-skin-tone;
+        mention-suggestions: ChatPane.thread-mention-suggestions;
+        mention-visible: ChatPane.thread-mention-visible;
+        mention-selected-index <=> ChatPane.thread-mention-selected-index;
+        is-replying: ChatPane.thread-composer-is-replying;
+        reply-to-sender-name: ChatPane.thread-reply-to-sender-name;
+        reply-preview: ChatPane.thread-reply-preview;
+        reply-has-thumbnail: ChatPane.thread-reply-has-thumbnail;
+        reply-thumbnail: ChatPane.thread-reply-thumbnail;
+        attachment-prepare-serial: ChatPane.thread-attachment-prepare-serial;
+        attachment-restore-serial: ChatPane.thread-attachment-restore-serial;
 
         close-clicked => { ChatPane.close-thread-clicked(); }
-        send-reply(text) => { ChatPane.send-thread-reply(text); }
+        send-reply(text) => { return ChatPane.send-thread-reply(text); }
+        attachment-clicked => { ChatPane.thread-attachment-clicked(); }
+        remove-attachment(id) => { ChatPane.thread-remove-attachment(id); }
+        paste-image => { ChatPane.thread-paste-image(); }
+        mention-triggered(query) => { ChatPane.thread-mention-triggered(query); }
+        mention-selected(id, display) => { ChatPane.thread-mention-selected(id, display); }
+        cancel-reply => { ChatPane.thread-cancel-reply(); }
+        emoji-category-changed(category) => { ChatPane.thread-emoji-category-changed(category); }
+        emoji-search-changed(query) => { ChatPane.thread-emoji-search-changed(query); }
+        emoji-skin-tone-changed(tone) => { ChatPane.thread-emoji-skin-tone-changed(tone); }
         load-more-replies => { ChatPane.load-more-thread-replies(); }
         open-message-link(url) => { ChatPane.open-message-link(url); }
         message-clicked(id) => { ChatPane.message-clicked(id); }

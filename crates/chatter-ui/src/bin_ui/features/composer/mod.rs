@@ -5,6 +5,8 @@
 mod attachments;
 pub(crate) use attachments::render_attachments;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) use attachments::read_clipboard_image;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod drag_drop;
 mod emoji;
 mod format_text;
@@ -260,6 +262,9 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             .collect();
         for (tray, staged) in &d.attachment_trays {
             ids.extend(staged.iter().map(|a| format!("{tray:?}:{}", a.id)));
+        }
+        for (root, staged) in &d.thread_attachment_trays {
+            ids.extend(staged.iter().map(|a| format!("thread:{root}:{}", a.id)));
         }
         ids.sort();
         ids
