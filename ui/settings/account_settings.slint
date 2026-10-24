@@ -215,6 +215,7 @@ export component AccountSettings inherits VerticalLayout {
                         touch: root.mobile-platform;
                         text: "Cancel";
                         variant: "ghost";
+                        disabled: root.delete-loading;
                         clicked => {
                             show-password-form = false;
                             root.current-password = "";
@@ -785,7 +786,7 @@ export component AccountSettings inherits VerticalLayout {
                         text: "Delete Forever";
                         variant: "destructive";
                         loading: root.delete-loading;
-                        disabled: root.delete-password == "";
+                        disabled: root.delete-loading || root.delete-password == "";
                         clicked => {
                             root.delete-account-confirmed(root.delete-password);
                         }

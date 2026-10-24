@@ -74,7 +74,10 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if let Some(w) = weak.upgrade() {
                             if w.get_current_view().as_str() != "recovery"
                                 || w.global::<crate::AuthFlow>().get_recovery_loading()
-                                || w.global::<crate::AuthFlow>().get_recovery_success().is_empty()
+                                || w.global::<crate::AuthFlow>()
+                                    .get_recovery_success()
+                                    .as_str()
+                                    .is_empty()
                             {
                                 return;
                             }
