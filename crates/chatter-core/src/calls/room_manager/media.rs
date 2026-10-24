@@ -475,14 +475,23 @@ impl RoomManager {
         Ok(())
     }
 
-    /// Stop microphone capture and unpublish track.
-    pub fn stop_microphone(&self) {
+    /// Stop microphone capture and retire its published track.
+    pub async fn stop_microphone(&self) {
         self.microphone_requested
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        let mut capture = self.audio_capture.write();
-        capture.stop();
-        // Note: Track will be auto-unpublished when room disconnects
-        // For explicit unpublish, we'd need to track the publication
+        self.audio_capture.write().stop();
+        let sid = self.microphone_track_sid.write().take();
+        let Some(sid) = sid else { return };
+        let local_participant = {
+            let room = self.room.read();
+            match room.as_ref() {
+                Some(room) => room.local_participant(),
+                None => return,
+            }
+        };
+        if let Err(error) = local_participant.unpublish_track(&sid).await {
+            tracing::warn!(%error, %sid, "Could not unpublish microphone track");
+        }
     }
 
     /// Stop camera capture AND unpublish the LiveKit track.

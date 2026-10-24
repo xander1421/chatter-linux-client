@@ -241,7 +241,7 @@ mod reconnect_initialization_tests {
         assert!(manager.is_microphone_muted());
         manager.disconnect().await;
         assert!(manager.reconnect_microphone_device().is_some());
-        manager.stop_microphone();
+        manager.stop_microphone().await;
         assert!(manager.reconnect_microphone_device().is_none());
     }
 

@@ -547,7 +547,7 @@ pub(super) fn run_call_worker(
 
                 CallCommand::StopMicrophone => {
                     gate_defers(&active_call, |g| { g.drop_mic(); false });
-                    room_manager.stop_microphone();
+                    room_manager.stop_microphone().await;
                 }
 
                 CallCommand::StopCamera => {
