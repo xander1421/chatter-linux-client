@@ -1,0 +1,70 @@
+import { ActivityGlobal } from "activity_global.slint";
+import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// A callback bridge avoids importing ModalHostState into sidebar headers.
+export global ActivityUi {
+    out property <int> open-request: 0;
+    callback open();
+    open => { open-request += 1; }
+}
+
+export component ActivityBell inherits Rectangle {
+    in property <bool> touch: false;
+    in property <bool> server-unreachable: false;
+    in property <string> connection-status: "connected";
+    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+    border-radius: Spacing.radius-full;
+    background: bell-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+
+    Image {
+        source: Icons.bell;
+        width: Spacing.header-glyph;
+        height: Spacing.header-glyph;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: Colors.text-secondary;
+    }
+    if ActivityGlobal.unread-count > 0: Rectangle {
+        width: ActivityGlobal.unread-count > 99 ? 34px : ActivityGlobal.unread-count > 9 ? 28px : 20px;
+        height: 20px;
+        x: parent.width - self.width + 3px;
+        y: -4px;
+        border-radius: Spacing.radius-full;
+        background: Colors.primary;
+        Text {
+            text: ActivityGlobal.unread-count > 99 ? "99+" : "" + ActivityGlobal.unread-count;
+            color: Colors.on-action;
+            font-size: Typography.xs;
+            font-weight: Typography.bold;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    if root.server-unreachable || root.connection-status != "connected": Rectangle {
+        width: 9px; height: 9px;
+        x: 5px; y: 5px;
+        border-radius: Spacing.radius-full;
+        border-width: 1px; border-color: Colors.surface;
+        background: root.server-unreachable || root.connection-status == "failed" || root.connection-status == "disconnected"
+            ? Colors.error : Colors.warning;
+    }
+    FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return { ActivityUi.open(); return accept; }
+            return reject;
+        }
+    }
+    bell-touch := TouchArea {
+        mouse-cursor: pointer;
+        accessible-role: button;
+        accessible-label: ActivityGlobal.unread-count > 0
+            ? "Activity, " + ActivityGlobal.unread-count + " unread" : "Activity";
+        accessible-action-default => { ActivityUi.open(); }
+        clicked => { ActivityUi.open(); }
+    }
+}

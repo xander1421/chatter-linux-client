@@ -35,8 +35,6 @@ export component MainChatShell inherits Rectangle {
     in property <bool> compact-layout;
     in-out property <string> composer-composed-text;
     in-out property <bool> composer-composing;
-    in-out property <bool> connection-banner-dismissed;
-    in property <int> connection-reconnect-attempt;
     in property <string> connection-status;
     in-out property <length> context-menu-anchor-bottom;
     in-out property <length> context-menu-anchor-left;
@@ -102,6 +100,7 @@ export component MainChatShell inherits Rectangle {
             return-to-call-height: root.return-to-call-height;
             safe-area-bottom: root.safe-area-bottom;
             server-unreachable: root.server-unreachable;
+            connection-status: root.connection-status;
             sidebar-is-rail: root.sidebar-is-rail;
             sidebar-user-collapsed <=> root.sidebar-user-collapsed;
             window-width: root.width;
@@ -466,10 +465,6 @@ export component MainChatShell inherits Rectangle {
             z: 1;
             width: parent.width;
             height: parent.height;
-            connection-banner-dismissed <=> root.connection-banner-dismissed;
-            connection-status: root.connection-status;
-            server-unreachable: root.server-unreachable;
-            connection-reconnect-attempt: root.connection-reconnect-attempt;
             is-signed-in: AuthFlow.is-signed-in;
             go-to-login => { AuthFlow.go-to-login(); }
         }

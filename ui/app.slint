@@ -16,6 +16,9 @@ import { AppSettingsHost } from "app_settings_host.slint";
 import { AppSecondaryModals } from "app_secondary_modals.slint";
 import { AppTabScreens } from "app_tab_screens.slint";
 import { AppModalHost } from "app_modal_host.slint";
+import { ActivityUi } from "activity/activity_bell.slint";
+import { ActivityGlobal, ActivityItemData } from "activity/activity_global.slint";
+export { ActivityGlobal, ActivityItemData }
 import { Materials } from "theme/materials.slint";
 import { Appearance } from "theme/appearance.slint";
 // Chatter window: the root component Rust binds as `MainWindow`.
@@ -232,14 +235,10 @@ export component MainWindow inherits Window {
     // computed in core, so the auth screens and the banner cannot disagree.
     in property <bool> server-unreachable: false;
 
-    // The user closed the connection banner. Purely presentational — the red dot
-    // on the sidebar's settings button keeps reporting the outage — and cleared
-    // again on reconnect below, so dismissing one outage never hides the next.
-    property <bool> connection-banner-dismissed: false;
-    changed connection-status => {
-        if (root.connection-status == "connected") {
-            root.connection-banner-dismissed = false;
-        }
+    private property <int> observed-activity-open-request: ActivityUi.open-request;
+    changed observed-activity-open-request => {
+        ModalHostState.nav-push("activity");
+        ActivityGlobal.opened();
     }
 
     // ========== Working without an account ==========
@@ -642,8 +641,6 @@ export component MainWindow inherits Window {
                 compact-layout : root.compact-layout;
                 composer-composed-text <=> root.composer-composed-text;
                 composer-composing <=> root.composer-composing;
-                connection-banner-dismissed <=> root.connection-banner-dismissed;
-                connection-reconnect-attempt : root.connection-reconnect-attempt;
                 connection-status : root.connection-status;
                 context-menu-anchor-bottom <=> root.context-menu-anchor-bottom;
                 context-menu-anchor-left <=> root.context-menu-anchor-left;
@@ -683,6 +680,9 @@ export component MainWindow inherits Window {
             }
 
         AppModalHost {
+            connection-status: root.connection-status;
+            server-unreachable: root.server-unreachable;
+            connection-reconnect-attempt: root.connection-reconnect-attempt;
             z: 0;
             width: parent.width;
             height: parent.height;

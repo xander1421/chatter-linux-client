@@ -20,6 +20,7 @@ export component AppSidebarHost inherits Rectangle {
     in property <length> return-to-call-height;
     in property <length> safe-area-bottom;
     in property <bool> server-unreachable;
+    in property <string> connection-status;
     in property <bool> sidebar-is-rail;
     in-out property <bool> sidebar-user-collapsed;
     in property <length> window-width;
@@ -37,9 +38,10 @@ export component AppSidebarHost inherits Rectangle {
         y: 0px;
         bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
             + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px) : 0px;
-        // Survives dismissing the connection banner: the dot on the
-        // settings button is what keeps saying the server is down.
+        // Keep the settled reachability fact available to the Activity bell
+        // and to the compact rail, which has no header.
         server-unreachable: root.server-unreachable;
+        connection-status: root.connection-status;
         // `mobile-mode` means "touch input" — it sizes the panel's
         // targets. On desktop the panel also keeps its Discord-style
         // layout role: an icon rail by default, expanded to the full

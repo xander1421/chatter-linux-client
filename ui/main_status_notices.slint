@@ -1,4 +1,4 @@
-import { ConnectionBanner, MeshOnlyBar } from "components/mod.slint";
+import { MeshOnlyBar } from "components/mod.slint";
 import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
 import { Spacing } from "theme/spacing.slint";
 import { Materials } from "theme/materials.slint";
@@ -6,30 +6,14 @@ import { Materials } from "theme/materials.slint";
 // Status notices float over the header. Their animated height changes only
 // this overlay's stack, never the list or chat pane.
 export component MainStatusNotices inherits Rectangle {
-    in-out property <bool> connection-banner-dismissed;
-    in property <string> connection-status;
-    in property <bool> server-unreachable;
-    in property <int> connection-reconnect-attempt;
     in property <bool> is-signed-in;
     callback go-to-login();
     background: transparent;
 
-    connection-toast := ConnectionBanner {
-        x: (parent.width - self.width) / 2;
-        y: self.height > 0px ? Spacing.sm : -self.height - Spacing.sm;
-        width: min(parent.width - Spacing.sm * 2, 620px);
-        suppressed: root.connection-banner-dismissed;
-        connection-state: root.connection-status;
-        server-unreachable: root.server-unreachable;
-        reconnect-attempt: root.connection-reconnect-attempt;
-        dismissed => { root.connection-banner-dismissed = true; }
-        animate y { duration: Materials.motion-standard; easing: Materials.spring; }
-    }
-
     // Shield failure is persistent, but uses the same overlay stack.
     shield-toast := ShieldNetworkBanner {
         x: (parent.width - self.width) / 2;
-        y: connection-toast.height > 0px ? connection-toast.y + connection-toast.height + Spacing.xs : Spacing.sm;
+        y: Spacing.sm;
         width: min(parent.width - Spacing.sm * 2, 620px);
         animate y { duration: Materials.motion-standard; easing: Materials.spring; }
     }
@@ -38,7 +22,7 @@ export component MainStatusNotices inherits Rectangle {
     MeshOnlyBar {
         x: (parent.width - self.width) / 2;
         y: shield-toast.height > 0px ? shield-toast.y + shield-toast.height + Spacing.xs
-            : connection-toast.height > 0px ? connection-toast.y + connection-toast.height + Spacing.xs : Spacing.sm;
+            : Spacing.sm;
         width: min(parent.width - Spacing.sm * 2, 620px);
         signed-in: root.is-signed-in;
         sign-in => { root.go-to-login(); }

@@ -1,17 +1,16 @@
 export struct ActivityItemData {
-    id: string,
-    kind: string,
-    title: string,
-    preview: string,
-    time-label: string,
-    section: string,
+    id: string,            // stable id from core
+    kind: string,          // "mention" | "reply" | "reaction" | "missed-call" | "contact-request" | "invite" | "mesh-invite" | "device-linked" | "server" | "update"
+    title: string,         // already-worded by core/glue, e.g. "Alice mentioned you in #general"
+    preview: string,       // "" when privacy hides it
+    time-label: string,    // "2m", "14:05", "Yesterday"
+    section: string,       // "Today" | "Earlier"
     unread: bool,
 }
-
 export global ActivityGlobal {
     in-out property <[ActivityItemData]> items: [];
     in-out property <int> unread-count: 0;
-    callback open-item(string);
+    callback open-item(string);      // id → navigate + mark read
     callback mark-all-read();
-    callback opened();
+    callback opened();               // sheet shown (refresh)
 }
