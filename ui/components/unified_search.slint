@@ -511,6 +511,12 @@ export component UnifiedSearch inherits Rectangle {
                         width: Spacing.touch-target-min; height: Spacing.touch-target-min;
                         border-radius: self.width / 2;
                         background: clear-touch.pressed ? Materials.pressed : clear-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Clear search";
+                        accessible-action-default => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); }
+                        clear-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: clear-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
                         clear-touch := TouchArea { mouse-cursor: pointer; clicked => { root.query = ""; root.last-edited-query = ""; root.query-changed(""); search-input.focus(); } }
                         Text { text: "×"; color: Colors.text-secondary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -518,6 +524,12 @@ export component UnifiedSearch inherits Rectangle {
                         width: 72px; height: Spacing.touch-target-min;
                         border-radius: Spacing.radius-lg;
                         background: cancel-touch.pressed ? Materials.pressed : cancel-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Cancel search";
+                        accessible-action-default => { root.cancel(); }
+                        cancel-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.cancel(); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: cancel-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                         cancel-touch := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(); } }
                         Text { text: "Cancel"; color: Colors.primary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                     }
@@ -681,12 +693,24 @@ export component UnifiedSearch inherits Rectangle {
                 for recent in root.recent-searches: Rectangle {
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
                     background: recent-touch.pressed ? Materials.pressed : recent-touch.has-hover ? Materials.hover : transparent;
+                    accessible-role: button; accessible-label: "Search for " + recent;
+                    accessible-action-default => { root.recent-selected(recent); search-input.focus(); }
+                    recent-keys := FocusScope { width: 0px; height: 0px;
+                        key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-selected(recent); search-input.focus(); return accept; } return reject; }
+                    }
+                    Rectangle { border-width: recent-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-sm; }
                     recent-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-selected(recent); search-input.focus(); } }
                     Text { text: recent; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; width: parent.width - Spacing.touch-target-min - Spacing.md; vertical-alignment: center; height: 100%; overflow: elide; }
                     Rectangle {
                         x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min;
                         border-radius: self.width / 2;
                         background: remove-touch.pressed ? Materials.pressed : remove-touch.has-hover ? Materials.hover : transparent;
+                        accessible-role: button; accessible-label: "Remove recent search " + recent;
+                        accessible-action-default => { root.recent-remove(recent); }
+                        remove-keys := FocusScope { width: 0px; height: 0px;
+                            key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.recent-remove(recent); return accept; } return reject; }
+                        }
+                        Rectangle { border-width: remove-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: self.width / 2; }
                         remove-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-remove(recent); } }
                         Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
