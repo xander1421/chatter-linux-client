@@ -4,6 +4,11 @@ impl MessageService {
     /// Reissue only the handshake. Queued content remains byte-for-byte in
     /// pending_dm_messages until one completion path wins the drain.
     pub(crate) async fn reissue_dm_bootstrap(&self, peer_id: &UserId) -> Result<(), MessageError> {
+        // These rows were queued by Shield. A mode switch must not move their
+        // handshake onto the public transport.
+        if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(MessageError::ShieldNotReady);
+        }
         let our_user_id = self.settings_repo.current_user_id()?;
         let mut auth_client = AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone());
         if our_user_id.as_uuid() > peer_id.as_uuid() {
