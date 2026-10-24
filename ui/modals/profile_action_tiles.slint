@@ -12,6 +12,7 @@ export component ProfileActionTiles inherits HorizontalLayout {
     callback send-message();
     callback toggle-mute();
     callback start-call(bool);
+    callback open-more();
     padding-left: Spacing.md;
     padding-right: Spacing.md;
     spacing: Spacing.xs;
@@ -23,20 +24,23 @@ export component ProfileActionTiles inherits HorizontalLayout {
     // leave Tor and expose the user's IP.
     for act in root.scoped-member ? [
         { id: "mute", label: root.is-muted ? "Unmute conversation" : "Mute conversation", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
     ] : root.is-anonymous && AnonMode.enabled && !root.is-friend ? [
         { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
     ] : root.is-anonymous ? [
         { id: "message", label: "Message", icon: Icons.message-circle },
         { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
     ] : AnonMode.enabled && !root.is-friend ? [
         { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
         { id: "call", label: "Call", icon: Icons.phone },
-        { id: "video", label: "Video", icon: Icons.video },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
     ] : [
         { id: "message", label: "Message", icon: Icons.message-circle },
         { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
         { id: "call", label: "Call", icon: Icons.phone },
-        { id: "video", label: "Video", icon: Icons.video },
+        { id: "more", label: "More", icon: Icons.more-horizontal },
     ]: Rectangle {
         horizontal-stretch: 1;
         height: 62px;
@@ -85,7 +89,7 @@ export component ProfileActionTiles inherits HorizontalLayout {
                 } else if (act.id == "call") {
                     root.start-call(false);
                 } else {
-                    root.start-call(true);
+                    root.open-more();
                 }
             }
         }

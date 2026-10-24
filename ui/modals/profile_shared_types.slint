@@ -26,8 +26,9 @@ export global ProfileSharedIcons {
     // Category glyph for a list row / a media tile with no thumbnail.
     public pure function category-icon(c: string) -> image {
         if c == "link" { return Icons.link; }
-        else if c == "voice" || c == "music" { return Icons.mic; }
-        else if c == "media" || c == "gif" { return Icons.image; }
+        else if c == "voice" || c == "audio" || c == "music" { return Icons.mic; }
+        else if c == "photo" || c == "media" || c == "gif" { return Icons.image; }
+        else if c == "video" { return Icons.video; }
         else { return Icons.file; }
     }
 }

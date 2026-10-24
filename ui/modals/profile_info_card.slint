@@ -2,10 +2,17 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
+import { ProfileSafetyNumber } from "profile_safety_number.slint";
 export component ProfileInfoCard inherits HorizontalLayout {
     in property <string> username;
     in property <string> bio;
     in property <bool> is-self;
+    in property <bool> scoped-member;
+    in property <bool> is-verified;
+    in property <string> safety-number;
+    in-out property <bool> show-safety-number;
+    callback view-safety-number();
+    callback toggle-verified();
     in property <string> share-link;
     in property <image> share-qr;
     in property <string> share-status;
@@ -163,6 +170,14 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     font-size: Typography.xs;
                     wrap: word-wrap;
                 }
+            }
+
+            if !root.is-self && !root.scoped-member: ProfileSafetyNumber {
+                safety-number: root.safety-number;
+                is-verified: root.is-verified;
+                show-safety-number <=> root.show-safety-number;
+                view-safety-number => { root.view-safety-number(); }
+                toggle-verified => { root.toggle-verified(); }
             }
 
             // Bio
