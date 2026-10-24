@@ -9,38 +9,26 @@ pub(super) fn wire_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<crate::SettingsPane>()
         .on_settings_change_pin(move |current_pin: SharedString, new_pin: SharedString| {
+            let Some(window) = weak_window.upgrade() else { return };
+            let settings = window.global::<crate::SettingsPane>();
+            if settings.get_settings_change_pin_loading() {
+                return;
+            }
+            if current_pin == new_pin {
+                settings.set_settings_change_pin_error(
+                    "New PIN must be different from current PIN".into(),
+                );
+                return;
+            }
+            settings.set_settings_change_pin_loading(true);
+            settings.set_settings_change_pin_error("".into());
+            settings.set_settings_change_pin_success("".into());
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_pin.clone();
             let current_pin = current_pin.to_string();
             let new_pin = new_pin.to_string();
 
             tokio::spawn(async move {
-                // SECURITY: Early check - new PIN must differ from current PIN
-                if current_pin == new_pin {
-                    let weak_err = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_err.upgrade() {
-                            w.global::<crate::SettingsPane>()
-                                .set_settings_change_pin_error(
-                                    "New PIN must be different from current PIN".into(),
-                                );
-                        }
-                    });
-                    return;
-                }
-
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_change_pin_loading(true);
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_change_pin_error("".into());
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_change_pin_success("".into());
-                    }
-                });
-
                 match ui_ctx.change_pin(&current_pin, &new_pin).await {
                     Ok(()) => {
                         tracing::info!("PIN changed successfully");
@@ -83,21 +71,18 @@ pub(super) fn wire_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<crate::SettingsPane>()
         .on_settings_retry_backup(move |pin: SharedString| {
+            let Some(window) = weak_window.upgrade() else { return };
+            let settings = window.global::<crate::SettingsPane>();
+            if settings.get_settings_backup_retry_loading() {
+                return;
+            }
+            settings.set_settings_backup_retry_loading(true);
+            settings.set_settings_backup_retry_error("".into());
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx_retry.clone();
             let pin = pin.to_string();
 
             tokio::spawn(async move {
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_backup_retry_loading(true);
-                        w.global::<crate::SettingsPane>()
-                            .set_settings_backup_retry_error("".into());
-                    }
-                });
-
                 let result = ui_ctx.retry_svr_backup(&pin).await;
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {

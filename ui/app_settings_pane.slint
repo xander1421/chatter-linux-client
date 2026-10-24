@@ -92,6 +92,7 @@ export global SettingsPane {
     callback settings-server-message-backup(string);   // pin
     callback settings-restore-message-backup(string);  // pin
     in-out property <string> settings-message-backup-status: "";
+    in property <bool> settings-message-backup-busy: false;
 
     // AI settings callbacks
     callback settings-local-ai-enabled-changed(bool);

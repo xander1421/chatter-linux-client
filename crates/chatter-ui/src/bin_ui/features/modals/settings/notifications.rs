@@ -80,11 +80,15 @@ fn update_notification_delivery(
                     delivery.set_saved_push_enabled(value);
                     delivery.set_loaded(true);
                 }
-                Err(error) => {
+                Err(_error) => {
                     delivery.set_push_enabled(delivery.get_saved_push_enabled());
-                    delivery.set_error(
-                        format!("Could not update notification preferences: {error}").into(),
-                    );
+                    delivery.set_error(if enabled.is_some() {
+                        "Could not save notification preferences. Check your connection and retry."
+                            .into()
+                    } else {
+                        "Could not load notification preferences. Check your connection and retry."
+                            .into()
+                    });
                 }
             }
         });
