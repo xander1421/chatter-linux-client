@@ -115,6 +115,10 @@ export component Modal inherits Rectangle {
         close => { root.close(); }
 
         modal-layout := VerticalLayout {
+            // A layout in a plain Rectangle only gets its preferred height, so
+            // full-screen and fill-height bodies stopped at their min-heights
+            // (Contacts' list cut off at ~400px on a phone). Fill the card.
+            height: root.full-screen || root.fill-height ? parent.height : self.preferred-height;
             padding: Spacing.lg;
             padding-bottom: Spacing.lg + (root.floating-content ? root.bottom-inset : Spacing.none);
             spacing: Spacing.md;
