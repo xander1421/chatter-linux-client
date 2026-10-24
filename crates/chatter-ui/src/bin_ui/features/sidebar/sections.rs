@@ -417,7 +417,6 @@ fn apply_sections(window: &MainWindow, sections: Vec<CustomSectionData>) {
             let old = vec.row_data(from).expect("located section");
             let rows = old.conversations.clone();
             if let Some(row_vec) = rows.as_any().downcast_ref::<VecModel<ChatRowData>>() {
-                            old.conversation_id == row.conversation_id
                 let new_rows: Vec<_> = section.conversations.iter().collect();
                 super::reconcile_chat_rows(row_vec, new_rows, false);
                 section.conversations = rows;

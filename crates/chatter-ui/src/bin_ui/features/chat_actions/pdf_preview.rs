@@ -379,7 +379,7 @@ mod pdf_renderer {
                         .map_err(|e| format!("Failed to load PDF: {e}"))?);
                 }
                 let document = document.as_ref().ok_or("PDF is no longer loaded")?;
-                let count = document.pages().len();
+                let count = u16::try_from(document.pages().len()).map_err(|_| "PDF page count is unavailable")?;
                 if count == 0 { return Err("PDF has no pages".into()); }
                 if page >= count { return Err("PDF page is unavailable".into()); }
                 if let Some(position) = cache.iter().position(|entry| entry.index == page) {
