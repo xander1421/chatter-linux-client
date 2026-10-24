@@ -185,9 +185,9 @@ impl ChatterClient {
                 }
                 out.push(FriendDataSendData {
                     user_id: dm.id.to_string(),
-                    display_name: dm
-                        .peer_display_name
-                        .clone()
+                    display_name: self
+                        .contact_name(&dm.peer_id)
+                        .or(dm.peer_display_name.clone())
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
                     username: String::new(),
                     avatar_bytes: self.anon_dm_avatar(&dm),

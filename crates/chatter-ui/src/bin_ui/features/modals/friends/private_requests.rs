@@ -38,6 +38,18 @@ fn finish_decision(weak: slint::Weak<MainWindow>) {
     });
 }
 
+fn report_failure(weak: &slint::Weak<MainWindow>, message: &'static str) {
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_toast_message(message.into());
+            w.set_toast_variant("error".into());
+            w.set_toast_visible(true);
+            w.global::<crate::Haptics>().invoke_error();
+        }
+    });
+}
+
 /// Wire callback to accept an anonymous DM request.
 ///
 /// This uses the anonymous DM service which has NO server involvement.
@@ -77,9 +89,14 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     Ok(dm) => {
                         let peer_id = dm.peer_id;
                         // Use stored display name, not user_service (strangers aren't in the database)
-                        let peer_name = dm.peer_display_name.clone().unwrap_or_else(|| {
-                            chatter_core::services::user::friend_display_name_placeholder(&peer_id)
-                        });
+                        let peer_name = ui_ctx
+                            .contact_name(&peer_id)
+                            .or(dm.peer_display_name.clone())
+                            .unwrap_or_else(|| {
+                                chatter_core::services::user::friend_display_name_placeholder(
+                                    &peer_id,
+                                )
+                            });
                         let dm_id = dm.id;
 
                         tracing::info!(
@@ -100,6 +117,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     }
                     Err(e) => {
                         tracing::error!("Failed to accept private request: {}", e);
+                        report_failure(&weak, "Could not accept the private request. Try again.");
                         finish_decision(weak);
                     }
                 }
@@ -157,6 +175,7 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     }
                     Err(e) => {
                         tracing::error!("Failed to decline private request: {}", e);
+                        report_failure(&weak, "Could not decline the private request. Try again.");
                         finish_decision(weak);
                     }
                 }
@@ -174,31 +193,20 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
     window
         .global::<crate::ModalHostState>()
         .on_friends_block_private_request(move |conversation_id: SharedString| {
+            let Some(w) = weak_window.upgrade() else { return };
+            if !begin_decision(&w, &conversation_id) { return; }
+            w.global::<crate::ModalHostState>().set_friends_loading(true);
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
             let conv_id_str = conversation_id.to_string();
 
             tokio::spawn(async move {
-                // Set loading state
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.global::<crate::ModalHostState>()
-                            .set_friends_loading(true);
-                    }
-                });
-
                 // Parse conversation ID
                 let conv_id: chatter_core::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.global::<crate::ModalHostState>()
-                                    .set_friends_loading(false);
-                            }
-                        });
+                        finish_decision(weak);
                         return;
                     }
                 };
@@ -219,6 +227,7 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                                 ui_ctx.block_anon_dm_user(&user_id, Some("Blocked from request"))
                             {
                                 tracing::warn!("Failed to globally block user: {}", e);
+                                report_failure(&weak, "Chat blocked, but the user block failed. Try again from Blocked.");
                             } else {
                                 tracing::info!(
                                     "Globally blocked user {} from anonymous DMs",
@@ -233,21 +242,12 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
 
                         // The request's row leaves the chat list with it.
                         crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.global::<crate::ModalHostState>()
-                                    .set_friends_loading(false);
-                            }
-                        });
+                        finish_decision(weak);
                     }
                     Err(e) => {
                         tracing::error!("Failed to block private request: {}", e);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.global::<crate::ModalHostState>()
-                                    .set_friends_loading(false);
-                            }
-                        });
+                        report_failure(&weak, "Could not block the private request. Try again.");
+                        finish_decision(weak);
                     }
                 }
             });
@@ -255,7 +255,7 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
 }
 
 /// Refresh the private (anon DM) requests list in the UI.
-async fn refresh_private_requests(
+pub(super) async fn refresh_private_requests(
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
@@ -263,9 +263,12 @@ async fn refresh_private_requests(
     let mut private_requests: Vec<FriendRequestSendData> = Vec::with_capacity(requests.len());
 
     for dm in requests {
-        let peer_name = dm.peer_display_name.clone().unwrap_or_else(|| {
-            chatter_core::services::user::friend_display_name_placeholder(&dm.peer_id)
-        });
+        let peer_name = ui_ctx
+            .contact_name(&dm.peer_id)
+            .or(dm.peer_display_name.clone())
+            .unwrap_or_else(|| {
+                chatter_core::services::user::friend_display_name_placeholder(&dm.peer_id)
+            });
         let conv_id_str = dm.id.to_string();
 
         private_requests.push(FriendRequestSendData {

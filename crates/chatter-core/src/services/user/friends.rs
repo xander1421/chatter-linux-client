@@ -145,7 +145,10 @@ impl UserService {
             .is_ok()
         {
             if let Ok(profile) = self.get_user_profile(sender_id).await {
-                out.display_name = Some(profile.display_name).filter(|s| !s.is_empty());
+                // Resolve after persistence so a name saved on this device
+                // takes precedence over the newly decrypted profile name.
+                out.display_name = Some(self.get_display_name(sender_id))
+                    .filter(|name| name != &friend_display_name_placeholder(sender_id));
                 out.avatar_bytes = profile.avatar_bytes;
             }
         }
@@ -300,7 +303,7 @@ impl UserService {
             .list_friends(limit as i32, offset as i32)
             .await?;
 
-        let mut results = Vec::with_capacity(response.friends.len());
+        let mut friendships = Vec::with_capacity(response.friends.len());
         for friend in &response.friends {
             let friend_id: UserId = friend
                 .user_id
@@ -320,9 +323,22 @@ impl UserService {
             self.user_repo
                 .accept_friendship_unless_blocked(&current_user, &friend_id)?;
 
-            let profile = self.get_user_profile(&friend_id).await?;
+            friendships.push(friendship);
+        }
 
-            results.push((friendship, profile));
+        // Profile fetches make an RPC per friend. Bound their concurrency so
+        // opening Contacts does not wait for every network round trip in turn.
+        let mut results = Vec::with_capacity(friendships.len());
+        for batch in friendships.chunks(8) {
+            let profiles = futures::future::join_all(
+                batch
+                    .iter()
+                    .map(|friend| self.get_user_profile(&friend.addressee_id)),
+            )
+            .await;
+            for (friendship, profile) in batch.iter().zip(profiles) {
+                results.push((friendship.clone(), profile?));
+            }
         }
 
         Ok(results)

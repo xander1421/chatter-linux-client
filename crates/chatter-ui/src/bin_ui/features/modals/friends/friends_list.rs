@@ -103,10 +103,12 @@ fn run_blocked_action(
     user_id_str: String,
     remove: bool,
 ) {
-    if let Some(w) = weak.upgrade() {
-        w.global::<crate::ModalHostState>()
-            .set_friends_loading(true);
+    let Some(w) = weak.upgrade() else { return };
+    let host = w.global::<crate::ModalHostState>();
+    if host.get_friends_loading() {
+        return;
     }
+    host.set_friends_loading(true);
     tokio::spawn(async move {
         match user_id_str.parse() {
             Ok(id) => {
@@ -125,18 +127,14 @@ fn run_blocked_action(
                     }
                     Err(e) => {
                         tracing::error!("Blocked-user action failed: {}", e);
-                        // E.g. Delete chat on a secret chat stays when its
-                        // peer could not be told, as from the chat itself.
-                        if remove {
-                            crate::run_ui!(weak, |w| {
-                                w.set_toast_message(
-                                    "That did not go through. Check your connection and try again."
-                                        .into(),
-                                );
-                                w.set_toast_variant("error".into());
-                                w.set_toast_visible(true);
-                            });
-                        }
+                        crate::run_ui!(weak, |w| {
+                            w.set_toast_message(
+                                "That did not go through. Check your connection and try again."
+                                    .into(),
+                            );
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        });
                     }
                 }
             }
@@ -148,7 +146,11 @@ fn run_blocked_action(
                     .set_friends_loading(false);
                 crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
                 if let Some(channel) = ui_ctx.chat_snapshot().active_channel_id {
-                    crate::bin_ui::features::chat::send_message::show_send_notice(&w.as_weak(), &ui_ctx, channel);
+                    crate::bin_ui::features::chat::send_message::show_send_notice(
+                        &w.as_weak(),
+                        &ui_ctx,
+                        channel,
+                    );
                 }
             }
         });

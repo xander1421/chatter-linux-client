@@ -44,7 +44,7 @@ export component FindTab inherits VerticalLayout {
             spacing: Spacing.sm;
 
             Text {
-                text: "Add Friend via Code";
+                text: root.effective-private-mode ? "Start a secret chat" : "Add friend via code";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 font-weight: Typography.semibold;
@@ -56,7 +56,7 @@ export component FindTab inherits VerticalLayout {
 
                 Input {
                     horizontal-stretch: 1;
-                    placeholder: "Friend code";
+                    placeholder: "Friend code or username link";
                     text <=> root.code-input;
 
                     accepted(code) => {
@@ -176,7 +176,7 @@ export component FindTab inherits VerticalLayout {
                         padding-right: Spacing.sm;
 
                         Text {
-                            text: root.my-code != "" ? root.my-code : "No code yet — generate one";
+                            text: root.my-code != "" ? root.my-code : "No code yet — get your code";
                             color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
                             font-size: Typography.xs;
                             font-family: Typography.font-family-mono;
@@ -193,7 +193,7 @@ export component FindTab inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-mode;
-                        text: root.my-code == "" ? "Generate" : "Regenerate";
+                        text: root.my-code == "" ? "Get code" : "Refresh";
                         variant: "ghost";
                         horizontal-stretch: 1;
 
@@ -222,8 +222,9 @@ export component FindTab inherits VerticalLayout {
                         clicked => {
                             if (!root.show-qr) {
                                 root.generate-qr(root.effective-private-mode);
+                            } else {
+                                root.show-qr = false;
                             }
-                            root.show-qr = !root.show-qr;
                         }
                     }
                 }
@@ -256,13 +257,15 @@ export component FindTab inherits VerticalLayout {
                                 source: root.qr-code-image;
                                 width: 150px;
                                 height: 150px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
                                 image-fit: contain;
                             }
                         }
                     }
 
                     Text {
-                        text: "Scan to add as friend";
+                        text: root.effective-private-mode ? "Scan to start a secret chat" : "Scan to add as friend";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
