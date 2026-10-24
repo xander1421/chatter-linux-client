@@ -37,11 +37,8 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Short delay after reconnect before triggering sync.
 const RECONNECT_SYNC_DELAY: Duration = Duration::from_secs(2);
 
-/// The engine's own timer (initial and periodic) skips a cycle when some
-/// other trigger — usually the channel stream's per-connect catch-up —
-/// finished one this recently. That catch-up and the 2 s initial sync used to
-/// run back to back at every start. A cycle that *failed* does not use this
-/// skip: the retry has to run.
+/// The engine's own timer skips a cycle when another full sync trigger
+/// finished one recently. A failed cycle does not use this skip.
 const TIMER_SKIP_IF_FRESH: Duration = Duration::from_secs(30);
 
 /// First delay after a failed cycle while the server still looks reachable.
@@ -57,9 +54,8 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 /// while it runs costs at most ONE follow-up.
 ///
 /// Every caller waits for a cycle that *started after it asked* — a trigger
-/// that arrives mid-cycle cannot be satisfied by that cycle (the channel
-/// stream's post-subscribe catch-up depends on this, OPEN-ITEMS §103), so the
-/// first waiter runs a follow-up and every other waiter rides on it.
+/// that arrives mid-cycle cannot be satisfied by that cycle, so the first
+/// waiter runs a follow-up and every other waiter rides on it.
 struct Coalescer {
     /// Cycles started so far. Bumped under `last_done`'s lock, before the work.
     started: AtomicU64,
@@ -106,9 +102,10 @@ pub struct SyncEngine {
     messages: Arc<crate::services::message::MessageService>,
     event_bus: EventBus,
     coalescer: Coalescer,
-    /// Set at the end of every cycle, including one this engine did not start
-    /// (the channel stream's catch-up shares the coalescer). The retry loop
-    /// reads it when its own trigger was coalesced into that cycle.
+    /// Serializes durable message checkpoints with full sync cycles.
+    sync_lock: tokio::sync::Mutex<()>,
+    /// Set at the end of every full cycle. The retry loop reads it when its
+    /// own trigger was coalesced into a cycle another caller started.
     needs_retry: AtomicBool,
 }
 
@@ -160,6 +157,7 @@ impl SyncEngine {
             messages,
             event_bus,
             coalescer: Coalescer::new(),
+            sync_lock: tokio::sync::Mutex::new(()),
             needs_retry: AtomicBool::new(false),
         }
     }
@@ -169,6 +167,7 @@ impl SyncEngine {
     /// Channels are synced first so we know which channels to fetch messages for.
     /// Only ever called through `coalescer` — never run two of these at once.
     async fn sync_all(&self) -> SyncCycleResult {
+        let _sync_guard = self.sync_lock.lock().await;
         let start = std::time::Instant::now();
         let mut result = SyncCycleResult::default();
 
@@ -313,6 +312,25 @@ impl SyncEngine {
     pub async fn trigger_sync(&self) -> Option<SyncCycleResult> {
         tracing::info!("Triggered immediate sync");
         self.sync_if_stale(Duration::ZERO).await
+    }
+
+    /// Close the post-subscribe stream gap using only durable messages for
+    /// locally joined channels. The periodic full pass owns list and roster
+    /// reconciliation; this pass retains each channel's message checkpoint.
+    pub async fn catch_up_messages(&self) -> Result<FullMessageSyncResult, String> {
+        let _sync_guard = self.sync_lock.lock().await;
+        let channels = self
+            .channel_sync
+            .local_channel_ids()
+            .map_err(|e| e.to_string())?;
+        let result = self.message_sync.sync_all(&channels).await;
+        let _ = self.event_bus.domain_sender().send(DomainEvent::SyncComplete {
+            channels_synced: 0,
+            messages_synced: result.total_inserted,
+            duration_ms: 0,
+            blocks_changed: false,
+        });
+        Ok(result)
     }
 
     /// Like [`Self::trigger_sync`], but also skipped when a cycle finished
