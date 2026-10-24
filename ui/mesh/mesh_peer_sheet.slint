@@ -1,116 +1,255 @@
-// Local mesh identity. No server account controls belong on this surface.
-import { Modal } from "../components/modal.slint";
+// A local contact card for a self-asserted mesh identity.
+import { ModalContainer } from "../components/modal_container.slint";
 import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { SettingsRow } from "../components/settings_row.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
+component PeerAction inherits Rectangle {
+    in property <image> icon;
+    in property <string> caption;
+    in property <bool> disabled: false;
+    callback clicked();
+    width: 80px;
+    height: 80px;
+    accessible-role: button;
+    accessible-label: root.caption;
+    accessible-enabled: !root.disabled;
+    accessible-action-default => { if !root.disabled { root.clicked(); } }
+    FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if !root.disabled && (event.text == Key.Space || event.text == Key.Return) { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    VerticalLayout {
+        alignment: center; spacing: Spacing.xs;
+        Rectangle {
+            width: 48px; height: 48px;
+            border-radius: Spacing.radius-full;
+            background: action-touch.pressed ? Colors.tint-strong : Colors.tint-weak;
+            Image { source: root.icon; width: Spacing.button-icon; height: Spacing.button-icon;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
+        }
+        Text { text: root.caption; color: Colors.primary; font-size: Typography.xs;
+            horizontal-alignment: center; horizontal-stretch: 1; overflow: elide; }
+    }
+    action-touch := TouchArea { enabled: !root.disabled; mouse-cursor: root.disabled ? default : pointer;
+        clicked => { root.clicked(); } }
+}
+
 export component MeshPeerSheet inherits Rectangle {
     in property <bool> show-modal: false;
+    in property <bool> touch: false;
     in-out property <string> qr-text: "";
     callback close();
-    Modal {
+    property <bool> verify-open: false;
+    property <bool> peer-verified: MeshGlobal.sheet-binding-label == "Verified Chatter contact";
+    property <bool> active-dm: MeshGlobal.active-kind == "dm" && MeshGlobal.active-scope == MeshGlobal.sheet-peer-id;
+
+    ModalContainer {
         show: root.show-modal;
-        title: "Mesh peer";
-        modal-width: 430px;
+        accessible-title: "Mesh peer";
+        modal-width: 500px;
+        max-modal-height: 760px;
         fill-height: true;
         close => { root.close(); }
-        Flickable {
-            width: 100%;
-            height: 100%;
-            viewport-height: peer-content.preferred-height;
-            peer-content := VerticalLayout {
-            width: parent.width;
+        VerticalLayout {
+            padding-left: Spacing.lg; padding-right: Spacing.lg;
+            padding-top: Spacing.md; padding-bottom: Spacing.xl;
             spacing: Spacing.md;
-            Text { text: MeshGlobal.sheet-peer-name; color: Colors.text-primary; font-size: Typography.lg; font-weight: 600; }
-            Text { text: MeshGlobal.sheet-binding-label; color: Colors.text-secondary; font-size: Typography.sm; }
-            Text { text: "Name is self-asserted until you verify in person."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
-            Text { text: "Mesh fingerprint"; color: Colors.text-muted; font-size: Typography.xs; }
-            Text { text: MeshGlobal.sheet-fingerprint == "" ? "Waiting for encrypted link" : MeshGlobal.sheet-fingerprint;
-                color: Colors.text-primary; font-size: Typography.xs; wrap: char-wrap; }
-            if MeshGlobal.sheet-comparison-code != "": Text {
-                text: "Compare in person: " + MeshGlobal.sheet-comparison-code;
-                color: Colors.text-primary; font-size: Typography.sm; wrap: word-wrap;
-            }
-            Button { text: "Message over mesh"; variant: "primary";
-                disabled: MeshGlobal.sheet-peer-id == "";
-                clicked => { MeshGlobal.open-peer-dm(MeshGlobal.sheet-peer-id); }
-            }
-            Button { text: "Share my Chatter identity"; variant: "secondary";
-                disabled: MeshGlobal.sheet-peer-id == "";
-                clicked => { MeshGlobal.share-identity(MeshGlobal.sheet-peer-id); }
-            }
-            Button { text: "Verify in person (QR)"; variant: "secondary";
-                disabled: MeshGlobal.sheet-peer-id == "";
-                clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); }
-            }
-            if MeshGlobal.private-invitable-channels.length > 0: Text {
-                text: "Invite to a private group"; color: Colors.text-primary;
-                font-size: Typography.sm; font-weight: 600;
-            }
-            for channel in MeshGlobal.private-invitable-channels: VerticalLayout {
-                spacing: Spacing.xs;
-                Text {
-                    text: channel.name; color: Colors.text-secondary;
-                    font-size: Typography.sm; wrap: word-wrap;
-                }
-                Button {
-                    text: "Invite to " + channel.name; variant: "secondary";
-                    touch: true;
-                    clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); }
-                }
-                Button {
-                    text: "Show Chatter invite QR"; variant: "secondary";
-                    touch: true;
-                    clicked => { MeshGlobal.invite-private-channel(channel.id, MeshGlobal.sheet-peer-id); }
-                }
-            }
-            for member in MeshGlobal.private-removable-members: Button {
-                visible: MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage && member.peer-id == MeshGlobal.sheet-peer-id;
-                height: self.visible ? Spacing.button-height : 0px;
-                text: MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id ? "Confirm remove and rotate key" : "Remove from " + MeshGlobal.active-title;
-                variant: "secondary";
-                clicked => {
-                    if MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id {
-                        MeshGlobal.private-remove-pending = "";
-                        MeshGlobal.remove-private-member(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id);
-                    } else { MeshGlobal.private-remove-pending = MeshGlobal.sheet-peer-id; }
-                }
-            }
-            if MeshGlobal.private-invite-visible: Image {
-                source: MeshGlobal.private-invite-image; width: 300px; height: 300px; image-fit: contain;
-            }
-            if MeshGlobal.binding-qr-visible: Image {
-                source: MeshGlobal.binding-qr-image; width: 180px; height: 180px; image-fit: contain;
-            }
-            if MeshGlobal.binding-qr-visible: Rectangle {
-                height: Spacing.touch-target-min;
-                border-radius: Spacing.radius-sm;
-                background: Colors.inset;
-                qr-input := TextInput {
-                    x: Spacing.sm; y: Spacing.xs;
-                    width: parent.width - Spacing.sm * 2; height: parent.height - Spacing.xs * 2;
-                    single-line: true; color: Colors.text-primary; font-size: Typography.sm;
-                    text <=> root.qr-text;
-                    accepted => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, self.text); self.text = ""; }
-                }
-            }
-            if MeshGlobal.binding-qr-visible: Button { text: "Verify pasted QR"; variant: "secondary";
-                clicked => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, root.qr-text); root.qr-text = ""; }
-            }
             HorizontalLayout {
-                spacing: Spacing.sm;
-                Button { text: MeshGlobal.sheet-peer-muted ? "Unmute" : "Mute"; variant: "secondary";
-                    disabled: MeshGlobal.sheet-peer-id == "";
-                    clicked => { MeshGlobal.toggle-peer-mute(MeshGlobal.sheet-peer-id); }
-                }
-                Button { text: MeshGlobal.sheet-peer-blocked ? "Unblock" : "Block"; variant: "secondary";
-                    disabled: MeshGlobal.sheet-peer-id == "";
-                    clicked => { MeshGlobal.toggle-peer-block(MeshGlobal.sheet-peer-id); }
+                height: Spacing.touch-target-min;
+                alignment: center;
+                Text { text: "Contact"; color: Colors.text-primary; font-size: Typography.lg;
+                    font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
+                Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
+            }
+            Flickable {
+                width: 100%; vertical-stretch: 1;
+                viewport-height: peer-content.preferred-height;
+                peer-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: Spacing.lg;
+                    padding-bottom: Spacing.xl;
+                    VerticalLayout {
+                        alignment: center; spacing: Spacing.sm;
+                        Rectangle {
+                            width: 72px; height: 72px; border-radius: Spacing.radius-full;
+                            background: Colors.tint-strong;
+                            Image { source: Icons.user; width: 34px; height: 34px;
+                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                colorize: Colors.primary; }
+                        }
+                        Text { text: MeshGlobal.sheet-peer-name; color: Colors.text-primary;
+                            font-size: 22px; font-weight: Typography.semibold; horizontal-alignment: center; }
+                        HorizontalLayout {
+                            alignment: center; spacing: Spacing.xs;
+                            if root.peer-verified: Image { source: Icons.shield; width: Spacing.button-icon;
+                                height: Spacing.button-icon; colorize: Colors.success; }
+                            Text { text: root.peer-verified ? "Verified" : MeshGlobal.sheet-binding-label;
+                                color: root.peer-verified ? Colors.success : Colors.text-secondary;
+                                font-size: Typography.sm; horizontal-alignment: center; }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: center; spacing: Spacing.sm;
+                        PeerAction { icon: Icons.message-circle; caption: "Message";
+                            disabled: MeshGlobal.sheet-peer-id == "";
+                            clicked => { MeshGlobal.open-peer-dm(MeshGlobal.sheet-peer-id); } }
+                        PeerAction { icon: MeshGlobal.sheet-peer-muted ? Icons.bell : Icons.bell-off;
+                            caption: MeshGlobal.sheet-peer-muted ? "Unmute" : "Mute";
+                            disabled: MeshGlobal.sheet-peer-id == "";
+                            clicked => { MeshGlobal.toggle-peer-mute(MeshGlobal.sheet-peer-id); } }
+                        PeerAction { icon: Icons.shield; caption: "Verify";
+                            disabled: MeshGlobal.sheet-peer-id == "";
+                            clicked => { root.verify-open = !root.verify-open; } }
+                    }
+                    if root.verify-open: VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text { text: "VERIFY"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        if MeshGlobal.sheet-comparison-code != "": Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout { padding: Spacing.lg; spacing: Spacing.sm;
+                                Text { text: MeshGlobal.sheet-comparison-code; color: Colors.text-primary;
+                                    font-size: Typography.xl; font-family: Typography.font-family-mono;
+                                    horizontal-alignment: center; wrap: word-wrap; letter-spacing: 1px; }
+                                Text { text: "Compare these numbers in person with " + MeshGlobal.sheet-peer-name + ".";
+                                    color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
+                                    horizontal-alignment: center; }
+                            }
+                        }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout {
+                                SettingsRow { icon: Icons.image; title: "Show My QR Code"; touch: root.touch;
+                                    clickable: MeshGlobal.sheet-peer-id != "";
+                                    clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); } }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                SettingsRow { icon: Icons.search; title: "Scan Their Code"; touch: root.touch;
+                                    clickable: MeshGlobal.sheet-peer-id != "";
+                                    clicked => { MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); } }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                SettingsRow { icon: Icons.shield; title: "Verify Known Contact"; touch: root.touch;
+                                    clickable: MeshGlobal.sheet-peer-id != "";
+                                    clicked => { MeshGlobal.verify-known-contact(MeshGlobal.sheet-peer-id); } }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                SettingsRow { icon: Icons.send; title: "Share My Chatter Identity"; touch: root.touch;
+                                    clickable: MeshGlobal.sheet-peer-id != "";
+                                    clicked => { MeshGlobal.share-identity(MeshGlobal.sheet-peer-id); } }
+                                if root.active-dm: Rectangle { height: 1px; background: Colors.divider; }
+                                if root.active-dm: ToggleRow {
+                                    checked <=> MeshGlobal.active-signal-enabled;
+                                    accessible-text: "Use Signal Encryption";
+                                    row-padding: Spacing.md;
+                                    Text { text: "Use Signal Encryption"; color: Colors.text-primary;
+                                        font-size: Typography.base; }
+                                    toggled(value) => { MeshGlobal.toggle-signal-mesh(MeshGlobal.active-scope); }
+                                }
+                            }
+                        }
+                        if MeshGlobal.binding-qr-visible: Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            height: 240px;
+                            Rectangle {
+                                width: 220px; height: 220px; background: white;
+                                border-radius: Spacing.radius-md;
+                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                Image { source: MeshGlobal.binding-qr-image; x: Spacing.sm; y: Spacing.sm;
+                                    width: parent.width - Spacing.sm * 2; height: parent.height - Spacing.sm * 2;
+                                    image-fit: contain; }
+                            }
+                        }
+                        Rectangle {
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
+                                Input { placeholder: "Paste their QR code"; text <=> root.qr-text;
+                                    control-height: Spacing.touch-target-min; horizontal-stretch: 1;
+                                    accepted(value) => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, value); root.qr-text = ""; } }
+                                Button { text: "Verify"; variant: "ghost"; touch: root.touch;
+                                    disabled: root.qr-text == "" || MeshGlobal.sheet-peer-id == "";
+                                    clicked => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, root.qr-text); root.qr-text = ""; } }
+                            }
+                        }
+                        Text { text: MeshGlobal.sheet-fingerprint == "" ? "Waiting for encrypted link" : "Fingerprint: " + MeshGlobal.sheet-fingerprint;
+                            color: Colors.text-muted; font-size: Typography.xs; font-family: Typography.font-family-mono;
+                            wrap: char-wrap; }
+                    }
+                    if MeshGlobal.private-invitable-channels.length > 0: VerticalLayout {
+                        spacing: Spacing.sm;
+                        Text { text: "GROUPS"; color: Colors.text-muted; font-size: Typography.xs;
+                            font-weight: Typography.semibold; letter-spacing: 0.4px; }
+                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            VerticalLayout {
+                                for channel in MeshGlobal.private-invitable-channels: VerticalLayout {
+                                    SettingsRow { icon: Icons.users; title: "Add to " + channel.name;
+                                        action-label: "Invite"; show-chevron: false; touch: root.touch;
+                                        clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); } }
+                                    SettingsRow { icon: Icons.image; title: "Invite QR";
+                                        show-chevron: false; touch: root.touch;
+                                        clicked => { MeshGlobal.invite-private-channel(channel.id, MeshGlobal.sheet-peer-id); } }
+                                }
+                            }
+                        }
+                    }
+                    if MeshGlobal.private-invite-visible: Rectangle {
+                        background: Colors.surface-section; border-radius: Spacing.radius-lg; height: 300px;
+                        Image { source: MeshGlobal.private-invite-image; width: 280px; height: 280px;
+                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                            image-fit: contain; }
+                    }
+                    for member in MeshGlobal.private-removable-members: Rectangle {
+                        visible: MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage
+                            && member.peer-id == MeshGlobal.sheet-peer-id;
+                        height: self.visible ? Spacing.touch-target-min : 0px;
+                        background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        SettingsRow { icon: Icons.trash; title: "Remove from " + MeshGlobal.active-title;
+                            destructive: true; show-chevron: false; touch: root.touch;
+                            clicked => { MeshGlobal.private-remove-pending = MeshGlobal.sheet-peer-id; } }
+                    }
+                    Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        SettingsRow { icon: Icons.slash; title: MeshGlobal.sheet-peer-blocked ? "Unblock" : "Block";
+                            destructive: !MeshGlobal.sheet-peer-blocked; show-chevron: false; touch: root.touch;
+                            clickable: MeshGlobal.sheet-peer-id != "";
+                            clicked => { MeshGlobal.toggle-peer-block(MeshGlobal.sheet-peer-id); } }
+                    }
+                    if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary;
+                        font-size: Typography.xs; wrap: word-wrap; }
                 }
             }
-            if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary; font-size: Typography.xs; wrap: word-wrap; }
+        }
+    }
+    if MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id && MeshGlobal.sheet-peer-id != "": Rectangle {
+        z: 10; background: Materials.scrim;
+        TouchArea { clicked => { MeshGlobal.private-remove-pending = ""; } }
+        VerticalLayout {
+            x: Spacing.lg; width: parent.width - Spacing.lg * 2;
+            y: parent.height - self.preferred-height - Spacing.lg;
+            spacing: Spacing.sm;
+            Rectangle { height: remove-action.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                remove-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
+                    Text { text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
+                        color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
+                    Button { text: "Remove and rotate key"; variant: "destructive"; touch: root.touch;
+                        clicked => { MeshGlobal.private-remove-pending = "";
+                            MeshGlobal.remove-private-member(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); } }
+                }
+            }
+            Rectangle { height: remove-cancel.preferred-height;
+                background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                remove-cancel := VerticalLayout { padding: Spacing.sm;
+                    Button { text: "Cancel"; variant: "ghost"; touch: root.touch;
+                        clicked => { MeshGlobal.private-remove-pending = ""; } }
+                }
             }
         }
     }
