@@ -1,6 +1,7 @@
 //! Context menu callback for messages.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, Model, SharedString};
 
@@ -17,6 +18,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_message_info(window, ui_ctx);
     let ui_ctx = Arc::clone(ui_ctx);
     let weak_window = window.as_weak();
+    let request_serial = Arc::new(AtomicU64::new(0));
 
     window.global::<crate::ChatPane>().on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
         let sender_id_str = sender_id.to_string();
@@ -30,6 +32,8 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
+        let serial = request_serial.fetch_add(1, Ordering::SeqCst) + 1;
+        let request_serial = request_serial.clone();
         // The menu is for this session and conversation: a lookup that
         // finishes after a sign-out or another conversation opened must not
         // publish a menu (whose Edit would then key the new conversation
@@ -62,12 +66,21 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(menu) => menu,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to look up message for context menu");
+                    crate::run_history_ui!(weak, owner, |w| {
+                        if request_serial.load(Ordering::SeqCst) == serial {
+                            w.set_toast_message("Message actions are unavailable right now.".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        }
+                    });
                     return;
                 }
             };
 
             crate::run_history_ui!(weak, owner, |w| {
-                set_context_menu(&w, sender_id_str, timestamp_ns_str, menu, menu_x, menu_y);
+                if request_serial.load(Ordering::SeqCst) == serial {
+                    set_context_menu(&w, sender_id_str, timestamp_ns_str, menu, menu_x, menu_y);
+                }
             });
         });
     });
@@ -133,14 +146,33 @@ fn wire_message_info(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let client = ui_ctx.clone();
     window.global::<crate::MessageInfo>().on_open(move |id| {
         let Ok(message_id) = id.parse() else { return };
-        let details = client
-            .message_receipt_info(message_id)
-            .unwrap_or_else(|error| format!("Could not load delivery details: {error}"));
-        if let Some(window) = weak.upgrade() {
-            let info = window.global::<crate::MessageInfo>();
-            info.set_message_id(id);
-            info.set_details(details.into());
-            super::super::back::push(&window, "message-info");
-        }
+        let Some(window) = weak.upgrade() else { return };
+        let info = window.global::<crate::MessageInfo>();
+        info.set_message_id(id.clone());
+        info.set_details("Loading delivery details…".into());
+        super::super::back::push(&window, "message-info");
+        let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+            &client,
+            client.active_conversation(),
+        );
+        let client = client.clone();
+        let weak = weak.clone();
+        tokio::task::spawn_blocking(move || {
+            let details = match client.message_receipt_info(message_id) {
+                Ok(details) => details,
+                Err(error) => {
+                    tracing::warn!(%error, "Could not load message delivery details");
+                    "Could not load delivery details.".to_owned()
+                }
+            };
+            crate::run_history_ui!(weak, owner, |w| {
+                let info = w.global::<crate::MessageInfo>();
+                if w.get_active_modal().as_str() == "message-info"
+                    && info.get_message_id() == id
+                {
+                    info.set_details(details.into());
+                }
+            });
+        });
     });
 }

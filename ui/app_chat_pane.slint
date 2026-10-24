@@ -198,6 +198,15 @@ export global ChatPane {
     in property <int> selected-message-count: 0;
     callback message-selection-toggled(string);   // (message_id)
     callback selection-cleared();
+    // A conversation swap raises loading before replacing its row model.
+    // Clear Rust's selected-id set at that boundary so a selection cannot
+    // carry into another conversation (or leave an empty selection bar there).
+    changed loading-messages => {
+        if self.loading-messages && self.selection-mode {
+            self.selection-mode = false;
+            self.selection-cleared();
+        }
+    }
     callback selection-delete-clicked();
     callback selection-copy-clicked();
     callback selection-forward-clicked();

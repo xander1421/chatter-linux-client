@@ -324,16 +324,19 @@ impl MessageService {
         if rows.is_empty() {
             lines.push("Per-device delivery times are not available for this message.".into());
         }
+        let recipients: Vec<_> = rows.iter().map(|row| row.recipient_id).collect();
+        let names = self
+            .user_repo
+            .display_name_sources(message.sender_id.as_ref(), &recipients)?;
         for row in rows {
-            let name = self
-                .user_repo
-                .get_profile(&row.recipient_id)?
-                .map(|profile| profile.display_name)
-                .filter(|name| !name.is_empty())
-                .or(self
-                    .user_repo
-                    .get(&row.recipient_id)?
-                    .map(|user| user.username))
+            let name = names
+                .get(&row.recipient_id)
+                .and_then(|(local, profile, username)| {
+                    local.as_deref().filter(|name| !name.is_empty())
+                        .or_else(|| profile.as_deref().filter(|name| !name.is_empty()))
+                        .or_else(|| username.as_deref().filter(|name| !name.is_empty()))
+                })
+                .map(str::to_owned)
                 .unwrap_or_else(|| row.recipient_id.to_string());
             let time = |value: Option<u64>| {
                 value
