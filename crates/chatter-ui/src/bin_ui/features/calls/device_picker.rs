@@ -48,6 +48,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         Err(e) => {
                             tracing::error!("Failed to enumerate audio input devices: {}", e);
+                            picker_error(&w, "Could not list microphones. Try again.");
                         }
                     }
                 }
@@ -83,6 +84,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         Err(e) => {
                             tracing::error!("Failed to enumerate audio output devices: {}", e);
+                            picker_error(&w, "Could not list speakers. Try again.");
                         }
                     }
                 }
@@ -114,6 +116,9 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // never appear). Don't surface the picker until connected.
                         if !ui_ctx.call_is_connected().await {
                             tracing::info!("Screen share unavailable — call not connected yet");
+                            if let Some(w) = weak.upgrade() {
+                                picker_error(&w, "Screen sharing is available once the call connects.");
+                            }
                             return;
                         }
                         let Some(w) = weak.upgrade() else { return };
@@ -148,6 +153,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                             Err(e) => {
                                 tracing::error!("Failed to enumerate screen sources: {}", e);
+                                picker_error(&w, "Could not list screens. Try again.");
                             }
                         }
                     })
@@ -172,6 +178,9 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ui_ctx.call_stop_microphone();
                     if let Err(e) = ui_ctx.call_publish_microphone(Some(&device_id_str)).await {
                         tracing::error!("Failed to switch microphone to {}: {}", device_id_str, e);
+                        if let Some(w) = weak.upgrade() {
+                            picker_error(&w, "Could not switch microphones. Try again.");
+                        }
                     } else {
                         tracing::info!("Switched to microphone: {}", device_id_str);
                         if let Some(w) = weak.upgrade() {
@@ -211,6 +220,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             );
                             w.global::<crate::CallView>()
                                 .set_selected_audio_output_id("".into());
+                            picker_error(&w, "Could not switch speakers. Try again.");
                         }
                     }
                 })
@@ -240,6 +250,9 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         Ok(id) => id,
                         Err(e) => {
                             tracing::error!("Invalid screen source ID '{}': {}", source_id_str, e);
+                            if let Some(w) = weak.upgrade() {
+                                picker_error(&w, "That screen is no longer available.");
+                            }
                             return;
                         }
                     };
@@ -255,6 +268,9 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 {
                                     if let Err(e) = ui_ctx.call_publish_screen_share(source).await {
                                         tracing::error!("Failed to start screen share: {}", e);
+                                        if let Some(w) = weak.upgrade() {
+                                            picker_error(&w, "Could not share that screen. Try again.");
+                                        }
                                     } else {
                                         tracing::info!(
                                             "Screen share started with source: {}",
@@ -267,6 +283,13 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                                 .set_selected_screen_source_id(
                                                     source_id_display.into(),
                                                 );
+                                            if let Some(id) = ui_ctx.session_current_user_id() {
+                                                super::active::set_local_participant_screen_sharing(
+                                                    &w,
+                                                    &id.to_string(),
+                                                    true,
+                                                );
+                                            }
                                         }
                                     }
                                 } else {
@@ -274,10 +297,16 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         "Selected screen source not found: {}",
                                         source_id_display
                                     );
+                                    if let Some(w) = weak.upgrade() {
+                                        picker_error(&w, "That screen is no longer available.");
+                                    }
                                 }
                             }
                             Err(e) => {
                                 tracing::error!("Failed to enumerate screen sources: {}", e);
+                                if let Some(w) = weak.upgrade() {
+                                    picker_error(&w, "Could not list screens. Try again.");
+                                }
                             }
                         }
                     })
@@ -285,4 +314,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             }
         });
+}
+
+fn picker_error(window: &MainWindow, message: &str) {
+    window.set_toast_message(message.into());
+    window.set_toast_variant("error".into());
+    window.set_toast_visible(true);
 }

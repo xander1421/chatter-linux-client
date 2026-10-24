@@ -43,9 +43,9 @@ export component CallControls inherits GlassSurface {
 
     HorizontalLayout {
         alignment: center;
-        spacing: Spacing.sm;
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
+        spacing: root.speaker-toggle ? Spacing.xs : Spacing.sm;
+        padding-left: root.speaker-toggle ? Spacing.xs : Spacing.md;
+        padding-right: root.speaker-toggle ? Spacing.xs : Spacing.md;
         padding-top: (root.height - button-size) / 2;
         padding-bottom: (root.height - button-size) / 2;
 
@@ -98,6 +98,7 @@ export component CallControls inherits GlassSurface {
         // Screen share toggle (system consent is requested on Android).
         IconAction {
             size: button-size;
+            enabled: root.is-connected || root.is-screen-sharing;
             icon: Icons.monitor;
             label: root.is-screen-sharing ? "Stop sharing screen" : "Share screen";
             active: is-screen-sharing;
@@ -105,7 +106,7 @@ export component CallControls inherits GlassSurface {
         }
 
         // Spacer
-        Rectangle {
+        if !root.speaker-toggle: Rectangle {
             width: Spacing.sm;
             background: transparent;
         }
