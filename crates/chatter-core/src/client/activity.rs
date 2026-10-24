@@ -61,6 +61,8 @@ impl ChatterClient {
                     tracing::warn!(error = %e, "Could not record server status");
                 }
             }
+            #[cfg(feature = "mesh")]
+            self.sync_mesh_invitations(owner);
         }
         let mut events = self.services.event_bus.subscribe_domain();
         let mut offline = self.subscribe_offline_snapshots();
@@ -100,6 +102,8 @@ impl ChatterClient {
                                         tracing::warn!(error = %e, "Could not record server status");
                                     }
                                 }
+                                #[cfg(feature = "mesh")]
+                                client.sync_mesh_invitations(owner);
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -114,9 +118,10 @@ impl ChatterClient {
             let mut mesh = self.mesh_subscribe();
             let client = self.clone();
             let handle = tokio::spawn(async move {
-                while let Ok(event) = mesh.recv().await {
-                    if let crate::services::mesh::MeshEvent::PrivateChannelInvitation { id, name, nickname, .. } = event {
-                        if let Some(owner) = client.auth_snapshot().current_user_id {
+                loop {
+                    match mesh.recv().await {
+                        Ok(crate::services::mesh::MeshEvent::PrivateChannelInvitation { id, name, nickname, .. }) => {
+                            let Some(owner) = client.auth_snapshot().current_user_id else { continue };
                             let title = format!("{nickname} invited you to {name}");
                             client.record_activity(owner, NewActivity {
                                 id: &format!("mesh-invite:{id}"), kind: "mesh-invite", title: &title,
@@ -124,6 +129,13 @@ impl ChatterClient {
                                 message_id: None, created_at_ms: chrono::Utc::now().timestamp_millis(),
                             });
                         }
+                        Ok(_) => {},
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            if let Some(owner) = client.auth_snapshot().current_user_id {
+                                client.sync_mesh_invitations(owner);
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
             });
@@ -134,6 +146,18 @@ impl ChatterClient {
     fn record_activity(&self, owner: crate::domain::UserId, item: NewActivity<'_>) {
         if let Err(e) = self.activity.record(owner, item) {
             tracing::warn!(error = %e, "Could not record activity");
+        }
+    }
+
+    #[cfg(feature = "mesh")]
+    fn sync_mesh_invitations(&self, owner: crate::domain::UserId) {
+        for (id, name, nickname) in self.mesh_pending_private_invitations() {
+            let title = format!("{nickname} invited you to {name}");
+            self.record_activity(owner, NewActivity {
+                id: &format!("mesh-invite:{id}"), kind: "mesh-invite", title: &title,
+                preview: "", conversation_id: None, conversation_type: None,
+                message_id: None, created_at_ms: chrono::Utc::now().timestamp_millis(),
+            });
         }
     }
 
