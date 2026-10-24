@@ -37,7 +37,7 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
     let sections = pane.get_custom_sections();
     let sections: Vec<_> = sections.iter().collect();
     let shape: Vec<_> = sections.iter().map(|s| (s.is_expanded, s.conversations.row_count())).collect();
-    let rows: Vec<crate::SidebarRowData> = sidebar_slots(chats.row_count(), &shape)
+    let mut rows: Vec<crate::SidebarRowData> = sidebar_slots(chats.row_count(), &shape)
         .into_iter()
         .map(|slot| {
             let (kind, chat, section) = match slot {
@@ -70,6 +70,31 @@ pub(crate) fn refresh_flat_rows(window: &MainWindow) {
             }
         })
         .collect();
+    let archived = pane.get_archived_rows();
+    let empty = |kind: &str| crate::SidebarRowData {
+        key: kind.into(),
+        kind: kind.into(),
+        chat: Default::default(),
+        section: Default::default(),
+    };
+    if pane.get_archive_open() {
+        rows.clear();
+        rows.push(empty("archive-back"));
+        for chat in archived.iter() {
+            rows.push(crate::SidebarRowData {
+                key: format!("archived-chat:{}", chat.conversation_id).into(),
+                kind: "archived-chat".into(),
+                chat,
+                section: Default::default(),
+            });
+        }
+        if archived.row_count() == 0 {
+            rows.push(empty("archive-empty"));
+        }
+        rows.push(empty("bottom"));
+    } else if archived.row_count() > 0 {
+        rows.insert(1, empty("archive-entry"));
+    }
     let model = pane.get_flat_rows();
     if let Some(vec) = model.as_any().downcast_ref::<VecModel<crate::SidebarRowData>>() {
         let target_len = rows.len();
@@ -229,6 +254,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     navigation::load_pending_group_invites_count(window, ui_ctx);
     sections::wire_section_callbacks(window, ui_ctx);
     sections::load_sections(window, ui_ctx);
+    wire_archive(window, ui_ctx);
     anon_mode::wire(window, ui_ctx);
     refresh_flat_rows(window);
 }
@@ -319,6 +345,19 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                     item.conversation_type,
                     item.conversation_id.as_str(),
                 );
+                if item.is_selected != selected {
+                    item.is_selected = selected;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
+    }
+
+    {
+        let model = window.global::<crate::SidebarPane>().get_archived_rows();
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                let selected = row_is_active(&active, item.conversation_type, item.conversation_id.as_str());
                 if item.is_selected != selected {
                     item.is_selected = selected;
                     model.set_row_data(i, item);
@@ -472,7 +511,7 @@ pub(crate) fn update_sidebar_preview(
     preview: &str,
     timestamp: &str,
 ) {
-    update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, None);
+    update_sidebar_row(window, ui_ctx, conversation, preview, timestamp, None, None);
 }
 
 /// [`update_sidebar_preview`] for a received message, also setting the row's
@@ -490,6 +529,7 @@ pub fn apply_received_to_sidebar(
     preview: &str,
     timestamp: &str,
     badges: chatter_core::client::UnreadBadges,
+    mention_count: u32,
 ) {
     if !update_sidebar_row(
         window,
@@ -498,6 +538,7 @@ pub fn apply_received_to_sidebar(
         preview,
         timestamp,
         Some(badges.row as i32),
+        Some(mention_count as i32),
     ) {
         let (weak, ui_ctx) = (slint::ComponentHandle::as_weak(window), ui_ctx.clone());
         tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
@@ -505,6 +546,46 @@ pub fn apply_received_to_sidebar(
     window
         .global::<crate::SidebarPane>()
         .set_total_unread_count(badges.total as i32);
+}
+
+/// Thread replies count as unread in their channel without changing the main
+/// chat's preview, timestamp, or position.
+pub fn apply_thread_reply_badges(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    badges: chatter_core::client::UnreadBadges,
+    mention_count: u32,
+) {
+    use chatter_core::state::ActiveConversation;
+    refresh_section_badges(window, ui_ctx);
+    let key = match conversation {
+        ActiveConversation::ServerDm { peer_id } => peer_id.to_string(),
+        ActiveConversation::Channel(id) => id.to_string(),
+        ActiveConversation::AnonGroup(id) => id.to_string(),
+        ActiveConversation::AnonDm(id) => id.to_string(),
+        ActiveConversation::None => String::new(),
+    };
+    let model = window.global::<crate::SidebarPane>().get_chat_rows();
+    let mut found = false;
+    if let Some(vec) = model.as_any().downcast_ref::<slint::VecModel<crate::ChatRowData>>() {
+        if let Some(i) = (0..vec.row_count()).find(|&i| {
+            vec.row_data(i).is_some_and(|row| row.conversation_id.as_str() == key.as_str())
+        }) {
+            if let Some(mut row) = vec.row_data(i) {
+                found = true;
+                row.unread_count = badges.row as i32;
+                row.mention_count = mention_count as i32;
+                vec.set_row_data(i, row);
+                refresh_flat_rows(window);
+            }
+        }
+    }
+    if !found {
+        let (weak, ui_ctx) = (window.as_weak(), ui_ctx.clone());
+        tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
+    }
+    window.global::<crate::SidebarPane>().set_total_unread_count(badges.total as i32);
 }
 
 /// Move the row for `conversation` to the top with a new preview line, and
@@ -518,6 +599,7 @@ fn update_sidebar_row(
     preview: &str,
     timestamp: &str,
     unread: Option<i32>,
+    mentions: Option<i32>,
 ) -> bool {
     use chatter_core::state::ActiveConversation;
     use slint::Model;
@@ -552,6 +634,9 @@ fn update_sidebar_row(
     if let Some(n) = unread {
         row.unread_count = n;
     }
+    if let Some(n) = mentions {
+        row.mention_count = n;
+    }
     let slot = chatter_core::ui::sidebar_data::chat_row_top_slot(
         row.is_pinned,
         (0..vec.row_count())
@@ -585,6 +670,47 @@ pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<Cha
     });
 }
 
+fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    let rows = ui_ctx.archived_sidebar_rows();
+    let ui_ctx = ui_ctx.clone();
+    run_ui!(weak, |w| {
+        use crate::bin_ui::converters::ChatRowExt;
+        let rows = rows.into_iter().map(ChatRowExt::to_slint).collect::<Vec<_>>();
+        w.global::<crate::SidebarPane>().set_archived_rows(
+            slint::ModelRc::new(slint::VecModel::from(rows)));
+        refresh_selection(&w, &ui_ctx);
+    });
+}
+
+fn wire_archive(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    window.global::<crate::SidebarPane>().on_archive_view_changed(move || {
+        if let Some(w) = weak.upgrade() {
+            refresh_flat_rows(&w);
+        }
+    });
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.global::<crate::SidebarPane>().on_set_conversation_archived(move |id, archived| {
+        let weak = weak.clone();
+        let ui_ctx = ui_ctx.clone();
+        tokio::spawn(async move {
+            if let Err(error) = ui_ctx.set_conversation_archived(id.as_str(), archived) {
+                tracing::error!(%error, "Failed to change chat archive state");
+                let message = format!("Couldn't change archive: {error}");
+                run_ui!(weak, |w| {
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                });
+                return;
+            }
+            rebuild_chat_list(&weak, &ui_ctx);
+            sections::refresh_sections_ui(&weak, &ui_ctx);
+        });
+    });
+}
+
 /// Apply a core sidebar snapshot on the UI thread after the caller's guards.
 pub(crate) fn apply_chat_list(
     window: &MainWindow,
@@ -615,6 +741,8 @@ pub(crate) fn apply_chat_list(
         arrivals,
     );
     refresh_selection(window, ui_ctx);
+    let (weak, archive_ctx) = (window.as_weak(), ui_ctx.clone());
+    tokio::spawn(async move { rebuild_archived_list(&weak, &archive_ctx) });
     crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
     #[cfg(target_os = "android")]
     crate::platform::android::notification_route::open_pending(window);

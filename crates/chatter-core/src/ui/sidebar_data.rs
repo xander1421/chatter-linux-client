@@ -75,6 +75,7 @@ pub struct ChatRowSendData {
     /// Activity time shown at the right of the row, before local formatting.
     pub timestamp_at: Option<chrono::DateTime<chrono::Utc>>,
     pub unread_count: u32,
+    pub mention_count: u32,
     pub is_typing: bool,
     /// Local-only pin flag; pinned rows lead the list.
     pub is_pinned: bool,
@@ -111,6 +112,7 @@ impl ChatRowSendData {
             last_message: String::new(),
             timestamp_at: None,
             unread_count: 0,
+            mention_count: 0,
             is_typing: false,
             is_pinned: false,
             private_channel: false,

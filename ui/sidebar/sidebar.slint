@@ -52,6 +52,8 @@ export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
     // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
     in property <[ChatRowData]> chat-rows: [];
+    in property <[ChatRowData]> archived-rows: [];
+    in property <bool> archive-open: false;
     in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];
@@ -142,6 +144,8 @@ export component Sidebar inherits Rectangle {
     callback move-to-section(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
+    callback set-conversation-archived(/* conversation-id */ string, /* archived */ bool);
+    callback archive-view-changed(bool);
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
@@ -216,6 +220,7 @@ export component Sidebar inherits Rectangle {
     property <ConversationKind> ctx-menu-conv-type;
     property <string> ctx-menu-current-section-id: "";
     property <bool> ctx-menu-is-pinned: false;
+    property <bool> ctx-menu-is-archived: false;
     // Channel and group rows, as core decided it for the row.
     property <bool> ctx-menu-can-leave: false;
     property <bool> ctx-menu-can-delete-channel: false;
@@ -316,6 +321,59 @@ export component Sidebar inherits Rectangle {
                         : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
                             + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md)
                     : Spacing.none;
+                if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {
+                    height: root.quick-link-height;
+                    accessible-role: button;
+                    accessible-label: entry.kind == "archive-back" ? "Back to chats" : "Archived chats";
+                    accessible-action-default => { root.archive-view-changed(entry.kind == "archive-entry"); }
+                    border-width: archive-keys.has-focus ? 2px : 0px;
+                    border-color: Colors.focus-ring;
+                    archive-keys := FocusScope {
+                        width: 0px; height: 0px;
+                        key-pressed(event) => {
+                            if event.text == Key.Space || event.text == Key.Return {
+                                root.archive-view-changed(entry.kind == "archive-entry");
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: root.quick-link-inset;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.sm;
+                        Image {
+                            source: entry.kind == "archive-back" ? Icons.chevron-left : Icons.folder;
+                            width: root.quick-link-icon-size;
+                            height: root.quick-link-icon-size;
+                            colorize: Colors.text-secondary;
+                        }
+                        Text {
+                            text: entry.kind == "archive-back" ? "Chats" : "Archived";
+                            color: Colors.text-primary;
+                            font-size: root.quick-link-text-size;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        if entry.kind == "archive-entry": Text {
+                            text: root.archived-rows.length;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.archive-view-changed(entry.kind == "archive-entry"); }
+                    }
+                }
+                if entry.kind == "archive-empty": Text {
+                    text: "No archived chats";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    height: root.quick-link-height;
+                }
                 if entry.kind == "search" && root.collapsed: Rectangle {
                     height: root.quick-link-height;
                     opacity: root.search-overlay-open ? 0 : 1;
@@ -609,7 +667,7 @@ export component Sidebar inherits Rectangle {
                     spacing: Spacing.xxs;
                     for placeholder in [0, 1, 2, 3, 4]: ChatListSkeleton { mobile-mode: root.touch; }
                 }
-                if entry.kind == "chat": Rectangle {
+                if entry.kind == "chat" || entry.kind == "archived-chat": Rectangle {
                     height: (root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop) + Spacing.xxs;
                     chat-row := ChatRow {
                         x: Spacing.xs;
@@ -631,6 +689,7 @@ export component Sidebar inherits Rectangle {
                             root.ctx-menu-conv-id = entry.chat.conversation-id;
                             root.ctx-menu-conv-type = entry.chat.conversation-type;
                             root.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            root.ctx-menu-is-archived = entry.kind == "archived-chat";
                             root.ctx-menu-can-leave = entry.chat.can-leave;
                             root.ctx-menu-can-delete-channel = entry.chat.can-delete;
                             root.ctx-menu-x = x;
@@ -678,6 +737,7 @@ export component Sidebar inherits Rectangle {
                             root.ctx-menu-y = y;
                             root.ctx-menu-current-section-id = entry.section.section-id;
                             root.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            root.ctx-menu-is-archived = false;
                             root.ctx-menu-show = true;
                         }
                     }
@@ -831,6 +891,7 @@ export component Sidebar inherits Rectangle {
         conversation-type: root.ctx-menu-conv-type;
         current-section-id: root.ctx-menu-current-section-id;
         is-pinned: root.ctx-menu-is-pinned;
+        is-archived: root.ctx-menu-is-archived;
         can-leave: root.ctx-menu-can-leave;
         can-delete-channel: root.ctx-menu-can-delete-channel;
         mobile-mode: root.touch;
@@ -850,6 +911,9 @@ export component Sidebar inherits Rectangle {
         }
         set-pinned(conv-id, pinned) => {
             root.set-conversation-pinned(conv-id, pinned);
+        }
+        set-archived(conv-id, archived) => {
+            root.set-conversation-archived(conv-id, archived);
         }
         delete-chat(conv-id, conv-type) => {
             root.delete-conversation(conv-id, conv-type);

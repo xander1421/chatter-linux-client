@@ -276,6 +276,7 @@ export component SectionContextMenu inherits Rectangle {
     in property <ConversationKind> conversation-type;
     in property <string> current-section-id: "";   // non-empty => already in a section
     in property <bool> is-pinned: false;
+    in property <bool> is-archived: false;
     // Channel rows: core's `can_leave_channel` (a member, not the owner).
     // Private-group rows: always (any member may leave).
     in property <bool> can-leave: false;
@@ -289,6 +290,7 @@ export component SectionContextMenu inherits Rectangle {
     callback move-to-section(/* conv-id */ string, /* conv-type */ ConversationKind, /* section-id */ string);
     callback remove-from-section(/* conv-id */ string);
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
+    callback set-archived(/* conv-id */ string, /* archived */ bool);
     callback create-section-clicked();
     // DM rows, and channels we are no longer in: deletes the chat on this
     // device (core `delete_conversation`).
@@ -351,6 +353,16 @@ export component SectionContextMenu inherits Rectangle {
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.set-pinned(root.conversation-id, !root.is-pinned);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.folder;
+                label: root.is-archived ? "Unarchive" : "Archive";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.set-archived(root.conversation-id, !root.is-archived);
                     root.close();
                 }
             }

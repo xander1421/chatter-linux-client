@@ -66,6 +66,8 @@ export component AppSidebarHost inherits Rectangle {
         search-overlay-open: SearchPane.unified-search-open;
         active-tab: SidebarPane.active-tab;
         chat-rows: SidebarPane.chat-rows;
+        archived-rows: SidebarPane.archived-rows;
+        archive-open: SidebarPane.archive-open;
         chat-rows-loading: AuthFlow.is-signed-in && SidebarPane.chat-rows-loading;
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;
@@ -187,6 +189,13 @@ export component AppSidebarHost inherits Rectangle {
         }
         set-conversation-pinned(conv-id, pinned) => {
             SidebarPane.set-conversation-pinned(conv-id, pinned);
+        }
+        set-conversation-archived(conv-id, archived) => {
+            SidebarPane.set-conversation-archived(conv-id, archived);
+        }
+        archive-view-changed(open) => {
+            SidebarPane.archive-open = open;
+            SidebarPane.archive-view-changed();
         }
         delete-conversation(conv-id, kind) => {
             SidebarPane.delete-conversation(conv-id, kind);

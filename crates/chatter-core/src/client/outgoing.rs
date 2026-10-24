@@ -66,7 +66,9 @@ impl ChatterClient {
                 .map(Some),
         };
         if let Some(message) = stored {
-            self.announce_sent(conversation, message.as_ref(), text.trim());
+            if !message.as_ref().is_some_and(|message| message.thread_id.is_some()) {
+                self.announce_sent(conversation, message.as_ref(), text.trim());
+            }
         }
         outcome
     }

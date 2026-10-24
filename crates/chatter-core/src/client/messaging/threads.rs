@@ -79,13 +79,14 @@ impl ChatterClient {
                 quote,
             )
             .await?;
-        // A received thread reply moves the chat-list row; a sent one does too.
-        let conversation = self.classify_active_conversation(
-            &message.conversation_id,
-            &message.conversation_type,
-            None,
-        );
-        self.announce_sent(conversation, Some(&message), text.trim());
+        if message.thread_id.is_none() {
+            let conversation = self.classify_active_conversation(
+                &message.conversation_id,
+                &message.conversation_type,
+                None,
+            );
+            self.announce_sent(conversation, Some(&message), text.trim());
+        }
         Ok(message)
     }
 

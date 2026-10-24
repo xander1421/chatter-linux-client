@@ -39,6 +39,9 @@ pub(super) fn handle_message_received(
     if chatter_core::services::disappearing::is_timer_notice(&message) {
         return;
     }
+    if let Err(error) = ui_ctx.unarchive_on_incoming_message(&message) {
+        tracing::warn!(%error, "Failed to update archived chat after message");
+    }
     let conversation_id = message.conversation_id;
     let sender_id = message.sender_id;
     let timestamp = message.sent_at;
@@ -127,6 +130,7 @@ pub(super) fn handle_message_received(
     // Absolute badge values, read here on the runtime (after the mark-read
     // above), never counted up on the UI thread.
     let badges = ui_ctx.unread_badges(&sidebar_conversation);
+    let mention_count = ui_ctx.sidebar_mention_count(&conversation_id, &conv_type);
 
     // Fetch media thumbnail sidecars, then auto-download small images.
     let downloadable: Vec<_> = resolved_attachments
@@ -205,13 +209,12 @@ pub(super) fn handle_message_received(
                     panel_shows_this_thread,
                 );
             }
-            crate::bin_ui::features::sidebar::apply_received_to_sidebar(
+            crate::bin_ui::features::sidebar::apply_thread_reply_badges(
                 &w,
                 &ui_ctx_ui,
                 sidebar_conversation,
-                &preview,
-                &timestamp_str,
                 badges,
+                mention_count,
             );
             return;
         }
@@ -318,6 +321,7 @@ pub(super) fn handle_message_received(
             &preview,
             &timestamp_str,
             badges,
+            mention_count,
         );
     });
 }

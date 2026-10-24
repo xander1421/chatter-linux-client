@@ -3,6 +3,7 @@ use super::*;
 struct SidebarProjection {
     latest: std::collections::HashMap<(String, crate::domain::message::ConversationType), crate::domain::message::Message>,
     unread: std::collections::HashMap<(String, crate::domain::message::ConversationType), u32>,
+    mentions: std::collections::HashMap<(String, crate::domain::message::ConversationType), u32>,
 }
 
 impl ChatterClient {
@@ -48,18 +49,7 @@ impl ChatterClient {
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Option<crate::domain::message::Message> {
-        let main = self.latest_main_message(conversation_id, conversation_type);
-        // A thread reply is channel activity: it already orders the row and
-        // counts as unread, and the sender's own row previews it on send.
-        let reply = self
-            .messages()
-            .latest_thread_reply(conversation_id, conversation_type)
-            .ok()
-            .flatten();
-        match (main, reply) {
-            (Some(main), Some(reply)) => Some(if reply.sent_at > main.sent_at { reply } else { main }),
-            (main, reply) => main.or(reply),
-        }
+        self.latest_main_message(conversation_id, conversation_type)
     }
 
     fn latest_main_message(
@@ -184,10 +174,38 @@ impl ChatterClient {
         &self,
         conv: &crate::domain::section::SectionConversation,
     ) -> crate::ui::sidebar_data::ChatRowSendData {
+        let ids = conv.conversation_id.parse().ok().into_iter().collect::<Vec<_>>();
+        let projection = self.section_projection(&ids);
+        self.section_row_with_projection(conv, &projection)
+    }
+
+    /// Shape a full folder snapshot with one message and mention projection
+    /// shared by every child row. Folder unread counts arrive with sections.
+    pub fn section_rows(
+        &self,
+        sections: &[crate::domain::section::CustomSection],
+    ) -> Vec<Vec<crate::ui::sidebar_data::ChatRowSendData>> {
+        let ids = sections.iter().flat_map(|section| &section.conversations)
+            .filter_map(|conv| conv.conversation_id.parse().ok()).collect::<Vec<_>>();
+        let projection = self.section_projection(&ids);
+        sections.iter().map(|section| section.conversations.iter()
+            .map(|conv| self.section_row_with_projection(conv, &projection)).collect()).collect()
+    }
+
+    fn section_row_with_projection(
+        &self,
+        conv: &crate::domain::section::SectionConversation,
+        projection: &SidebarProjection,
+    ) -> crate::ui::sidebar_data::ChatRowSendData {
         use crate::domain::message::ConversationType as CT;
         use crate::ui::sidebar_data::ChatRowSendData;
 
-        let display_name = conv.display_name.clone();
+        let display_name = if conv.conversation_type == CT::ServerDm {
+            conv.conversation_id.parse().ok().map(|peer| self.display_name(&peer))
+                .unwrap_or_else(|| conv.display_name.clone())
+        } else {
+            conv.display_name.clone()
+        };
         let channel_id = conv
             .conversation_id
             .parse::<crate::domain::ids::ChannelId>()
@@ -195,6 +213,8 @@ impl ChatterClient {
         let is_channel = conv.conversation_type == CT::Channel;
         let mut row = ChatRowSendData {
             unread_count: conv.unread_count,
+            mention_count: projection.mentions.get(&(conv.conversation_id.clone(), conv.conversation_type.clone()))
+                .copied().unwrap_or(0),
             is_pinned: conv.is_pinned,
             can_leave: match conv.conversation_type {
                 // As `private_group_row`.
@@ -235,7 +255,8 @@ impl ChatterClient {
                     } else {
                         "pending"
                     }.to_string();
-                    let (preview, at) = self.sidebar_activity(self.get_latest_anon_dm_message(&id).as_ref());
+                    let latest = projection.latest.get(&(conv.conversation_id.clone(), CT::AnonDm));
+                    let (preview, at) = self.sidebar_activity(latest);
                     if dm.status == crate::domain::anon_dm::AnonDmStatus::Pending {
                         if dm.initiated_by_us {
                             row.last_message = if preview.is_empty() { "Waiting for response...".to_string() } else { preview };
@@ -260,7 +281,8 @@ impl ChatterClient {
                 if let Some(group) = self.get_anon_group(&id) {
                     row.display_name = group.name.clone();
                     row.member_count = self.get_anon_group_members(&id).len() as u32;
-                    let (preview, at) = self.sidebar_activity(self.get_latest_anon_group_message(&id).as_ref());
+                    let latest = projection.latest.get(&(conv.conversation_id.clone(), CT::AnonGroup));
+                    let (preview, at) = self.sidebar_activity(latest);
                     row.last_message = preview;
                     row.timestamp_at = Some(at.unwrap_or(group.created_at));
                     row.last_activity = row.timestamp_at.clone();
@@ -272,8 +294,9 @@ impl ChatterClient {
         if !matches!(conv.conversation_type, CT::ServerDm | CT::Channel) {
             return row;
         }
-        (row.last_message, row.timestamp_at) =
-            self.sidebar_activity(self.latest_message(&id, &conv.conversation_type).as_ref());
+        (row.last_message, row.timestamp_at) = self.sidebar_activity(
+            projection.latest.get(&(conv.conversation_id.clone(), conv.conversation_type.clone())));
+        row.last_activity = row.timestamp_at.clone();
         match conv.conversation_type {
             CT::ServerDm => {
                 let peer = crate::domain::ids::UserId::from_uuid(*id.as_uuid());
@@ -314,7 +337,46 @@ impl ChatterClient {
         let unread = self.services.conversation_repo.conversation_stats()
             .unwrap_or_default().into_iter()
             .map(|(key, stats)| (key, stats.unread_count)).collect();
-        SidebarProjection { latest, unread }
+        let mentions = self.sidebar_mention_counts(ids);
+        SidebarProjection { latest, unread, mentions }
+    }
+
+    fn section_projection(&self, ids: &[crate::domain::ids::ChannelId]) -> SidebarProjection {
+        SidebarProjection {
+            latest: self.messages().message_repo.sidebar_latest_batch(ids).unwrap_or_default(),
+            unread: Default::default(),
+            mentions: self.sidebar_mention_counts(ids),
+        }
+    }
+
+    fn sidebar_mention_counts(
+        &self,
+        ids: &[crate::domain::ids::ChannelId],
+    ) -> std::collections::HashMap<(String, crate::domain::message::ConversationType), u32> {
+        let Some(owner) = self.auth_state().get().current_user_id else {
+            return Default::default();
+        };
+        let mut counts = std::collections::HashMap::new();
+        if let Ok(messages) = self.messages().message_repo.sidebar_unread_mention_candidates(ids) {
+            for message in messages {
+                if message.sender_id != Some(owner) && self.message_mentions_user(&message, &owner) {
+                    *counts.entry((message.conversation_id.to_string(), message.conversation_type))
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+        counts
+    }
+
+    pub fn sidebar_mention_count(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        kind: &crate::domain::message::ConversationType,
+    ) -> u32 {
+        self.sidebar_mention_counts(&[*conversation_id])
+            .get(&(conversation_id.to_string(), kind.clone()))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn regular_dm_sidebar_with_projection(
@@ -351,6 +413,7 @@ impl ChatterClient {
             let (last_message, timestamp_at) = self.sidebar_activity(latest.as_ref());
 
             let unread_count = projection.unread.get(&key).copied().unwrap_or(0);
+            let mention_count = projection.mentions.get(&key).copied().unwrap_or(0);
 
             out.push(ChatRowSendData {
                 user_id: peer_id.to_string(),
@@ -359,6 +422,7 @@ impl ChatterClient {
                 last_message,
                 timestamp_at,
                 unread_count,
+                mention_count,
                 last_activity: latest.map(|m| m.created_at),
                 ..ChatRowSendData::new(
                     ConversationType::ServerDm,
@@ -483,6 +547,7 @@ impl ChatterClient {
                 last_message,
                 timestamp_at,
                 unread_count: dm.unread_count,
+                mention_count: projection.mentions.get(&(dm.id.to_string(), ConversationType::AnonDm)).copied().unwrap_or(0),
                 last_activity: latest.map(|m| m.created_at),
                 ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
             });
@@ -529,6 +594,36 @@ impl ChatterClient {
     /// own rows (`list_sections_with_conversations`); every builder here drops
     /// what lives in one.
     pub fn sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
+        let archived = self.archived_conversation_ids();
+        self.sidebar_rows_unfiltered().into_iter()
+            .filter(|row| !archived.contains(&row.id)).collect()
+    }
+
+    pub fn archived_sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
+        let archived = self.archived_conversation_ids();
+        if archived.is_empty() {
+            return Vec::new();
+        }
+        let mut rows = self.sidebar_rows_unfiltered().into_iter()
+            .filter(|row| archived.contains(&row.id)).collect::<Vec<_>>();
+        if let Ok(sections) = self.sections().list_sections_with_conversations() {
+            let section_rows = self.section_rows(&sections);
+            for (section, projected) in sections.iter().zip(section_rows) {
+                for (conversation, row) in section.conversations.iter().zip(projected) {
+                    if archived.contains(&conversation.conversation_id)
+                        && self.visible_in_mode(&conversation.conversation_type)
+                        && !self.is_blocked_conversation(&conversation.conversation_type, &conversation.conversation_id)
+                    {
+                        rows.push(row);
+                    }
+                }
+            }
+        }
+        crate::ui::sidebar_data::order_chat_rows(&mut rows);
+        rows
+    }
+
+    fn sidebar_rows_unfiltered(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         let channels = self.sidebar_channels();
         let groups = self.sidebar_private_groups();
         let mut ids = self.dm_peers().into_iter().map(Into::into).collect::<Vec<_>>();
@@ -566,15 +661,13 @@ impl ChatterClient {
         // A channel with no messages yet orders (and is dated) by when it was
         // created, so a just-created channel leads the list instead of sinking
         // below every dated row.
-        let last_activity = latest
-            .map(|m| m.created_at)
-            .or(channel.last_message_at)
-            .unwrap_or(channel.created_at);
+        let last_activity = latest.map_or(channel.created_at, |m| m.created_at);
         ChatRowSendData {
             avatar_bytes: channel.icon.clone().filter(|b| !b.is_empty()),
             last_message,
             timestamp_at: Some(last_activity),
             unread_count: channel.unread_count,
+            mention_count: projection.mentions.get(&(id.clone(), channel.conversation_type())).copied().unwrap_or(0),
             is_pinned: self.is_conversation_pinned(&id),
             private_channel: channel.channel_type == crate::domain::channel::ChannelType::Private,
             can_leave: self.can_leave_channel(&channel.id),
@@ -603,6 +696,7 @@ impl ChatterClient {
             last_message,
             timestamp_at: Some(last_activity),
             unread_count: projection.unread.get(&(group.id.to_string(), crate::domain::message::ConversationType::AnonGroup)).copied().unwrap_or(0),
+            mention_count: projection.mentions.get(&(group.id.to_string(), crate::domain::message::ConversationType::AnonGroup)).copied().unwrap_or(0),
             member_count: self.get_anon_group_members(&group.id).len() as u32,
             is_pinned: self.is_conversation_pinned(&group.id.to_string()),
             // Any member may leave; the owner only once someone else owns it

@@ -2,7 +2,7 @@ use super::*;
 use crate::domain::message::{EncryptedContent, EncryptedMessageType};
 
 #[test]
-fn sidebar_preview_skips_timer_notices_without_losing_thread_activity() {
+fn sidebar_preview_skips_timer_notices_and_thread_replies() {
     use crate::domain::message::SystemMessage;
 
     let dir = tempfile::tempdir().unwrap();
@@ -24,7 +24,7 @@ fn sidebar_preview_skips_timer_notices_without_losing_thread_activity() {
     }
 
     let previews = repo.sidebar_latest_batch(&[conversation, notice_only]).unwrap();
-    assert_eq!(previews.get(&(conversation.to_string(), ConversationType::Channel)).map(|m| m.id), Some(reply.id));
+    assert_eq!(previews.get(&(conversation.to_string(), ConversationType::Channel)).map(|m| m.id), Some(root.id));
     assert!(!previews.contains_key(&(notice_only.to_string(), ConversationType::Channel)));
 }
 

@@ -55,27 +55,24 @@ impl UnifiedMessageRepository {
             let placeholders = vec!["?"; chunk.len()].join(", ");
             let sql = format!(
                 "WITH ranked AS (SELECT m.id, m.conversation_id, m.conversation_type, \
-                 m.thread_id, m.sent_at, m.sender_id, \
-                 ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.conversation_type, \
-                 (m.thread_id IS NOT NULL) ORDER BY m.sent_at DESC, m.sender_id DESC) AS rank \
+                 m.sent_at, m.sender_id, \
+                 ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.conversation_type \
+                 ORDER BY m.sent_at DESC, m.sender_id DESC) AS rank \
                  FROM messages m WHERE m.conversation_id IN ({placeholders}) \
-                 AND (m.thread_id IS NULL OR m.is_deleted = 0) \
+                 AND m.thread_id IS NULL \
                  AND (m.conversation_type NOT IN ('anon_dm', 'anon_group') OR m.is_deleted = 0)), \
                  candidates AS (SELECT r.id, r.conversation_id, r.conversation_type, r.sent_at, r.sender_id, \
-                 ROW_NUMBER() OVER (PARTITION BY r.conversation_id, r.conversation_type, \
-                 (r.thread_id IS NOT NULL) \
+                 ROW_NUMBER() OVER (PARTITION BY r.conversation_id, r.conversation_type \
                  ORDER BY r.sent_at DESC, r.sender_id DESC) AS preview_rank \
                  FROM ranked r JOIN messages candidate ON candidate.id = r.id \
-                 WHERE (r.thread_id IS NULL AND r.rank <= 256 \
+                 WHERE r.rank <= 256 \
                    AND (r.conversation_type IN ('anon_dm', 'anon_group') \
                      OR (CASE WHEN json_valid(candidate.content_json) \
                        THEN json_type(candidate.content_json, '$.System.DisappearingTimerChanged') IS NULL \
                        ELSE 0 END))) \
-                   OR (r.thread_id IS NOT NULL AND r.rank = 1)) \
-                 SELECT c.id, c.conversation_id, c.conversation_type, \
-                 (m.thread_id IS NOT NULL) FROM candidates c JOIN messages m ON m.id = c.id \
-                 ORDER BY c.conversation_id, c.conversation_type, \
-                 (m.thread_id IS NOT NULL), c.preview_rank",
+                 SELECT c.id, c.conversation_id, c.conversation_type \
+                 FROM candidates c \
+                 ORDER BY c.conversation_id, c.conversation_type, c.preview_rank",
             );
             let mut stmt = conn.prepare(&sql)?;
             let params = chunk.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -85,8 +82,7 @@ impl UnifiedMessageRepository {
                 let id: String = row.get(0)?;
                 let conversation_id: String = row.get(1)?;
                 let kind = ConversationType::from_str_value(&row.get::<_, String>(2)?)?;
-                let is_thread: bool = row.get(3)?;
-                let candidate_key = (conversation_id, kind, is_thread);
+                let candidate_key = (conversation_id, kind);
                 if resolved.contains(&candidate_key) {
                     continue;
                 }
@@ -96,13 +92,35 @@ impl UnifiedMessageRepository {
                 };
                 resolved.insert(candidate_key);
                 let key = (message.conversation_id.to_string(), message.conversation_type.clone());
-                let replace = latest.get(&key).is_none_or(|old: &Message| message.sent_at > old.sent_at);
-                if replace {
-                    latest.insert(key, message);
-                }
+                latest.insert(key, message);
             }
         }
         Ok(latest)
+    }
+
+    /// Unread messages containing a possible mention, hydrated in one read.
+    pub fn sidebar_unread_mention_candidates(
+        &self,
+        ids: &[ChannelId],
+    ) -> Result<Vec<Message>, StorageError> {
+        let mut out = Vec::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.db.read_connection()?;
+        for chunk in ids.chunks(400) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT {} FROM messages m WHERE m.conversation_id IN ({placeholders}) \
+                 AND m.is_read = 0 AND m.is_deleted = 0 AND m.content_json LIKE '%@%'",
+                message_columns("m"),
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let params = chunk.iter().map(ToString::to_string).collect::<Vec<_>>();
+            let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
+            out.extend(collect_messages(&mut rows)?);
+        }
+        Ok(out)
     }
 
     // ========================================================================
