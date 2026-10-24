@@ -93,7 +93,8 @@ export component DevicePicker inherits Rectangle {
     in property <string> selected-audio-output-id: "";
 
     // Screen sources
-    in property <[ScreenSourceData]> screen-sources: [];
+    in property <[ScreenSourceData]> screen-monitors: [];
+    in property <[ScreenSourceData]> screen-windows: [];
     in property <string> selected-screen-id: "";
 
     callback audio-selected(string);
@@ -216,7 +217,7 @@ export component DevicePicker inherits Rectangle {
                             spacing: Spacing.xs;
 
                             // Check if this is portal mode (single source with id "0")
-                            if screen-sources.length == 1 && screen-sources[0].id == "0": VerticalLayout {
+                            if screen-monitors.length == 1 && screen-monitors[0].id == "0" && screen-windows.length == 0: VerticalLayout {
                                 spacing: Spacing.md;
 
                                 Text {
@@ -236,19 +237,18 @@ export component DevicePicker inherits Rectangle {
                             }
 
                             // Normal mode: show monitors and windows separately
-                            if screen-sources.length != 1 || screen-sources[0].id != "0": VerticalLayout {
+                            if screen-monitors.length != 1 || screen-monitors[0].id != "0" || screen-windows.length != 0: VerticalLayout {
                                 spacing: Spacing.xs;
 
                                 // Section: Monitors
-                                Text {
+                                if screen-monitors.length > 0: Text {
                                     text: "Screens";
                                     font-size: Typography.xs;
                                     font-weight: Typography.semibold;
                                     color: Colors.text-secondary;
                                 }
 
-                                for source[idx] in screen-sources: DeviceItem {
-                                    visible: source.is-monitor;
+                                for source[idx] in screen-monitors: DeviceItem {
                                     name: source.name;
                                     icon: Icons.monitor;
                                     is-selected: source.id == selected-screen-id;
@@ -257,15 +257,14 @@ export component DevicePicker inherits Rectangle {
                                 }
 
                                 // Section: Windows
-                                Text {
+                                if screen-windows.length > 0: Text {
                                     text: "Windows";
                                     font-size: Typography.xs;
                                     font-weight: Typography.semibold;
                                     color: Colors.text-secondary;
                                 }
 
-                                for source[idx] in screen-sources: DeviceItem {
-                                    visible: !source.is-monitor;
+                                for source[idx] in screen-windows: DeviceItem {
                                     name: source.name;
                                     icon: Icons.monitor;
                                     is-selected: source.id == selected-screen-id;
@@ -274,7 +273,7 @@ export component DevicePicker inherits Rectangle {
                                 }
                             }
 
-                            if screen-sources.length == 0: Text {
+                            if screen-monitors.length == 0 && screen-windows.length == 0: Text {
                                 text: "No screens or windows found";
                                 font-size: Typography.sm;
                                 color: Colors.text-secondary;

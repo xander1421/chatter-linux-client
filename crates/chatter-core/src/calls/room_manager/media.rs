@@ -30,6 +30,9 @@ impl RoomManager {
     /// # Arguments
     /// * `device_id` - Optional device ID (uses default if None)
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
+        if self.microphone_requested.load(std::sync::atomic::Ordering::SeqCst) {
+            return self.switch_microphone(device_id).await;
+        }
         self.publish_microphone_restored(device_id, false).await
     }
 
@@ -65,14 +68,57 @@ impl RoomManager {
             ..Default::default()
         };
 
-        local_participant
+        let publication = local_participant
             .publish_track(LocalTrack::Audio(audio_track), publish_options)
             .await
-            .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
+            .map_err(|e| {
+                self.audio_capture.write().stop();
+                CallError::TrackPublishFailed(e.to_string())
+            })?;
 
+        *self.microphone_track_sid.write() = Some(publication.sid());
         self.microphone_requested
             .store(true, std::sync::atomic::Ordering::SeqCst);
         tracing::info!("Published microphone track");
+        Ok(())
+    }
+
+    /// Keep the old capture and publication alive until the replacement is live.
+    pub async fn switch_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
+        let local_participant = {
+            let room = self.room.read();
+            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+        };
+        let mut replacement = AudioCapture::new();
+        let source = replacement.start(device_id)?;
+        if self.audio_capture.read().is_muted() {
+            replacement.set_muted(true);
+        }
+        let track = LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(source));
+        let options = TrackPublishOptions {
+            source: TrackSource::Microphone,
+            ..Default::default()
+        };
+        let publication = match local_participant.publish_track(LocalTrack::Audio(track), options).await {
+            Ok(publication) => publication,
+            Err(error) => {
+                replacement.stop();
+                return Err(CallError::TrackPublishFailed(format!("Could not publish replacement microphone: {error}")));
+            }
+        };
+        let new_sid = publication.sid();
+        let old_sid = self.microphone_track_sid.read().clone();
+        if let Some(ref sid) = old_sid {
+            if let Err(error) = local_participant.unpublish_track(sid).await {
+                let _ = local_participant.unpublish_track(&new_sid).await;
+                replacement.stop();
+                return Err(CallError::TrackPublishFailed(format!("Could not retire previous microphone: {error}")));
+            }
+        }
+        self.audio_capture.write().stop();
+        *self.audio_capture.write() = replacement;
+        *self.microphone_track_sid.write() = Some(new_sid);
+        self.microphone_requested.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -88,10 +134,13 @@ impl RoomManager {
     ) -> Result<(), CallError> {
         use std::sync::atomic::Ordering;
 
-        // Already on — guard against double-publish from a rapid re-toggle.
+        // A requested device change is a handoff; a plain re-toggle is ignored.
         if self.camera_published.load(Ordering::SeqCst) {
-            tracing::info!("Camera already published — ignoring publish");
-            return Ok(());
+            return if device_path.is_some() {
+                self.switch_camera(device_path, config).await
+            } else {
+                Ok(())
+            };
         }
 
         let local_participant = {
@@ -148,6 +197,59 @@ impl RoomManager {
         *self.camera_track_sid.write() = Some(publication.sid());
         self.camera_published.store(true, Ordering::SeqCst);
         tracing::info!("Published camera track");
+        Ok(())
+    }
+
+    /// Start and publish a new camera before retiring the current capture.
+    pub async fn switch_camera(
+        &self,
+        device_path: Option<&str>,
+        config: Option<VideoCaptureConfig>,
+    ) -> Result<(), CallError> {
+        let local_participant = {
+            let room = self.room.read();
+            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+        };
+        let preview = self.shared_frames.as_ref().map(|shared| {
+            super::super::video_capture::LocalPreview {
+                shared: shared.clone(),
+                local_id: local_participant.identity().to_string(),
+                screen_share: false,
+            }
+        });
+        let mut replacement = VideoCapture::new();
+        let (source, ready) = replacement.start(device_path, config, preview)?;
+        if !matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(60), ready).await,
+            Ok(Ok(()))
+        ) {
+            replacement.stop();
+            return Err(CallError::CameraUnavailable);
+        }
+        let track = LocalVideoTrack::create_video_track("camera", RtcVideoSource::Native(source));
+        let options = TrackPublishOptions {
+            source: TrackSource::Camera,
+            ..Default::default()
+        };
+        let publication = match local_participant.publish_track(LocalTrack::Video(track), options).await {
+            Ok(publication) => publication,
+            Err(error) => {
+                replacement.stop();
+                return Err(CallError::TrackPublishFailed(format!("Could not publish replacement camera: {error}")));
+            }
+        };
+        let new_sid = publication.sid();
+        let old_sid = self.camera_track_sid.read().clone();
+        if let Some(ref sid) = old_sid {
+            if let Err(error) = local_participant.unpublish_track(sid).await {
+                let _ = local_participant.unpublish_track(&new_sid).await;
+                replacement.stop();
+                return Err(CallError::TrackPublishFailed(format!("Could not retire previous camera: {error}")));
+            }
+        }
+        self.video_capture.write().stop();
+        *self.video_capture.write() = replacement;
+        *self.camera_track_sid.write() = Some(new_sid);
         Ok(())
     }
 

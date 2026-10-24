@@ -25,9 +25,12 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .on_show_audio_device_picker({
             let weak = weak.clone();
             move || {
-                if let Some(w) = weak.upgrade() {
-                    // Enumerate audio input devices
-                    match AudioCapture::list_devices() {
+                let weak = weak.clone();
+                std::thread::spawn(move || {
+                    let result = AudioCapture::list_devices();
+                    let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    match result {
                         Ok(devices) => {
                             let ui_devices: Vec<AudioDeviceData> = devices
                                 .into_iter()
@@ -51,7 +54,8 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             picker_error(&w, "Could not list microphones. Try again.");
                         }
                     }
-                }
+                    });
+                });
             }
         });
 
@@ -61,9 +65,12 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .on_show_audio_output_picker({
             let weak = weak.clone();
             move || {
-                if let Some(w) = weak.upgrade() {
-                    // Enumerate audio output devices
-                    match AudioCapture::list_output_devices() {
+                let weak = weak.clone();
+                std::thread::spawn(move || {
+                    let result = AudioCapture::list_output_devices();
+                    let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    match result {
                         Ok(devices) => {
                             let ui_devices: Vec<AudioDeviceData> = devices
                                 .into_iter()
@@ -87,7 +94,8 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             picker_error(&w, "Could not list speakers. Try again.");
                         }
                     }
-                }
+                    });
+                });
             }
         });
 
@@ -121,41 +129,45 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                             return;
                         }
-                        let Some(w) = weak.upgrade() else { return };
-                        // Enumerate screen sources using LiveKit's desktop_capturer
-                        match ScreenCapture::list_sources() {
-                            Ok(sources) => {
-                                let source_count = sources.len();
-                                let ui_sources: Vec<ScreenSourceData> = sources
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(idx, s)| ScreenSourceData {
-                                        id: s.id.to_string().into(),
-                                        name: s.name.into(),
-                                        width: 0, // Not available from libwebrtc
-                                        height: 0,
-                                        is_monitor: s.source_type == ScreenSourceType::Monitor,
-                                        is_primary: idx == 0
-                                            && s.source_type == ScreenSourceType::Monitor,
-                                    })
-                                    .collect();
-
-                                w.global::<crate::CallView>()
-                                    .set_screen_sources(ModelRc::new(VecModel::from(ui_sources)));
-                                w.global::<crate::CallView>()
-                                    .set_device_picker_type("screen".into());
-                                w.global::<crate::CallView>()
-                                    .set_device_picker_visible(true);
-                                tracing::info!(
-                                    "Showing screen source picker with {} sources",
-                                    source_count
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to enumerate screen sources: {}", e);
-                                picker_error(&w, "Could not list screens. Try again.");
-                            }
-                        }
+                        // Desktop capturer discovery may invoke an OS portal.
+                        std::thread::spawn(move || {
+                            let result = ScreenCapture::list_sources();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                let Some(w) = weak.upgrade() else { return };
+                                match result {
+                                    Ok(sources) => {
+                                        let source_count = sources.len();
+                                        let ui_sources: Vec<ScreenSourceData> = sources
+                                            .into_iter()
+                                            .enumerate()
+                                            .map(|(idx, s)| ScreenSourceData {
+                                                id: s.id.to_string().into(),
+                                                name: s.name.into(),
+                                                width: 0,
+                                                height: 0,
+                                                is_monitor: s.source_type == ScreenSourceType::Monitor,
+                                                is_primary: idx == 0 && s.source_type == ScreenSourceType::Monitor,
+                                            })
+                                            .collect();
+                                        let (monitors, windows): (Vec<_>, Vec<_>) = ui_sources
+                                            .into_iter().partition(|source| source.is_monitor);
+                                        w.global::<crate::CallView>()
+                                            .set_screen_monitors(ModelRc::new(VecModel::from(monitors)));
+                                        w.global::<crate::CallView>()
+                                            .set_screen_windows(ModelRc::new(VecModel::from(windows)));
+                                        w.global::<crate::CallView>()
+                                            .set_device_picker_type("screen".into());
+                                        w.global::<crate::CallView>()
+                                            .set_device_picker_visible(true);
+                                        tracing::info!("Showing screen source picker with {} sources", source_count);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to enumerate screen sources: {}", e);
+                                        picker_error(&w, "Could not list screens. Try again.");
+                                    }
+                                }
+                            });
+                        });
                     })
                     .unwrap();
                 }
@@ -175,7 +187,6 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let ui_ctx = ui_ctx.clone();
                 let weak = weak.clone();
                 slint::spawn_local(async move {
-                    ui_ctx.call_stop_microphone();
                     if let Err(e) = ui_ctx.call_publish_microphone(Some(&device_id_str)).await {
                         tracing::error!("Failed to switch microphone to {}: {}", device_id_str, e);
                         if let Some(w) = weak.upgrade() {
@@ -261,7 +272,15 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let weak = weak.clone();
                     let source_id_display = source_id_str.clone();
                     slint::spawn_local(async move {
-                        match ScreenCapture::list_sources() {
+                        let sources_result = tokio::task::spawn_blocking(ScreenCapture::list_sources).await;
+                        match sources_result {
+                            Err(error) => {
+                                tracing::error!("Failed to enumerate screen sources: {}", error);
+                                if let Some(w) = weak.upgrade() {
+                                    picker_error(&w, "Could not list screens. Try again.");
+                                }
+                            }
+                            Ok(result) => match result {
                             Ok(sources) => {
                                 if let Some(source) =
                                     sources.into_iter().find(|s| s.id == source_id_u64)
@@ -307,6 +326,7 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 if let Some(w) = weak.upgrade() {
                                     picker_error(&w, "Could not list screens. Try again.");
                                 }
+                            }
                             }
                         }
                     })

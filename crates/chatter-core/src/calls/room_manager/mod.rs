@@ -234,6 +234,8 @@ pub struct RoomManager {
     event_tx: mpsc::Sender<RoomEvent>,
     /// Audio capture manager.
     audio_capture: Arc<RwLock<AudioCapture>>,
+    /// Published microphone track, retained for an atomic device handoff.
+    microphone_track_sid: Arc<RwLock<Option<TrackSid>>>,
     /// A muted microphone remains requested even though capture is paused.
     microphone_requested: std::sync::atomic::AtomicBool,
     /// Audio playback manager for remote participants.
@@ -316,6 +318,7 @@ impl RoomManager {
             state: Arc::new(RwLock::new(RoomState::Disconnected)),
             event_tx,
             audio_capture: Arc::new(RwLock::new(AudioCapture::new())),
+            microphone_track_sid: Arc::new(RwLock::new(None)),
             microphone_requested: std::sync::atomic::AtomicBool::new(false),
             audio_playback: Arc::new(RwLock::new(audio_playback)),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),

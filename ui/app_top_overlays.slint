@@ -77,11 +77,11 @@ export component AppTopOverlays inherits Rectangle {
         selected-audio-id: CallView.selected-audio-device-id;
         audio-output-devices: CallView.audio-output-devices;
         selected-audio-output-id: CallView.selected-audio-output-id;
-        screen-sources: CallView.screen-sources;
+        screen-monitors: CallView.screen-monitors;
+        screen-windows: CallView.screen-windows;
         selected-screen-id: CallView.selected-screen-source-id;
 
         audio-selected(id) => {
-            CallView.selected-audio-device-id = id;
             CallView.device-picker-visible = false;
             CallView.audio-device-selected(id);
         }

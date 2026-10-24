@@ -34,6 +34,9 @@ export component AppCallDock inherits ActiveCallView {
         fullscreen: root.active-call-fullscreen;
         viewport-height: root.window-height;
         call-data: root.active-call-data;
+        select-tile-indices(participants, pinned_id) => {
+            return CallView.select-call-tile-indices(participants, pinned_id);
+        }
         is-muted: root.call-is-muted;
         is-video-enabled: root.call-is-video-enabled;
         is-screen-sharing: root.call-is-screen-sharing;
