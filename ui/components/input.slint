@@ -9,6 +9,8 @@ import { Icons } from "../theme/icons.slint";
 export component Input inherits Rectangle {
     in property <string> placeholder: "";
     in-out property <string> text: "";
+    in property <int> caret-end-seq: 0;
+    changed caret-end-seq => { input.set-selection-offsets(2147483647, 2147483647); }
     in property <bool> password: false;
     in property <bool> disabled: false;
     in property <length> control-height: Spacing.touch-target-min;

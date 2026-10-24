@@ -277,9 +277,9 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     // The composer starts out holding `current`'s draft.
     let draft = ui_ctx.swap_composer_draft("", Default::default(), &current);
     if !draft.text.is_empty() {
-        window
-            .global::<crate::ChatPane>()
-            .set_composer_text(draft.text.into());
+        let pane = window.global::<crate::ChatPane>();
+        pane.set_composer_text(draft.text.into());
+        pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
     }
     if let Some(reply) = draft.reply {
         crate::bin_ui::features::chat::send_message::show_reply(window, reply);
@@ -378,8 +378,9 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     };
     crate::bin_ui::features::chat::send_message::clear_reply(w);
     let entering_draft = ctx.swap_composer_draft(leaving, leaving_draft, entering);
-    w.global::<crate::ChatPane>()
-        .set_composer_text(entering_draft.text.into());
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_composer_text(entering_draft.text.into());
+    pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
     if let Some(reply) = entering_draft.reply {
         crate::bin_ui::features::chat::send_message::show_reply(w, reply);
     }

@@ -201,8 +201,9 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 return;
                             }
                             if w.global::<crate::ChatPane>().get_composer_text().is_empty() {
-                                w.global::<crate::ChatPane>()
-                                    .set_composer_text(new_text_str.into());
+                                let pane = w.global::<crate::ChatPane>();
+                                pane.set_composer_text(new_text_str.into());
+                                pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
                                 #[cfg(target_os = "android")]
                                 crate::platform::android::text_input::restore();
                             }
@@ -274,8 +275,9 @@ pub fn wire_cancel_edit(window: &MainWindow) {
 pub(crate) fn end_edit(w: &MainWindow) {
     next_generation();
     if w.global::<crate::ChatPane>().get_composer_stash_held() {
-        w.global::<crate::ChatPane>()
-            .set_composer_text(w.global::<crate::ChatPane>().get_composer_stash());
+        let pane = w.global::<crate::ChatPane>();
+        pane.set_composer_text(pane.get_composer_stash());
+        pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
         w.global::<crate::ChatPane>().set_composer_stash_held(false);
         // Android: the accepted edit consumed the input method's copy of
         // the composer; the draft going back in is a newer state of the

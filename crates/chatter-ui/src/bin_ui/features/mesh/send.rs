@@ -66,8 +66,9 @@ pub fn intercept_send(
                 run_ui!(weak, |w| {
                     w.global::<MeshGlobal>().set_notice(notice.clone().into());
                     if w.global::<crate::ChatPane>().get_composer_text().is_empty() {
-                        w.global::<crate::ChatPane>()
-                            .set_composer_text(text.clone().into());
+                        let pane = w.global::<crate::ChatPane>();
+                        pane.set_composer_text(text.clone().into());
+                        pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
                     }
                 });
             }

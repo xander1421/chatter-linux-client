@@ -104,7 +104,9 @@ fn wire_scan_friend_code(window: &MainWindow) {
                 let Some(w) = weak.upgrade() else { return };
                 match outcome {
                     qr_scanner::ScanOutcome::Scanned(text) => {
-                        w.global::<crate::ModalHostState>().set_friends_code_input(text.trim().into());
+                        let state = w.global::<crate::ModalHostState>();
+                        state.set_friends_code_input(text.trim().into());
+                        state.set_friends_code_caret_end_seq(state.get_friends_code_caret_end_seq() + 1);
                         w.global::<crate::ModalHostState>().set_friends_code_status("Code scanned — tap Connect".into());
                     }
                     qr_scanner::ScanOutcome::Cancelled => w.global::<crate::ModalHostState>().set_friends_code_status("".into()),
@@ -190,8 +192,9 @@ fn wire_paste_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 }
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.global::<crate::ModalHostState>()
-                            .set_friends_code_input(trimmed.into());
+                        let state = w.global::<crate::ModalHostState>();
+                        state.set_friends_code_input(trimmed.into());
+                        state.set_friends_code_caret_end_seq(state.get_friends_code_caret_end_seq() + 1);
                         w.global::<crate::ModalHostState>()
                             .set_friends_code_status("Pasted from clipboard".into());
                     }

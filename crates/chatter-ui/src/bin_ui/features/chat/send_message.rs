@@ -774,8 +774,9 @@ pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
     {
         return;
     }
-    w.global::<crate::ChatPane>()
-        .set_composer_text(send.text.into());
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_composer_text(send.text.into());
+    pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
     // Android: the accepted send consumed the IME's copy; the text going
     // back in is a newer state than the emptied one it may still report.
     #[cfg(target_os = "android")]

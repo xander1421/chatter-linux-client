@@ -212,8 +212,9 @@ fn wire_recents(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<crate::SearchPane>()
         .on_unified_search_recent_selected(move |query| {
             if let Some(w) = weak.upgrade() {
-                w.global::<crate::SearchPane>()
-                    .set_unified_search_query(query.clone());
+                let pane = w.global::<crate::SearchPane>();
+                pane.set_unified_search_query(query.clone());
+                pane.set_unified_search_caret_end_seq(pane.get_unified_search_caret_end_seq() + 1);
                 w.global::<crate::SearchPane>()
                     .invoke_unified_search_changed(query);
             }
