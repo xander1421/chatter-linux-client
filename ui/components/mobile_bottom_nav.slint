@@ -34,6 +34,22 @@ component NavTab inherits Rectangle {
     accessible-label: root.label;
     accessible-item-selected: root.active;
     accessible-action-default => { root.clicked(); }
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if keys.has-focus: Rectangle {
+        border-width: 2px;
+        border-color: Colors.focus-ring;
+        border-radius: Spacing.radius-lg;
+    }
 
     Rectangle {
         x: touch.pressed ? 9px : 5px;

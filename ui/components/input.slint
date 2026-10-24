@@ -11,9 +11,8 @@ export component Input inherits Rectangle {
     in-out property <string> text: "";
     in property <bool> password: false;
     in property <bool> disabled: false;
-    // Screens with touch-first forms can request a 48px field without changing
-    // the existing desktop/default sizing elsewhere.
-    in property <length> control-height: Spacing.button-height;
+    in property <length> control-height: Spacing.touch-target-min;
+    property <length> effective-height: max(root.control-height, Spacing.touch-target-min);
     in property <bool> error: false;
     in property <string> error-message: "";
 
@@ -50,7 +49,7 @@ export component Input inherits Rectangle {
     };
 
     background: transparent;
-    height: error && error-message != "" ? root.control-height + 22px : root.control-height;
+    height: error && error-message != "" ? root.effective-height + 22px : root.effective-height;
 
     // Main container
     VerticalLayout {
@@ -58,7 +57,7 @@ export component Input inherits Rectangle {
 
         // Input container
         Rectangle {
-            height: root.control-height;
+            height: root.effective-height;
             border-radius: Spacing.radius-md;
             background: Colors.surface;
             border-width: Spacing.stroke;
@@ -90,7 +89,7 @@ export component Input inherits Rectangle {
             // characters (OPEN-ITEMS §112n).
             if root.text == "" && input.preedit-text == "": Text {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.button-height : 0px);
+                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.touch-target-min : 0px);
                 height: 100%;
                 text: root.placeholder;
                 color: Colors.text-muted;
@@ -106,7 +105,7 @@ export component Input inherits Rectangle {
             // TextInput never saw a press and the caret could not be placed by
             // tapping, nor text selected by dragging (OPEN-ITEMS §112o).
             TouchArea {
-                width: parent.width - (root.password ? 36px : 0px);
+                width: parent.width - (root.password ? Spacing.touch-target-min : 0px);
                 enabled: !root.disabled;
                 clicked => { input.focus(); }
             }
@@ -114,7 +113,7 @@ export component Input inherits Rectangle {
             // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.button-height : 0px);
+                width: parent.width - Spacing.md * 2 - (root.password ? Spacing.touch-target-min : 0px);
                 height: parent.height;
                 color: Colors.text-primary;
                 font-size: Typography.base;
@@ -134,9 +133,32 @@ export component Input inherits Rectangle {
 
             // Password visibility toggle
             if root.password: Rectangle {
-                x: parent.width - Spacing.button-height;
-                width: Spacing.button-height;
+                x: parent.width - Spacing.touch-target-min;
+                width: Spacing.touch-target-min;
                 height: 100%;
+                accessible-role: button;
+                accessible-label: root.show-password ? "Hide password" : "Show password";
+                accessible-enabled: !root.disabled;
+                accessible-action-default => { if !root.disabled { root.show-password = !root.show-password; } }
+
+                eye-keys := FocusScope {
+                    width: 0px;
+                    height: 0px;
+                    enabled: !root.disabled;
+                    key-pressed(event) => {
+                        if event.text == Key.Space || event.text == Key.Return {
+                            root.show-password = !root.show-password;
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+
+                if eye-keys.has-focus: Rectangle {
+                    border-width: 2px;
+                    border-color: Colors.focus-ring;
+                    border-radius: self.height / 2;
+                }
 
                 Rectangle {
                     width: 36px;

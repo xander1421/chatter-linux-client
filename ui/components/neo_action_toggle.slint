@@ -44,9 +44,9 @@ export component NeoActionToggle inherits Rectangle {
         }
     };
 
-    // Match Toggle: a centred 44x24 track inside a 44px hit target.
-    width: Spacing.switch-width;
-    height: Spacing.button-height;
+    // Match Toggle: a centred 44x24 track inside a 48px hit target.
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
     opacity: disabled ? 0.5 : 1.0;
 
     keys := FocusScope {
@@ -65,8 +65,9 @@ export component NeoActionToggle inherits Rectangle {
 
     // Track
     Rectangle {
-        width: 100%;
+        width: Spacing.switch-width;
         height: Spacing.switch-track-height;
+        x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         border-radius: self.height / 2;
         background: root.track-color;
