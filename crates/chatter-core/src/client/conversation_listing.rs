@@ -267,6 +267,9 @@ impl ChatterClient {
                         .map(|m| m.role)
                 })
         });
+        let names = self.users().get_display_names(
+            &members.iter().map(|member| member.user_id).collect::<Vec<_>>(),
+        );
         Ok(members
             .into_iter()
             .map(|membership| {
@@ -277,7 +280,8 @@ impl ChatterClient {
                     membership.role,
                 );
                 let unverified = self.is_unverified_channel_member(channel_id, &membership.user_id);
-                let mut row = self.member_with_profile(membership);
+                let display_name = names.get(&membership.user_id).cloned().unwrap_or_default();
+                let mut row = self.member_with_profile(membership, display_name);
                 row.moderation = moderation;
                 row.unverified = unverified;
                 // Our own row reads "You", as in Signal's member list.
@@ -293,10 +297,11 @@ impl ChatterClient {
     pub fn member_with_profile(
         &self,
         membership: crate::domain::channel::Membership,
+        display_name: String,
     ) -> crate::domain::channel::MemberWithProfile {
         let uid = membership.user_id;
         crate::domain::channel::MemberWithProfile {
-            display_name: self.display_name(&uid),
+            display_name,
             // Our full handle lives in settings, while the user directory may
             // only hold the nickname used at login. Peers show a handle only
             // when the directory has its complete lookup form.

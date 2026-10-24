@@ -102,11 +102,16 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // File picker for channel icon — stores the chosen path so on_create can
     // upload it through AttachmentService. Preview decoding is local UI state only.
     let weak_pick = weak_window.clone();
+    let ctx_pick = ctx.clone();
     window
         .global::<crate::ModalHostState>()
         .on_create_channel_pick_icon(move || {
             tracing::info!("[CHANNEL_ICON] pick-channel-icon callback fired");
             let weak = weak_pick.clone();
+            let ui_ctx = ctx_pick.clone();
+            let Some(fence) = weak.upgrade().and_then(|w| RequestFence::capture(&w, &ui_ctx)) else {
+                return;
+            };
             tokio::spawn(async move {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let picked = {
@@ -129,7 +134,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 match picked {
                     Some(path) => {
-                        tracing::info!(path = %path.display(), "[CHANNEL_ICON] file picked");
+                        tracing::info!("[CHANNEL_ICON] file picked");
                         match std::fs::read(&path) {
                             Ok(data) => {
                                 let path_string = path.to_string_lossy().to_string();
@@ -138,6 +143,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     // on_create can read it (thread_local! is tokio-worker-local,
                                     // which race-lost the value between pick and create).
                                     if let Some(w) = weak.upgrade() {
+                                        if !fence.owns_ui(&w, &ui_ctx) { return; }
                                         w.global::<crate::ModalHostState>()
                                             .set_create_channel_icon_url(path_string.into());
                                     }
@@ -209,14 +215,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             };
 
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::ModalHostState>().set_create_channel_loading(true);
+                w.global::<crate::ModalHostState>().set_create_channel_error("".into());
+            }
+
             tokio::spawn(async move {
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.global::<crate::ModalHostState>().set_create_channel_loading(true);
-                        w.global::<crate::ModalHostState>().set_create_channel_error("".into());
-                    }
-                });
 
                 let channel_type = if is_private { ChannelType::Private } else { ChannelType::Public };
                 let description_opt = if description.is_empty() { None } else { Some(description.as_str()) };
@@ -321,10 +325,10 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // channel_selected owns this history load.
                     }
                     Err(e) => {
-                        let error_msg = e.to_string();
+                        let error_msg = e.user_message();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                if !fence.session_current(&ui_ctx) {
+                                if !fence.owns_ui(&w, &ui_ctx) {
                                     return;
                                 }
                                 w.global::<crate::ModalHostState>().set_create_channel_loading(false);
@@ -443,15 +447,10 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 };
 
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.global::<crate::ModalHostState>()
-                            .set_create_channel_loading(true);
-                        w.global::<crate::ModalHostState>()
-                            .set_create_channel_error("".into());
-                    }
-                });
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::ModalHostState>().set_create_channel_loading(true);
+                    w.global::<crate::ModalHostState>().set_create_channel_error("".into());
+                }
 
                 tokio::spawn(async move {
                     match ui_ctx
@@ -482,16 +481,16 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             });
                         }
                         Err(e) => {
-                            let error_msg = e.to_string();
+                            tracing::warn!(error = %e, "Could not create private group");
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
-                                    if !fence.session_current(&ui_ctx) {
+                                    if !fence.owns_ui(&w, &ui_ctx) {
                                         return;
                                     }
                                     w.global::<crate::ModalHostState>()
                                         .set_create_channel_loading(false);
                                     w.global::<crate::ModalHostState>()
-                                        .set_create_channel_error(error_msg.into());
+                                        .set_create_channel_error("Couldn't create the group. Please try again.".into());
                                 }
                             });
                         }

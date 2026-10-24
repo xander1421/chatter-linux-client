@@ -424,10 +424,13 @@ impl ChatterClient {
         let Some(bans) = self.channels().list_banned_users(channel_id).await? else {
             return Ok(None);
         };
+        let names = self.users().get_display_names(
+            &bans.iter().map(|ban| ban.user_id).collect::<Vec<_>>(),
+        );
         Ok(Some(
             bans.into_iter()
                 .map(|b| crate::domain::channel::BannedMember {
-                    display_name: self.display_name(&b.user_id),
+                    display_name: names.get(&b.user_id).cloned().unwrap_or_default(),
                     avatar_bytes: self
                         .get_profile_local(&b.user_id)
                         .and_then(|p| p.avatar_bytes),

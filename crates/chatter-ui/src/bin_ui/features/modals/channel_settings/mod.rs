@@ -6,6 +6,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_core::client::{ChatterClient, InviteCandidate};
 use chatter_core::domain::ChannelType;
+use chatter_core::domain::channel::NotificationPreference;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::ConversationType;
@@ -222,6 +223,8 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
     w.global::<crate::ModalHostState>()
         .set_channel_settings_muted(false);
     w.global::<crate::ModalHostState>()
+        .set_channel_settings_notification_pref("all".into());
+    w.global::<crate::ModalHostState>()
         .set_channel_settings_icon_path("".into());
     w.global::<crate::ModalHostState>()
         .set_channel_settings_has_icon_preview(false);
@@ -283,6 +286,7 @@ struct LocalChannelSettings {
     created_at: String,
     ai_enabled: bool,
     muted: bool,
+    notification_preference: NotificationPreference,
     can_edit: bool,
     can_manage_members: bool,
     can_invite: bool,
@@ -291,6 +295,14 @@ struct LocalChannelSettings {
     is_owner: bool,
     can_leave: bool,
     member_count: i32,
+}
+
+pub(crate) fn preference_label(preference: NotificationPreference) -> &'static str {
+    match preference {
+        NotificationPreference::All => "all",
+        NotificationPreference::Mentions => "mentions",
+        NotificationPreference::None => "none",
+    }
 }
 
 fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSettings) {
@@ -317,6 +329,8 @@ fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSetting
         .set_channel_settings_ai_enabled(settings.ai_enabled);
     w.global::<crate::ModalHostState>()
         .set_channel_settings_muted(settings.muted);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_notification_pref(preference_label(settings.notification_preference).into());
     w.global::<crate::ModalHostState>()
         .set_channel_settings_type(settings.channel_type.into());
     w.global::<crate::ModalHostState>()
@@ -473,6 +487,9 @@ pub fn open_channel_settings(
             muted: ui_ctx
                 .is_conversation_muted(ActiveConversation::Channel(channel_id))
                 .unwrap_or(false),
+            notification_preference: ui_ctx
+                .conversation_notification_preference(ActiveConversation::Channel(channel_id))
+                .unwrap_or_default(),
             can_edit,
             can_manage_members,
             can_invite: ui_ctx.can_invite_to_channel(&channel_id),
@@ -608,11 +625,15 @@ fn refresh_member_lists(
             ActiveConversation::Channel(channel_id),
             channel_id.to_string(),
             move |w| {
+                if !members.is_empty() || error.is_none() {
+                    apply_member_lists(w, &members, bans.as_deref(), complete);
+                }
                 if let Some(error) = error {
                     w.global::<crate::ModalHostState>()
                         .set_channel_settings_error(error.into());
                 } else {
-                    apply_member_lists(w, &members, bans.as_deref(), complete);
+                    w.global::<crate::ModalHostState>()
+                        .set_channel_settings_error("".into());
                 }
             },
         );
@@ -980,22 +1001,38 @@ fn wire_pick_icon(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // NOTE: `change_notification` (per-channel notification PREFERENCE — all /
-    // mentions / none) is intentionally still LOCAL-ONLY: chatter-core has no
-    // notification-preference persistence method and the proto channel Config
-    // carries no such field, so there is nothing to persist it to. Wiring it
-    // needs a server-side change (owner-scoped, tracked in VALIDATED-UI F-UI-1).
     let weak_window = window.as_weak();
+    let ui_ctx_preference = ui_ctx.clone();
     window
         .global::<crate::ModalHostState>()
         .on_channel_settings_change_notification(move |preference| {
             let weak = weak_window.clone();
-            let pref_str = preference.to_string();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.global::<crate::ModalHostState>()
-                        .set_channel_settings_notification_pref(pref_str.into());
-                }
+            let ui_ctx = ui_ctx_preference.clone();
+            let Some(w) = weak.upgrade() else { return };
+            let Some(conv) = settings_conversation(&w, &ui_ctx) else { return };
+            let selected = match preference.as_str() {
+                "all" => NotificationPreference::All,
+                "mentions" => NotificationPreference::Mentions,
+                "none" => NotificationPreference::None,
+                _ => return,
+            };
+            let settings_id = w.global::<crate::ModalHostState>().get_channel_settings_id().to_string();
+            tokio::spawn(async move {
+                let result = ui_ctx.set_conversation_notification_preference(conv, selected);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id() != settings_id.as_str()
+                        || !settings_on_stack(&w) { return; }
+                    match result {
+                        Ok(()) => w.global::<crate::ModalHostState>()
+                            .set_channel_settings_notification_pref(preference_label(selected).into()),
+                        Err(error) => {
+                            tracing::warn!(%error, "Could not save conversation notification preference");
+                            w.global::<crate::ModalHostState>()
+                                .set_channel_settings_error("Couldn't save notification preference".into());
+                        }
+                    }
+                });
             });
         });
 
@@ -1015,18 +1052,23 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             if channel_id.is_empty() {
                 return;
             }
-            match ui_ctx_ai.set_ai_enabled_for(&channel_id, enabled) {
-                Ok(()) => w
-                    .global::<crate::ModalHostState>()
-                    .set_channel_settings_ai_enabled(enabled),
-                Err(e) => {
-                    tracing::error!("Failed to save per-channel AI setting: {}", e);
-                    // Snap the toggle back so it never shows a state we did not
-                    // manage to persist.
-                    w.global::<crate::ModalHostState>()
-                        .set_channel_settings_ai_enabled(ui_ctx_ai.ai_enabled_for(&channel_id));
-                }
-            }
+            let weak = weak_ai.clone();
+            let ui_ctx = ui_ctx_ai.clone();
+            tokio::spawn(async move {
+                let result = ui_ctx.set_ai_enabled_for(&channel_id, enabled);
+                let stored = ui_ctx.ai_enabled_for(&channel_id);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id() != channel_id.as_str()
+                        || !settings_on_stack(&w) { return; }
+                    w.global::<crate::ModalHostState>().set_channel_settings_ai_enabled(stored);
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "Could not save conversation AI setting");
+                        w.global::<crate::ModalHostState>()
+                            .set_channel_settings_error("Couldn't save AI setting".into());
+                    }
+                });
+            });
         });
 
     // Mute DOES persist: `mute_conversation` writes a per-channel settings key
@@ -1049,33 +1091,27 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 }
             });
             // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-            let channel_id = weak
-                .upgrade()
-                .map(|w| {
-                    w.global::<crate::ModalHostState>()
-                        .get_channel_settings_id()
-                        .to_string()
-                })
-                .unwrap_or_default();
+            let (conv, settings_id) = match weak.upgrade() {
+                Some(w) => (
+                    settings_conversation(&w, &ui_ctx),
+                    w.global::<crate::ModalHostState>().get_channel_settings_id().to_string(),
+                ),
+                None => return,
+            };
             tokio::spawn(async move {
-                if channel_id.is_empty() {
-                    return;
-                }
-                let channel_uuid = match channel_id.parse::<uuid::Uuid>() {
-                    Ok(id) => ChannelId::from(id),
-                    Err(_) => return,
-                };
-                if let Err(e) = ui_ctx.mute_conversation(
-                    chatter_core::state::ActiveConversation::Channel(channel_uuid),
-                    muted,
-                ) {
+                let Some(conv) = conv else { return };
+                if let Err(e) = ui_ctx.mute_conversation(conv, muted) {
                     tracing::error!(error = %e, "Failed to persist channel mute");
                     // Snap the switch back so it never shows a state we did not
                     // manage to persist (same as the AI toggle above).
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.global::<crate::ModalHostState>()
-                                .set_channel_settings_muted(!muted);
+                            if w.global::<crate::ModalHostState>().get_channel_settings_id() == settings_id.as_str()
+                                && settings_on_stack(&w) {
+                                w.global::<crate::ModalHostState>().set_channel_settings_muted(!muted);
+                                w.global::<crate::ModalHostState>()
+                                    .set_channel_settings_error("Couldn't save mute setting".into());
+                            }
                         }
                     });
                 }
@@ -1126,6 +1162,8 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .await;
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
+                    if w.global::<crate::ModalHostState>().get_channel_settings_id()
+                        != channel_id.as_str() || !settings_on_stack(&w) { return; }
                     match result {
                         Ok(m) => {
                             w.global::<crate::ModalHostState>()
@@ -1146,7 +1184,7 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::warn!(error = %e, "Failed to change member role");
                             w.global::<crate::ModalHostState>()
                                 .set_channel_settings_error(
-                                    format!("Couldn't change role: {e}").into(),
+                                    "Couldn't change this member's role. Please try again.".into(),
                                 );
                         }
                     }
@@ -1193,9 +1231,13 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::warn!(error = %e, "Failed to remove member");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.global::<crate::ModalHostState>().set_channel_settings_error(
-                                format!("Couldn't remove member: {e}").into(),
-                            );
+                            if conv.channel_id().is_some_and(|id| {
+                                w.global::<crate::ModalHostState>().get_channel_settings_id() == id.to_string().as_str()
+                            }) && settings_on_stack(&w) {
+                                w.global::<crate::ModalHostState>().set_channel_settings_error(
+                                    "Couldn't remove this member. Please try again.".into(),
+                                );
+                            }
                         }
                     });
                 }
