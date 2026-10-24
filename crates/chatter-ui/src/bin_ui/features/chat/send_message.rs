@@ -442,6 +442,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Some(channel) = channel {
                 show_send_notice(&weak, &ctx, channel);
             }
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list(weak.clone(), ctx.clone());
             crate::bin_ui::features::modals::friends::refresh_blocked_users(weak.clone(), &ctx);
             crate::run_ui!(weak, |w| {
                 crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ctx);
