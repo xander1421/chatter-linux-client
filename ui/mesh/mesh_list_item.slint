@@ -88,10 +88,14 @@ export component MeshListItem inherits Rectangle {
                     font-weight: Typography.semibold; overflow: elide;
                     horizontal-stretch: 1; vertical-alignment: center;
                 }
-                if root.kind == "dm" && (root.verified || root.binding-label == "Verified Chatter contact"): Image {
-                    source: Icons.shield; width: 14px; height: 14px; colorize: Colors.success;
+                if root.kind == "dm" && (root.verified || root.binding-label == "Verified Chatter contact"): VerticalLayout {
+                    alignment: center;
+                    Image { source: Icons.shield; width: 14px; height: 14px; colorize: Colors.success; }
                 }
-                if root.muted: Image { source: Icons.bell-off; width: 14px; height: 14px; colorize: Colors.text-muted; }
+                if root.muted: VerticalLayout {
+                    alignment: center;
+                    Image { source: Icons.bell-off; width: 14px; height: 14px; colorize: Colors.text-muted; }
+                }
             }
             Text { text: root.secondary; color: Colors.text-muted; font-size: Typography.sm; overflow: elide; wrap: no-wrap; }
         }

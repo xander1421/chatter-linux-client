@@ -94,11 +94,14 @@ export component MeshPeerSheet inherits Rectangle {
                             font-size: 22px; font-weight: Typography.semibold; horizontal-alignment: center; }
                         HorizontalLayout {
                             alignment: center; spacing: Spacing.xs;
-                            if root.peer-verified: Image { source: Icons.shield; width: Spacing.button-icon;
-                                height: Spacing.button-icon; colorize: Colors.success; }
+                            if root.peer-verified: VerticalLayout {
+                                alignment: center;
+                                Image { source: Icons.shield; width: Spacing.button-icon;
+                                    height: Spacing.button-icon; colorize: Colors.success; }
+                            }
                             Text { text: root.peer-verified ? "Verified" : MeshGlobal.sheet-binding-label;
                                 color: root.peer-verified ? Colors.success : Colors.text-secondary;
-                                font-size: Typography.sm; horizontal-alignment: center; }
+                                font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                         }
                     }
                     HorizontalLayout {

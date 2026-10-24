@@ -30,12 +30,14 @@ export component MeshContextBar inherits Rectangle {
             padding-left: Spacing.md;
             padding-right: Spacing.md;
             spacing: Spacing.sm;
-            Image {
-                source: Icons.radio;
-                width: 15px;
-                height: 15px;
-                colorize: Colors.primary;
-                vertical-alignment: center;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.radio;
+                    width: 15px;
+                    height: 15px;
+                    colorize: Colors.primary;
+                }
             }
             Text {
                 text: root.message;
