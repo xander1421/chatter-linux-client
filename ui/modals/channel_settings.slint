@@ -243,6 +243,11 @@ export component ChannelSettingsModal inherits Rectangle {
                     viewport-height: content-area.preferred-height;
 
                     content-area := VerticalLayout {
+                        // Without a width the preferred height (and so the
+                        // viewport) was computed with wrapped text unwrapped;
+                        // the layout then ran short and Create link overlapped
+                        // the Join requests section (Access tab, 360dp phone).
+                        width: parent.width;
                         padding: Spacing.md;
                         spacing: Spacing.lg;
                         alignment: start;
