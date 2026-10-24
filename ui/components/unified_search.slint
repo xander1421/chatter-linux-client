@@ -328,6 +328,11 @@ export component UnifiedSearch inherits Rectangle {
     in property <[string]> message-kinds: [];
     callback filters-changed(string, string, string, string, string);
     callback recent-selected(string);
+    in property <int> caret-end-seq;
+    changed caret-end-seq => {
+        search-input.focus();
+        search-input.set-selection-offsets(2147483647, 2147483647);
+    }
     callback recent-clear();
     callback recent-remove(string);
     in-out property <bool> date-sheet-open: false;

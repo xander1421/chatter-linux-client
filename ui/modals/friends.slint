@@ -61,6 +61,7 @@ export component FriendsModal inherits Rectangle {
     // Friend code (privacy-first discovery)
     in-out property <string> my-code: "";
     in-out property <string> code-input: "";
+    in property <int> code-caret-end-seq;
     in-out property <string> code-status: "";
     in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
@@ -239,6 +240,7 @@ export component FriendsModal inherits Rectangle {
                     can-scan: root.can-scan;
                     loading: root.loading;
                     code-input <=> root.code-input;
+                    code-caret-end-seq: root.code-caret-end-seq;
                     code-status: root.code-status;
                     my-code: root.my-code;
                     request-note <=> root.request-note;

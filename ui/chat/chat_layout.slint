@@ -107,6 +107,7 @@ export component ChatLayout inherits Rectangle {
     in-out property <string> emoji-search;
     in-out property <string> gif-search;
     private property <string> drawer-search-text;
+    private property <int> drawer-search-caret-end-seq: 0;
     init => { root.drawer-search-text = root.gif-picker-visible ? root.gif-search : root.emoji-search; }
     changed emoji-search => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
     changed gif-search => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
@@ -795,6 +796,7 @@ export component ChatLayout inherits Rectangle {
             // its rows are the provider's.
             root.gif-picker-visible = gifs;
             root.emoji-picker-visible = !gifs;
+            root.drawer-search-caret-end-seq += 1;
             if gifs { root.gif-clicked(); }
         }
         // The message list runs full height underneath: swallow clicks that
@@ -829,6 +831,8 @@ export component ChatLayout inherits Rectangle {
                         drawer-search := TextInput {
                             width: 100%; height: 100%;
                             text <=> root.drawer-search-text;
+                            property <int> caret-end-seq: root.drawer-search-caret-end-seq;
+                            changed caret-end-seq => { self.set-selection-offsets(2147483647, 2147483647); }
                             color: Colors.text-primary;
                             single-line: true;
                             vertical-alignment: center;

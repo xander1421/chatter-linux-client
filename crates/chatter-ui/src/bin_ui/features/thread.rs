@@ -441,8 +441,9 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         {
                             ui_ctx.park_failed_thread_composer_reply(&root, &text, failed_reply.clone(), session_revision);
                             if let Some(restored) = ui_ctx.take_failed_thread_reply(&root) {
-                                w.global::<crate::ChatPane>()
-                                    .set_thread_composer_text(restored.into());
+                                let pane = w.global::<crate::ChatPane>();
+                                pane.set_thread_composer_text(restored.into());
+                                pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
                             }
                             if let Some(reply) = ui_ctx.thread_draft_reply(&root) {
                                 show_thread_reply(&w, &ui_ctx, reply);
@@ -522,8 +523,9 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
     let Some(text) = ui_ctx.take_failed_thread_reply(root) else {
         return;
     };
-    w.global::<crate::ChatPane>()
-        .set_thread_composer_text(text.into());
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_thread_composer_text(text.into());
+    pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
     if let Some(reply) = ui_ctx.thread_draft_reply(root) {
         show_thread_reply(w, ui_ctx, reply);
     }
@@ -857,8 +859,9 @@ pub fn load_thread_data(
                     w.global::<crate::ChatPane>()
                         .set_thread_root_message_id(root_id.into());
                     if switching {
-                        w.global::<crate::ChatPane>()
-                            .set_thread_composer_text(draft.into());
+                        let pane = w.global::<crate::ChatPane>();
+                        pane.set_thread_composer_text(draft.into());
+                        pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
                         clear_thread_reply(&w);
                         w.global::<crate::ChatPane>().set_thread_mention_visible(false);
                         w.global::<crate::ChatPane>().set_thread_mention_query("".into());
