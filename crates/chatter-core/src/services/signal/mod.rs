@@ -39,6 +39,13 @@ pub struct SignalService {
     /// `ensure_sessions_and_access_policy_all_devices`). Not a device list:
     /// which devices a recipient has is the server's answer to each send.
     pub(crate) unrestricted_access: Arc<std::sync::Mutex<HashMap<String, bool>>>,
+    pub(crate) sender_cert_cache: Arc<std::sync::Mutex<Option<VerifiedSenderCert>>>,
+}
+
+pub(crate) struct VerifiedSenderCert {
+    pub cert_b64: String,
+    pub root: Vec<u8>,
+    pub cert: libsignal_protocol::SenderCertificate,
 }
 
 impl Clone for SignalService {
@@ -51,6 +58,7 @@ impl Clone for SignalService {
             encrypt_locks: self.encrypt_locks.clone(),
             encrypt_lock_lru: self.encrypt_lock_lru.clone(),
             unrestricted_access: self.unrestricted_access.clone(),
+            sender_cert_cache: self.sender_cert_cache.clone(),
         }
     }
 }
@@ -80,6 +88,7 @@ impl SignalService {
             encrypt_locks: Arc::new(Mutex::new(HashMap::new())),
             encrypt_lock_lru: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             unrestricted_access: Arc::default(),
+            sender_cert_cache: Arc::default(),
         }
     }
 }

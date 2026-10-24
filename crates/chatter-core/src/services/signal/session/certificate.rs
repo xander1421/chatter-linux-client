@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::signal::VerifiedSenderCert;
 
 impl SignalService {
     /// Get sender certificate from cache or request a new one.
@@ -46,6 +47,20 @@ impl SignalService {
 
         if let (Some(cert_b64), Some(refresh_after)) = (&cached_cert_b64, cached_refresh_after) {
             if !sender_cert_refresh_due(std::time::SystemTime::now(), refresh_after) {
+                let root = self.trust_root.serialize().to_vec();
+                if let Ok(cache) = self.sender_cert_cache.lock() {
+                    if let Some(saved) = cache.as_ref() {
+                        // Settings remain authoritative. A changed certificate or
+                        // trust root must go through signature verification again.
+                        if saved.cert_b64 == *cert_b64
+                            && saved.root == root
+                            && cert_not_expired(&saved.cert)
+                            && self.cert_is_for_this_device(&saved.cert)
+                        {
+                            return Ok(Some(saved.cert.clone()));
+                        }
+                    }
+                }
                 use base64::Engine;
                 if let Ok(cert_bytes) = base64::engine::general_purpose::STANDARD.decode(cert_b64) {
                     if let Ok(cert) = SenderCertificate::deserialize(&cert_bytes) {
@@ -64,6 +79,13 @@ impl SignalService {
                         if self.cert_is_for_this_device(&cert)
                             && crate::crypto::signal::sealed_sender::validate_trust_root(&cert)
                         {
+                            if let Ok(mut cache) = self.sender_cert_cache.lock() {
+                                *cache = Some(VerifiedSenderCert {
+                                    cert_b64: cert_b64.clone(),
+                                    root,
+                                    cert: cert.clone(),
+                                });
+                            }
                             return Ok(Some(cert));
                         }
                     }
@@ -116,6 +138,15 @@ fn sender_cert_refresh_due(now: std::time::SystemTime, refresh_after_ns: u64) ->
         .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
         .unwrap_or(0);
     now_ns >= refresh_after_ns
+}
+
+fn cert_not_expired(cert: &SenderCertificate) -> bool {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    cert.expiration()
+        .is_ok_and(|expiry| expiry.epoch_millis() >= now_ms)
 }
 
 #[cfg(test)]

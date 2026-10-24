@@ -500,6 +500,35 @@ async fn an_announce_may_not_swap_the_noise_key_recorded_for_a_peer() {
 }
 
 #[tokio::test]
+async fn stale_verdict_is_reused_only_for_the_current_signing_key() {
+    let (mut runtime, _radio, state) = runtime();
+    let sender = PeerId::from_str("eeeeeeeeeeeeeeee");
+    let identity = register_verified_peer(&state, &sender, "peer");
+    let attacker = MeshIdentity::generate(&mut os_rng());
+    let mut events = runtime.events.subscribe();
+    let forged = signed(
+        &sender,
+        &attacker,
+        MessageType::Message,
+        b"forged".to_vec(),
+        true,
+    );
+
+    runtime.on_public_message_with_verdict(&forged, &sender, Some(attacker.signing_public()));
+    assert!(events.try_recv().is_err());
+
+    let genuine = signed(
+        &sender,
+        &identity,
+        MessageType::Message,
+        b"genuine".to_vec(),
+        true,
+    );
+    runtime.on_public_message_with_verdict(&genuine, &sender, Some(identity.signing_public()));
+    assert!(matches!(events.try_recv(), Ok(MeshEvent::Message(_))));
+}
+
+#[tokio::test]
 async fn an_empty_public_message_is_not_stored_as_a_blank_row() {
     // An empty payload is valid UTF-8 and decodes without complaint, so it used
     // to become an ordinary row holding `Text("")`. The room then showed a

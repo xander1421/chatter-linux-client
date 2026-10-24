@@ -449,8 +449,8 @@ impl BleRuntime {
             )
         });
 
-        let (received_from, stale_sync_answer) = match accepted {
-            Ok(accepted) => (accepted.received_from, false),
+        let (received_from, verified_stale_key) = match accepted {
+            Ok(accepted) => (accepted.received_from, None),
             Err(rejection) => {
                 // Every check before the timestamp passed: the guard decides
                 // freshness last. See `stale_sync_answer_from` for the one case
@@ -465,7 +465,7 @@ impl BleRuntime {
                     ),
                     _ => None,
                 };
-                let Some(peer) = admitted else {
+                let Some((peer, author_key)) = admitted else {
                     // A packet addressed to us that we refuse is a conversation
                     // that silently stops (a Noise opening from a restarted peer
                     // never answered); debug is invisible on Android.
@@ -504,7 +504,7 @@ impl BleRuntime {
                     age_ms = now_ms.saturating_sub(packet.timestamp),
                     "stale sync answer admitted"
                 );
-                (peer, true)
+                (peer, Some(author_key))
             }
         };
 
@@ -537,7 +537,9 @@ impl BleRuntime {
             state.peers.update_last_seen(&received_from, now_ms);
         });
 
-        let retainable = self.dispatch(link, &packet, &claimed, now_s).await;
+        let retainable = self
+            .dispatch(link, &packet, &claimed, now_s, verified_stale_key)
+            .await;
 
         // Refused identity-control packets must not be propagated to peers.
         if !retainable {
@@ -547,7 +549,7 @@ impl BleRuntime {
             self.gossip.on_public_packet_seen(&packet, now_s);
         }
         // TTL 0 already stops the relay; this does not depend on that.
-        if stale_sync_answer {
+        if verified_stale_key.is_some() {
             return;
         }
         self.relay(link, &packet, &local).await;
@@ -584,7 +586,7 @@ impl BleRuntime {
         claimed: &PeerId,
         now_ms: u64,
         now_s: u64,
-    ) -> Option<PeerId> {
+    ) -> Option<(PeerId, [u8; 32])> {
         if packet.ttl != 0 || packet.is_rsr {
             return None;
         }
@@ -611,7 +613,7 @@ impl BleRuntime {
             return None;
         }
         let key = <[u8; 32]>::try_from(author_key.as_slice()).ok()?;
-        verify_packet(packet, &key).then(|| peer.clone())
+        verify_packet(packet, &key).then(|| (peer.clone(), key))
     }
 
     /// Unwrap a fragment, then handle whatever it turns out to be.
@@ -628,9 +630,12 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
         now_s: u64,
+        verified_key: Option<[u8; 32]>,
     ) -> bool {
         if packet.message_type() != Some(MessageType::Fragment) {
-            return self.handle_typed(link, packet, claimed).await;
+            return self
+                .handle_typed_with_verdict(link, packet, claimed, verified_key)
+                .await;
         }
 
         let reassembled = self
@@ -666,9 +671,21 @@ impl BleRuntime {
         packet: &BitchatPacket,
         claimed: &PeerId,
     ) -> bool {
+        self.handle_typed_with_verdict(link, packet, claimed, None).await
+    }
+
+    async fn handle_typed_with_verdict(
+        &mut self,
+        link: &LinkId,
+        packet: &BitchatPacket,
+        claimed: &PeerId,
+        verified_key: Option<[u8; 32]>,
+    ) -> bool {
         match packet.message_type() {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
-            Some(MessageType::Message) => self.on_public_message(packet, claimed),
+            Some(MessageType::Message) => {
+                self.on_public_message_with_verdict(packet, claimed, verified_key)
+            }
             Some(MessageType::ChannelMessage) => return self.on_channel_message(packet, claimed),
             Some(MessageType::GroupMessage) => {
                 return self.on_private_channel_message(packet, claimed);

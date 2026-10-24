@@ -167,6 +167,20 @@ pub trait LogBackend: Send + Sync {
     /// The identity key the server claims for `user_id` (KT-checked by the
     /// caller before it is vouched for in an `AddMember`).
     async fn claimed_identity_key(&self, user_id: &str) -> Result<KeyBytes, LogError>;
+
+    async fn vouched_identity_key(
+        &self,
+        user_id: &str,
+        kt: &dyn IdentityKeyVerifier,
+    ) -> Result<KeyBytes, LogError> {
+        let key = self.claimed_identity_key(user_id).await?;
+        match kt.is_current_identity_key(user_id, &key).await {
+            Ok(true) => Ok(key),
+            Ok(false) => Err(LogError::Verify(VerifyError::KtMismatch)),
+            Err(VerifyError::KtUnavailable(m)) => Err(LogError::KtUnavailable(m)),
+            Err(e) => Err(LogError::Verify(e)),
+        }
+    }
 }
 
 /// Told about every committed change and every notice
@@ -596,13 +610,7 @@ impl MembershipLog {
 
     /// `user_id`'s identity key, KT-verified: what an `AddMember` vouches for.
     pub async fn vouched_identity_key(&self, user_id: &str) -> Result<KeyBytes, LogError> {
-        let key = self.backend.claimed_identity_key(user_id).await?;
-        match self.kt.is_current_identity_key(user_id, &key).await {
-            Ok(true) => Ok(key),
-            Ok(false) => Err(LogError::Verify(VerifyError::KtMismatch)),
-            Err(VerifyError::KtUnavailable(m)) => Err(LogError::KtUnavailable(m)),
-            Err(e) => Err(LogError::Verify(e)),
-        }
+        self.backend.vouched_identity_key(user_id, self.kt.as_ref()).await
     }
 
     /// The asymmetric rule for a membership fact only the server vouches for
@@ -905,6 +913,32 @@ impl LogBackend for SignalLogBackend {
                 ))
             })?;
         vs::key33(&proof.identity_key).map_err(LogError::Verify)
+    }
+
+    async fn vouched_identity_key(
+        &self,
+        user_id: &str,
+        kt: &dyn IdentityKeyVerifier,
+    ) -> Result<KeyBytes, LogError> {
+        if self
+            .settings_repo
+            .current_user_id()
+            .is_ok_and(|me| me.to_string() == user_id)
+        {
+            let key = self.claimed_identity_key(user_id).await?;
+            return match kt.is_current_identity_key(user_id, &key).await {
+                Ok(true) => Ok(key),
+                Ok(false) => Err(LogError::Verify(VerifyError::KtMismatch)),
+                Err(VerifyError::KtUnavailable(m)) => Err(LogError::KtUnavailable(m)),
+                Err(e) => Err(LogError::Verify(e)),
+            };
+        }
+        let mut auth = self.grpc_pool.auth_client();
+        let key = self
+            .signal_service
+            .verified_identity_key_from_kt(&mut auth, user_id)
+            .await?;
+        vs::key33(&key).map_err(LogError::Verify)
     }
 }
 
