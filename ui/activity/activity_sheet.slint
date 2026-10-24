@@ -156,13 +156,21 @@ export component ActivitySheet inherits Rectangle {
                                     tint: root.server-unreachable || root.connection-status == "failed" || root.connection-status == "disconnected"
                                         ? Colors.error : root.connection-status == "connected" ? Colors.success : Colors.warning; }
                                 Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "Server host"; value: ActivityGlobal.server-host; touch: root.touch; tint: Colors.info; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "Last connected"; value: ActivityGlobal.last-connected; touch: root.touch; tint: Colors.info; }
+                                Rectangle { height: 1px; background: Colors.divider; }
+                                StatusRow { title: "Push"; value: ActivityGlobal.push-status; touch: root.touch;
+                                    tint: ActivityGlobal.push-status == "Registered" ? Colors.success : Colors.warning; }
+                                Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: "Mesh"; value: root.mesh-value; touch: root.touch;
                                     tint: !MeshGlobal.enabled || !MeshGlobal.mesh-on ? Colors.text-muted
                                         : MeshGlobal.radio-running ? Colors.success : Colors.warning; }
                                 if AnonMode.enabled: Rectangle { height: 1px; background: Colors.divider; }
                                 if AnonMode.enabled: StatusRow { title: "Shield / Tor"; touch: root.touch;
                                     value: !AnonMode.onion-built ? "Unavailable" : TorStatus.state == 2 ? "Connected"
-                                        : TorStatus.state == 1 ? "Bootstrapping" : TorStatus.state >= 3 ? "Failed" : "Off";
+                                        : TorStatus.state == 1 ? "Bootstrapping " + ActivityGlobal.tor-bootstrap
+                                        : TorStatus.state >= 3 ? "Failed" : "Off";
                                     tint: TorStatus.state == 2 ? Colors.success : TorStatus.state == 1 ? Colors.warning : Colors.error; }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: "App version"; touch: root.touch;

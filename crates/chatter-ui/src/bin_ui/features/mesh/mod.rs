@@ -37,6 +37,7 @@ pub use conversation::open;
 pub use send::intercept_send;
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
@@ -59,6 +60,25 @@ static ACTIVE: Mutex<(Option<MeshConversation>, u64)> = Mutex::new((None, 0));
 
 /// This device's derived mesh account id, cached after the first lookup.
 static LOCAL_USER: OnceLock<String> = OnceLock::new();
+static SUCCESS_NOTICE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn show_success_notice(window: &MainWindow, notice: &'static str) {
+    let generation = SUCCESS_NOTICE_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    window.global::<MeshGlobal>().set_notice(notice.into());
+    let weak = window.as_weak();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                let global = window.global::<MeshGlobal>();
+                if SUCCESS_NOTICE_GENERATION.load(Ordering::Relaxed) == generation
+                    && global.get_notice().as_str() == notice {
+                    global.set_notice("".into());
+                }
+            }
+        });
+    });
+}
 
 /// The mesh conversation currently open.
 #[must_use]
@@ -229,8 +249,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             match ui_ctx.mesh_join_channel(name.as_str()) {
                 Ok(_) => {
-                    w.global::<MeshGlobal>()
-                        .set_notice("Public channel joined.".into());
+                    show_success_notice(&w, "Public channel joined.");
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w
@@ -363,14 +382,11 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::bin_ui::features::back::close(&w, "mesh-setup");
                         conversation::open(&w, &ui_ctx, &row.id);
                     } else {
-                        mesh.set_notice(
-                            if join {
-                                "Private group joined."
-                            } else {
-                                "Invitation declined."
-                            }
-                            .into(),
-                        );
+                        if join {
+                            show_success_notice(&w, "Private group joined.");
+                        } else {
+                            mesh.set_notice("Invitation declined.".into());
+                        }
                     }
                 }
                 Err(error) => mesh.set_notice(error.to_string().into()),

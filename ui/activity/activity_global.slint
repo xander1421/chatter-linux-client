@@ -10,6 +10,10 @@ export struct ActivityItemData {
 export global ActivityGlobal {
     in-out property <[ActivityItemData]> items: [];
     in-out property <int> unread-count: 0;
+    in-out property <string> push-status: "Off";
+    in-out property <string> last-connected: "Never";
+    in-out property <string> server-host: "Unknown";
+    in-out property <string> tor-bootstrap: "";
     callback open-item(string);      // id → navigate + mark read
     callback mark-all-read();
     callback opened();               // sheet shown (refresh)

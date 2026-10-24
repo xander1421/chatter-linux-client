@@ -9,7 +9,42 @@ use crate::services::notification_service::NotificationDetailLevel;
 
 use super::ChatterClient;
 
+/// Device facts for the Activity Center. Never exposes an endpoint path or push topic.
+pub struct ActivityStatus {
+    pub push: &'static str,
+    pub last_connected: Option<chrono::DateTime<chrono::Utc>>,
+    pub server_host: String,
+    pub tor_bootstrap_percent: Option<u8>,
+}
+
 impl ChatterClient {
+    pub fn activity_status(&self) -> ActivityStatus {
+        let push = if self.push_url.lock().is_none() {
+            "Off"
+        } else if self.anon_mode_enabled() {
+            "Paused in Shield"
+        } else if self.push_shutdown.lock().is_some() {
+            "Registered"
+        } else {
+            "Configured, not registered"
+        };
+        let server_host = url::Url::parse(&self.endpoint())
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "Unknown".into());
+        ActivityStatus {
+            push,
+            last_connected: self.offline_snapshot().last_connected,
+            server_host,
+            tor_bootstrap_percent: {
+                #[cfg(feature = "onion")]
+                { crate::network::grpc::onion_transport::bootstrap_percent() }
+                #[cfg(not(feature = "onion"))]
+                { None }
+            },
+        }
+    }
+
     pub fn activity_items(&self) -> Vec<ActivityItem> {
         let Some(owner) = self.auth_snapshot().current_user_id else { return Vec::new() };
         let show_preview = self.notification_detail_level() == NotificationDetailLevel::NameAndMessage;
