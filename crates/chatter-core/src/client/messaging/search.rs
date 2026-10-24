@@ -9,32 +9,56 @@ impl ChatterClient {
         query: &str,
         limit: u32,
     ) -> Vec<crate::domain::message::Message> {
+        let request = crate::services::search::SearchQuery::from_controls(
+            query,
+            "all",
+            "relevance",
+            "all",
+        );
+        self.search_messages_visible_page(&request, limit, 0).0
+    }
+
+    pub(crate) fn search_messages_visible_page(
+        &self,
+        request: &crate::services::search::SearchQuery,
+        limit: u32,
+        offset: u32,
+    ) -> (Vec<crate::domain::message::Message>, usize) {
         let joined_channels: std::collections::HashSet<_> = self
             .list_channels()
             .unwrap_or_default()
             .into_iter()
             .map(|channel| channel.id)
             .collect();
-        let hits = match self.messages().search_local(query, None, limit) {
+        let hits = match self.messages().search_local_scoped(
+            &request.text,
+            request.from.as_deref(),
+            request.in_chat.as_deref(),
+            request.since.as_ref().and_then(|date| date.timestamp_nanos_opt()),
+            request.until.as_ref().and_then(|date| date.timestamp_nanos_opt()),
+            limit,
+            offset,
+        ) {
             Ok(hits) => hits,
             Err(e) => {
                 tracing::error!("Search failed: {}", e);
-                return Vec::new();
+                return (Vec::new(), 0);
             }
         };
+        let fetched = hits.len();
         let ids = hits.iter().map(|hit| hit.message_id).collect::<Vec<_>>();
         let messages = match self.messages().get_messages_by_ids_local(&ids) {
             Ok(messages) => messages,
             Err(error) => {
                 tracing::error!(%error, "Search hydration failed");
-                return Vec::new();
+                return (Vec::new(), 0);
             }
         };
         let mut by_id = messages
             .into_iter()
             .map(|msg| (msg.id, msg))
             .collect::<std::collections::HashMap<_, _>>();
-        hits.into_iter()
+        let visible = hits.into_iter()
             .filter_map(|hit| by_id.remove(&hit.message_id))
             .filter(|msg| {
                 !msg.conversation_type.is_secret_chat()
@@ -46,7 +70,8 @@ impl ChatterClient {
                         &msg.conversation_id.to_string(),
                     )
             })
-            .collect()
+            .collect();
+        (visible, fetched)
     }
 
     /// Jump-to / quick-switcher rows for `query`, ranked by the core rule

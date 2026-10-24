@@ -102,6 +102,70 @@ impl SharedContentRepository {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Page matching shared items after sender, chat, date and type filters.
+    pub fn search_global_scoped(
+        &self,
+        query: &str,
+        sender: Option<&str>,
+        conversation: Option<&str>,
+        since: Option<i64>,
+        until: Option<i64>,
+        category: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SharedContentRow>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let pattern = format!(
+            "%{}%",
+            query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut stmt = conn.prepare(
+            "SELECT s.message_id, s.attachment_id, s.category, s.sent_at,
+                    s.title, s.size_bytes, a.thumbnail_bytes
+             FROM shared_content s JOIN messages m ON m.id = s.message_id
+             LEFT JOIN attachments a ON a.id = s.attachment_id
+             WHERE s.category != 'unsorted' AND m.is_deleted = 0
+               AND s.title LIKE ?1 ESCAPE '\\'
+               AND (?2 IS NULL OR m.sender_id = ?2)
+               AND (?3 IS NULL OR s.conversation_id = ?3)
+               AND (?4 IS NULL OR s.sent_at >= ?4)
+               AND (?5 IS NULL OR s.sent_at < ?5)
+               AND (?6 IS NULL OR
+                    CASE WHEN s.category IN ('photo', 'video', 'gif') THEN 'media'
+                         WHEN s.category = 'voice' THEN 'voice'
+                         WHEN s.category = 'link' THEN 'links'
+                         ELSE 'files' END = ?6)
+             ORDER BY s.sent_at DESC, s.rowid DESC LIMIT ?7 OFFSET ?8",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                pattern,
+                sender,
+                conversation,
+                since,
+                until,
+                category,
+                limit,
+                offset
+            ],
+            |row| {
+                Ok(SharedContentRow {
+                    message_id: row.get(0)?,
+                    attachment_id: row.get(1)?,
+                    category: row.get(2)?,
+                    sent_at: row.get(3)?,
+                    title: row.get(4)?,
+                    size_bytes: row.get(5)?,
+                    thumbnail: row.get(6)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// One page of a conversation's tab, newest first.
     ///
     /// `offset` pages backwards through the same ordering. Keyset paging

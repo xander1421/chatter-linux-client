@@ -81,6 +81,44 @@ impl SearchIndex {
 
         Ok(results)
     }
+
+    /// Page FTS hits after applying message metadata filters in SQLite.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        sender: Option<&str>,
+        conversation: Option<&str>,
+        since: Option<i64>,
+        until: Option<i64>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SearchResult>, StorageError> {
+        let escaped_query = escape_fts5_query(query);
+        if escaped_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT messages_fts.message_id, messages_fts.conversation_id, bm25(messages_fts) AS score
+             FROM messages_fts JOIN messages m ON m.id = messages_fts.message_id
+             WHERE messages_fts MATCH ?1 AND m.is_deleted = 0
+               AND (?2 IS NULL OR m.sender_id = ?2)
+               AND (?3 IS NULL OR m.conversation_id = ?3)
+               AND (?4 IS NULL OR m.sent_at >= ?4)
+               AND (?5 IS NULL OR m.sent_at < ?5)
+             ORDER BY score, messages_fts.rowid LIMIT ?6 OFFSET ?7",
+        )?;
+        let mut rows = stmt.query(params![
+            escaped_query,
+            sender,
+            conversation,
+            since,
+            until,
+            limit,
+            offset
+        ])?;
+        collect_results(&mut rows)
+    }
 }
 
 /// Escape special FTS5 query characters.
