@@ -174,26 +174,47 @@ impl ActivityService {
         Ok(())
     }
 
-    /// One unresolved outage row per owner; recovery is an independent entry.
+    /// One activity row per outage. Recovery rewrites that row rather than
+    /// adding one, and a drop within `OUTAGE_REOPEN_MS` of recovery reopens it,
+    /// so a reconnect that flaps reads as one outage, not a list of them.
     pub fn server_reachability(&self, owner: UserId, unreachable: bool) -> Result<(), StorageError> {
+        const OUTAGE_REOPEN_MS: i64 = 120_000;
         let conn = self.db.connection()?;
         let owner_id = owner.to_string();
-        let active: Option<String> = conn.query_row(
-            "SELECT outage_id FROM activity_outages WHERE owner_id=?1", [&owner_id], |row| row.get(0),
+        let current: Option<(String, Option<i64>)> = conn.query_row(
+            "SELECT outage_id, resolved_at_ms FROM activity_outages WHERE owner_id=?1",
+            [&owner_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
         let now = Utc::now().timestamp_millis();
-        if unreachable && active.is_none() {
-            let id = format!("server-down:{now}");
-            conn.execute("INSERT INTO activity_outages(owner_id,outage_id) VALUES (?1,?2)", params![owner_id, id])?;
-            conn.execute("INSERT OR IGNORE INTO activity_items(owner_id,id,kind,title,created_at_ms) VALUES (?1,?2,'server','Server unreachable — messages will send later',?3)", params![owner_id, id, now])?;
-            Self::prune(&conn, owner)?;
-            let _ = self.changed.send(());
-        } else if let Some(outage_id) = active.filter(|_| !unreachable) {
-            conn.execute("DELETE FROM activity_outages WHERE owner_id=?1", [&owner_id])?;
-            conn.execute("INSERT OR IGNORE INTO activity_items(owner_id,id,kind,title,created_at_ms) VALUES (?1,?2,'server','Server back online',?3)", params![owner_id, format!("server-online:{outage_id}"), now])?;
-            Self::prune(&conn, owner)?;
-            let _ = self.changed.send(());
+        let down_title = "Server unreachable — messages will send later";
+        match (unreachable, current) {
+            (true, Some((_, None))) | (false, None) | (false, Some((_, Some(_)))) => return Ok(()),
+            (true, Some((id, Some(resolved)))) if now - resolved < OUTAGE_REOPEN_MS => {
+                conn.execute("UPDATE activity_outages SET resolved_at_ms=NULL WHERE owner_id=?1", [&owner_id])?;
+                conn.execute("UPDATE activity_items SET kind='server', title=?3, unread=1 WHERE owner_id=?1 AND id=?2",
+                    params![owner_id, id, down_title])?;
+            }
+            (true, _) => {
+                let id = format!("server-down:{now}");
+                conn.execute("INSERT OR REPLACE INTO activity_outages(owner_id,outage_id,resolved_at_ms) VALUES (?1,?2,NULL)",
+                    params![owner_id, id])?;
+                conn.execute("INSERT OR IGNORE INTO activity_items(owner_id,id,kind,title,created_at_ms) VALUES (?1,?2,'server',?3,?4)",
+                    params![owner_id, id, down_title, now])?;
+                Self::prune(&conn, owner)?;
+            }
+            (false, Some((id, None))) => {
+                let started: i64 = conn.query_row(
+                    "SELECT created_at_ms FROM activity_items WHERE owner_id=?1 AND id=?2",
+                    params![owner_id, id], |row| row.get(0),
+                ).optional()?.unwrap_or(now);
+                let secs = ((now - started) / 1000).max(1);
+                let span = if secs < 120 { format!("{secs} s") } else { format!("{} min", secs / 60) };
+                conn.execute("UPDATE activity_outages SET resolved_at_ms=?2 WHERE owner_id=?1", params![owner_id, now])?;
+                conn.execute("UPDATE activity_items SET kind='server-ok', title=?3 WHERE owner_id=?1 AND id=?2",
+                    params![owner_id, id, format!("Server was unreachable for {span} — back online")])?;
+            }
         }
+        let _ = self.changed.send(());
         Ok(())
     }
 }

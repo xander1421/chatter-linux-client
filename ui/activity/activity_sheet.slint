@@ -37,6 +37,7 @@ component ActivityFeedRow inherits Rectangle {
     in property <bool> unread;
     in property <bool> touch: false;
     property <color> tint: root.kind == "server" ? Colors.warning
+        : root.kind == "server-ok" ? Colors.success
         : root.kind == "missed-call" ? Colors.error : root.kind == "update" ? Colors.info : Colors.primary;
     property <image> glyph: root.kind == "mention" ? Icons.megaphone
         : root.kind == "reply" ? Icons.reply
@@ -45,7 +46,8 @@ component ActivityFeedRow inherits Rectangle {
         : root.kind == "contact-request" ? Icons.user-plus
         : root.kind == "invite" || root.kind == "mesh-invite" ? Icons.users
         : root.kind == "device-linked" ? Icons.smartphone
-        : root.kind == "server" ? Icons.alert-triangle : Icons.download;
+        : root.kind == "server" ? Icons.alert-triangle
+        : root.kind == "server-ok" ? Icons.check : Icons.download;
     height: root.touch ? 76px : 68px;
     background: row-touch.has-hover ? Colors.surface-control-hover : transparent;
     HorizontalLayout {
