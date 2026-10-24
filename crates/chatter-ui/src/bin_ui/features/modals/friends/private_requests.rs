@@ -79,6 +79,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
+                        report_failure(&weak, "This request is no longer available.");
                         finish_decision(weak);
                         return;
                     }
@@ -88,15 +89,8 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                 match ui_ctx.accept_anon_dm(&conv_id).await {
                     Ok(dm) => {
                         let peer_id = dm.peer_id;
-                        // Use stored display name, not user_service (strangers aren't in the database)
-                        let peer_name = ui_ctx
-                            .contact_name(&peer_id)
-                            .or(dm.peer_display_name.clone())
-                            .unwrap_or_else(|| {
-                                chatter_core::services::user::friend_display_name_placeholder(
-                                    &peer_id,
-                                )
-                            });
+                        // Core preserves local contact names for known secret-chat peers.
+                        let peer_name = ui_ctx.anon_dm_peer_name(&dm);
                         let dm_id = dm.id;
 
                         tracing::info!(
@@ -151,6 +145,7 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
+                        report_failure(&weak, "This request is no longer available.");
                         finish_decision(weak);
                         return;
                     }
@@ -194,7 +189,9 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
         .global::<crate::ModalHostState>()
         .on_friends_block_private_request(move |conversation_id: SharedString| {
             let Some(w) = weak_window.upgrade() else { return };
-            if !begin_decision(&w, &conversation_id) { return; }
+            if !begin_decision(&w, &conversation_id) {
+                return;
+            }
             w.global::<crate::ModalHostState>().set_friends_loading(true);
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
@@ -206,6 +203,7 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                     Ok(id) => id,
                     Err(_) => {
                         tracing::error!("Invalid conversation ID: {}", conv_id_str);
+                        report_failure(&weak, "This request is no longer available.");
                         finish_decision(weak);
                         return;
                     }
@@ -255,7 +253,7 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
 }
 
 /// Refresh the private (anon DM) requests list in the UI.
-pub(super) async fn refresh_private_requests(
+pub(crate) async fn refresh_private_requests(
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
@@ -263,12 +261,7 @@ pub(super) async fn refresh_private_requests(
     let mut private_requests: Vec<FriendRequestSendData> = Vec::with_capacity(requests.len());
 
     for dm in requests {
-        let peer_name = ui_ctx
-            .contact_name(&dm.peer_id)
-            .or(dm.peer_display_name.clone())
-            .unwrap_or_else(|| {
-                chatter_core::services::user::friend_display_name_placeholder(&dm.peer_id)
-            });
+        let peer_name = ui_ctx.anon_dm_peer_name(&dm);
         let conv_id_str = dm.id.to_string();
 
         private_requests.push(FriendRequestSendData {

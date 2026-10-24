@@ -57,8 +57,9 @@ fn spawn_request_stream(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         dropped_count = n,
-                        "[ANON_DM_HANDLER] Request receiver lagged, continuing"
+                        "[ANON_DM_HANDLER] Request receiver lagged; rebuilding from storage"
                     );
+                    super::friends::refresh_private_requests(weak_window.clone(), &ui_ctx).await;
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -96,7 +97,9 @@ fn spawn_request_stream(
 
                     // Add to pending requests in UI (no auto-accept)
                     let conv_id_str = conversation_id.to_string();
-                    let peer_name = sender_name.clone();
+                    let peer_name = ui_ctx
+                        .contact_name(&sender_id)
+                        .unwrap_or_else(|| sender_name.clone());
                     let intro = intro_message.unwrap_or_default();
                     let weak = weak_window.clone();
                     let request_client = ui_ctx.clone();
@@ -251,7 +254,9 @@ fn spawn_request_stream(
 
                     // Add to pending requests in UI
                     let conv_id_str = conversation_id.to_string();
-                    let peer_name = sender_name.clone();
+                    let peer_name = ui_ctx
+                        .contact_name(&sender_id)
+                        .unwrap_or_else(|| sender_name.clone());
                     let intro = if intro_message.is_empty() {
                         "Private contact request".to_string()
                     } else {

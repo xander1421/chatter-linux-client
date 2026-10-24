@@ -49,7 +49,10 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             .join("\n");
 
                         let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
+                            if let Some(w) = weak.upgrade().filter(|w| {
+                                w.global::<crate::ModalHostState>()
+                                    .get_profile_user_id().as_str() == profile_user_id.as_str()
+                            }) {
                                 w.global::<crate::ModalHostState>()
                                     .set_profile_safety_number(formatted.into());
                                 w.global::<crate::ModalHostState>()
@@ -59,6 +62,16 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     Err(e) => {
                         tracing::error!("Failed to generate safety number: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade().filter(|w| {
+                                w.global::<crate::ModalHostState>()
+                                    .get_profile_user_id().as_str() == profile_user_id.as_str()
+                            }) {
+                                w.set_toast_message("Could not load the safety number. Try again.".into());
+                                w.set_toast_variant("error".into());
+                                w.set_toast_visible(true);
+                            }
+                        });
                     }
                 }
             });
@@ -101,33 +114,59 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             if currently_verified {
-                // Unverify — sync operation
-                match ui_ctx.mark_peer_unverified(&peer_id) {
-                    Ok(()) => {
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.global::<crate::ModalHostState>()
-                                    .set_profile_is_verified(false);
-                            }
-                        });
+                // Local storage can block; keep it off the Slint event loop.
+                tokio::spawn(async move {
+                    match tokio::task::spawn_blocking(move || ui_ctx.mark_peer_unverified(&peer_id)).await {
+                        Ok(Ok(())) => {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade().filter(|w| {
+                                    w.global::<crate::ModalHostState>()
+                                        .get_profile_user_id().as_str() == profile_user_id.as_str()
+                                }) {
+                                    w.global::<crate::ModalHostState>()
+                                        .set_profile_is_verified(false);
+                                }
+                            });
+                        }
+                        error => {
+                            tracing::error!(?error, "Failed to unverify peer");
+                            show_verification_error(weak, profile_user_id);
+                        }
                     }
-                    Err(e) => tracing::error!("Failed to unverify peer: {}", e),
-                }
+                });
             } else {
                 // Verify — async (needs to generate safety number first)
                 tokio::spawn(async move {
                     match ui_ctx.mark_peer_verified(&peer_id).await {
                         Ok(()) => {
                             let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
+                                if let Some(w) = weak.upgrade().filter(|w| {
+                                    w.global::<crate::ModalHostState>()
+                                        .get_profile_user_id().as_str() == profile_user_id.as_str()
+                                }) {
                                     w.global::<crate::ModalHostState>()
                                         .set_profile_is_verified(true);
                                 }
                             });
                         }
-                        Err(e) => tracing::error!("Failed to verify peer: {}", e),
+                        Err(e) => {
+                            tracing::error!("Failed to verify peer: {}", e);
+                            show_verification_error(weak, profile_user_id);
+                        }
                     }
                 });
             }
         });
+}
+
+fn show_verification_error(weak: slint::Weak<MainWindow>, profile_user_id: String) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade().filter(|w| {
+            w.global::<crate::ModalHostState>().get_profile_user_id().as_str() == profile_user_id.as_str()
+        }) {
+            w.set_toast_message("Could not change verification. Try again.".into());
+            w.set_toast_variant("error".into());
+            w.set_toast_visible(true);
+        }
+    });
 }
