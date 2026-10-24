@@ -398,10 +398,7 @@ impl ChatterClient {
             if !shown_secret_peers.insert(dm.peer_id) {
                 continue;
             }
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let peer_name = self.anon_dm_peer_name(&dm);
             let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             let last_message = if superseded_peers.contains(&dm.peer_id) {
                 format!("{} started a new secret chat — Accept / Decline", peer_name)
@@ -429,10 +426,7 @@ impl ChatterClient {
             if dm.status != AnonDmStatus::Active || !shown_secret_peers.insert(dm.peer_id) {
                 continue;
             }
-            let display_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let display_name = self.anon_dm_peer_name(&dm);
             let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             // The preview every other row uses: "You: " on our own messages
             // (RC108 O5), typed attachment labels.
@@ -457,10 +451,7 @@ impl ChatterClient {
             if !shown_secret_peers.insert(dm.peer_id) {
                 continue;
             }
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let peer_name = self.anon_dm_peer_name(&dm);
             let latest = projection.latest.get(&(dm.id.to_string(), ConversationType::AnonDm)).cloned();
             let (last_message, timestamp_at) = match &latest {
                 Some(msg) => {

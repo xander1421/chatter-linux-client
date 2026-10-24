@@ -41,7 +41,9 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         state.set_profile_contact_name(client.contact_name(&peer).unwrap_or_default().into());
         state.set_profile_display_name(resolved.clone().into());
         state.set_profile_initials(crate::bin_ui::converters::initials_from_name(&resolved).into());
-        if client.active_conversation() == (chatter_core::state::ActiveConversation::ServerDm { peer_id: peer }) {
+        if client.active_conversation() == (chatter_core::state::ActiveConversation::ServerDm { peer_id: peer })
+            || matches!(client.active_conversation(), chatter_core::state::ActiveConversation::AnonDm(id)
+                if client.get_anon_dm_conversation(&id).is_some_and(|dm| dm.peer_id == peer)) {
             w.global::<crate::ChatPane>().set_channel_name(resolved.into());
         }
         let messages = w.global::<crate::ChatPane>().get_messages();

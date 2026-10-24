@@ -81,10 +81,9 @@ impl ChatterClient {
             .map(|dm| dm.id)
     }
 
-    /// A secret DM's peer as the chat itself presents them: the name and
-    /// avatar they sent inside it (encrypted in the request/profile update,
-    /// cached on the row). An accepted friend's account avatar fills the gap
-    /// until that private avatar arrives. `None` when the chat is unknown.
+    /// A secret DM's peer card. The local contact name wins; otherwise use
+    /// the name shared inside the chat. The private avatar wins over an
+    /// accepted friend's account avatar. `None` when the chat is unknown.
     pub fn anon_dm_peer_card(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
@@ -95,11 +94,16 @@ impl ChatterClient {
             .ok()
             .flatten()?;
         let avatar = self.anon_dm_avatar(&dm);
-        let name = dm
-            .peer_display_name
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+        let name = self.anon_dm_peer_name(&dm);
         Some((name, avatar))
+    }
+
+    /// A locally named contact keeps that name in both the secret-chat row
+    /// and header; other peers retain the name shared inside the chat.
+    pub fn anon_dm_peer_name(&self, dm: &crate::domain::anon_dm::AnonDm) -> String {
+        self.contact_name(&dm.peer_id)
+            .or_else(|| dm.peer_display_name.clone().filter(|n| !n.is_empty()))
+            .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id))
     }
 
     /// Prefer the avatar shared inside this secret chat. For an accepted
