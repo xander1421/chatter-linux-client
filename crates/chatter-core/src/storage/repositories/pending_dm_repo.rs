@@ -145,15 +145,20 @@ impl PendingDmRepository {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare("SELECT id, content FROM pending_dm_messages WHERE peer_id = ?1 AND failed = 1 ORDER BY id")?;
         let rows = stmt.query_map([peer_id.to_string()], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+        let mut matching_id = None;
         for row in rows {
             let (id, bytes) = row?;
             if crate::proto::content_v1::Content::decode(bytes.as_slice()).ok()
                 .and_then(|content| crate::services::message::queued_bubble_timestamp(&content)) == Some(sent_at) {
-                conn.execute("UPDATE pending_dm_messages SET failed = 0 WHERE id = ?1", [id])?;
-                return Ok(Some(id));
+                matching_id = Some(id);
+                break;
             }
         }
-        Ok(None)
+        drop(stmt);
+        if let Some(id) = matching_id {
+            conn.execute("UPDATE pending_dm_messages SET failed = 0 WHERE id = ?1", [id])?;
+        }
+        Ok(matching_id)
     }
 
     pub fn park(&self, id: i64) -> Result<(), StorageError> {
