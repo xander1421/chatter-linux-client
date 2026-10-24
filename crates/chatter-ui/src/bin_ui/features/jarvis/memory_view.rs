@@ -61,8 +61,33 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
             tokio::spawn(async move {
-                if let Err(e) = ui_ctx.jarvis_clear_history() {
-                    tracing::error!("failed to clear Jarvis history: {e}");
+                if let Err(error) = ui_ctx.jarvis_clear_history() {
+                    tracing::error!(%error, "failed to clear Jarvis history");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_toast_message("Couldn't clear Jarvis history. Try again.".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
+                        }
+                    });
+                    return;
+                }
+                let current = matches!(ui_ctx.active_conversation(),
+                    chatter_core::state::ActiveConversation::Channel(id)
+                        if chatter_core::client::is_jarvis_channel(&id));
+                if current {
+                    let weak_chat = weak.clone();
+                    let ui_ctx_chat = ui_ctx.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_chat.upgrade() {
+                            if matches!(ui_ctx_chat.active_conversation(),
+                                chatter_core::state::ActiveConversation::Channel(id)
+                                    if chatter_core::client::is_jarvis_channel(&id)) {
+                                w.global::<crate::ChatPane>()
+                                    .set_messages(ModelRc::new(VecModel::default()));
+                            }
+                        }
+                    });
                 }
                 refresh(ui_ctx, weak, None).await
             });

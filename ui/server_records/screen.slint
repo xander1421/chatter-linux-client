@@ -48,9 +48,9 @@ export component ServerRecordsScreen inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 spacing: Spacing.sm;
-                if ServerRecordsGlobal.kind != "notifications": Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
                 if ServerRecordsGlobal.kind == "notifications": Button {
-                    text: "Mark all read"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                    text: "Mark all read"; variant: "secondary"; disabled: ServerRecordsGlobal.loading || ServerRecordsGlobal.notifications.length == 0;
                     clicked => { ServerRecordsGlobal.act("", "Mark all read"); }
                 }
             }

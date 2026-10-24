@@ -191,7 +191,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
             return;
         }
         let Some(manifest_before_download) = client.available_update() else {
-            show_error(weak, "No verified update is available".into());
+            crate::rt_handle().spawn(check(client, weak, true, play));
             return;
         };
         #[cfg(target_os = "android")]
