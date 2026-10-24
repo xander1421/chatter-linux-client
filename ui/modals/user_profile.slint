@@ -36,6 +36,30 @@ import { DisappearingSettings } from "../chat/disappearing_settings.slint";
 import { DisappearingGlobal } from "../chat/disappearing_global.slint";
 
 
+// Telegram-style list row for the profile's action card: leading glyph,
+// left-aligned label, red only for the destructive action.
+component ProfileActionRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> destructive: false;
+    in property <length> row-height: 48px;
+    callback clicked();
+    height: root.row-height;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+        VerticalLayout { alignment: center;
+            Image { source: root.icon; width: 20px; height: 20px; colorize: root.destructive ? Colors.danger : Colors.text-secondary; }
+        }
+        Text { text: root.text; color: root.destructive ? Colors.danger : Colors.text-primary;
+            font-size: Typography.base; vertical-alignment: center; horizontal-stretch: 1; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
 export component UserProfileModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> user-id: "";
@@ -542,24 +566,6 @@ export component UserProfileModal inherits Rectangle {
                         change-status(mode) => { root.change-status(mode); }
                     }
 
-                    // ── Secret chat ───────────────────────────────────
-                    // Telegram-style: a device-bound conversation over Tor,
-                    // its own row beside the regular DM. Hidden where core
-                    // cannot start one.
-                    if root.can-start-secret-chat && !root.scoped-member && !root.is-self && !root.is-blocked: HorizontalLayout {
-                        padding-left: Spacing.md;
-                        padding-right: Spacing.md;
-                        padding-top: Spacing.sm;
-
-                        Button {
-                            text: "Start secret chat";
-                            icon: Icons.lock;
-                            variant: "secondary";
-                            horizontal-stretch: 1;
-                            clicked => { root.start-secret-chat(); }
-                        }
-                    }
-
                     // ── Add friend ────────────────────────────────────
                     if !root.scoped-member && !root.is-self && !root.is-blocked && !root.is-friend && !AnonMode.enabled: HorizontalLayout {
                         padding-left: Spacing.md;
@@ -613,11 +619,15 @@ export component UserProfileModal inherits Rectangle {
                             height: actions-card.preferred-height;
                             background: Colors.inset; border-radius: Spacing.radius-lg;
                             actions-card := VerticalLayout {
-                                padding: Spacing.sm; spacing: Spacing.xs;
-                                Button { text: "Share this contact"; icon: Icons.send; variant: "secondary"; clicked => { root.share-contact(); } }
-                                Button { text: "Edit contact"; icon: Icons.edit; variant: "secondary"; clicked => { root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
-                                if root.is-friend: Button { text: "Delete contact"; icon: Icons.trash; variant: "destructive"; clicked => { root.confirm-remove = true; } }
-                                Button { text: root.is-blocked ? "Unblock user" : "Block user"; variant: "destructive"; clicked => { if root.is-blocked { root.confirm-unblock = true; } else { root.confirm-block = true; } } }
+                                ProfileActionRow { icon: Icons.send; text: "Share this contact"; row-height: root.row-height;
+                                    clicked => { root.share-contact(); } }
+                                ProfileActionRow { icon: Icons.edit; text: "Edit contact"; row-height: root.row-height;
+                                    clicked => { root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
+                                if root.is-friend: ProfileActionRow { icon: Icons.trash; text: "Delete contact"; row-height: root.row-height;
+                                    clicked => { root.confirm-remove = true; } }
+                                ProfileActionRow { icon: Icons.slash; text: root.is-blocked ? "Unblock user" : "Block user"; row-height: root.row-height;
+                                    destructive: !root.is-blocked;
+                                    clicked => { if root.is-blocked { root.confirm-unblock = true; } else { root.confirm-block = true; } } }
                             }
                         }
                     }
