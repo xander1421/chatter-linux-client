@@ -108,7 +108,10 @@ impl BleRuntime {
                                 .is_some_and(|at| now_secs().saturating_sub(*at) >= super::super::DIRECT_INVITE_LIFETIME_SECS)
                             && let Ok(bytes) = state.update_bytes()
                         {
-                            self.send_group_state(claimed, &bytes, false).await;
+                            let invite = state
+                                .unanswered_direct_invites
+                                .contains_key(claimed.as_str());
+                            self.send_group_state(claimed, &bytes, invite).await;
                         }
                     }
                 }

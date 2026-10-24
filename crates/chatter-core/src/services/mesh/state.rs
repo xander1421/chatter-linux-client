@@ -66,6 +66,8 @@ pub struct LinkStateInner {
     pub pending_bindings: BTreeMap<PeerId, super::account_binding::BindingV1>,
     /// Verified group states awaiting local consent; never persisted.
     pub pending_group_invites: BTreeMap<String, PendingGroupInvite>,
+    /// Declined invitation epochs stay suppressed while a creator retries them.
+    pub declined_group_invites: BTreeMap<String, (u32, u64)>,
     pub binding_offers: BTreeSet<PeerId>,
     pub links: LinkStateStore,
     pub peers: PeerRegistry,
@@ -134,6 +136,7 @@ impl Default for LinkStateInner {
             chatter_hello: super::chatter_hello::HelloPeers::default(),
             pending_bindings: BTreeMap::new(),
             pending_group_invites: BTreeMap::new(),
+            declined_group_invites: BTreeMap::new(),
             binding_offers: BTreeSet::new(),
             prekeys: super::prekeys::PrekeyState::default(),
             max_write: BTreeMap::new(),

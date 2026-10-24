@@ -329,7 +329,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.mesh_invite_private_channel_direct(id.as_str(), peer.as_str()) {
                 Ok(()) => {
                     w.global::<MeshGlobal>()
-                        .set_notice("Invitation sent over the encrypted mesh link.".into());
+                        .set_notice("Invitation queued — will deliver when connected.".into());
                     refresh_rows(&w, &ui_ctx);
                 }
                 Err(error) => w
@@ -793,13 +793,23 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     use slint::Model;
 
-    let nearby: Vec<MeshPeerData> = ui_ctx
-        .mesh_nearby_peers()
+    let peer_rows = match active() {
+        Some(MeshConversation::PrivateChannel(id)) => ui_ctx
+            .mesh_private_channel_nearby_peers(&id)
+            .unwrap_or_default(),
+        _ => ui_ctx
+            .mesh_nearby_peers()
+            .into_iter()
+            .map(|peer| (peer, false))
+            .collect(),
+    };
+    let nearby: Vec<MeshPeerData> = peer_rows
         .into_iter()
-        .map(|peer| MeshPeerData {
+        .map(|(peer, member)| MeshPeerData {
             id: peer.peer.as_str().into(),
             name: peer.nickname.into(),
             reachable: peer.reachable || peer.connected,
+            member,
             binding_label: ui_ctx
                 .mesh_binding_state(peer.peer.as_str())
                 .map(|state| state.label())
@@ -818,6 +828,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             a.id != b.id
                 || a.name != b.name
                 || a.reachable != b.reachable
+                || a.member != b.member
                 || a.binding_label != b.binding_label
         })
     {

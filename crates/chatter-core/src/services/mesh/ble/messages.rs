@@ -335,8 +335,8 @@ impl BleRuntime {
         self.events.send(MeshEvent::PrivateChannelChanged);
     }
 
-    /// `invite` is a direct GroupInvite (0x06). Only that may raise a Join/Decline prompt; the creator's
-    /// 10 s GroupKeyUpdate (0x07) re-sends refresh a pending prompt but never re-raise a declined one.
+    /// An unanswered direct invitation is retried as GroupInvite (0x06).
+    /// A locally declined epoch cannot raise its prompt again.
     pub(super) async fn on_private_epoch(
         &mut self,
         claimed: &PeerId,
@@ -392,6 +392,13 @@ impl BleRuntime {
                         && invite.target == self.identity.peer_id().as_str()
                 });
             if !accepted {
+                if self.state.with(|s| {
+                    s.declined_group_invites
+                        .get(&update.id)
+                        .is_some_and(|(epoch, _)| update.epoch <= *epoch)
+                }) {
+                    return;
+                }
                 if update.member_key(&self.identity.peer_id())
                     != Some(self.identity.signing_public())
                 {
@@ -405,7 +412,10 @@ impl BleRuntime {
                 }
                 let nickname = self
                     .state
-                    .with(|s| s.peers.info(claimed).map(|p| p.nickname.clone()))
+                    .peers()
+                    .into_iter()
+                    .find(|peer| peer.peer == *claimed)
+                    .map(|peer| peer.nickname)
                     .unwrap_or_else(|| claimed.to_string());
                 let now = now_secs();
                 let id = update.id.clone();

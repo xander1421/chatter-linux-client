@@ -173,7 +173,6 @@ export component MeshInfoSheet inherits Rectangle {
                         VerticalLayout {
                             for peer[i] in MeshGlobal.nearby-peers: Rectangle {
                                 height: 60px;
-                                property <bool> sent: false;
                                 HorizontalLayout {
                                     padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
                                     VerticalLayout { alignment: center; Avatar { size: 36px; name: peer.name; } }
@@ -184,7 +183,11 @@ export component MeshInfoSheet inherits Rectangle {
                                         Text { text: peer.reachable ? "Nearby" : "Waiting for a route";
                                             color: Colors.text-muted; font-size: Typography.xs; overflow: elide; }
                                     }
-                                    VerticalLayout {
+                                    if peer.member: VerticalLayout {
+                                        alignment: center;
+                                        Text { text: "Member"; color: Colors.text-muted; font-size: Typography.sm; }
+                                    }
+                                    if !peer.member: VerticalLayout {
                                         alignment: center;
                                         Rectangle {
                                             width: 40px; height: 30px; border-radius: Spacing.radius-full;
@@ -198,17 +201,17 @@ export component MeshInfoSheet inherits Rectangle {
                                             }
                                         }
                                     }
-                                    VerticalLayout {
+                                    if !peer.member: VerticalLayout {
                                         alignment: center;
                                         Rectangle {
                                             width: 72px; height: 30px; border-radius: Spacing.radius-full;
-                                            background: sent ? Colors.surface-control : invite-touch.pressed ? Colors.primary.darker(0.2) : Colors.action-fill;
-                                            Text { text: sent ? "Sent" : "Invite"; color: sent ? Colors.primary : Colors.on-action; font-size: Typography.sm; font-weight: 600;
+                                            background: invite-touch.pressed ? Colors.primary.darker(0.2) : Colors.action-fill;
+                                            Text { text: "Invite"; color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
                                                 horizontal-alignment: center; vertical-alignment: center; }
                                             invite-touch := TouchArea {
                                                 mouse-cursor: pointer; accessible-role: button;
                                                 accessible-label: "Invite " + peer.name;
-                                                clicked => { sent = true; MeshGlobal.invite-private-channel-direct(MeshGlobal.active-scope, peer.id); }
+                                                clicked => { MeshGlobal.invite-private-channel-direct(MeshGlobal.active-scope, peer.id); }
                                             }
                                         }
                                     }
