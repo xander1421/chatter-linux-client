@@ -354,13 +354,15 @@ fn set_send_notice(
         return;
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
+    let blocked = ui_ctx.blocked_dm_peer(ui_ctx.active_conversation()).is_some();
+    let notice = if blocked { "You blocked this person.".to_string() } else { notice };
     // A role change (`ChannelMemberUpdated`) lands here too, so the header's
     // invite button follows promotion and demotion.
     let actions = ui_ctx.conversation_actions(ui_ctx.active_conversation());
     // The membership banner and public badge travel with the notice: both say
     // whether (and why) this channel can be posted to.
     let membership = ui_ctx.channel_membership_header(&channel_id);
-    let answer = ui_ctx
+    let answer = !blocked && ui_ctx
         .secret_chat_gate(&chatter_core::domain::anon_dm::AnonDmId::from_uuid(
             *channel_id.as_uuid(),
         ))
@@ -370,6 +372,7 @@ fn set_send_notice(
         if let Some(w) = weak.upgrade() {
             w.global::<crate::ChatPane>()
                 .set_composer_notice(notice.into());
+            w.global::<crate::ChatPane>().set_is_blocked(blocked);
             w.global::<crate::ChatPane>()
                 .set_secret_request_actions(answer);
             w.global::<crate::ChatPane>()
@@ -407,6 +410,7 @@ fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_clear.upgrade() {
                     w.global::<crate::ChatPane>().set_composer_notice("".into());
+                    w.global::<crate::ChatPane>().set_is_blocked(false);
                     w.global::<crate::ChatPane>()
                         .set_secret_request_actions(false);
                     w.global::<crate::ChatPane>()
@@ -423,6 +427,30 @@ fn wire_send_notice(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_send_notice(window, ui_ctx);
+    let unblock_ctx = ui_ctx.clone();
+    let unblock_weak = window.as_weak();
+    window.global::<crate::ChatPane>().on_unblock_clicked(move || {
+        let Some(peer) = unblock_ctx.blocked_dm_peer(unblock_ctx.active_conversation()) else { return };
+        let ctx = unblock_ctx.clone();
+        let weak = unblock_weak.clone();
+        tokio::spawn(async move {
+            if let Err(error) = ctx.unblock_profile_user(&peer).await {
+                tracing::error!(%error, "unblock from chat failed");
+                return;
+            }
+            let channel = ctx.chat_snapshot().active_channel_id;
+            if let Some(channel) = channel {
+                show_send_notice(&weak, &ctx, channel);
+            }
+            crate::bin_ui::features::modals::friends::refresh_blocked_users(weak.clone(), &ctx);
+            crate::run_ui!(weak, |w| {
+                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ctx);
+                if w.global::<crate::ModalHostState>().get_profile_user_id().as_str() == peer.to_string() {
+                    w.global::<crate::ModalHostState>().set_profile_is_blocked(false);
+                }
+            });
+        });
+    });
     let chat_state = ui_ctx.clone();
     let ui_ctx_jarvis = ui_ctx.clone();
 

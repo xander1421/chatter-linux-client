@@ -46,6 +46,8 @@ export component AppConversationLayout inherits Rectangle {
     in-out property <bool> composer-is-editing;
     in property <bool> composer-is-replying;
     in property <string> composer-notice;
+    in property <bool> is-blocked;
+    callback unblock-clicked();
     in property <string> composer-placeholder;
     in property <bool> composer-reply-has-thumbnail;
     in property <string> composer-reply-preview;
@@ -252,6 +254,8 @@ export component AppConversationLayout inherits Rectangle {
     composer-text <=> root.composer-text;
     composer-placeholder: root.composer-placeholder;
     composer-notice: root.composer-notice;
+    is-blocked: root.is-blocked;
+    unblock-clicked => { root.unblock-clicked(); }
     conversation-read-only: root.conversation-read-only;
     header-can-call: root.header-can-call;
     active-channel-call-id: root.active-call-visible ? "" : root.active-channel-call-id;

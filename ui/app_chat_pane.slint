@@ -64,6 +64,8 @@ export global ChatPane {
     in-out property <bool> composer-stash-held: false;
     in property <string> composer-placeholder: "Type a message...";
     in property <string> composer-notice: "";
+    in property <bool> is-blocked: false;
+    callback unblock-clicked();
     // A channel we are no longer in (core's `is_former_channel`): read-only.
     in property <bool> conversation-read-only: false;
     in-out property <bool> header-can-call: false;

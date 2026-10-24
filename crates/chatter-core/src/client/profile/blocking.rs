@@ -304,4 +304,18 @@ impl ChatterClient {
         self.users().is_blocked_local(id)
     }
 
+    /// The blocked peer of a DM or secret chat, if this conversation cannot
+    /// accept a reply until the person is unblocked.
+    pub fn blocked_dm_peer(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> Option<crate::domain::ids::UserId> {
+        let peer = match conversation {
+            crate::state::ActiveConversation::ServerDm { peer_id } => peer_id,
+            crate::state::ActiveConversation::AnonDm(id) => self.get_anon_dm_conversation(&id)?.peer_id,
+            _ => return None,
+        };
+        self.is_profile_user_blocked(&peer).then_some(peer)
+    }
+
 }

@@ -186,6 +186,8 @@ export component ChatLayout inherits Rectangle {
     // Non-empty when the viewer may not post here (muted, removed): the
     // composer is replaced by this text, worded by chatter-core.
     in property <string> composer-notice: "";
+    in property <bool> is-blocked: false;
+    callback unblock-clicked();
     in property <bool> conversation-read-only: false;
     in property <bool> header-can-call: false;
     in property <string> active-channel-call-id: "";
@@ -600,12 +602,22 @@ export component ChatLayout inherits Rectangle {
                 padding: Spacing.md;
                 spacing: Spacing.sm;
 
-                Text {
-                    text: root.composer-notice;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Text {
+                        text: root.composer-notice;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: root.is-blocked ? left : center;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
+                    if root.is-blocked: Button {
+                        text: "Unblock";
+                        variant: "secondary";
+                        clicked => { root.unblock-clicked(); }
+                    }
                 }
 
                 if root.secret-request-actions: HorizontalLayout {

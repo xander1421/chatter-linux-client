@@ -147,6 +147,9 @@ fn run_blocked_action(
                 w.global::<crate::ModalHostState>()
                     .set_friends_loading(false);
                 crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+                if let Some(channel) = ui_ctx.chat_snapshot().active_channel_id {
+                    crate::bin_ui::features::chat::send_message::show_send_notice(&w.as_weak(), &ui_ctx, channel);
+                }
             }
         });
     });

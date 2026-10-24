@@ -265,6 +265,8 @@ export component MainChatShell inherits Rectangle {
                     composer-is-editing <=> ChatPane.composer-is-editing;
                     composer-is-replying: ChatPane.composer-is-replying;
                     composer-notice: ChatPane.composer-notice;
+                    is-blocked: ChatPane.is-blocked;
+                    unblock-clicked() => { ChatPane.unblock-clicked(); }
                     composer-placeholder: ChatPane.composer-placeholder;
                     composer-reply-has-thumbnail: ChatPane.composer-reply-has-thumbnail;
                     composer-reply-preview: ChatPane.composer-reply-preview;

@@ -270,6 +270,9 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 // Their DM leaves the sidebar (core hides blocked
                                 // contacts); history stays for an unblock.
                                 crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+                                if let Some(channel) = ui_ctx.chat_snapshot().active_channel_id {
+                                    crate::bin_ui::features::chat::send_message::show_send_notice(&w.as_weak(), &ui_ctx, channel);
+                                }
                                 tracing::info!("Blocked user: {}", user_id);
                             }
                         });
