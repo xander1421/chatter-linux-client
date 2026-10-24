@@ -102,7 +102,6 @@ impl MessageService {
 
     /// Get the current user's ID.
     pub fn current_user_id(&self) -> Result<UserId, MessageError> {
-        use crate::services::current_user::CurrentUserProvider;
         self.settings_repo
             .current_user_id()
             .map_err(|_| MessageError::NotLoggedIn)

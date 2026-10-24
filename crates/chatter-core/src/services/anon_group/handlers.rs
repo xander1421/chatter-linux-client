@@ -3,7 +3,6 @@
 use crate::domain::UserId;
 use crate::domain::anon_group::AnonGroupId;
 use crate::proto::content_v1::AnonGroupUpdate;
-use crate::services::current_user::CurrentUserProvider;
 
 use super::{AnonGroupError, AnonGroupService};
 

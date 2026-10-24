@@ -17,7 +17,6 @@ use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::proto::content_v1::DataMessage;
 use crate::services::SignalService;
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::MessageRepository;
 
 // Re-export inbound types (moved from inline definitions)

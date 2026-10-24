@@ -23,7 +23,6 @@ use crate::inbox::DomainEvent;
 use crate::proto::chat_v1;
 use crate::proto::content_v1::{self, GroupEncrypted};
 use crate::services::attachment::AttachmentService;
-use crate::services::current_user::CurrentUserProvider;
 
 use super::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
 use super::{MessageError, MessageService};

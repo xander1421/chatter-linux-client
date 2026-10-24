@@ -13,7 +13,6 @@
 use crate::domain::ids::UserId;
 use crate::domain::user::FriendshipStatus;
 use crate::error::StorageError;
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use crate::storage::repositories::user_repo::UserRepository;
 

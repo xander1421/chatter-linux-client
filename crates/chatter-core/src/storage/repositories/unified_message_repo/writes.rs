@@ -93,7 +93,6 @@ impl UnifiedMessageRepository {
         message: &Message,
         pin_changed_at: u64,
     ) -> Result<bool, StorageError> {
-        use crate::services::current_user::CurrentUserProvider;
         let own = super::super::settings_repo::SettingsRepository::new(self.db.clone())
             .current_user_id()
             .map_err(|e| StorageError::InvalidData(format!("Saved identity: {e}")))?;
@@ -125,7 +124,6 @@ impl UnifiedMessageRepository {
             message.content,
             MessageContent::System(_) | MessageContent::Call(_)
         ) && message.sender_id.is_some_and(|sender| {
-            use crate::services::current_user::CurrentUserProvider;
             super::super::settings_repo::SettingsRepository::new(self.db.clone())
                 .current_user_id()
                 .is_ok_and(|me| me == sender)

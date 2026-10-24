@@ -13,7 +13,6 @@ use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
 use crate::proto::content_v1::AttachmentPointer;
 use crate::services::attachment::AttachmentService;
-use crate::services::current_user::CurrentUserProvider;
 
 use super::{MessageError, MessageService};
 

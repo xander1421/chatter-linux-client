@@ -8,7 +8,6 @@ impl MessageGateway {
         let Some(key) = key.and_then(|k| <[u8; 32]>::try_from(k).ok()) else {
             return false;
         };
-        use crate::services::current_user::CurrentUserProvider;
         let Ok(us) = self.settings_repo.current_user_id() else {
             return false;
         };

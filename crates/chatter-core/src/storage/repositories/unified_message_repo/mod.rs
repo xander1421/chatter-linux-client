@@ -82,7 +82,6 @@ impl UnifiedMessageRepository {
     /// history, not messages, and badging them lit the Chats tab for a
     /// conversation that showed nothing new (Signal counts neither).
     fn stored_is_read(&self, message: &Message) -> bool {
-        use crate::services::current_user::CurrentUserProvider;
         message.is_read
             || matches!(
                 message.content,

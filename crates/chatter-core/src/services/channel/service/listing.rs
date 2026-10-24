@@ -7,7 +7,6 @@ use crate::domain::channel::{
 };
 use crate::domain::ids::ChannelId;
 use crate::proto::chat_v1;
-use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::converters::{
     domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership,

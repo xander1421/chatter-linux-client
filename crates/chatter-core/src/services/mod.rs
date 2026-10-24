@@ -70,8 +70,8 @@ pub use dm_bootstrap_service::DmBootstrapService;
 // Re-exports for channel event service
 pub use channel_event_service::{ChannelEventError, ChannelEventService};
 
-// Re-exports for current user provider
-pub use current_user::{CurrentUserError, CurrentUserProvider};
+// Re-export the current-user lookup error.
+pub use current_user::CurrentUserError;
 
 // Re-exports for call verification
 pub use call_verification::{CallVerification, CallVerificationData, VERIFICATION_EMOJI_COUNT};

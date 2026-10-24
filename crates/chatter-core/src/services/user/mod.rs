@@ -28,7 +28,7 @@ use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::{FriendStatus, UserProfile, friend_requests_filter, user_event};
-use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::services::current_user::CurrentUserError;
 use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
 use crate::storage::repositories::anon_group_repo::AnonGroupRepository;
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};

@@ -11,7 +11,6 @@ use crate::domain::UserId;
 use crate::domain::anon_group::{
     AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupRole,
 };
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_keys;
 use crate::util::time::TimestampNanos;
 

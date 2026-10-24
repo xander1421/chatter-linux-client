@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use super::{ChatterClient, ClientError};
 use crate::domain::message::ConversationType;
-use crate::services::current_user::CurrentUserProvider;
 use crate::state::ActiveConversation;
 
 /// One Friends › Blocked row (`blocked_users`). `anon` marks an anon-DM peer

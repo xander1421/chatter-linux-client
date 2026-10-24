@@ -191,7 +191,7 @@ impl AnonGroupService {
     ///
     /// Called when user updates their profile to notify all owned groups.
     pub async fn broadcast_profile_to_owned_groups(&self) -> Result<(), AnonGroupError> {
-        let my_user_id = CurrentUserProvider::current_user_id(&*self.settings_repo)?;
+        let my_user_id = self.settings_repo.current_user_id()?;
         let groups = self.anon_group_repo.list_active_groups()?;
 
         for group in groups {

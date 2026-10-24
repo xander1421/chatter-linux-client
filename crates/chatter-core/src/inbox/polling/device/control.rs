@@ -8,7 +8,6 @@ pub(super) fn persist_exact_saved_delete_before_ack(
     sender: UserId,
     gateway: &MessageGateway,
 ) -> Result<(), ServiceError> {
-    use crate::services::current_user::CurrentUserProvider;
     if let content::Content::DeleteForMeSync(sync) = inner
         && (sync.saved_messages_scope || !sync.saved_message_id.is_empty())
     {

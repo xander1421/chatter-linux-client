@@ -9,7 +9,6 @@ use chrono::Utc;
 use crate::domain::ids::UserId;
 use crate::domain::user::{Friendship, FriendshipStatus, Profile, StatusMessage};
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::services::current_user::CurrentUserProvider;
 use crate::services::user::conversions::presence_from_proto;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;

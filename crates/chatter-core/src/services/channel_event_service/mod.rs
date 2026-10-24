@@ -20,7 +20,6 @@ use crate::proto::chat_v1::channel_event;
 use crate::services::channel::membership_log::{
     Applied, LogObserver, MembershipLog, MembershipNotice,
 };
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::MessageRepository;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::user_repo::UserRepository;

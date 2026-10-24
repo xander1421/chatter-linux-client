@@ -12,7 +12,6 @@
 use crate::domain::ids::UserId;
 use crate::error::StorageError;
 use crate::proto::content_v1::{ConfigurationSync, Content, content};
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 
 /// The settings as they stand on this device (each defaults to on, as the

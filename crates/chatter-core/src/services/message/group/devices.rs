@@ -112,7 +112,6 @@ impl MessageService {
         proto_msg: &crate::proto::chat_v1::Message,
     ) {
         use crate::inbox::ack_policy::{FailureMarker, MarkerTarget, record_marker_then_ack};
-        use crate::services::current_user::CurrentUserProvider;
 
         if self.settings_repo.current_user_id().ok() == Some(sender_id) {
             return;
@@ -150,7 +149,6 @@ impl MessageService {
         device_id: u32,
         sent_at: u64,
     ) -> bool {
-        use crate::services::current_user::CurrentUserProvider;
 
         if self.settings_repo.current_user_id().ok() != Some(user_id) {
             let mut retired = self.retired_peer_devices.lock();

@@ -12,7 +12,6 @@ use crate::domain::ids::ChannelId;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::channel::converters::{proto_to_domain_channel, proto_to_domain_membership};
 use crate::services::channel_event_service::ChannelEventService;
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 

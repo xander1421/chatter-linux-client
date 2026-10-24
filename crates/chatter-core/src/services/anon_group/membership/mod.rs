@@ -15,7 +15,6 @@ use crate::proto::content_v1::{
     AnonGroupMemberInfo, AnonGroupMemberList, AnonGroupProfileShare, Content,
 };
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::services::current_user::CurrentUserProvider;
 use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};

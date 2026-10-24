@@ -14,7 +14,7 @@ use crate::network::grpc::integration_client::IntegrationClient;
 use crate::proto::chat_v1::{
     AvailableModel, Integration, IntegrationConfig, IntegrationEvent, IntegrationType, ModelLimits,
 };
-use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::services::current_user::CurrentUserError;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// AI service errors.

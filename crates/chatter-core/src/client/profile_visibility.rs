@@ -73,8 +73,6 @@ impl ChatterClient {
             return Ok(());
         }
 
-        use crate::services::current_user::CurrentUserProvider;
-
         // A freshly linked device has the provisioned key but may not have
         // opened its profile UI yet. Fetch/decrypt missing profile fields
         // BEFORE replacing that key or its backup: after the commit the old
@@ -231,7 +229,6 @@ impl ChatterClient {
     /// so nothing the server holds is still readable with the old key. Status
     /// goes up even when empty: skipping it would leave the old ciphertext.
     async fn reupload_own_profile(&self) -> Result<(), ClientError> {
-        use crate::services::current_user::CurrentUserProvider;
         use crate::storage::repositories::settings_repo::keys;
 
         let m = self.messages();

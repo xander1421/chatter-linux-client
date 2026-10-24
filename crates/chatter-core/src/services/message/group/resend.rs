@@ -42,7 +42,6 @@ impl MessageService {
         proto_msg: &crate::proto::chat_v1::Message,
         ciphertext: &[u8],
     ) {
-        use crate::services::current_user::CurrentUserProvider;
 
         // Our own sender-key ciphertext from this very device is undecryptable
         // by design, not lost.
@@ -230,7 +229,6 @@ impl MessageService {
     ) -> Result<Option<Vec<u8>>, MessageError> {
         use crate::domain::ids::DeviceId;
         use crate::domain::message::ConversationType;
-        use crate::services::current_user::CurrentUserProvider;
         const RETENTION_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
 
         let us = self.settings_repo.current_user_id()?;
@@ -303,7 +301,6 @@ impl MessageService {
         &self,
         message: &crate::domain::message::Message,
     ) -> Result<usize, MessageError> {
-        use crate::services::current_user::CurrentUserProvider;
 
         let us = self.settings_repo.current_user_id()?;
         let original =

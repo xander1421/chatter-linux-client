@@ -771,7 +771,6 @@ async fn announce_rotated_group_mailbox(
     use crate::mailbox::key_rolling::group_mailbox_rotation_plaintext;
     use crate::proto::chat_v1::SealedSenderMessage;
     use crate::proto::mailbox_v1::EnvelopeType;
-    use crate::services::current_user::CurrentUserProvider;
     use crate::util::time::TimestampNanos;
 
     let me = match message_service.settings_repo.current_user_id() {

@@ -9,7 +9,6 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::proto::chat_v1::{self as pb, channel_event};
 use crate::proto::content_v1::SenderKeyDistribution;
 use crate::services::channel::membership_log::AuthorBase;
-use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::error::ChannelError;
 

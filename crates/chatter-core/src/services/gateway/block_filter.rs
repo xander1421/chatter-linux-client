@@ -53,7 +53,6 @@ pub fn sender_is_blocked(
     settings_repo: &SettingsRepository,
     sender_id: &UserId,
 ) -> Result<bool, ServiceError> {
-    use crate::services::current_user::CurrentUserProvider;
     let me = settings_repo.current_user_id()?;
     Ok(user_repo.is_blocked(&me, sender_id)?)
 }

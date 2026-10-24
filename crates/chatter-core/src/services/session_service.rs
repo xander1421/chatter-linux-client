@@ -179,7 +179,6 @@ impl SessionService {
 
     /// Get the current user ID if logged in.
     pub fn current_user_id(&self) -> Option<crate::domain::ids::UserId> {
-        use crate::services::current_user::CurrentUserProvider;
         self.settings_repo.current_user_id().ok()
     }
 

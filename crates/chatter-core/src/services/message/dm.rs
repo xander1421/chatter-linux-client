@@ -11,7 +11,6 @@ use crate::mailbox::dm::{DmConversation, DmConversationManager, PeerMailbox};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
 
 use super::{

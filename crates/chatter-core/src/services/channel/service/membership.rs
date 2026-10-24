@@ -19,7 +19,6 @@ use crate::services::channel::membership_log::{
     AuthorBase, IntentContext, InviteLink, LogError, invite_pub_of, password_invite_key,
 };
 use crate::services::channel::verified_state::{ChannelRole, MemberStatus, UnsignedEvent};
-use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::converters::{domain_role_to_proto, proto_to_domain_membership};
 use crate::services::channel::error::ChannelError;

@@ -1,5 +1,4 @@
 use super::*;
-use crate::services::current_user::CurrentUserProvider;
 
 impl MessageService {
     /// Distribute a sender key distribution message to channel members.
@@ -317,7 +316,6 @@ impl MessageService {
     pub(super) async fn fetch_own_device_ids(
         &self,
     ) -> Result<std::collections::HashSet<u32>, crate::error::NetworkError> {
-        use crate::services::current_user::CurrentUserProvider;
         let me = self
             .settings_repo
             .current_user_id()

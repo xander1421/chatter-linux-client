@@ -32,7 +32,6 @@ use crate::domain::anon_dm::AnonDmId;
 use crate::error::StorageError;
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::pairwise::PairwiseService;
 use crate::storage::repositories::AnonDmRepository;

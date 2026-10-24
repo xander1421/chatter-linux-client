@@ -21,7 +21,6 @@ use prost::Message as _;
 use super::{MessageError, MessageService};
 use crate::domain::ids::UserId;
 use crate::proto::content_v1::{Content, DataMessage, content};
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::send_log_repo::SendLogRepository;
 use crate::util::time::TimestampNanos;
 

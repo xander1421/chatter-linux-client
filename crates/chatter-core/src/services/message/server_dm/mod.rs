@@ -33,7 +33,6 @@ use crate::proto::chat_v1::{
     SealedDelivery, SealedDeviceMessage, SealedSenderMessage, SendSealedMessageResponse,
 };
 use crate::proto::content_v1::AttachmentPointer;
-use crate::services::current_user::CurrentUserProvider;
 
 use super::{DmSendResult, MessageError, MessageService};
 

@@ -24,7 +24,6 @@ use crate::proto::content_v1::{
     AttachmentPointer, Quote, QuotedAttachment, SavedMessageSync, quote,
 };
 use crate::services::attachment::AttachmentService;
-use crate::services::current_user::CurrentUserProvider;
 use crate::services::gateway::{QuoteIntent, build_saved_message_sync_content};
 use crate::storage::repositories::{PinWrite, SavedReply, SavedSyncRepository};
 use crate::util::time::TimestampNanos;
