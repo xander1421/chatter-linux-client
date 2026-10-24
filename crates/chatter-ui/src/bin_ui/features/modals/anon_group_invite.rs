@@ -21,9 +21,12 @@ pub fn refresh_group_invites(weak: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient
     let items: Vec<(String, String, String)> = invites
         .into_iter()
         .map(|invite| {
-            let inviter_name = invite.inviter_display_name.unwrap_or_else(|| {
-                chatter_core::services::user::friend_display_name_placeholder(&invite.inviter_id)
-            });
+            let inviter_name = ui_ctx.contact_name(&invite.inviter_id)
+                .filter(|name| !name.is_empty())
+                .or(invite.inviter_display_name)
+                .unwrap_or_else(|| {
+                    chatter_core::services::user::friend_display_name_placeholder(&invite.inviter_id)
+                });
             (invite.group_id.to_string(), invite.group_name, inviter_name)
         })
         .collect();
@@ -132,7 +135,7 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                     w.global::<crate::ModalHostState>()
                                         .set_group_invite_error_id(group_id_str);
                                     w.global::<crate::ModalHostState>()
-                                        .set_group_invite_error(error.to_string().into());
+                                        .set_group_invite_error("Could not join the group. Try again.".into());
                                 }
                             });
                         }
@@ -180,7 +183,7 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                 w.global::<crate::ModalHostState>()
                                     .set_group_invite_error_id(group_id_str);
                                 w.global::<crate::ModalHostState>()
-                                    .set_group_invite_error(error.to_string().into());
+                                    .set_group_invite_error("Could not decline the invitation. Try again.".into());
                             }
                         }
                     });

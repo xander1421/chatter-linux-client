@@ -96,7 +96,9 @@ fn spawn_request_stream(
 
                     // Add to pending requests in UI (no auto-accept)
                     let conv_id_str = conversation_id.to_string();
-                    let peer_name = sender_name.clone();
+                    let peer_name = ui_ctx
+                        .contact_name(&sender_id)
+                        .unwrap_or_else(|| sender_name.clone());
                     let intro = intro_message.unwrap_or_default();
                     let weak = weak_window.clone();
                     let request_client = ui_ctx.clone();
@@ -251,7 +253,9 @@ fn spawn_request_stream(
 
                     // Add to pending requests in UI
                     let conv_id_str = conversation_id.to_string();
-                    let peer_name = sender_name.clone();
+                    let peer_name = ui_ctx
+                        .contact_name(&sender_id)
+                        .unwrap_or_else(|| sender_name.clone());
                     let intro = if intro_message.is_empty() {
                         "Private contact request".to_string()
                     } else {
