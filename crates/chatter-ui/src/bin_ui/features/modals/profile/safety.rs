@@ -1,4 +1,17 @@
 use super::*;
+use std::sync::Mutex;
+
+static VERIFYING_PEERS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub(super) fn verification_pending_for(user_id: &UserId) -> bool {
+    VERIFYING_PEERS.lock().unwrap_or_else(|e| e.into_inner())
+        .contains(&user_id.to_string())
+}
+
+fn finish_verification(profile_user_id: &str) {
+    VERIFYING_PEERS.lock().unwrap_or_else(|e| e.into_inner())
+        .retain(|id| id != profile_user_id);
+}
 
 pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // View safety number — generates and displays the 60-digit fingerprint
@@ -87,13 +100,13 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ui_ctx_verify.clone();
 
             let (profile_user_id, currently_verified) = match weak.upgrade() {
-                Some(w) => (
-                    w.global::<crate::ModalHostState>()
-                        .get_profile_user_id()
-                        .to_string(),
-                    w.global::<crate::ModalHostState>()
-                        .get_profile_is_verified(),
-                ),
+                Some(w) => {
+                    let state = w.global::<crate::ModalHostState>();
+                    if state.get_profile_verification_pending() {
+                        return;
+                    }
+                    (state.get_profile_user_id().to_string(), state.get_profile_is_verified())
+                }
                 None => {
                     tracing::debug!("Profile verification tap ignored: window closed");
                     return;
@@ -113,18 +126,34 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
+            {
+                let mut verifying = VERIFYING_PEERS.lock().unwrap_or_else(|e| e.into_inner());
+                if verifying.contains(&profile_user_id) {
+                    return;
+                }
+                verifying.push(profile_user_id.clone());
+            }
+
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::ModalHostState>()
+                    .set_profile_verification_pending(true);
+            }
+
             if currently_verified {
                 // Local storage can block; keep it off the Slint event loop.
                 tokio::spawn(async move {
                     match tokio::task::spawn_blocking(move || ui_ctx.mark_peer_unverified(&peer_id)).await {
                         Ok(Ok(())) => {
                             let _ = slint::invoke_from_event_loop(move || {
+                                finish_verification(&profile_user_id);
                                 if let Some(w) = weak.upgrade().filter(|w| {
                                     w.global::<crate::ModalHostState>()
                                         .get_profile_user_id().as_str() == profile_user_id.as_str()
                                 }) {
                                     w.global::<crate::ModalHostState>()
                                         .set_profile_is_verified(false);
+                                    w.global::<crate::ModalHostState>()
+                                        .set_profile_verification_pending(false);
                                 }
                             });
                         }
@@ -140,12 +169,15 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     match ui_ctx.mark_peer_verified(&peer_id).await {
                         Ok(()) => {
                             let _ = slint::invoke_from_event_loop(move || {
+                                finish_verification(&profile_user_id);
                                 if let Some(w) = weak.upgrade().filter(|w| {
                                     w.global::<crate::ModalHostState>()
                                         .get_profile_user_id().as_str() == profile_user_id.as_str()
                                 }) {
                                     w.global::<crate::ModalHostState>()
                                         .set_profile_is_verified(true);
+                                    w.global::<crate::ModalHostState>()
+                                        .set_profile_verification_pending(false);
                                 }
                             });
                         }
@@ -161,9 +193,12 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn show_verification_error(weak: slint::Weak<MainWindow>, profile_user_id: String) {
     let _ = slint::invoke_from_event_loop(move || {
+        finish_verification(&profile_user_id);
         if let Some(w) = weak.upgrade().filter(|w| {
             w.global::<crate::ModalHostState>().get_profile_user_id().as_str() == profile_user_id.as_str()
         }) {
+            w.global::<crate::ModalHostState>()
+                .set_profile_verification_pending(false);
             w.set_toast_message("Could not change verification. Try again.".into());
             w.set_toast_variant("error".into());
             w.set_toast_visible(true);

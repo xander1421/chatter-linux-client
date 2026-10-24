@@ -1,6 +1,7 @@
 //! Anonymous group invite presentation. Core owns the pending invitations.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
@@ -8,48 +9,68 @@ use crate::{FriendRequestData, MainWindow};
 use chatter_core::client::ChatterClient;
 use chatter_core::client::events::AnonGroupInviteEvent;
 
+static INVITE_REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Refresh the requests model and badge from durable core storage.
 pub fn refresh_group_invites(weak: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
-    let invites = match ui_ctx.list_pending_anon_group_invites() {
-        Ok(invites) => invites,
-        Err(error) => {
-            tracing::error!(%error, "Failed to load pending anonymous group invites");
-            return;
-        }
-    };
-    let count = invites.len() as i32;
-    let items: Vec<(String, String, String)> = invites
-        .into_iter()
-        .map(|invite| {
-            let inviter_name = ui_ctx.contact_name(&invite.inviter_id)
-                .filter(|name| !name.is_empty())
-                .or(invite.inviter_display_name)
-                .unwrap_or_else(|| {
-                    chatter_core::services::user::friend_display_name_placeholder(&invite.inviter_id)
-                });
-            (invite.group_id.to_string(), invite.group_name, inviter_name)
-        })
-        .collect();
+    let generation = INVITE_REFRESH_GENERATION.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let weak = weak.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            w.global::<crate::ModalHostState>()
-                .set_pending_group_invites(count);
-            let items: Vec<FriendRequestData> = items
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            let invites = match ui_ctx.list_pending_anon_group_invites() {
+                Ok(invites) => invites,
+                Err(error) => {
+                    tracing::error!(%error, "Failed to load pending anonymous group invites");
+                    return None;
+                }
+            };
+            let count = invites.len() as i32;
+            let items: Vec<(String, String, String)> = invites
                 .into_iter()
-                .map(|(id, name, inviter_name)| FriendRequestData {
-                    user_id: id.into(),
-                    display_name: name.into(),
-                    username: inviter_name.into(),
-                    avatar_source: slint::Image::default(),
-                    has_avatar: false,
-                    sent_at: SharedString::default(),
-                    note: SharedString::default(),
+                .map(|invite| {
+                    let inviter_name = ui_ctx.contact_name(&invite.inviter_id)
+                        .filter(|name| !name.is_empty())
+                        .or(invite.inviter_display_name)
+                        .unwrap_or_else(|| {
+                            chatter_core::services::user::friend_display_name_placeholder(&invite.inviter_id)
+                        });
+                    (invite.group_id.to_string(), invite.group_name, inviter_name)
                 })
                 .collect();
-            w.global::<crate::ModalHostState>()
-                .set_friends_group_invites(ModelRc::new(VecModel::from(items)));
-        }
+            Some((count, items))
+        }).await;
+        let (count, items) = match result {
+            Ok(Some(items)) => items,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::error!(%error, "Anonymous group invite refresh worker failed");
+                return;
+            }
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if INVITE_REFRESH_GENERATION.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::ModalHostState>()
+                    .set_pending_group_invites(count);
+                let items: Vec<FriendRequestData> = items
+                    .into_iter()
+                    .map(|(id, name, inviter_name)| FriendRequestData {
+                        user_id: id.into(),
+                        display_name: name.into(),
+                        username: inviter_name.into(),
+                        avatar_source: slint::Image::default(),
+                        has_avatar: false,
+                        sent_at: SharedString::default(),
+                        note: SharedString::default(),
+                    })
+                    .collect();
+                w.global::<crate::ModalHostState>()
+                    .set_friends_group_invites(ModelRc::new(VecModel::from(items)));
+            }
+        });
     });
 }
 
