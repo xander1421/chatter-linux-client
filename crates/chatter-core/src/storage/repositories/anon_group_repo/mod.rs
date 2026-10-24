@@ -25,6 +25,7 @@ pub struct AnonGroupRepository {
 #[derive(Debug, Clone)]
 pub struct PendingAnonGroupInvite {
     pub group_id: AnonGroupId,
+    pub invite_epoch: u64,
     pub group_name: String,
     pub inviter_id: UserId,
     pub inviter_device_id: u32,

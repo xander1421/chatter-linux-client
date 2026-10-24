@@ -48,10 +48,12 @@ impl ContentHandoff {
                 | "invalid roster group"
                 | "DM sender is not bound peer"
                 | "invalid JoinAck group"
+                | "invalid decline group"
                 | "invalid JoinAck mailbox key"
                 | "invalid profile group"
                 | "invalid DM profile destination"
                 | "JoinAck mailbox destination mismatch"
+                | "decline mailbox destination mismatch"
                 | "profile mailbox destination mismatch"
                 | "profile names another group"
                 | "group destination mismatch"
@@ -202,6 +204,18 @@ impl ContentHandoff {
             .map_err(|e| e.to_string())?;
             use crate::proto::content_v1::content::Content as Body;
             match content.content.as_ref() {
+                Some(Body::AnonGroupDecline(decline)) => {
+                    let id = crate::domain::anon_group::AnonGroupId::try_from_slice(&decline.group_id)
+                        .ok_or("invalid decline group")?;
+                    if artifact.key.transport != "anon_group"
+                        || ChannelId::from(id).to_string() != artifact.key.scope
+                    {
+                        return Err("decline mailbox destination mismatch".into());
+                    }
+                    let sender: UserId = artifact.sender.parse().map_err(|_| "invalid sender")?;
+                    self.group.handle_decline_ordered(id, sender, decline.invite_epoch)
+                        .await.map_err(|e| e.to_string())?;
+                }
                 Some(Body::AnonGroupJoinAck(ack)) => {
                     let id = crate::domain::anon_group::AnonGroupId::try_from_slice(&ack.group_id)
                         .ok_or("invalid JoinAck group")?;

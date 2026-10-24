@@ -3,10 +3,27 @@
 use crate::domain::UserId;
 use crate::domain::anon_group::AnonGroupId;
 use crate::proto::content_v1::AnonGroupUpdate;
+use crate::services::current_user::CurrentUserProvider;
 
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    pub async fn handle_decline_ordered(
+        &self,
+        group_id: AnonGroupId,
+        sender_id: UserId,
+        invite_epoch: u64,
+    ) -> Result<bool, AnonGroupError> {
+        let owner = self.current_user_id()?;
+        let applied = self
+            .anon_group_repo
+            .apply_invite_decline(&group_id, &sender_id, &owner, invite_epoch)?;
+        if applied {
+            self.broadcast_member_list(&group_id).await?;
+        }
+        Ok(applied)
+    }
+
     /// Handle an incoming leave message. `Ok(true)` only when a member was
     /// actually removed, so the caller announces nothing it did not apply.
     pub fn handle_leave_ordered(

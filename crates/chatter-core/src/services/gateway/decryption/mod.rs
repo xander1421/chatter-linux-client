@@ -446,6 +446,7 @@ impl MessageGateway {
             // so InboxEventProcessor can handle them.
             let mgmt_group_id = match &content_proto.content {
                 Some(content::Content::AnonGroupMemberList(m)) => Some(m.group_id.clone()),
+                Some(content::Content::AnonGroupDecline(m)) => Some(m.group_id.clone()),
                 Some(content::Content::AnonGroupLeave(m)) => Some(m.group_id.clone()),
                 Some(content::Content::AnonGroupKick(m)) => Some(m.group_id.clone()),
                 Some(content::Content::AnonGroupProfileShare(m)) => Some(m.group_id.clone()),
