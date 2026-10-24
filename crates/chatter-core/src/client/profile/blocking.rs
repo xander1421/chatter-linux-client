@@ -71,7 +71,10 @@ impl ChatterClient {
         &self,
         id: &crate::domain::ids::UserId,
     ) -> Result<(), super::ClientError> {
-        // 1. Check if id is a peer in an anon DM
+        // 1. Check if id is a peer in an anon DM. A secret-chat peer who is
+        // also a friend or has a server DM is one person: block both paths, or
+        // their ordinary DMs keep arriving. An anon-only peer stays off the
+        // server so the block does not reveal the secret chat.
         if let Some(conv_id) = self.find_anon_dm_by_peer(id) {
             self.anon_dms()
                 .block_conversation(&conv_id)
@@ -79,7 +82,14 @@ impl ChatterClient {
             self.anon_dms()
                 .block_user(id, Some("Blocked from profile"))
                 .map_err(|e| super::ClientError::Inbox(e.to_string()))?;
-            return Ok(());
+            if !self.has_server_relationship(id) {
+                return Ok(());
+            }
+            return self
+                .users()
+                .block_user(id)
+                .await
+                .map_err(|e| super::ClientError::Inbox(e.to_string()));
         }
         // 2. Check if id is actually a conversation ID (Friends tab uses dm.id)
         let conv_id = crate::domain::anon_dm::AnonDmId::from_uuid(id.0);
@@ -136,7 +146,9 @@ impl ChatterClient {
             // enough — the poller picks up the existing keys. If the
             // server-side mailbox expired during the block period, the
             // poll will fail and the next renewal cycle handles it.
-            return Ok(());
+            if !self.users().is_blocked_local(id) {
+                return Ok(());
+            }
         }
 
         self.users()
@@ -177,6 +189,19 @@ impl ChatterClient {
             }
         }
         self.unblock_profile_user(id).await
+    }
+
+    /// Whether the server already sees a tie to this person: a friendship or a
+    /// server DM (whose channel id is the peer's user id).
+    fn has_server_relationship(&self, id: &crate::domain::ids::UserId) -> bool {
+        self.users().is_friend_local(id)
+            || self
+                .services
+                .channel_repo
+                .get(&(*id).into())
+                .ok()
+                .flatten()
+                .is_some()
     }
 
     /// Whether this user is an accepted friend (local friendships table).
