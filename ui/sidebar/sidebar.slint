@@ -342,11 +342,14 @@ export component Sidebar inherits Rectangle {
                         padding-left: root.quick-link-inset;
                         padding-right: Spacing.md;
                         spacing: Spacing.sm;
-                        Image {
-                            source: entry.kind == "archive-back" ? Icons.chevron-left : Icons.folder;
-                            width: root.quick-link-icon-size;
-                            height: root.quick-link-icon-size;
-                            colorize: Colors.text-secondary;
+                        // Same centred icon slot as the Saved Messages row.
+                        VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                            HorizontalLayout { alignment: center; Image {
+                                source: entry.kind == "archive-back" ? Icons.chevron-left : Icons.folder;
+                                width: root.quick-link-icon-size;
+                                height: root.quick-link-icon-size;
+                                colorize: Colors.text-secondary;
+                            } }
                         }
                         Text {
                             text: entry.kind == "archive-back" ? "Chats" : "Archived";
