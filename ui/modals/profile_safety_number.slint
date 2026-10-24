@@ -5,6 +5,7 @@ import { Button } from "../components/button.slint";
 export component ProfileSafetyNumber inherits VerticalLayout {
     in property <string> safety-number;
     in property <bool> is-verified;
+    in property <bool> verification-pending;
     in-out property <bool> show-safety-number;
     callback view-safety-number();
     callback toggle-verified();
@@ -93,8 +94,9 @@ export component ProfileSafetyNumber inherits VerticalLayout {
         }
 
         Button {
-            text: root.is-verified ? "Clear verification" : "Mark as verified";
+            text: root.verification-pending ? "Updating verification…" : root.is-verified ? "Clear verification" : "Mark as verified";
             variant: root.is-verified ? "secondary" : "primary";
+            loading: root.verification-pending;
             height: Spacing.touch-target-min;
             clicked => { root.toggle-verified(); }
         }

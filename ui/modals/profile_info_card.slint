@@ -9,6 +9,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
     in property <bool> is-self;
     in property <bool> scoped-member;
     in property <bool> is-verified;
+    in property <bool> verification-pending;
     in property <string> safety-number;
     in-out property <bool> show-safety-number;
     callback view-safety-number();
@@ -175,6 +176,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
             if !root.is-self && !root.scoped-member: ProfileSafetyNumber {
                 safety-number: root.safety-number;
                 is-verified: root.is-verified;
+                verification-pending: root.verification-pending;
                 show-safety-number <=> root.show-safety-number;
                 view-safety-number => { root.view-safety-number(); }
                 toggle-verified => { root.toggle-verified(); }

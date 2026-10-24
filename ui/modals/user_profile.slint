@@ -103,6 +103,7 @@ export component UserProfileModal inherits Rectangle {
     in property <bool> is-muted: false;
     in property <bool> loading: false;
     in property <bool> is-verified: false;
+    in property <bool> verification-pending: false;
     in property <string> safety-number: "";
     in-out property <bool> show-safety-number: false;
     // Username link (self view): shareable chatter://u/… URL + QR that
@@ -543,6 +544,7 @@ export component UserProfileModal inherits Rectangle {
                         is-self: root.is-self;
                         scoped-member: root.scoped-member;
                         is-verified: root.is-verified;
+                        verification-pending: root.verification-pending;
                         safety-number: root.safety-number;
                         show-safety-number <=> root.show-safety-number;
                         view-safety-number => { root.view-safety-number(); }

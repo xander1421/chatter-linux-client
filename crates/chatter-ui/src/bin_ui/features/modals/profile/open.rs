@@ -31,8 +31,11 @@ pub fn open_user_profile_in_conversation(
     let user_data = ui_ctx.map(|ctx| ctx.user_snapshot()).unwrap_or_default();
     let is_self = !scoped_member && auth.current_user_id.as_ref() == Some(user_id);
 
+    let profile_user_id = user_id.to_string();
     w.global::<crate::ModalHostState>()
-        .set_profile_user_id(user_id.to_string().into());
+        .set_profile_verification_pending(safety::verification_pending_for(user_id));
+    w.global::<crate::ModalHostState>()
+        .set_profile_user_id(profile_user_id.into());
     w.global::<crate::ModalHostState>()
         .set_profile_contact_name(if is_self || scoped_member { String::new() } else {
             ui_ctx.and_then(|ctx| ctx.contact_name(user_id)).unwrap_or_default()
