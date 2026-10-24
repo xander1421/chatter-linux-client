@@ -14,10 +14,12 @@ component StatusRow inherits Rectangle {
     in property <string> value;
     in property <color> tint: Colors.success;
     in property <bool> touch: false;
-    height: root.title == "Server" && root.value == "Unreachable — messages will send later"
+    min-height: root.title == "Server" && root.value == "Unreachable — messages will send later"
         ? (root.touch ? 72px : 60px) : root.touch ? 56px : 48px;
-    HorizontalLayout {
+    preferred-height: max(self.min-height, status-content.preferred-height);
+    status-content := HorizontalLayout {
         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
+        padding-top: Spacing.xs; padding-bottom: Spacing.xs;
         VerticalLayout { alignment: center;
             Rectangle { width: 9px; height: 9px; border-radius: Spacing.radius-full; background: root.tint; }
         }

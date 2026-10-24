@@ -403,12 +403,15 @@ export component AISettings inherits VerticalLayout {
             }
 
             for entry in root.local-ai-catalog: Rectangle {
-                height: entry.error != "" ? 64px : 48px;
+                min-height: entry.error != "" ? 64px : 48px;
+                preferred-height: max(self.min-height, catalog-row.preferred-height);
                 border-radius: Spacing.radius-md;
 
-                VerticalLayout {
+                catalog-row := VerticalLayout {
                     padding-left: Spacing.sm;
                     padding-right: Spacing.sm;
+                    padding-top: Spacing.xs;
+                    padding-bottom: Spacing.xs;
                     spacing: Spacing.xxs;
 
                     HorizontalLayout {

@@ -119,7 +119,7 @@ export component GifPicker inherits GlassSurface {
     property <length> tile-height: max(72px, min(150px, root.tile-width * 0.62));
     property <length> row-stride: root.tile-height + root.grid-gap;
     property <length> section-header: 20px * Appearance.text-grow;
-    property <length> status-height: root.failed ? 112px : 72px;
+    property <length> status-height: max(root.failed ? 112px : 72px, status-content.preferred-height);
     property <length> attribution-height: 20px;
     pure function grid-height(count: int) -> length {
         return Math.ceil(count / root.columns) * root.row-stride;
@@ -164,7 +164,8 @@ export component GifPicker inherits GlassSurface {
                 }
             }
 
-            if !(root.loading && !root.show-recent): gif-grid := Flickable {
+            gif-grid := Flickable {
+                visible: !(root.loading && !root.show-recent);
                 width: 100%;
                 height: 100%;
                 viewport-height: root.recent-height + root.results-height + root.attribution-height;
@@ -229,7 +230,8 @@ export component GifPicker inherits GlassSurface {
 
                     // Empty or failed. With recents above it, the provider's
                     // failure is one line and a Retry, not a blank drawer.
-                    if root.show-status: VerticalLayout {
+                    status-content := VerticalLayout {
+                        visible: root.show-status;
                         y: root.results-top;
                         width: parent.width;
                         height: root.status-height;
