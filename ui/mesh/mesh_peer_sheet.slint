@@ -193,6 +193,7 @@ export component MeshPeerSheet inherits Rectangle {
                             VerticalLayout {
                                 for channel[i] in MeshGlobal.private-invitable-channels: Rectangle {
                                     height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
+                                    property <bool> sent: false;
                                     HorizontalLayout {
                                         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
                                         VerticalLayout {
@@ -225,13 +226,13 @@ export component MeshPeerSheet inherits Rectangle {
                                             alignment: center;
                                             Rectangle {
                                                 width: 72px; height: 30px; border-radius: Spacing.radius-full;
-                                                background: Colors.action-fill;
-                                                Text { text: "Invite"; color: Colors.on-action; font-size: Typography.sm; font-weight: 600;
+                                                background: sent ? Colors.surface-control : Colors.action-fill;
+                                                Text { text: sent ? "Sent" : "Invite"; color: sent ? Colors.primary : Colors.on-action; font-size: Typography.sm; font-weight: 600;
                                                     horizontal-alignment: center; vertical-alignment: center; }
                                                 TouchArea {
                                                     mouse-cursor: pointer; accessible-role: button;
                                                     accessible-label: "Invite to " + channel.name;
-                                                    clicked => { MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); }
+                                                    clicked => { sent = true; MeshGlobal.invite-private-channel-direct(channel.id, MeshGlobal.sheet-peer-id); }
                                                 }
                                             }
                                         }
