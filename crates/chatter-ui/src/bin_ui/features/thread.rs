@@ -7,11 +7,34 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
+use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continuation};
 
 use super::chat::recompute_channel_continuations;
 use super::history_owner::HistoryOwner;
 use crate::bin_ui::converters::messages_to_display_batch;
 use crate::{MainWindow, MessageItemData};
+
+fn grouping_row(message: &MessageItemData) -> ChannelGroupingRow<'_> {
+    ChannelGroupingRow {
+        sender_id: message.sender_id.as_str(),
+        timestamp_ns: message.timestamp_ns.as_str().parse::<u64>().unwrap_or(0),
+        day_label: message.date_separator_text.as_str(),
+        is_system: message.is_system,
+        is_call: message.is_call,
+        is_deleted: message.is_deleted,
+    }
+}
+
+fn update_reply_continuation(model: &VecModel<MessageItemData>, index: usize) {
+    let Some(mut current) = model.row_data(index) else { return };
+    let previous = index.checked_sub(1).and_then(|i| model.row_data(i));
+    let previous_row = previous.as_ref().map(grouping_row);
+    let continued = channel_message_is_continuation(previous_row.as_ref(), &grouping_row(&current));
+    if current.is_continuation != continued {
+        current.is_continuation = continued;
+        model.set_row_data(index, current);
+    }
+}
 
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_close_thread(window, ui_ctx);
@@ -264,15 +287,19 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                         return;
                     }
                     let current = w.global::<crate::ChatPane>().get_thread_replies();
-                    let mut rows: Vec<MessageItemData> = display
+                    let rows: Vec<MessageItemData> = display
                         .iter()
                         .map(|d| d.to_slint_with_user(&current_user_id))
                         .collect();
-                    rows.extend(current.iter());
-                    let model = VecModel::from(rows);
-                    recompute_channel_continuations(&model);
-                    w.global::<crate::ChatPane>()
-                        .set_thread_replies(ModelRc::new(model));
+                    if let Some(model) = current.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                        let inserted = rows.len();
+                        for row in rows.into_iter().rev() {
+                            model.insert(0, row);
+                        }
+                        for index in 0..=inserted {
+                            update_reply_continuation(model, index);
+                        }
+                    }
                 });
             });
         });
@@ -297,14 +324,15 @@ pub fn apply_live_thread_reply(
             let own_reply = reply.is_own;
             match replies.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                 Some(model) => {
+                    let index = model.row_count();
                     model.push(reply);
-                    recompute_channel_continuations(model);
+                    update_reply_continuation(model, index);
                 }
                 None => {
                     let mut all: Vec<MessageItemData> = replies.iter().collect();
                     all.push(reply);
                     let model = VecModel::from(all);
-                    recompute_channel_continuations(&model);
+                    update_reply_continuation(&model, model.row_count() - 1);
                     w.global::<crate::ChatPane>()
                         .set_thread_replies(ModelRc::new(model));
                 }
