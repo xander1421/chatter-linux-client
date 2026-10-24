@@ -13,7 +13,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.Handler
 import android.os.Looper
-import android.annotation.SuppressLint
 import android.util.Log
 
 /** Keeps the process owning core's inbox poller and ntfy listeners runnable.
@@ -23,25 +22,8 @@ import android.util.Log
  * continuity between a user's devices, not ordinary incoming chat messages.
  */
 class MessagingService : Service() {
-    private var wakeLock: PowerManager.WakeLock? = null
     private var nativeStartupPending = false
     private external fun nativeStartHeadless(context: Context): Boolean
-
-    // The service lifetime is the bound: release onDestroy, and never restart
-    // after process death. Doze can still suspend network/ignore wake locks.
-    @SuppressLint("WakelockTimeout")
-    private fun retainInboxExecution() {
-        if (wakeLock?.isHeld == true) return
-        wakeLock = getSystemService(PowerManager::class.java)
-            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Chatter:Messaging")
-            ?.apply { setReferenceCounted(false); acquire() }
-    }
-
-    override fun onDestroy() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-        super.onDestroy()
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -72,12 +54,13 @@ class MessagingService : Service() {
         if (pendingStarts > 0) pendingStarts--
         if (stopRequested || !wasSignedIn(this)) {
             if (pendingStarts == 0) stopSelf(startId)
-        } else if (coreReadyInProcess) {
-            retainInboxExecution()
-        } else if (!nativeStartupPending) {
+        } else if (!coreReadyInProcess && !nativeStartupPending) {
             nativeStartupPending = true
             // Keep DB open and bounded network startup off Android's main
             // thread. JNI runs on this attached Java thread, not a Rust worker.
+            val startupLock = getSystemService(PowerManager::class.java)
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Chatter:MessagingStartup")
+            startupLock?.acquire(60_000L)
             Thread({
                 val ready = try {
                     System.loadLibrary("chatter_ui")
@@ -85,21 +68,21 @@ class MessagingService : Service() {
                 } catch (error: Throwable) {
                     Log.e("MessagingService", "Headless core startup failed", error)
                     false
+                } finally {
+                    if (startupLock?.isHeld == true) startupLock.release()
                 }
                 if (!ready) Log.w("MessagingService", "Native headless startup returned false")
                 Handler(Looper.getMainLooper()).post {
                     nativeStartupPending = false
                     if (ready && !stopRequested && wasSignedIn(this)) {
                         coreReadyInProcess = true
-                        retainInboxExecution()
                     } else if (pendingStarts == 0) {
                         stopSelf()
                     }
                 }
             }, "ChatterHeadlessStart").start()
         } else {
-            // A previous start already owns startup; its completion retains
-            // execution or stops this service.
+            // Core is already running, or a previous start owns startup.
         }
         return START_NOT_STICKY
     }
