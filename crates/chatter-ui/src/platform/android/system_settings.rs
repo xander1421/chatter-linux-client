@@ -65,7 +65,7 @@ pub fn open_message_notification_settings() {
                 )?;
                 let package = env
                     .call_method(
-                        act,
+                        &act,
                         jni::jni_str!("getPackageName"),
                         jni::jni_sig!("()Ljava/lang/String;"),
                         &[],
@@ -90,7 +90,7 @@ pub fn open_message_notification_settings() {
                     &[JValue::Object(&k_chan), JValue::Object(&chan)],
                 )?;
                 env.call_method(
-                    act,
+                    &act,
                     jni::jni_str!("startActivity"),
                     jni::jni_sig!("(Landroid/content/Intent;)V"),
                     &[JValue::Object(&intent)],
