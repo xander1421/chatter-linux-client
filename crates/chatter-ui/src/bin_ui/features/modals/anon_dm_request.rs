@@ -57,8 +57,9 @@ fn spawn_request_stream(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         dropped_count = n,
-                        "[ANON_DM_HANDLER] Request receiver lagged, continuing"
+                        "[ANON_DM_HANDLER] Request receiver lagged; rebuilding from storage"
                     );
+                    super::friends::refresh_private_requests(weak_window.clone(), &ui_ctx).await;
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

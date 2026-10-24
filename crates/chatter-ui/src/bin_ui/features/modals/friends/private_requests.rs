@@ -251,7 +251,7 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
 }
 
 /// Refresh the private (anon DM) requests list in the UI.
-async fn refresh_private_requests(
+pub(crate) async fn refresh_private_requests(
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) {
