@@ -370,6 +370,10 @@ export component ThreadPanel inherits Rectangle {
             // visible while earlier pages are available.
             if !root.loading && root.replies.length > 0
                     && root.replies.length < root.reply-count: Rectangle {
+                // A plain Rectangle parent centres fixed-size children; pin it
+                // to the top, where the list leaves room (replies-view.y).
+                x: 0px;
+                y: 0px;
                 height: Spacing.button-height;
                 width: 100%;
                 Text {
