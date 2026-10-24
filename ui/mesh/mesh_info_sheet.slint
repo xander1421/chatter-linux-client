@@ -16,6 +16,7 @@ component InfoActionRow inherits Rectangle {
     in property <bool> muted: false;
     callback clicked();
     height: detail == "" ? 52px : 60px;
+    border-radius: Spacing.radius-md;
     background: row-touch.has-hover ? Colors.surface-control-hover : Colors.surface-section;
     HorizontalLayout {
         padding-left: Spacing.lg;
@@ -102,9 +103,9 @@ export component MeshInfoSheet inherits Rectangle {
 
                 if !root.adding-members && MeshGlobal.active-kind == "private-channel": VerticalLayout {
                     spacing: Spacing.xs;
-                    Text { text: "MEMBERS"; color: Colors.text-muted; font-size: Typography.xs;
+                    if MeshGlobal.private-removable-members.length > 0: Text { text: "MEMBERS"; color: Colors.text-muted; font-size: Typography.xs;
                         font-weight: 600; letter-spacing: 0.4px; }
-                    Rectangle {
+                    if MeshGlobal.private-removable-members.length > 0: Rectangle {
                         border-radius: Spacing.radius-md;
                         background: Colors.surface-section;
                         VerticalLayout {
