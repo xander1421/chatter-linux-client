@@ -41,8 +41,8 @@ impl crate::client::ChatterClient {
     /// Keep the first query match inside the compact one-line result preview.
     pub fn search_result_preview(&self, text: &str, query: &str) -> String {
         let flat = self.plain_message_preview(text);
-        let chars: Vec<char> = flat.chars().collect();
-        if chars.len() <= 100 {
+        let char_count = flat.chars().count();
+        if char_count <= 100 {
             return flat;
         }
         let (_, matched, _, start, _) = preview_fragments(&flat, query);
@@ -52,12 +52,15 @@ impl crate::client::ChatterClient {
         } else {
             match_at.saturating_sub(30)
         };
-        let end = (start + 99).min(chars.len());
+        let end = (start + 99).min(char_count);
         format!(
             "{}{}{}",
             if start > 0 { "…" } else { "" },
-            chars[start..end].iter().collect::<String>(),
-            if end < chars.len() { "…" } else { "" }
+            flat.chars()
+                .skip(start)
+                .take(end - start)
+                .collect::<String>(),
+            if end < char_count { "…" } else { "" }
         )
     }
 
@@ -101,23 +104,27 @@ pub fn preview_fragments(preview: &str, query: &str) -> (String, String, String,
         return (preview.to_owned(), String::new(), String::new(), 0, 0);
     };
     let folded = term.to_lowercase();
-    for (start, _) in preview.char_indices() {
-        let suffix = &preview[start..];
-        let Some(end) = suffix
-            .char_indices()
-            .nth(term.chars().count())
-            .map(|(i, _)| i)
-            .or_else(|| (suffix.chars().count() == term.chars().count()).then_some(suffix.len()))
-        else {
-            continue;
-        };
-        if suffix[..end].to_lowercase() == folded {
+    let width = term.chars().count();
+    let boundaries = preview
+        .char_indices()
+        .map(|(byte, _)| byte)
+        .chain(std::iter::once(preview.len()))
+        .collect::<Vec<_>>();
+    for start_index in 0..boundaries.len().saturating_sub(width) {
+        let start = boundaries[start_index];
+        let end = boundaries[start_index + width];
+        let candidate = &preview[start..end];
+        if if candidate.is_ascii() && folded.is_ascii() {
+            candidate.eq_ignore_ascii_case(&folded)
+        } else {
+            candidate.to_lowercase() == folded
+        } {
             return (
                 preview[..start].to_owned(),
-                suffix[..end].to_owned(),
-                suffix[end..].to_owned(),
+                preview[start..end].to_owned(),
+                preview[end..].to_owned(),
                 start as i32,
-                (start + end) as i32,
+                end as i32,
             );
         }
     }
@@ -382,6 +389,18 @@ impl SearchShortcut {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn preview_match_keeps_unicode_byte_offsets() {
+        let preview = "Café 🦊 message";
+        let (before, matched, after, start, end) = preview_fragments(preview, "🦊");
+        assert_eq!(
+            (before.as_str(), matched.as_str(), after.as_str()),
+            ("Café ", "🦊", " message")
+        );
+        assert_eq!(&preview[start as usize..end as usize], "🦊");
+        assert_eq!(preview_fragments(preview, "absent").1, "");
+    }
 
     #[derive(Clone)]
     struct Doc {

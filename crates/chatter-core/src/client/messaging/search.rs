@@ -22,8 +22,20 @@ impl ChatterClient {
                 return Vec::new();
             }
         };
-        hits.iter()
-            .filter_map(|hit| self.get_message_local(&hit.message_id))
+        let ids = hits.iter().map(|hit| hit.message_id).collect::<Vec<_>>();
+        let messages = match self.messages().get_messages_by_ids_local(&ids) {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::error!(%error, "Search hydration failed");
+                return Vec::new();
+            }
+        };
+        let mut by_id = messages
+            .into_iter()
+            .map(|msg| (msg.id, msg))
+            .collect::<std::collections::HashMap<_, _>>();
+        hits.into_iter()
+            .filter_map(|hit| by_id.remove(&hit.message_id))
             .filter(|msg| {
                 !msg.conversation_type.is_secret_chat()
                     && self.visible_in_mode(&msg.conversation_type)

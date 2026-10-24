@@ -263,6 +263,16 @@ impl MessageService {
             .pop())
     }
 
+    pub fn get_messages_by_ids_local(
+        &self,
+        ids: &[crate::domain::ids::MessageId],
+    ) -> Result<Vec<Message>, MessageError> {
+        self.message_repo
+            .get_many(ids)
+            .map(|messages| self.resolve_stored_quotes(messages))
+            .map_err(MessageError::from)
+    }
+
     /// Whether the parent message a reply quotes is missing or deleted.
     ///
     /// Signal-Desktop parity: a reply keeps its quoted snapshot even after the
@@ -334,5 +344,4 @@ impl MessageService {
             .map(|messages| self.resolve_stored_quotes(messages))
             .map_err(MessageError::from)
     }
-
 }

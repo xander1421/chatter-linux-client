@@ -244,38 +244,10 @@ fn wire_opened(
                     .unwrap()
                     .invalidate(ui_ctx.auth_snapshot().session_revision, "");
                 clear_search_rows(&w);
-                let convs = conversation_items(
-                    &ui_ctx,
-                    w.global::<crate::SearchPane>()
-                        .get_unified_search_query()
-                        .as_str(),
-                );
-                set_conversations(&w, convs);
-                let count = w
-                    .global::<crate::SearchPane>()
-                    .get_unified_search_conversations()
-                    .row_count() as i32;
                 w.global::<crate::SearchPane>()
-                    .set_unified_search_counts(ModelRc::new(VecModel::from(vec![
-                        count, count, 0, 0, 0, 0, 0,
-                    ])));
-                if !w
-                    .global::<crate::SearchPane>()
-                    .get_unified_search_query()
-                    .trim()
-                    .is_empty()
-                    || !matches!(
-                        w.global::<crate::SearchPane>()
-                            .get_unified_search_category()
-                            .as_str(),
-                        "all" | "chats" | "messages"
-                    )
-                {
-                    w.global::<crate::SearchPane>()
-                        .invoke_unified_search_changed(
-                            w.global::<crate::SearchPane>().get_unified_search_query(),
-                        );
-                }
+                    .invoke_unified_search_changed(
+                        w.global::<crate::SearchPane>().get_unified_search_query(),
+                    );
             }
         });
 }
@@ -423,6 +395,7 @@ fn wire_changed(
             // prompt) and invalidate any prior resolution for the new query.
             if let Some(w) = weak.upgrade() {
                 clear_search_rows(&w);
+                set_conversations(&w, Vec::new());
                 let person = person_query(&query_str);
                 w.global::<crate::SearchPane>()
                     .set_unified_search_query_is_handle(resolvable_person_query(person));
@@ -432,33 +405,56 @@ fn wire_changed(
                     .set_unified_search_person_status("".into());
             }
 
-            // Conversations: synchronous, core-built and core-ranked.
-            let chat_count = if let Some(w) = weak.upgrade() {
-                let all_convs = conversation_items(&ui_ctx, &query_str);
-                let count = all_convs.len() as i32;
-                let convs = if w
-                    .global::<crate::SearchPane>()
-                    .get_unified_search_category()
-                    .as_str()
-                    == "all"
-                    || w.global::<crate::SearchPane>()
-                        .get_unified_search_category()
-                        .as_str()
-                        == "chats"
+            // Debounce the database-backed conversation scan and apply only the
+            // current request's rows on the event loop.
+            let conversations_ctx = ui_ctx.clone();
+            let conversations_requests = requests.clone();
+            let conversations_weak = weak.clone();
+            let conversations_query = query_str.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(160));
+                if !conversations_requests
+                    .lock()
+                    .unwrap()
+                    .pending(ticket, conversations_ctx.auth_snapshot().session_revision)
                 {
-                    all_convs
-                } else {
-                    Vec::new()
-                };
-                set_conversations(&w, convs);
-                w.global::<crate::SearchPane>()
-                    .set_unified_search_counts(ModelRc::new(VecModel::from(vec![
-                        count, count, 0, 0, 0, 0, 0,
-                    ])));
-                count
-            } else {
-                return;
-            };
+                    return;
+                }
+                let entries = conversations_ctx.quick_switcher_entries(&conversations_query);
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = conversations_weak.upgrade() else {
+                        return;
+                    };
+                    if !w.global::<crate::SearchPane>().get_unified_search_open()
+                        || !conversations_requests
+                            .lock()
+                            .unwrap()
+                            .pending(ticket, conversations_ctx.auth_snapshot().session_revision)
+                    {
+                        return;
+                    }
+                    let count = entries.len() as i32;
+                    let category = w
+                        .global::<crate::SearchPane>()
+                        .get_unified_search_category();
+                    if matches!(category.as_str(), "all" | "chats") {
+                        set_conversations(&w, conversation_items(entries));
+                    } else {
+                        set_conversations(&w, Vec::new());
+                    }
+                    let mut counts = w
+                        .global::<crate::SearchPane>()
+                        .get_unified_search_counts()
+                        .iter()
+                        .collect::<Vec<_>>();
+                    if counts.len() == 7 {
+                        counts[1] = count;
+                        counts[0] = count + counts[2..].iter().sum::<i32>();
+                        w.global::<crate::SearchPane>()
+                            .set_unified_search_counts(ModelRc::new(VecModel::from(counts)));
+                    }
+                });
+            });
 
             // Messages: empty query clears; otherwise search in background.
             if weak.upgrade().is_some_and(|w| {
@@ -549,6 +545,11 @@ fn wire_changed(
                             w.global::<crate::SearchPane>().get_unified_search_open(),
                             ids,
                             || {
+                                let chat_count = w
+                                    .global::<crate::SearchPane>()
+                                    .get_unified_search_counts()
+                                    .row_data(1)
+                                    .unwrap_or(0);
                                 counts[0] += chat_count;
                                 counts[1] = chat_count;
                                 w.global::<crate::SearchPane>().set_unified_search_counts(
@@ -882,9 +883,10 @@ use requests::{PersonRow, SearchRequests};
 
 /// Jump-to rows for `query`: core builds them from the mode-filtered sidebar
 /// sources (folders included) and ranks them; this only converts.
-fn conversation_items(ui_ctx: &ChatterClient, query: &str) -> Vec<QuickSwitcherItem> {
-    ui_ctx
-        .quick_switcher_entries(query)
+fn conversation_items(
+    entries: Vec<chatter_core::services::quick_switcher::QuickSwitcherEntry>,
+) -> Vec<QuickSwitcherItem> {
+    entries
         .into_iter()
         .map(|e| QuickSwitcherItem {
             id: e.id.into(),

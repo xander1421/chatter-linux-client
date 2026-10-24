@@ -1,5 +1,5 @@
-use super::*;
 use super::reactions::accept_reaction_action;
+use super::*;
 
 impl UnifiedMessageRepository {
     /// Insert the local echo of a message THIS device just sent.
@@ -410,6 +410,23 @@ impl UnifiedMessageRepository {
         }
     }
 
+    /// Hydrate a bounded search result page with one database read.
+    pub fn get_many(&self, ids: &[MessageId]) -> Result<Vec<Message>, StorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.db.read_connection()?;
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT {} FROM messages WHERE id IN ({placeholders})",
+            message_columns("messages")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let values = ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let mut rows = stmt.query(rusqlite::params_from_iter(values.iter()))?;
+        collect_messages(&mut rows)
+    }
+
     pub fn update_reply_parent(
         &self,
         id: &MessageId,
@@ -611,5 +628,4 @@ impl UnifiedMessageRepository {
         }
         Ok(())
     }
-
 }

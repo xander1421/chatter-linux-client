@@ -21,30 +21,6 @@ pub struct VisibleSearchHit {
     pub created_at: DateTime<Utc>,
     pub category: SearchCategory,
     pub thumbnail: Option<Vec<u8>>,
-    text: String,
-    size: u64,
-    sender_id: Option<String>,
-}
-
-impl SearchDocument for VisibleSearchHit {
-    fn category(&self) -> SearchCategory {
-        self.category
-    }
-    fn search_text(&self) -> &str {
-        &self.text
-    }
-    fn created_at(&self) -> DateTime<Utc> {
-        self.created_at
-    }
-    fn size_bytes(&self) -> u64 {
-        self.size
-    }
-    fn sender_id(&self) -> Option<&str> {
-        self.sender_id.as_deref()
-    }
-    fn chat_id(&self) -> &str {
-        &self.channel_id
-    }
 }
 
 fn category_slot(category: SearchCategory) -> Option<usize> {
@@ -58,6 +34,38 @@ fn category_slot(category: SearchCategory) -> Option<usize> {
     }
 }
 
+struct SearchCandidate {
+    message: crate::domain::message::Message,
+    attachment: Option<crate::domain::attachment::Attachment>,
+    shared: Option<crate::storage::repositories::SharedContentRow>,
+    category: SearchCategory,
+    text: String,
+    size: u64,
+    sender_id: Option<String>,
+    chat_id: String,
+}
+
+impl SearchDocument for SearchCandidate {
+    fn category(&self) -> SearchCategory {
+        self.category
+    }
+    fn search_text(&self) -> &str {
+        &self.text
+    }
+    fn created_at(&self) -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp_nanos(self.message.sent_at as i64)
+    }
+    fn size_bytes(&self) -> u64 {
+        self.size
+    }
+    fn sender_id(&self) -> Option<&str> {
+        self.sender_id.as_deref()
+    }
+    fn chat_id(&self) -> &str {
+        &self.chat_id
+    }
+}
+
 impl ChatterClient {
     /// Merge decrypted messages and shared content, then filter, count and page
     /// only results visible in the current mode. Source methods enforce the
@@ -65,15 +73,12 @@ impl ChatterClient {
     pub fn search_visible(&self, request: SearchQuery, page_limits: &[i32]) -> SearchPage {
         let messages = self.search_messages_visible(&request.text, 250);
         let mut candidates = Vec::with_capacity(messages.len());
-        for msg in &messages {
+        let mut seen: HashSet<_> = messages.iter().map(|msg| msg.id).collect();
+        for msg in messages {
             let attachment = msg
                 .attachments
                 .first()
                 .and_then(|id| self.get_attachment_metadata(id));
-            let (attachment_name, size) = attachment
-                .as_ref()
-                .map(|file| (file.metadata.name.clone(), file.metadata.size))
-                .unwrap_or_default();
             let category = SearchCategory::from_message(
                 attachment
                     .as_ref()
@@ -83,91 +88,120 @@ impl ChatterClient {
                     .is_some_and(|file| file.metadata.waveform_samples.is_some()),
                 msg.as_text(),
             );
-            candidates.push(VisibleSearchHit {
-                message_id: msg.id.to_string(),
-                channel_id: msg.conversation_id.to_string(),
-                channel_name: self
-                    .search_conversation_display_name(&msg.conversation_id, &msg.conversation_type),
-                sender_name: self.search_sender_display_name(msg),
-                preview: self.search_result_preview(
-                    msg.as_text().unwrap_or(&attachment_name),
-                    &request.text,
-                ),
-                created_at: DateTime::<Utc>::from_timestamp_nanos(msg.sent_at as i64),
+            let name = attachment
+                .as_ref()
+                .map(|file| file.metadata.name.as_str())
+                .unwrap_or("");
+            let size = attachment
+                .as_ref()
+                .map(|file| file.metadata.size)
+                .unwrap_or_default();
+            let text = format!("{} {}", msg.as_text().unwrap_or(""), name);
+            let sender_id = msg.sender_id.map(|id| id.to_string());
+            let chat_id = msg.conversation_id.to_string();
+            candidates.push(SearchCandidate {
+                message: msg,
+                attachment,
+                shared: None,
                 category,
-                thumbnail: attachment
-                    .as_ref()
-                    .and_then(|file| file.metadata.thumbnail.clone()),
-                text: format!("{} {}", msg.as_text().unwrap_or(""), attachment_name),
+                text,
                 size,
-                sender_id: msg.sender_id.map(|id| id.to_string()),
+                sender_id,
+                chat_id,
             });
         }
         let mut all_request = request.clone();
         all_request.category = SearchCategory::All;
         if request.category != SearchCategory::Chats {
-            let mut seen: HashSet<String> = candidates
-                .iter()
-                .map(|hit| hit.message_id.clone())
-                .collect();
             for item in self.search_shared_content_visible(&all_request, 250) {
-                if !seen.insert(item.message_id.clone()) {
-                    continue;
-                }
                 let Ok(id) = item.message_id.parse() else {
                     continue;
                 };
-                let Some(msg) = self.get_message_local(&id) else {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let Some(message) = self.get_message_local(&id) else {
                     continue;
                 };
-                let label = if item.size_bytes > 0 {
-                    format!(
-                        "{} · {}",
-                        item.title,
-                        crate::domain::attachment::format_bytes(item.size_bytes)
+                let sender_id = message.sender_id.map(|id| id.to_string());
+                let chat_id = message.conversation_id.to_string();
+                candidates.push(SearchCandidate {
+                    sender_id,
+                    chat_id,
+                    category: SearchCategory::from_shared_kind(&item.category),
+                    text: item.title.clone(),
+                    size: item.size_bytes,
+                    message,
+                    attachment: None,
+                    shared: Some(item),
+                });
+            }
+        }
+        // Count the same filtered set that provides the rows. Category
+        // selection retains the first pass's stable sort within a section.
+        let candidates = all_request.apply(candidates);
+        let mut counts = [0; 7];
+        for candidate in &candidates {
+            counts[0] += 1;
+            if let Some(slot) = category_slot(candidate.category) {
+                counts[slot] += 1;
+            }
+        }
+        let mut shown = [0; 7];
+        let hits = candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                if request.category != SearchCategory::All && request.category != candidate.category
+                {
+                    return None;
+                }
+                let slot = category_slot(candidate.category)?;
+                if shown[slot] >= page_limits.get(slot).copied().unwrap_or(50) {
+                    return None;
+                }
+                shown[slot] += 1;
+                let msg = &candidate.message;
+                let (preview, thumbnail) = if let Some(item) = &candidate.shared {
+                    let label = if item.size_bytes > 0 {
+                        format!(
+                            "{} · {}",
+                            item.title,
+                            crate::domain::attachment::format_bytes(item.size_bytes)
+                        )
+                    } else {
+                        item.title.clone()
+                    };
+                    (
+                        self.search_result_preview(&label, &request.text),
+                        item.thumbnail.clone(),
                     )
                 } else {
-                    item.title.clone()
+                    let name = candidate
+                        .attachment
+                        .as_ref()
+                        .map(|file| file.metadata.name.as_str())
+                        .unwrap_or("");
+                    (
+                        self.search_result_preview(msg.as_text().unwrap_or(name), &request.text),
+                        candidate
+                            .attachment
+                            .as_ref()
+                            .and_then(|file| file.metadata.thumbnail.clone()),
+                    )
                 };
-                candidates.push(VisibleSearchHit {
-                    message_id: item.message_id,
+                Some(VisibleSearchHit {
+                    message_id: msg.id.to_string(),
                     channel_id: msg.conversation_id.to_string(),
                     channel_name: self.search_conversation_display_name(
                         &msg.conversation_id,
                         &msg.conversation_type,
                     ),
-                    sender_name: self.search_sender_display_name(&msg),
-                    preview: self.search_result_preview(&label, &request.text),
-                    created_at: DateTime::<Utc>::from_timestamp_nanos(msg.sent_at as i64),
-                    category: SearchCategory::from_shared_kind(&item.category),
-                    thumbnail: item.thumbnail,
-                    text: item.title,
-                    size: item.size_bytes,
-                    sender_id: msg.sender_id.map(|id| id.to_string()),
-                });
-            }
-        }
-        let candidates = all_request.apply(candidates);
-        let mut counts = [0; 7];
-        for hit in &candidates {
-            counts[0] += 1;
-            if let Some(slot) = category_slot(hit.category) {
-                counts[slot] += 1;
-            }
-        }
-        let mut shown = [0; 7];
-        let hits = request
-            .apply(candidates)
-            .into_iter()
-            .filter(|hit| {
-                let Some(slot) = category_slot(hit.category) else {
-                    return false;
-                };
-                if shown[slot] >= page_limits.get(slot).copied().unwrap_or(50) {
-                    return false;
-                }
-                shown[slot] += 1;
-                true
+                    sender_name: self.search_sender_display_name(msg),
+                    preview,
+                    created_at: candidate.created_at(),
+                    category: candidate.category,
+                    thumbnail,
+                })
             })
             .collect();
         SearchPage { hits, counts }
