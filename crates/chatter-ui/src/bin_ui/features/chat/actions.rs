@@ -150,6 +150,10 @@ pub(super) fn open_forward_modal(
     w.global::<crate::ModalHostState>()
         .set_forward_message_preview(preview.into());
     w.global::<crate::ModalHostState>()
+        .set_forward_contact_share(false);
+    w.global::<crate::ModalHostState>()
+        .set_forward_contact_name("".into());
+    w.global::<crate::ModalHostState>()
         .set_forward_sources(ModelRc::from(std::rc::Rc::new(VecModel::from(sources))));
     w.global::<crate::ModalHostState>()
         .set_forward_search_text("".into());
@@ -166,6 +170,10 @@ pub(crate) fn open_contact_share_modal(
     ui_ctx: &Arc<ChatterClient>,
     text: String,
 ) {
+    let state = w.global::<crate::ModalHostState>();
+    state.set_forward_contact_share(true);
+    state.set_forward_contact_name(state.get_profile_display_name());
+    state.set_forward_contact_avatar(state.get_profile_avatar_source());
     w.global::<crate::ModalHostState>()
         .set_forward_message_preview(text.clone().into());
     w.global::<crate::ModalHostState>()
