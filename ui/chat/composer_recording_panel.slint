@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 import { VoiceRecording, LiveVoiceWaveform } from "voice_recording.slint";
 import { HeaderButton } from "../components/header_button.slint";
 import { Colors } from "../theme/colors.slint";
@@ -24,6 +25,7 @@ in property <bool> surface-backdrop-paused;
             height: Spacing.touch-target-min;
             border-radius: Spacing.radius-chrome;
             material-level: root.surface-material-level;
+            material-tint: Materials.chat-chrome;
             elevation: root.surface-elevation;
             backdrop-paused: root.surface-backdrop-paused;
             HorizontalLayout {

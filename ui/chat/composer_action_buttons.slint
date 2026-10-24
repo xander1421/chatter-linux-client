@@ -35,6 +35,7 @@ export component ComposerEmojiButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         material-enabled: root.lift-layout > 0.6;
         material-level: root.surface-material-level;
+        material-tint: Materials.chat-chrome;
         elevation: root.lift-layout > 0.6 ? 3 : 0;
         backdrop-paused: root.surface-backdrop-paused;
         background: root.picker-open && !root.mobile ? Colors.tint-strong
@@ -103,6 +104,7 @@ export component ComposerAttachButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         material-enabled: root.lift-layout > 0.6;
         material-level: root.surface-material-level;
+        material-tint: Materials.chat-chrome;
         elevation: root.lift-layout > 0.6 ? 3 : 0;
         backdrop-paused: root.surface-backdrop-paused;
         background: attachment-touch.pressed ? Materials.pressed

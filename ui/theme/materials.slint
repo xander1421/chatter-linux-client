@@ -13,6 +13,10 @@ export global Materials {
     out property <color> regular: Appearance.glass-effects
         ? (Appearance.dark ? #1a263566 : #ffffff75)
         : (Appearance.dark ? #18232f : #fbfdff);
+    // Chat header and composer float over the conversation: regular glass
+    // at 70% of its tint alpha (owner 2026-10-24). Flat mode stays opaque.
+    out property <color> chat-chrome: Appearance.glass-effects
+        ? regular.transparentize(0.3) : regular;
     // Search gains contrast as its glass travels above the results.
     out property <color> search-raised: Appearance.glass-effects
         ? (Appearance.dark ? #1c2837bd : #ffffffe0)

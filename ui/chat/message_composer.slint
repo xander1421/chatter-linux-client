@@ -440,6 +440,7 @@ export component MessageComposer inherits GlassSurface {
         width: root.width;
         height: root.edit-bar-height + root.format-bar-height;
         material-level: root.material-level;
+        material-tint: Materials.chat-chrome;
         elevation: root.elevation;
         backdrop-paused: root.backdrop-paused;
     }
@@ -482,6 +483,7 @@ export component MessageComposer inherits GlassSurface {
                 height: parent.height - self.y;
                 border-radius: Spacing.radius-chrome;
                 material-level: root.material-level;
+                material-tint: Materials.chat-chrome;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
                 visible: !VoiceRecording.active;
@@ -589,7 +591,7 @@ export component MessageComposer inherits GlassSurface {
                 // A brighter inset over the one sampled composer surface. The
                 // native TextInput stays mounted while controls lift and settle.
                 background: Appearance.glass-effects
-                    ? (Appearance.dark ? #ffffff18 : #ffffff9c)
+                    ? (Appearance.dark ? #ffffff11 : #ffffff6d)
                     : Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
                 border-radius: Spacing.radius-chrome-inner;

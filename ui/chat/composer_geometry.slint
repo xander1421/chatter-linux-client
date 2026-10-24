@@ -58,7 +58,7 @@ export component DropletNeck inherits Path {
     property <float> start: min(circle-bottom - 7, field-top - 6);
     property <float> half-width: 2 + 12 * (1 - p);
     width: 48px;
-    fill: Appearance.glass-effects ? Materials.regular : Materials.opaque;
+    fill: Appearance.glass-effects ? Materials.chat-chrome : Materials.opaque;
     opacity: min(1, max(0, (p - 0.08) * 8)) * min(1, max(0, (0.96 - p) * 14));
     viewbox-width: 48;
     viewbox-height: self.height / 1px;
