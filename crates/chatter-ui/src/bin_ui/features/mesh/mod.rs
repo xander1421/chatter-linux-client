@@ -924,7 +924,23 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let unread_count = items.iter().map(|row| row.unread_count).sum();
     let global = window.global::<MeshGlobal>();
     global.set_unread_count(unread_count);
-    global.set_conversations(ModelRc::new(VecModel::from(items)));
+    set_rows(&global, items);
+}
+
+/// Write the mesh rows and their per-section splits for the grouped home list.
+fn set_rows(global: &MeshGlobal, rows: Vec<MeshConversationData>) {
+    let section = |kinds: &[&str]| {
+        let rows: Vec<_> = rows
+            .iter()
+            .filter(|row| kinds.contains(&row.kind.as_str()))
+            .cloned()
+            .collect();
+        ModelRc::new(VecModel::from(rows))
+    };
+    global.set_group_conversations(section(&["private-channel"]));
+    global.set_channel_conversations(section(&["room", "channel", "geohash"]));
+    global.set_dm_conversations(section(&["dm"]));
+    global.set_conversations(ModelRc::new(VecModel::from(rows)));
 }
 
 /// A mesh-derived sender id never enters server profile routing.
@@ -1019,9 +1035,7 @@ fn deselect_rows(window: &MainWindow) {
             row
         })
         .collect();
-    window
-        .global::<MeshGlobal>()
-        .set_conversations(ModelRc::new(VecModel::from(rows)));
+    set_rows(&window.global::<MeshGlobal>(), rows);
 }
 
 /// Push transport state into the Slint global.

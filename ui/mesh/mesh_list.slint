@@ -47,36 +47,6 @@ export component MeshList inherits Rectangle {
                     text: "Mesh"; color: Colors.text-primary; font-size: Typography.xxxl;
                     font-weight: Typography.bold; vertical-alignment: center; horizontal-stretch: 1;
                 }
-                Rectangle {
-                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
-                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
-                    border-radius: Spacing.radius-full;
-                    background: compose-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-                    Image {
-                        source: Icons.plus; width: Spacing.header-glyph; height: Spacing.header-glyph;
-                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                        colorize: Colors.primary;
-                    }
-                    compose-touch := TouchArea {
-                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh conversation";
-                        clicked => { MeshGlobal.open-sheet("mesh-compose"); }
-                    }
-                }
-                Rectangle {
-                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
-                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
-                    border-radius: Spacing.radius-full;
-                    background: setup-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
-                    Image {
-                        source: Icons.settings; width: Spacing.header-glyph; height: Spacing.header-glyph;
-                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-secondary;
-                    }
-                    setup-touch := TouchArea {
-                        mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh settings";
-                        clicked => { MeshGlobal.open-setup(); }
-                    }
-                }
             }
             VerticalLayout {
                 padding-left: Spacing.lg; padding-right: Spacing.lg;
@@ -229,29 +199,71 @@ export component MeshList inherits Rectangle {
             }
             if MeshGlobal.conversations.length > 0: VerticalLayout {
                 spacing: Spacing.lg;
-                for section in ["private-channel", "channel", "dm"]: VerticalLayout {
-                    visible: section-rows.preferred-height > 0px;
+                if MeshGlobal.group-conversations.length > 0: VerticalLayout {
                     padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
                     Text {
-                        text: section == "private-channel" ? "GROUPS"
-                            : section == "channel" ? "CHANNELS" : "DIRECT MESSAGES";
-                        color: Colors.text-muted; font-size: Typography.xs;
+                        text: "GROUPS"; color: Colors.text-muted; font-size: Typography.xs;
                         font-weight: Typography.semibold;
                     }
                     Rectangle {
-                        height: section-rows.preferred-height;
                         border-radius: Spacing.radius-lg; clip: true;
                         background: Colors.surface-section;
-                        section-rows := VerticalLayout {
-                            for item in MeshGlobal.conversations: MeshListItem {
-                                visible: section == "private-channel" ? item.kind == "private-channel"
-                                    : section == "channel" ? item.kind == "room" || item.kind == "channel" || item.kind == "geohash"
-                                    : item.kind == "dm";
+                        VerticalLayout {
+                            for item[i] in MeshGlobal.group-conversations: MeshListItem {
                                 title: item.title; kind: item.kind; scope: item.scope;
                                 timestamp: item.timestamp; unread-count: item.unread-count;
                                 reachable: item.reachable; verified: item.verified; muted: item.muted;
                                 blocked: item.blocked; binding-label: item.binding-label;
                                 selected: item.is-selected; touch: root.touch;
+                                last: i == MeshGlobal.group-conversations.length - 1;
+                                clicked => { MeshGlobal.conversation-selected(item.id); }
+                                leave => { MeshGlobal.leave-channel(item.scope); }
+                                toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
+                            }
+                        }
+                    }
+                }
+                if MeshGlobal.channel-conversations.length > 0: VerticalLayout {
+                    padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
+                    Text {
+                        text: "CHANNELS"; color: Colors.text-muted; font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                    }
+                    Rectangle {
+                        border-radius: Spacing.radius-lg; clip: true;
+                        background: Colors.surface-section;
+                        VerticalLayout {
+                            for item[i] in MeshGlobal.channel-conversations: MeshListItem {
+                                title: item.title; kind: item.kind; scope: item.scope;
+                                timestamp: item.timestamp; unread-count: item.unread-count;
+                                reachable: item.reachable; verified: item.verified; muted: item.muted;
+                                blocked: item.blocked; binding-label: item.binding-label;
+                                selected: item.is-selected; touch: root.touch;
+                                last: i == MeshGlobal.channel-conversations.length - 1;
+                                clicked => { MeshGlobal.conversation-selected(item.id); }
+                                leave => { MeshGlobal.leave-channel(item.scope); }
+                                toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
+                            }
+                        }
+                    }
+                }
+                if MeshGlobal.dm-conversations.length > 0: VerticalLayout {
+                    padding-left: Spacing.lg; padding-right: Spacing.lg; spacing: Spacing.sm;
+                    Text {
+                        text: "DIRECT MESSAGES"; color: Colors.text-muted; font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                    }
+                    Rectangle {
+                        border-radius: Spacing.radius-lg; clip: true;
+                        background: Colors.surface-section;
+                        VerticalLayout {
+                            for item[i] in MeshGlobal.dm-conversations: MeshListItem {
+                                title: item.title; kind: item.kind; scope: item.scope;
+                                timestamp: item.timestamp; unread-count: item.unread-count;
+                                reachable: item.reachable; verified: item.verified; muted: item.muted;
+                                blocked: item.blocked; binding-label: item.binding-label;
+                                selected: item.is-selected; touch: root.touch;
+                                last: i == MeshGlobal.dm-conversations.length - 1;
                                 clicked => { MeshGlobal.conversation-selected(item.id); }
                                 leave => { MeshGlobal.leave-channel(item.scope); }
                                 toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }

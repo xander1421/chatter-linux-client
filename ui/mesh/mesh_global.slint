@@ -144,6 +144,11 @@ export global MeshGlobal {
 
     // ── Sidebar ──
     in-out property <[MeshConversationData]> conversations: [];
+    // The same rows split by `kind` for the grouped Mesh home sections
+    // (Slint cannot filter a model). Written together with `conversations`.
+    in-out property <[MeshConversationData]> group-conversations: [];
+    in-out property <[MeshConversationData]> channel-conversations: [];
+    in-out property <[MeshConversationData]> dm-conversations: [];
 
     // ── The mesh conversation currently open (empty id = none) ──
     in-out property <string> active-id: "";

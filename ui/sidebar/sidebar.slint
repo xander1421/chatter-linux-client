@@ -668,13 +668,37 @@ export component Sidebar inherits Rectangle {
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
                 spacing: Spacing.sm;
-                Text {
-                    text: "Mesh";
-                    color: Colors.text-primary;
-                    font-size: Typography.lg;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
+                // iOS large-title bar: actions only, the title is MeshList's.
+                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    border-radius: Spacing.radius-full;
+                    background: compose-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Image {
+                        source: Icons.plus; width: Spacing.header-glyph; height: Spacing.header-glyph;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+                    compose-touch := TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh conversation";
+                        clicked => { MeshGlobal.open-sheet("mesh-compose"); }
+                    }
+                }
+                Rectangle {
+                    width: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    height: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
+                    border-radius: Spacing.radius-full;
+                    background: setup-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Image {
+                        source: Icons.settings; width: Spacing.header-glyph; height: Spacing.header-glyph;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-secondary;
+                    }
+                    setup-touch := TouchArea {
+                        mouse-cursor: pointer; accessible-role: button; accessible-label: "Mesh settings";
+                        clicked => { MeshGlobal.open-setup(); }
+                    }
                 }
             }
         }
