@@ -67,8 +67,7 @@ export component MeshPeerSheet inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 height: Spacing.touch-target-min;
-                alignment: center;
-                Text { text: "Contact"; color: Colors.text-primary; font-size: Typography.lg;
+                                Text { text: "Contact"; color: Colors.text-primary; font-size: Typography.lg;
                     font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
                 Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
             }

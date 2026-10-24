@@ -29,7 +29,7 @@ component ComposeMenuRow inherits Rectangle {
     }
     HorizontalLayout {
         padding-left: Spacing.md; padding-right: Spacing.md;
-        spacing: Spacing.md; alignment: center;
+        spacing: Spacing.md;
         Rectangle {
             width: 40px; height: 40px; border-radius: Spacing.radius-md;
             background: root.tint.with-alpha(0.16);
@@ -101,14 +101,13 @@ export component MeshComposeSheet inherits Rectangle {
             spacing: Spacing.lg;
             HorizontalLayout {
                 height: Spacing.touch-target-min;
-                alignment: center;
-                Rectangle {
+                                Rectangle {
                     width: 78px; height: Spacing.touch-target-min;
                     accessible-role: button;
                     accessible-label: root.page == "menu" ? "Cancel" : "Back";
                     accessible-action-default => { root.go-back(); }
                     HorizontalLayout {
-                        alignment: center;
+                        alignment: start;
                         if root.page != "menu": Image { source: Icons.chevron-left; width: Spacing.button-icon; height: Spacing.button-icon; colorize: Colors.primary; }
                         Text { text: root.page == "menu" ? "Cancel" : "Back"; color: Colors.primary; font-size: Typography.base; vertical-alignment: center; }
                     }

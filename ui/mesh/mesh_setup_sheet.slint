@@ -29,7 +29,7 @@ component NearbyPeerRow inherits Rectangle {
         }
     }
     HorizontalLayout { padding-left: Spacing.md; padding-right: Spacing.md;
-        spacing: Spacing.md; alignment: center;
+        spacing: Spacing.md;
         Rectangle { width: 40px; height: 40px; border-radius: Spacing.radius-full;
             background: Colors.tint-strong;
             Image { source: Icons.user; width: Spacing.button-icon; height: Spacing.button-icon;
@@ -67,8 +67,7 @@ export component MeshSetupSheet inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 height: Spacing.touch-target-min;
-                alignment: center;
-                Text { text: "Mesh Settings"; color: Colors.text-primary; font-size: Typography.lg;
+                                Text { text: "Mesh Settings"; color: Colors.text-primary; font-size: Typography.lg;
                     font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
                 Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
             }
