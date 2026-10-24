@@ -219,7 +219,7 @@ export component AccountSettings inherits VerticalLayout {
                         touch: root.mobile-platform;
                         text: "Cancel";
                         variant: "ghost";
-                        disabled: root.password-changing;
+                        disabled: root.password-changing || root.delete-loading;
                         clicked => {
                             show-password-form = false;
                             root.current-password = "";

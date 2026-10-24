@@ -20,6 +20,19 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_welcome(window);
 }
 
+fn clear_auth_secrets(window: &MainWindow) {
+    let auth = window.global::<crate::AuthFlow>();
+    auth.set_login_password("".into());
+    auth.set_login_pin("".into());
+    auth.set_register_password("".into());
+    auth.set_register_confirm_password("".into());
+    auth.set_register_pin("".into());
+    auth.set_recovery_code("".into());
+    auth.set_recovery_new_password("".into());
+    auth.set_recovery_confirm_password("".into());
+    auth.set_recovery_new_pin("".into());
+}
+
 /// Welcome page (shown after first registration): all three buttons land in
 /// the main view, two of them with a modal already open.
 fn wire_welcome(window: &MainWindow) {
@@ -100,6 +113,7 @@ fn wire_go_to_link_device(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<crate::AuthFlow>()
         .on_go_to_link_device(move || {
             if let Some(w) = weak_window.upgrade() {
+                clear_auth_secrets(&w);
                 w.set_current_view("link-device".into());
                 match ui_ctx.link_device_has_local_identity() {
                     Ok(has_identity) => {
@@ -111,12 +125,14 @@ fn wire_go_to_link_device(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Err(error) => {
                         w.global::<crate::AuthFlow>()
                             .set_link_device_has_local_identity(false);
+                        tracing::warn!("Could not check local identity before linking: {error}");
                         w.global::<crate::AuthFlow>().set_link_device_error(
-                            format!("Could not check local identity: {error}").into(),
+                            "Could not check this device's saved identity. Try again.".into(),
                         );
                     }
                 }
                 w.global::<crate::AuthFlow>().set_link_device_url("".into());
+                w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
                 w.global::<crate::AuthFlow>()
                     .set_link_device_status("Tap \"Generate QR\" to start.".into());
                 w.global::<crate::AuthFlow>().set_link_device_active(false);
@@ -131,6 +147,7 @@ fn wire_go_to_register(window: &MainWindow) {
         .global::<crate::AuthFlow>()
         .on_go_to_register(move || {
             if let Some(w) = weak_window.upgrade() {
+                clear_auth_secrets(&w);
                 w.set_current_view("register".into());
                 // Clear register form
                 w.global::<crate::AuthFlow>()
@@ -152,6 +169,7 @@ fn wire_go_to_login(window: &MainWindow) {
     window.global::<crate::AuthFlow>().on_go_to_login(move || {
         if let Some(w) = weak_window.upgrade() {
             w.set_current_view("login".into());
+            clear_auth_secrets(&w);
             // Clear login form
             w.global::<crate::AuthFlow>().set_login_username("".into());
             w.global::<crate::AuthFlow>().set_login_password("".into());
@@ -167,6 +185,7 @@ fn wire_go_to_recovery(window: &MainWindow) {
         .global::<crate::AuthFlow>()
         .on_go_to_recovery(move || {
             if let Some(w) = weak_window.upgrade() {
+                clear_auth_secrets(&w);
                 w.set_current_view("recovery".into());
                 // Clear recovery form
                 w.global::<crate::AuthFlow>()

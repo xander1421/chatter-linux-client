@@ -38,6 +38,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_current_view("login".into());
                     crate::bin_ui::features::back::reset_to_chats(&w);
                     w.global::<crate::AuthFlow>().set_login_password("".into());
+                    w.global::<crate::AuthFlow>().set_login_pin("".into());
                     w.global::<crate::AuthFlow>().set_login_loading(false);
                     w.global::<crate::AuthFlow>()
                         .set_login_error(state.login_error.unwrap_or_default().into());
@@ -75,6 +76,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::bin_ui::features::back::reset_to_chats(&w);
                         w.global::<crate::AuthFlow>().set_login_username("".into());
                         w.global::<crate::AuthFlow>().set_login_password("".into());
+                        w.global::<crate::AuthFlow>().set_login_pin("".into());
                         w.global::<crate::AuthFlow>().set_login_error("".into());
                     }
                 });

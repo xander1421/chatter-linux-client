@@ -30,16 +30,21 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak.clone();
 
         if let Some(w) = weak.upgrade() {
+            if w.global::<crate::AuthFlow>().get_link_device_active() {
+                return;
+            }
             w.global::<crate::AuthFlow>().set_link_device_active(true);
             w.global::<crate::AuthFlow>().set_link_device_error("".into());
             w.global::<crate::AuthFlow>().set_link_device_status("Generating QR code…".into());
+            w.global::<crate::AuthFlow>().set_link_device_url("".into());
+            w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
         }
 
         crate::rt_handle().spawn(async move {
             let mut rx = match ui_ctx.link_device_run().await {
                 Ok(rx) => rx,
                 Err(e) => {
-                    set_error(&weak, e.to_string());
+                    set_error(&weak, e.user_message());
                     return;
                 }
             };
@@ -88,6 +93,7 @@ fn wire_start(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak_for_view.upgrade() {
                                 w.global::<crate::AuthFlow>().set_link_device_active(false);
                                 w.global::<crate::AuthFlow>().set_link_device_url("".into());
+                                w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
                             }
                         });
                         return;
@@ -111,6 +117,9 @@ fn wire_cancel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
 
             if let Some(w) = weak.upgrade() {
+                w.global::<crate::AuthFlow>().set_link_device_active(false);
+                w.global::<crate::AuthFlow>().set_link_device_url("".into());
+                w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
                 w.set_current_view("login".into());
             }
         });
@@ -203,6 +212,8 @@ fn set_error(weak: &slint::Weak<MainWindow>, msg: String) {
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             w.global::<crate::AuthFlow>().set_link_device_active(false);
+            w.global::<crate::AuthFlow>().set_link_device_url("".into());
+            w.global::<crate::AuthFlow>().set_link_device_qr(slint::Image::default());
             w.global::<crate::AuthFlow>()
                 .set_link_device_error(msg.into());
         }

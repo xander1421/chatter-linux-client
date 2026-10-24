@@ -20,17 +20,15 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let new_password = new_password.to_string();
         let new_pin = new_pin.to_string();
 
+        if let Some(w) = weak.upgrade() {
+            if w.global::<crate::AuthFlow>().get_recovery_loading() {
+                return;
+            }
+            w.global::<crate::AuthFlow>().set_recovery_loading(true);
+            w.global::<crate::AuthFlow>().set_recovery_error("".into());
+            w.global::<crate::AuthFlow>().set_recovery_success("".into());
+        }
         tokio::spawn(async move {
-            // Set loading state
-            let weak_for_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_for_loading.upgrade() {
-                    w.global::<crate::AuthFlow>().set_recovery_loading(true);
-                    w.global::<crate::AuthFlow>().set_recovery_error("".into());
-                    w.global::<crate::AuthFlow>().set_recovery_success("".into());
-                }
-            });
-
             match ui_ctx.use_recovery_code(&username, &recovery_code, &new_password, &new_pin).await {
                 Ok(result) => {
                     // Surface key_backup_invalidated (§7): recovery rotates the
@@ -60,6 +58,10 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.global::<crate::AuthFlow>().set_recovery_loading(false);
                             w.global::<crate::AuthFlow>().set_recovery_success(msg.into());
                             w.global::<crate::AuthFlow>().set_recovery_error("".into());
+                            w.global::<crate::AuthFlow>().set_recovery_code("".into());
+                            w.global::<crate::AuthFlow>().set_recovery_new_password("".into());
+                            w.global::<crate::AuthFlow>().set_recovery_confirm_password("".into());
+                            w.global::<crate::AuthFlow>().set_recovery_new_pin("".into());
                         }
                     });
 
@@ -70,6 +72,15 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            if w.get_current_view().as_str() != "recovery"
+                                || w.global::<crate::AuthFlow>().get_recovery_loading()
+                                || w.global::<crate::AuthFlow>()
+                                    .get_recovery_success()
+                                    .as_str()
+                                    .is_empty()
+                            {
+                                return;
+                            }
                             w.set_current_view("login".into());
                             // Clear recovery form fields and any cached auth state
                             w.global::<crate::AuthFlow>().set_recovery_username("".into());
@@ -87,7 +98,7 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                 }
                 Err(e) => {
-                    tracing::error!("Account recovery failed: {}", e);
+                    tracing::error!("Account recovery failed");
                     let error_msg = e.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
