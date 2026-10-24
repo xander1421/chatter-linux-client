@@ -173,6 +173,9 @@ export global ModalHostState {
     in-out property <bool> friends-show-qr: false;
     // Forward message modal properties
     in property <string> forward-message-preview: "";
+    in property <bool> forward-contact-share: false;
+    in property <string> forward-contact-name: "";
+    in property <image> forward-contact-avatar;
     // Source messages, stashed at modal-open, read by the confirm handler:
     // Messages being forwarded, as "sender_id:timestamp_ns" keys in send order
     // (one from the message menu, several from the selection bar).

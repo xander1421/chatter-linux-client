@@ -23,6 +23,9 @@ export struct ForwardTarget {
 export component ForwardMessageModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> message-preview: "";
+    in property <bool> contact-share: false;
+    in property <string> contact-name: "";
+    in property <image> contact-avatar;
     in-out property <string> search-text: "";
     in property <[ForwardTarget]> targets: [];
     in property <bool> loading: false;
@@ -44,7 +47,7 @@ export component ForwardMessageModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Forward Message";
+        title: root.contact-share ? "Share Contact" : "Forward Message";
         modal-width: 480px;
 
         close => {
@@ -60,7 +63,23 @@ export component ForwardMessageModal inherits Rectangle {
                 background: Colors.surface-hover;
                 border-radius: Spacing.radius-md;
 
-                VerticalLayout {
+                if root.contact-share: HorizontalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.md;
+                    alignment: center;
+
+                    Avatar { size: 48px; name: root.contact-name; source: root.contact-avatar; }
+                    Text {
+                        text: root.contact-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                if !root.contact-share: VerticalLayout {
                     padding: Spacing.md;
 
                     Text {
@@ -220,9 +239,9 @@ export component ForwardMessageModal inherits Rectangle {
                     }
                 }
 
-                // Forward button
+                // Confirm button
                 Button {
-                    text: root.loading ? "" : "Forward";
+                    text: root.loading ? "" : root.contact-share ? "Share" : "Forward";
                     variant: "primary";
                     disabled: root.selected-target-id == "" || root.loading;
                     loading: root.loading;

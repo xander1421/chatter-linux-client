@@ -47,6 +47,9 @@ export component AppSecondaryModals inherits Rectangle {
     if root.is-presented("forward-message"): ForwardMessageModal {
         show-modal: root.active-modal == "forward-message";
         message-preview: ModalHostState.forward-message-preview;
+        contact-share: ModalHostState.forward-contact-share;
+        contact-name: ModalHostState.forward-contact-name;
+        contact-avatar: ModalHostState.forward-contact-avatar;
         search-text <=> ModalHostState.forward-search-text;
         targets: ModalHostState.forward-targets;
         loading: ModalHostState.forward-loading;
