@@ -219,7 +219,9 @@ fn pin_added_order_survives_duplicate_pin_and_message_edits() {
 #[test]
 fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE messages (id TEXT, sender_id TEXT, conversation_id TEXT, conversation_type TEXT, sent_at INTEGER)").unwrap();
+    conn.execute_batch("CREATE TABLE messages (id TEXT, sender_id TEXT, conversation_id TEXT, conversation_type TEXT, timestamp_quote_key TEXT);
+        CREATE INDEX idx_messages_timestamp_quote_key ON messages(conversation_type, conversation_id, sender_id, timestamp_quote_key)
+        WHERE sender_id IS NOT NULL AND timestamp_quote_key IS NOT NULL;").unwrap();
     let author = UserId::new();
     let other_author = UserId::new();
     let conversation = ChannelId::new();
@@ -238,7 +240,7 @@ fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {
                 sender.to_string(),
                 channel.to_string(),
                 kind.as_str(),
-                123456789i64
+                reference.to_string()
             ],
         )
         .unwrap();
@@ -251,7 +253,7 @@ fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {
             author.to_string(),
             conversation.to_string(),
             kind.as_str(),
-            123456789i64
+            reference.to_string()
         ],
     )
     .unwrap();
