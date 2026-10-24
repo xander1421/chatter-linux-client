@@ -74,6 +74,8 @@ export component ChannelSettingsModal inherits Rectangle {
 
     callback integrations();
     callback server-calls();
+    callback pinned-messages();
+    callback clear-error();
     callback close();
     callback save-settings(string, string);  // name, description
     callback pick-channel-icon();  // opens native file picker for the channel icon
@@ -115,6 +117,7 @@ export component ChannelSettingsModal inherits Rectangle {
         self.show-discard-confirm = false;
         self.role-picker-user = "";
     }
+    changed active-section => { root.clear-error(); }
 
     // Private group helper
     property <bool> is-private-group: channel-type == "private-group";
@@ -138,7 +141,7 @@ export component ChannelSettingsModal inherits Rectangle {
     property <bool> has-edits: root.can-edit
         && (root.channel-name-draft != root.channel-name
             || root.channel-description-draft != root.channel-description || root.channel-has-icon-preview);
-    property <bool> name-invalid: root.channel-name-draft == "";
+    property <bool> name-invalid: root.error-message == "Name must be at least 3 characters";
 
     Modal {
         show: root.show-modal;
@@ -267,7 +270,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
 
                         // Error message
-                        if root.error-message != "": Rectangle {
+                        if root.error-message != "" && !root.name-invalid: Rectangle {
                             min-height: 40px;
                             background: Colors.error.with-alpha(0.1);
                             border-radius: Spacing.radius-sm;
@@ -386,6 +389,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                         icon: Icons.bell; title: "Notifications";
                                         detail: root.is-muted ? "Muted" : root.notification-preference == "mentions" ? "Mentions only" : root.notification-preference == "none" ? "Off" : "All messages";
                                         clicked => { root.active-section = "notifications"; }
+                                    }
+                                    Rectangle { height: 1px; background: Colors.divider; }
+                                    SettingsRow {
+                                        touch: true;
+                                        icon: Icons.pin; title: "Pinned messages";
+                                        clicked => { root.pinned-messages(); }
                                     }
                                     if !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
                                     // A channel's timer is fixed at creation:
@@ -532,9 +541,10 @@ export component ChannelSettingsModal inherits Rectangle {
                                     placeholder: root.is-private-group ? "Group name" : "Channel name";
 
                                     error: root.name-invalid;
-                                    error-message: root.name-invalid ? "Name is required" : "";
+                                    error-message: root.name-invalid ? "Name must be at least 3 characters" : "";
                                     edited(value) => {
                                         root.channel-name-draft = value;
+                                        root.clear-error();
                                     }
                                 }
 
@@ -564,6 +574,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                     edited(value) => {
                                         root.channel-description-draft = value;
+                                        root.clear-error();
                                     }
                                 }
 
@@ -612,12 +623,6 @@ export component ChannelSettingsModal inherits Rectangle {
                             // Save name/description/icon edits. Disabled until a
                             // draft differs or an icon was picked, so an
                             // accidental click is a no-op.
-                            if root.error-message != "": Text {
-                                text: root.error-message;
-                                color: Colors.error;
-                                font-size: Typography.sm;
-                                wrap: word-wrap;
-                            }
                             if root.can-edit: HorizontalLayout {
                                 alignment: end;
                                 Button {
@@ -625,7 +630,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     loading: root.saving;
                                     height: Spacing.touch-target-min;
                                     variant: "primary";
-                                    disabled: !root.has-edits || root.name-invalid || root.saving;
+                                    disabled: !root.has-edits || root.saving;
                                     clicked => {
                                         root.save-settings(root.channel-name-draft, root.channel-description-draft);
                                     }

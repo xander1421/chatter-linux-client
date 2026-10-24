@@ -136,6 +136,15 @@ fn finish_icon_request(
 
 /// Wire channel settings modal callbacks.
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    window
+        .global::<crate::ModalHostState>()
+        .on_channel_settings_clear_error(move || {
+            if let Some(w) = weak_window.upgrade() {
+                w.global::<crate::ModalHostState>()
+                    .set_channel_settings_error("".into());
+            }
+        });
     wire_save_settings(window, ui_ctx);
     wire_pick_icon(window, ui_ctx);
     wire_notification_settings(window, ui_ctx);
@@ -914,7 +923,10 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.global::<crate::ModalHostState>()
                                 .set_channel_settings_saving(false);
                             w.global::<crate::ModalHostState>()
-                                .set_channel_settings_error(e.to_string().into());
+                                .set_channel_settings_error(match &e {
+                                    chatter_core::services::channel::ChannelError::InvalidInput(message) => message.clone().into(),
+                                    _ => e.user_message().into(),
+                                });
                         }
                     }
                 });

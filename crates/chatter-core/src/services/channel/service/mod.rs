@@ -288,6 +288,11 @@ impl ChannelService {
         config: Option<ChannelConfig>,
     ) -> Result<Channel, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
+        if name.is_some_and(|name| name.chars().count() < 3) {
+            return Err(ChannelError::InvalidInput(
+                "Name must be at least 3 characters".to_string(),
+            ));
+        }
 
         let existing = self
             .channel_repo
