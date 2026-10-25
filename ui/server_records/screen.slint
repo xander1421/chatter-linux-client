@@ -84,6 +84,7 @@ export component ServerRecordsScreen inherits Rectangle {
                 text: ServerRecordsGlobal.kind == "notifications" ? "You're all caught up" : "No records yet"; color: Colors.text-secondary;
             }
             if ServerRecordsGlobal.kind == "notifications": inbox := ScrollView {
+                mouse-drag-pan-enabled: true;
                 vertical-stretch: 1;
                 viewport-height: activity.preferred-height;
                 activity := VerticalLayout {
@@ -149,6 +150,7 @@ export component ServerRecordsScreen inherits Rectangle {
                 }
             }
             if ServerRecordsGlobal.kind != "notifications": list := ScrollView {
+                mouse-drag-pan-enabled: true;
                 vertical-stretch: 1;
                 // The record texts take the list's width. Without it a
                 // repeated word-wrap Text was measured at ~0 width (one glyph

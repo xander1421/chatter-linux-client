@@ -231,6 +231,8 @@ export component ChannelSettingsModal inherits Rectangle {
                 preferred-height: content-area.preferred-height;
 
                 settings-scroll := ScrollView {
+                    // The fluent ScrollView only pans with the wheel; a finger drag needs this.
+                    mouse-drag-pan-enabled: true;
                     // Fill the area the layout gave us and scroll inside it.
                     // Sized to the content instead, it was centered in a
                     // shorter parent and the overview's top was cut off.
