@@ -69,8 +69,11 @@ export component DisappearingSettings inherits VerticalLayout {
     Button { text: "5 minutes"; variant: root.minutes == "5" ? "primary" : "secondary"; clicked => { root.minutes = "5"; } }
     Input { placeholder: "Custom duration in minutes"; text <=> root.minutes; }
     Button {
-        text: root.selected-ttl == 0 ? "Turn off" : "Enable disappearing messages";
+        // Off and staying off has nothing to apply; with a timer on, the
+        // window above can still change, so Save stays available.
+        text: root.selected-ttl == 0 ? "Turn off" : root.current-ttl == 0 ? "Enable disappearing messages" : "Save";
         variant: "primary";
+        disabled: root.selected-ttl == 0 && root.current-ttl == 0;
         clicked => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
     }
 }
