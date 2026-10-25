@@ -78,7 +78,8 @@ export component SettingsRow inherits Rectangle {
             if root.detail != "": Text {
                 width: max(0px, root.width - Spacing.md * 2 - Spacing.button-icon
                     - (root.show-chevron || root.action-label != "" ? Spacing.md * 2 : Spacing.md)
-                    - (root.action-label != "" ? Spacing.button-min-width : root.show-chevron ? Spacing.button-icon : 0px));
+                    - (root.action-label != "" ? max(Spacing.button-min-width, action-measure.preferred-width + Spacing.md * 2)
+                        : root.show-chevron ? Spacing.button-icon : 0px));
                 text: root.detail;
                 color: root.detail-color;
                 font-size: Typography.xs;
@@ -102,6 +103,17 @@ export component SettingsRow inherits Rectangle {
                 colorize: Colors.text-secondary;
             }
         }
+    }
+
+    // Measures the action button's label so the detail text leaves the
+    // button its full width (Button: sm text, md padding each side).
+    action-measure := Text {
+        x: 0;
+        y: 0;
+        visible: false;
+        text: root.action-label;
+        font-size: Typography.sm;
+        font-weight: Typography.medium;
     }
 
     if keys.has-focus: Rectangle {
