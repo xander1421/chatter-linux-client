@@ -57,7 +57,6 @@ export component ProfileSafetyNumber inherits VerticalLayout {
             height: safety-hint.preferred-height;
             safety-hint := VerticalLayout {
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;

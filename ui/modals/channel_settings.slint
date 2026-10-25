@@ -488,7 +488,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                     min-width: 0px;
 
                                     Text {
-                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: root.channel-name;
                                         color: Colors.text-primary;
                                         font-size: Typography.lg;
@@ -497,7 +496,6 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Text {
-                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         // No count once we left: the roster is no longer ours to see,
                                         // and "0 members" contradicted the header.
                                         text: root.member-summary

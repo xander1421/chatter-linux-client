@@ -84,7 +84,6 @@ export component MeshList inherits Rectangle {
                             }
                         }
                         if MeshGlobal.notice != "": Text {
-                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: MeshGlobal.notice; color: Colors.text-muted;
                             font-size: Typography.xs; wrap: word-wrap;
                         }
@@ -99,7 +98,6 @@ export component MeshList inherits Rectangle {
                     invitation-content := VerticalLayout {
                         padding: Spacing.md; spacing: Spacing.md;
                         Text {
-                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
                             color: Colors.text-primary; font-size: Typography.sm;
                             font-weight: Typography.semibold; wrap: word-wrap;
@@ -187,7 +185,6 @@ export component MeshList inherits Rectangle {
                 Text { text: "No mesh conversations"; color: Colors.text-primary;
                     font-size: Typography.base; font-weight: Typography.semibold; horizontal-alignment: center; }
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: "Create a group or start a nearby conversation.";
                     color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; wrap: word-wrap; }
                 Rectangle {

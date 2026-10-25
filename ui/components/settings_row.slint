@@ -76,7 +76,9 @@ export component SettingsRow inherits Rectangle {
                 overflow: elide;
             }
             if root.detail != "": Text {
-                width: parent.width;
+                width: max(0px, root.width - Spacing.md * 2 - Spacing.button-icon
+                    - (root.show-chevron || root.action-label != "" ? Spacing.md * 2 : Spacing.md)
+                    - (root.action-label != "" ? Spacing.button-min-width : root.show-chevron ? Spacing.button-icon : 0px));
                 text: root.detail;
                 color: root.detail-color;
                 font-size: Typography.xs;

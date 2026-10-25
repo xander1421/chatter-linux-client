@@ -139,7 +139,6 @@ export component ServerRecordsScreen inherits Rectangle {
                                     }
                                 }
                                 Text {
-                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                     text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                                 if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
                                 Button {

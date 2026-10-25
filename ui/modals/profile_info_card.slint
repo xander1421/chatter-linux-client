@@ -166,7 +166,6 @@ export component ProfileInfoCard inherits HorizontalLayout {
                 }
 
                 if root.share-status != "": Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: root.share-status;
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -188,7 +187,6 @@ export component ProfileInfoCard inherits HorizontalLayout {
                 spacing: Spacing.xxs;
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: root.bio;
                     color: Colors.text-primary;
                     font-size: Typography.base;

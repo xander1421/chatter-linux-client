@@ -39,7 +39,7 @@ export component RequestsTab inherits VerticalLayout {
 
     if root.read-error: HorizontalLayout {
         spacing: Spacing.sm;
-        Text { width: max(0px, parent.width - parent.spacing - retry-button.width); text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
+        Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
         retry-button := Button { text: "Retry"; clicked => { root.retry(); } }
     }
 
@@ -126,7 +126,6 @@ export component RequestsTab inherits VerticalLayout {
                                     }
 
                                     if request.note != "": Text {
-                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: request.note;
                                         color: Colors.text-secondary;
                                         font-size: Typography.xs;
@@ -551,7 +550,6 @@ export component RequestsTab inherits VerticalLayout {
                                         font-size: Typography.xs;
                                     }
                                     if root.group-invite-error-id == invite.user-id && root.group-invite-error != "": Text {
-                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: root.group-invite-error;
                                         color: Colors.error;
                                         font-size: Typography.xs;

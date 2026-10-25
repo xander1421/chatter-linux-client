@@ -150,7 +150,6 @@ export component FindTab inherits VerticalLayout {
                     }
 
                     Text {
-                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                         text: root.effective-private-mode ? "(Anonymous — over Tor, no account link)" : "(Enable Shield for a private, anonymous contact)";
                         color: Colors.text-muted.with-alpha(0.7);
                         font-size: Typography.xs;

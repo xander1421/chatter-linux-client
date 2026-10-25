@@ -68,7 +68,6 @@ export component ChannelAccessSection inherits VerticalLayout {
                 overflow: elide;
             }
             Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: bot.label;
                 color: Colors.warning;
                 font-size: Typography.xs;
@@ -156,7 +155,6 @@ export component ChannelAccessSection inherits VerticalLayout {
             spacing: Spacing.sm;
             min-height: Spacing.touch-target-min;
             Text {
-                width: max(0px, parent.width - parent.spacing - revoke-button.width);
                 horizontal-stretch: 1;
                 text: link.summary;
                 color: Colors.text-primary;
@@ -164,7 +162,7 @@ export component ChannelAccessSection inherits VerticalLayout {
                 vertical-alignment: center;
                 wrap: word-wrap;
             }
-            revoke-button := Button {
+            Button {
                 height: Spacing.touch-target-min;
                 text: "Revoke";
                 variant: "destructive";

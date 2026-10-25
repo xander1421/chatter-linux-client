@@ -75,7 +75,6 @@ export component PinnedMessagesModal inherits Rectangle {
                                 }
                             }
                             Text {
-                                width: max(0px, parent.width - parent.padding-left - parent.padding-right - (item.thumbnail.width > 0 ? 40px + parent.spacing : 0px));
                                 text: item.preview;
                                 color: Colors.text-primary;
                                 font-size: Typography.sm;

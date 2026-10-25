@@ -76,7 +76,6 @@ export component OfflineMeshNotice inherits Rectangle {
                 spacing: Spacing.xs;
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: "Can't reach the server";
                     color: Colors.warning;
                     font-size: Typography.sm;
@@ -87,7 +86,6 @@ export component OfflineMeshNotice inherits Rectangle {
                 // Why the screen behind this notice cannot do its job. Said
                 // once, in the place the user is already stuck.
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: "Creating an account and signing in both need it, so neither will work until it comes back.";
                     color: Colors.text-secondary;
                     font-size: Typography.xs;
@@ -98,7 +96,6 @@ export component OfflineMeshNotice inherits Rectangle {
                 // take. Nothing in between: either the service is up and this is
                 // a real offer, or it is down and there is no offer to make.
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: root.account-free-surfaces
                         ? "The mesh does not. It carries messages between nearby devices over Bluetooth with no server, no internet and no account — and it is running now."
                         : (MeshGlobal.enabled
