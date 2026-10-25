@@ -161,7 +161,7 @@ fn map_row(row: chatter_core::services::mesh::MeshSidebarRow) -> MeshRow {
         scope: row.scope,
         timestamp: row
             .last_message_at
-            .map(crate::bin_ui::converters::format_timestamp)
+            .map(crate::bin_ui::converters::sidebar_time)
             .unwrap_or_default(),
         unread_count: row.unread_count,
         conversation: row.conversation,
