@@ -13,6 +13,8 @@ thread_local! {
 /// 3-column grid fills several screens, small enough that decoding that many
 /// thumbnails does not stall a frame.
 const SHARED_PAGE_SIZE: u32 = 60;
+const MAX_SHARED_PAGES: usize = 3;
+const SHARED_TILE_PX: u32 = 200;
 // Android's video fallback decodes missing previews before painting the page.
 // Keep that blocking batch small; later rows load as the grid scrolls.
 #[cfg(target_os = "android")]
@@ -30,8 +32,29 @@ pub(super) struct SharedPage {
     pub(super) generation: u64,
     pub(super) tab: String,
     pub(super) loaded: usize,
+    pub(super) first_offset: usize,
     pub(super) exhausted: bool,
     pub(super) in_flight: bool,
+}
+
+pub(super) fn clear_shared_content(w: &MainWindow) {
+    SHARED_PAGE.with(|page| {
+        let mut page = page.borrow_mut();
+        let generation = page.generation.wrapping_add(1);
+        let peer = page.peer;
+        let conversation = page.conversation;
+        *page = SharedPage::default();
+        page.generation = generation;
+        page.peer = peer;
+        page.conversation = conversation;
+    });
+    let host = w.global::<crate::ModalHostState>();
+    host.set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(
+        vec![],
+    )));
+    host.set_profile_shared_has_previous(false);
+    host.set_profile_shared_has_more(false);
+    host.set_profile_shared_loading(false);
 }
 
 /// The conversation whose shared content a contact's profile shows: the DM
@@ -118,7 +141,7 @@ pub(super) fn load_shared_tabs(
                     w.global::<crate::ModalHostState>()
                         .set_profile_shared_tab(tab.clone().into());
                     // `request_shared_page` owns the loading flag from here.
-                    request_shared_page(&w, &ui_ctx, peer_id, tab, false);
+                    request_shared_page(&w, &ui_ctx, peer_id, tab, false, false);
                 }
                 // Nothing shared at all — clear the flag ourselves, or the
                 // spinner outlives the query that would have cleared it.
@@ -140,6 +163,7 @@ fn request_shared_page(
     peer_id: UserId,
     tab: String,
     append: bool,
+    previous: bool,
 ) {
     let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
         return;
@@ -154,17 +178,26 @@ fn request_shared_page(
     let page_size = SHARED_PAGE_SIZE;
     let offset = SHARED_PAGE.with(|p| {
         let mut p = p.borrow_mut();
-        if append && (p.exhausted || p.in_flight || p.tab != tab) {
+        if ((append || previous) && p.in_flight)
+            || (append && (p.exhausted || p.tab != tab))
+            || (previous && p.first_offset == 0)
+        {
             return None;
         }
-        if !append {
+        if !append && !previous {
             p.generation = p.generation.wrapping_add(1);
             p.tab = tab.clone();
             p.loaded = 0;
+            p.first_offset = 0;
             p.exhausted = false;
         }
         p.in_flight = true;
-        Some((p.loaded as u32, p.generation))
+        let offset = if previous {
+            p.first_offset.saturating_sub(page_size as usize)
+        } else {
+            p.loaded
+        };
+        Some((offset as u32, p.generation))
     });
     let Some((offset, generation)) = offset else {
         return;
@@ -204,8 +237,6 @@ fn request_shared_page(
                     return false;
                 }
                 p.in_flight = false;
-                p.loaded += count;
-                p.exhausted = short;
                 true
             });
             if !current {
@@ -235,7 +266,7 @@ fn request_shared_page(
 
             // Thumbnails decode here, on the UI thread, because a
             // `slint::Image` cannot cross threads.
-            let mut rows: Vec<SharedContentItem> = if append {
+            let mut rows: Vec<SharedContentItem> = if append || previous {
                 let cur = w
                     .global::<crate::ModalHostState>()
                     .get_profile_shared_items();
@@ -243,23 +274,59 @@ fn request_shared_page(
             } else {
                 Vec::new()
             };
-            rows.extend(page.iter().map(|item| {
-                let (title, subtitle, is_video) =
-                    crate::bin_ui::converters::shared_content_lines(item);
-                let thumbnail = crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
-                    .unwrap_or_default();
-                let has_thumbnail = thumbnail.size().width > 0;
-                SharedContentItem {
-                    message_id: item.message_id.clone().into(),
-                    attachment_id: item.attachment_id.clone().into(),
-                    category: item.category.clone().into(),
-                    title: shared_content_display_title(&item.category, &title).into(),
-                    subtitle: subtitle.into(),
-                    thumbnail,
-                    has_thumbnail,
-                    is_video,
-                }
-            }));
+            let new_rows = page
+                .iter()
+                .map(|item| {
+                    let (title, subtitle, is_video) =
+                        crate::bin_ui::converters::shared_content_lines(item);
+                    let thumbnail = image::load_from_memory(&item.thumbnail)
+                        .ok()
+                        .map(|image| {
+                            let rgba = image.thumbnail(SHARED_TILE_PX, SHARED_TILE_PX).to_rgba8();
+                            crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                                rgba.as_raw(), rgba.width(), rgba.height(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    let has_thumbnail = thumbnail.size().width > 0;
+                    SharedContentItem {
+                        message_id: item.message_id.clone().into(),
+                        attachment_id: item.attachment_id.clone().into(),
+                        category: item.category.clone().into(),
+                        title: shared_content_display_title(&item.category, &title).into(),
+                        subtitle: subtitle.into(),
+                        thumbnail,
+                        has_thumbnail,
+                        is_video,
+                    }
+                })
+                .collect::<Vec<_>>();
+            if previous {
+                rows.splice(0..0, new_rows);
+            } else {
+                rows.extend(new_rows);
+            }
+            let max_rows = MAX_SHARED_PAGES * page_size as usize;
+            let dropped = rows.len().saturating_sub(max_rows);
+            if previous {
+                rows.truncate(max_rows);
+            } else if dropped > 0 {
+                rows.drain(..dropped);
+            }
+            SHARED_PAGE.with(|p| {
+                let mut p = p.borrow_mut();
+                p.first_offset = if previous {
+                    offset as usize
+                } else {
+                    p.first_offset + dropped
+                };
+                p.loaded = p.first_offset + rows.len();
+                p.exhausted = !previous && short;
+                w.global::<crate::ModalHostState>()
+                    .set_profile_shared_has_previous(p.first_offset > 0);
+                w.global::<crate::ModalHostState>()
+                    .set_profile_shared_has_more(!p.exhausted);
+            });
             w.global::<crate::ModalHostState>()
                 .set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
         });
@@ -295,7 +362,7 @@ pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         });
         if let (Some(peer), Some(conversation)) = (peer, conversation) {
             if tab.is_empty() { load_shared_tabs(w.as_weak(), ui_ctx_retry.clone(), peer, conversation); }
-            else { request_shared_page(&w, &ui_ctx_retry, peer, tab, false); }
+            else { request_shared_page(&w, &ui_ctx_retry, peer, tab, false, false); }
         }
     });
     let weak_window = window.as_weak();
@@ -313,7 +380,7 @@ pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 .set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(
                     vec![],
                 )));
-            request_shared_page(&w, &ui_ctx_tab, peer, tab.to_string(), false);
+            request_shared_page(&w, &ui_ctx_tab, peer, tab.to_string(), false, false);
         });
 
     let weak_window = window.as_weak();
@@ -334,8 +401,26 @@ pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             if tab.is_empty() {
                 return;
             }
-            request_shared_page(&w, &ui_ctx_more, peer, tab, true);
+            request_shared_page(&w, &ui_ctx_more, peer, tab, true, false);
         });
+
+    let weak_window = window.as_weak();
+    let ui_ctx_previous = ui_ctx.clone();
+    window.global::<crate::ModalHostState>().on_profile_shared_load_previous(move || {
+        let Some(w) = weak_window.upgrade() else { return };
+        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else { return };
+        let tab = w.global::<crate::ModalHostState>().get_profile_shared_tab().to_string();
+        if !tab.is_empty() {
+            request_shared_page(&w, &ui_ctx_previous, peer, tab, false, true);
+        }
+    });
+
+    let weak_window = window.as_weak();
+    window.global::<crate::ModalHostState>().on_profile_shared_page_closed(move || {
+        if let Some(w) = weak_window.upgrade() {
+            clear_shared_content(&w);
+        }
+    });
 
     // Opening an item: a link goes to the browser, everything else jumps the
     // conversation to the message it arrived in — which is the existing

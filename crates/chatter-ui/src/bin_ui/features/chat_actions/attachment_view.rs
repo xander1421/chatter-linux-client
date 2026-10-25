@@ -27,6 +27,31 @@ use crate::bin_ui::video_state;
 use super::timers::{start_audio_progress_timer, start_video_progress_timer};
 use super::transfer_status::update_attachment_transfer_status;
 
+const MAX_VIEWER_EDGE: u32 = 2560;
+
+fn viewer_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= MAX_VIEWER_EDGE {
+        return (width, height);
+    }
+    let scale = |side: u32| {
+        ((u64::from(side) * u64::from(MAX_VIEWER_EDGE)) / u64::from(longest)).max(1) as u32
+    };
+    (scale(width), scale(height))
+}
+
+#[cfg(test)]
+mod viewer_dimension_tests {
+    use super::viewer_dimensions;
+
+    #[test]
+    fn bounds_both_orientations_without_upscaling() {
+        assert_eq!(viewer_dimensions(4000, 3000), (2560, 1920));
+        assert_eq!(viewer_dimensions(3000, 4000), (1920, 2560));
+        assert_eq!(viewer_dimensions(800, 600), (800, 600));
+    }
+}
+
 fn show_attachment_error(weak: &slint::Weak<MainWindow>, request: u64, message: &'static str) {
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -750,7 +775,7 @@ fn display_image_from_buffer(
     if !super::media_viewer::is_current(request) {
         return;
     }
-    let data = secure_buffer.as_slice().to_vec();
+    let data = secure_buffer.as_slice();
     let filename_for_ui = filename.to_string();
     let size_display = format_file_size(file_size);
     let att_id_for_inline = attachment_id.to_string();
@@ -766,6 +791,7 @@ fn display_image_from_buffer(
     );
 
     if is_gif {
+        let data = data.to_vec();
         let first_frame = crate::bin_ui::gif_state::prepare_first_gif_frame(&data);
         // GIF: Handle on UI thread
         let _ = slint::invoke_from_event_loop(move || {
@@ -824,9 +850,11 @@ fn display_image_from_buffer(
     } else {
         // Static image: decode synchronously (already on a background thread).
         let t0 = std::time::Instant::now();
-        match ImageProcessor::load_from_memory(&data) {
+        match ImageProcessor::load_from_memory(data) {
             Ok(image) => {
-                let rgba = image.to_rgba8();
+                let (display_width, display_height) =
+                    viewer_dimensions(image.width(), image.height());
+                let rgba = image.thumbnail(display_width, display_height).to_rgba8();
                 let width = rgba.width();
                 let height = rgba.height();
                 let rgba_data = rgba.into_raw();

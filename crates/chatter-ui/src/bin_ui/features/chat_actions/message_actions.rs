@@ -318,6 +318,8 @@ pub fn wire_close_image_viewer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             if let Some(w) = weak.upgrade() {
                 w.global::<crate::ChatPane>()
                     .set_media_viewer_attachment_id("".into());
+                w.global::<crate::ChatPane>()
+                    .set_image_viewer_source(slint::Image::default());
                 crate::bin_ui::features::header::refresh_visible_media(
                     &w,
                     &ui_ctx,

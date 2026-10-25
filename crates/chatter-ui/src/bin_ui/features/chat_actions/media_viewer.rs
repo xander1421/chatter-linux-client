@@ -125,6 +125,8 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
     w.global::<crate::ChatPane>()
         .set_media_viewer_attachment_id(id.into());
     w.global::<crate::ChatPane>()
+        .set_image_viewer_source(slint::Image::default());
+    w.global::<crate::ChatPane>()
         .set_image_viewer_sender("".into());
     w.global::<crate::ChatPane>()
         .set_image_viewer_datetime("".into());

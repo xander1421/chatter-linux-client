@@ -267,6 +267,10 @@ pub fn open_user_profile_in_conversation(
     w.global::<crate::ModalHostState>()
         .set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
     w.global::<crate::ModalHostState>()
+        .set_profile_shared_has_previous(false);
+    w.global::<crate::ModalHostState>()
+        .set_profile_shared_has_more(false);
+    w.global::<crate::ModalHostState>()
         .set_profile_shared_tab("".into());
     w.global::<crate::ModalHostState>()
         .set_profile_shared_error("".into());

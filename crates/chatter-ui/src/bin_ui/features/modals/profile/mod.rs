@@ -23,6 +23,8 @@ use shared::{
     SHARED_PAGE, SharedPage, dm_conversation, load_shared_tabs, shared_sender, wire_shared_content,
 };
 
+pub(crate) use shared::clear_shared_content;
+
 pub(crate) fn retire_avatar_edit() {
     avatar_edit::retire();
 }
