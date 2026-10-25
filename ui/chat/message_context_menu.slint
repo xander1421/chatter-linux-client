@@ -507,7 +507,7 @@ export component MessageContextMenu inherits Rectangle {
 
                 if MessageMenuActions.reply && root.can-thread && root.more-actions: MenuItem {
                     icon: Icons.message-circle;
-                    label: "Reply in Thread";
+                    label: "Reply in thread";
                     clicked => {
                         root.thread-clicked(root.message-id);
                         root.close();

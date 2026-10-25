@@ -131,7 +131,7 @@ export component MessageAttachments inherits VerticalLayout {
                 Text {
                     width: parent.width - Spacing.md;
                     height: parent.height;
-                    text: "Download failed · Tap to retry";
+                    text: "Download failed · tap to retry";
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -279,7 +279,7 @@ export component MessageAttachments inherits VerticalLayout {
                 Text {
                     width: parent.width - Spacing.md;
                     height: parent.height;
-                    text: "Download failed · Tap to retry";
+                    text: "Download failed · tap to retry";
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;
@@ -345,7 +345,7 @@ export component MessageAttachments inherits VerticalLayout {
                         overflow: elide;
                     }
                     Text {
-                        text: attachment.is-download-failed ? "Download failed · Tap to retry" : attachment.size-display;
+                        text: attachment.is-download-failed ? "Download failed · tap to retry" : attachment.size-display;
                         color: attachment.is-download-failed ? Colors.primary : Colors.text-muted;
                         font-size: Typography.xs;
                     }

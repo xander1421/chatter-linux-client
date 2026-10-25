@@ -117,7 +117,7 @@ impl FileFilter {
     /// Filter for all files (no restriction).
     #[must_use]
     pub fn all() -> Self {
-        Self::new("All Files", vec!["*"])
+        Self::new("All files", vec!["*"])
     }
 }
 
@@ -286,11 +286,11 @@ mod tests {
     #[test]
     fn test_config_builder() {
         let config = FilePickerConfig::new()
-            .with_title("Select File")
+            .with_title("Select file")
             .with_filter(FileFilter::images())
             .with_multiple(true);
 
-        assert_eq!(config.title, Some("Select File".to_string()));
+        assert_eq!(config.title, Some("Select file".to_string()));
         assert!(config.multiple);
         assert_eq!(config.filters.len(), 1);
     }

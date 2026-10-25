@@ -145,7 +145,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.is-private-group ? "Group Settings" : "Channel Settings";
+        title: root.is-private-group ? "Group settings" : "Channel settings";
         modal-width: 640px;
         // One fixed card height for every section, the body scrolling inside
         // it: a card that hugged each tab's content changed height and, being
@@ -299,7 +299,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
 
                         if root.active-section == "general" || root.active-section == "destructive": Button {
-                            text: root.has-edits && root.active-section == "general" ? "‹ Info • Unsaved changes" : "‹ Info";
+                            text: root.has-edits && root.active-section == "general" ? "‹ Info • unsaved changes" : "‹ Info";
                             variant: "ghost";
                             height: Spacing.touch-target-min;
                             clicked => { root.active-section = "overview"; }
@@ -543,7 +543,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: root.is-private-group ? "Group Name" : "Channel Name";
+                                    text: root.is-private-group ? "Group name" : "Channel name";
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;

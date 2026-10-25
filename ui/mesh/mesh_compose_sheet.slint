@@ -89,10 +89,10 @@ export component MeshComposeSheet inherits Rectangle {
         : root.page == "channel" ? root.channel-draft != ""
         : root.page == "invite" ? root.invite-draft != ""
         : root.page == "cell" && root.cell-draft != "";
-    property <string> page-title: root.page == "group" ? "New Private Group"
-        : root.page == "channel" ? "Join Public Channel"
-        : root.page == "invite" ? "Join with Invite"
-        : root.page == "cell" ? "Join Location Cell" : "New";
+    property <string> page-title: root.page == "group" ? "New private group"
+        : root.page == "channel" ? "Join public channel"
+        : root.page == "invite" ? "Join with invite"
+        : root.page == "cell" ? "Join location cell" : "New";
 
     ModalContainer {
         show: root.show-modal;
@@ -146,18 +146,18 @@ export component MeshComposeSheet inherits Rectangle {
                         Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
-                                ComposeMenuRow { icon: Icons.lock; title: "New Private Group"; detail: "Invite only";
+                                ComposeMenuRow { icon: Icons.lock; title: "New private group"; detail: "Invite only";
                                     tint: Colors.group-accent; touch: root.touch;
                                     clicked => { root.page = "group"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.hash; title: "Join Public Channel"; detail: "Talk with devices nearby"; touch: root.touch;
+                                ComposeMenuRow { icon: Icons.hash; title: "Join public channel"; detail: "Talk with devices nearby"; touch: root.touch;
                                     clicked => { root.page = "channel"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.link; title: "Join with Invite"; detail: "Paste or scan a private invite";
+                                ComposeMenuRow { icon: Icons.link; title: "Join with invite"; detail: "Paste or scan a private invite";
                                     tint: Colors.info; touch: root.touch;
                                     clicked => { root.page = "invite"; } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                ComposeMenuRow { icon: Icons.radio; title: "Join Location Cell"; detail: "Connect through nearby relays";
+                                ComposeMenuRow { icon: Icons.radio; title: "Join location cell"; detail: "Connect through nearby relays";
                                     tint: Colors.accent; touch: root.touch;
                                     clicked => { root.page = "cell"; } }
                             }
@@ -167,7 +167,7 @@ export component MeshComposeSheet inherits Rectangle {
                         spacing: Spacing.sm;
                         Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             HorizontalLayout { padding: Spacing.sm; spacing: Spacing.sm;
-                                Input { placeholder: "Group Name"; text <=> root.group-draft; control-height: Spacing.touch-target-min;
+                                Input { placeholder: "Group name"; text <=> root.group-draft; control-height: Spacing.touch-target-min;
                                     horizontal-stretch: 1; accepted(value) => { root.submit(); } }
                             }
                         }
@@ -206,7 +206,7 @@ export component MeshComposeSheet inherits Rectangle {
                                         accepted(value) => { root.submit(); } }
                                 }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.image; title: "Scan QR Code"; touch: root.touch;
+                                SettingsRow { icon: Icons.image; title: "Scan QR code"; touch: root.touch;
                                     clicked => { MeshGlobal.open-private-scanner(); } }
                             }
                         }

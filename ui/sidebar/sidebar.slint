@@ -401,17 +401,17 @@ export component Sidebar inherits Rectangle {
                         : (!root.mobile-mode && saved-touch.has-hover) ? Colors.surface-hover : transparent;
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
-                    accessible-label: "Saved Messages";
+                    accessible-label: "Saved messages";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: "Saved Messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                        Text { text: "Saved messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Saved Messages"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: "Saved messages"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     saved-touch := TouchArea {
@@ -447,17 +447,17 @@ export component Sidebar inherits Rectangle {
                         : friends-touch.has-hover ? Colors.surface-hover : transparent;
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
-                    accessible-label: AnonMode.enabled ? "Add Contact" : "Friends";
+                    accessible-label: AnonMode.enabled ? "Add contact" : "Friends";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: AnonMode.enabled ? "Add Contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                        Text { text: AnonMode.enabled ? "Add contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: AnonMode.enabled ? "Add Contact" : "Friends"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: AnonMode.enabled ? "Add contact" : "Friends"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
                     friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
@@ -617,7 +617,7 @@ export component Sidebar inherits Rectangle {
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: "New Channel"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: "New channel"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
@@ -629,7 +629,7 @@ export component Sidebar inherits Rectangle {
 
                     TooltipArea {
                         height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                        tooltip-text: "New Section"; tooltip-enabled: true; placement: "right";
+                        tooltip-text: "New section"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;

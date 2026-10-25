@@ -118,7 +118,7 @@ export component AccountSettings inherits VerticalLayout {
                 // Edit button — beside the name on wide screens
                 if !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Edit Profile";
+                    text: "Edit profile";
                     variant: "secondary";
                     icon: Icons.edit;
                     clicked => { root.edit-profile-clicked(); }
@@ -127,7 +127,7 @@ export component AccountSettings inherits VerticalLayout {
 
             // Compact: full-width button stacked below
             if root.compact-mode: Button {
-                text: "Edit Profile";
+                text: "Edit profile";
                 variant: "secondary";
                 touch: true;
                 icon: Icons.edit;
@@ -259,7 +259,7 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.shield;
-                title: "Recovery Codes";
+                title: "Recovery codes";
                 detail: "Lost or used up your codes? Get a new set.";
                 clickable: false;
                 show-chevron: false;
@@ -445,7 +445,7 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.download;
-                title: "Key Backup";
+                title: "Key backup";
                 detail: "Status: " + (root.backup-status == "backed_up" ? "Backed up" : root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown");
                 detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
                 clickable: false;
@@ -530,7 +530,7 @@ export component AccountSettings inherits VerticalLayout {
             SettingsRow {
                 touch: root.mobile-platform;
                 icon: Icons.download;
-                title: "Message Backup";
+                title: "Message backup";
                 detail: "Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.";
                 clickable: false;
                 show-chevron: false;
@@ -556,7 +556,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Export to File…";
+                    text: "Export to file…";
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-passphrase == "";
@@ -567,7 +567,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Restore from File…";
+                    text: "Restore from file…";
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-passphrase == "";
@@ -597,7 +597,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Back Up to Server";
+                    text: "Back up to server";
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-pin == "";
@@ -608,7 +608,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Restore from Server";
+                    text: "Restore from server";
                     variant: "secondary";
                     horizontal-stretch: 1;
                     disabled: root.message-backup-busy || root.message-backup-pin == "";
@@ -632,7 +632,7 @@ export component AccountSettings inherits VerticalLayout {
     Rectangle { height: Spacing.md; }
 
     Text {
-        text: "Danger Zone";
+        text: "Danger zone";
         color: Colors.error;
         font-size: Typography.lg;
         font-weight: Typography.semibold;
@@ -672,7 +672,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 if !show-logout-confirm && !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Log Out";
+                    text: "Log out";
                     variant: "destructive";
                     clicked => { show-logout-confirm = true; }
                 }
@@ -681,7 +681,7 @@ export component AccountSettings inherits VerticalLayout {
             // Compact: full-width button stacked below
             if !show-logout-confirm && root.compact-mode: Button {
                 touch: root.mobile-platform;
-                text: "Log Out";
+                text: "Log out";
                 variant: "destructive";
                 clicked => { show-logout-confirm = true; }
             }
@@ -699,7 +699,7 @@ export component AccountSettings inherits VerticalLayout {
 
                 Button {
                     touch: root.mobile-platform;
-                    text: "Log Out of This Device";
+                    text: "Log out of this device";
                     variant: "destructive";
                     clicked => {
                         show-logout-confirm = false;
@@ -742,7 +742,7 @@ export component AccountSettings inherits VerticalLayout {
                 // (with password) — never deletes directly.
                 if !show-delete-confirm && !root.compact-mode: Button {
                     touch: root.mobile-platform;
-                    text: "Delete Account";
+                    text: "Delete account";
                     variant: "destructive";
                     clicked => {
                         root.delete-account-clicked();
@@ -754,7 +754,7 @@ export component AccountSettings inherits VerticalLayout {
             // Compact: full-width button stacked below
             if !show-delete-confirm && root.compact-mode: Button {
                 touch: root.mobile-platform;
-                text: "Delete Account";
+                text: "Delete account";
                 variant: "destructive";
                 clicked => {
                     root.delete-account-clicked();
@@ -805,7 +805,7 @@ export component AccountSettings inherits VerticalLayout {
 
                     Button {
                         touch: root.mobile-platform;
-                        text: "Delete Forever";
+                        text: "Delete forever";
                         variant: "destructive";
                         loading: root.delete-loading;
                         disabled: root.delete-loading || root.delete-password == "";

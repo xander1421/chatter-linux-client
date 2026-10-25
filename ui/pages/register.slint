@@ -114,7 +114,7 @@ export component RegisterPage inherits Rectangle {
                 if current-step == 1: Rectangle { width: Spacing.header-action-box-touch; } // Spacer
                 
                 Text {
-                    text: "Create Account";
+                    text: "Create account";
                     color: Colors.text-primary;
                     font-size: Typography.lg;
                     font-weight: Typography.semibold;
@@ -484,7 +484,7 @@ export component RegisterPage inherits Rectangle {
                             spacing: Spacing.md;
                             
                             Text {
-                                text: "Finalize Registration";
+                                text: "Finalize registration";
                                 color: Colors.text-primary;
                                 font-size: Typography.xl;
                                 font-weight: Typography.bold;
@@ -541,7 +541,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             Button {
-                                text: loading ? "" : "Create Account";
+                                text: loading ? "" : "Create account";
                                 variant: "primary";
                                 loading: root.loading;
                                 disabled: root.loading || server-url == "";

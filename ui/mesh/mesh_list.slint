@@ -14,8 +14,8 @@ export component MeshList inherits Rectangle {
         : MeshGlobal.peer-count + " devices nearby";
     property <string> relay-count: MeshGlobal.relay-count == 1 ? "1 relay"
         : MeshGlobal.relay-count + " relays";
-    property <string> status-title: !MeshGlobal.mesh-on ? "Mesh Off"
-        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth Off" : "Mesh On";
+    property <string> status-title: !MeshGlobal.mesh-on ? "Mesh off"
+        : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off" : "Mesh on";
     property <string> status-detail: !MeshGlobal.mesh-on ? "Radio off · " + root.relay-count
         : MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth is off · " + root.relay-count
         : !MeshGlobal.radio-running ? "Radio unavailable · " + root.relay-count
@@ -190,7 +190,7 @@ export component MeshList inherits Rectangle {
                 Rectangle {
                     height: Spacing.button-height; border-radius: Spacing.radius-md;
                     background: Colors.action-fill;
-                    Text { text: "New Group"; color: Colors.on-action; font-size: Typography.sm;
+                    Text { text: "New group"; color: Colors.on-action; font-size: Typography.sm;
                         font-weight: Typography.semibold; horizontal-alignment: center; vertical-alignment: center; }
                     TouchArea {
                         mouse-cursor: pointer; accessible-role: button; accessible-label: "New mesh group";

@@ -193,7 +193,7 @@ export component UserProfileModal inherits Rectangle {
         } else if p == "away" {
             return "Away";
         } else if p == "dnd" {
-            return "Do Not Disturb";
+            return "Do not disturb";
         } else {
             return "Offline";
         }
@@ -535,7 +535,7 @@ export component UserProfileModal inherits Rectangle {
                         padding-right: Spacing.md;
 
                         Button {
-                            text: "Edit Profile";
+                            text: "Edit profile";
                             variant: "primary";
                             clicked => { root.edit-profile(); }
                         }
@@ -555,7 +555,7 @@ export component UserProfileModal inherits Rectangle {
                         }
 
                         Button {
-                            text: "Open Blocked";
+                            text: "Open blocked";
                             variant: "secondary";
                             clicked => { root.manage-blocked(); }
                         }
@@ -601,7 +601,7 @@ export component UserProfileModal inherits Rectangle {
                         // Core refuses friend requests in Anon Mode (they
                         // reveal the real identity), so the button is not shown.
                         Button {
-                            text: root.loading ? "" : "Add Friend";
+                            text: root.loading ? "" : "Add friend";
                             variant: "secondary";
                             horizontal-stretch: 1;
                             loading: root.loading;

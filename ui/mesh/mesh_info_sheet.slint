@@ -53,14 +53,14 @@ export component MeshInfoSheet inherits Rectangle {
     property <string> selected-member-id: "";
     property <string> selected-member-name: "";
     property <string> confirm-kind: "";
-    property <string> leave-label: MeshGlobal.active-kind == "private-channel" ? "Leave Group"
-        : MeshGlobal.active-kind == "geohash" ? "Leave Cell" : "Leave Channel";
+    property <string> leave-label: MeshGlobal.active-kind == "private-channel" ? "Leave group"
+        : MeshGlobal.active-kind == "geohash" ? "Leave cell" : "Leave channel";
 
     Modal {
         show: root.show-modal;
-        title: root.adding-members ? "Add Members"
-            : MeshGlobal.active-kind == "private-channel" ? "Group Info"
-            : MeshGlobal.active-kind == "geohash" ? "Cell Info" : "Channel Info";
+        title: root.adding-members ? "Add members"
+            : MeshGlobal.active-kind == "private-channel" ? "Group info"
+            : MeshGlobal.active-kind == "geohash" ? "Cell info" : "Channel info";
         modal-width: 500px;
         max-modal-height: 760px;
         fill-height: true;
@@ -148,7 +148,7 @@ export component MeshInfoSheet inherits Rectangle {
                         }
                     }
                     if MeshGlobal.private-can-manage: InfoActionRow {
-                        title: "Add Members";
+                        title: "Add members";
                         clicked => { root.adding-members = true; MeshGlobal.private-invite-visible = false; }
                     }
                     Text {
@@ -304,7 +304,7 @@ export component MeshInfoSheet inherits Rectangle {
                             vertical-alignment: center; horizontal-stretch: 1;
                         }
                         if root.confirm-kind == "member": InfoActionRow {
-                            title: "View Contact"; centered: true;
+                            title: "View contact"; centered: true;
                             clicked => {
                                 root.confirm-kind = "";
                                 MeshGlobal.open-peer(root.selected-member-id);

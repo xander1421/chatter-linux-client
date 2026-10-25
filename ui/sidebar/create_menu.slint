@@ -84,7 +84,7 @@ export component CreateMenu inherits Rectangle {
                 padding-top: Spacing.xs;
                 padding-bottom: Spacing.xs;
                 MenuRow {
-                    icon: Icons.message-circle; label: "New Chat";
+                    icon: Icons.message-circle; label: "New chat";
                     opacity: root.first-arrived ? 1 : 0;
                     transform-scale-x: root.first-arrived ? 100% : 84%;
                     transform-scale-y: root.first-arrived ? 100% : 84%;
@@ -96,7 +96,7 @@ export component CreateMenu inherits Rectangle {
                 }
                 // Channels do not exist in Shield mode (sidebar.slint hides them).
                 if !AnonMode.enabled: MenuRow {
-                    icon: Icons.megaphone; label: "New Channel";
+                    icon: Icons.megaphone; label: "New channel";
                     opacity: root.second-arrived ? 1 : 0;
                     transform-scale-x: root.second-arrived ? 100% : 84%;
                     transform-scale-y: root.second-arrived ? 100% : 84%;
@@ -107,7 +107,7 @@ export component CreateMenu inherits Rectangle {
                     clicked => { if root.show && root.second-arrived { root.new-channel(); } }
                 }
                 MenuRow {
-                    icon: Icons.folder; label: "New Section";
+                    icon: Icons.folder; label: "New section";
                     opacity: root.third-arrived ? 1 : 0;
                     transform-scale-x: root.third-arrived ? 100% : 84%;
                     transform-scale-y: root.third-arrived ? 100% : 84%;
@@ -137,7 +137,7 @@ export component NewChatPicker inherits Rectangle {
     in property <bool> show: true;
     Modal {
         show: root.show;
-        title: "New Chat";
+        title: "New chat";
         modal-width: 420px;
         max-modal-height: 640px;
         full-screen: root.mobile-mode;

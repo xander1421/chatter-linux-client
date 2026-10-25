@@ -88,7 +88,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     let picked = {
                         let config = FilePickerConfig {
-                            title: Some("Select Avatar".to_string()),
+                            title: Some("Select avatar".to_string()),
                             filters: vec![FileFilter {
                                 name: "Images".to_string(),
                                 extensions: vec!["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "webp".to_string()],

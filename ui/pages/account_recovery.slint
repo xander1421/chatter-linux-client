@@ -86,7 +86,7 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // Subtitle
                 Text {
-                    text: "Account Recovery";
+                    text: "Account recovery";
                     color: Colors.text-primary;
                     font-size: Typography.xl;
                     font-weight: Typography.semibold;
@@ -128,7 +128,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "Recovery Code";
+                        text: "Recovery code";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
@@ -157,7 +157,7 @@ export component AccountRecoveryPage inherits Rectangle {
                         spacing: Spacing.xs;
 
                         Text {
-                            text: "New Password";
+                            text: "New password";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                         }
@@ -176,7 +176,7 @@ export component AccountRecoveryPage inherits Rectangle {
                         spacing: Spacing.xs;
 
                         Text {
-                            text: "Confirm Password";
+                            text: "Confirm password";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                         }
@@ -268,7 +268,7 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // Recover Account button
                 Button {
-                    text: loading ? "" : "Recover Account";
+                    text: loading ? "" : "Recover account";
                     variant: "primary";
                     loading: root.loading;
                     disabled: root.loading || (submitted && !fields-valid);
@@ -287,7 +287,7 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Button {
-                        text: "Back to Login";
+                        text: "Back to login";
                         variant: "ghost";
                         clicked => { root.go-to-login(); }
                     }
