@@ -362,10 +362,8 @@ export component ChannelMembersSection inherits Rectangle {
                     }
                 }
 
-                // One ⋮ instead of Role + Remove, which on a phone
-                // squeezed the name to "…". Tapping it expands the
-                // action row below. Only if can manage and not owner.
-                // Also for a moderator/admin who can only mute or ban.
+                // One ⋮ opens the shared menu without changing row height.
+                // Moderators/admins may have only mute or ban actions.
                 if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner || member.can-block: Rectangle {
                     width: Spacing.touch-target-min;
                     height: Spacing.touch-target-min;
