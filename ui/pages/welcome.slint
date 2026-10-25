@@ -253,8 +253,9 @@ export component WelcomePage inherits Rectangle {
         // Continue button
         Rectangle {
             width: min(400px, root.width - 2 * Spacing.xl);
+            height: continue-button.height;
 
-            Button {
+            continue-button := Button {
                 text: "Continue to Chatter";
                 variant: "primary";
                 clicked => { root.get-started(); }

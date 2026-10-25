@@ -208,10 +208,11 @@ export component AppearanceSettings inherits VerticalLayout {
     }
 
     Rectangle {
+        height: glass-effects-row.preferred-height;
         background: Colors.surface-section;
         border-radius: Spacing.radius-lg;
 
-        ToggleRow {
+        glass-effects-row := ToggleRow {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
@@ -235,10 +236,11 @@ export component AppearanceSettings inherits VerticalLayout {
     }
 
     Rectangle {
+        height: reduce-motion-row.preferred-height;
         background: Colors.surface-section;
         border-radius: Spacing.radius-lg;
 
-        ToggleRow {
+        reduce-motion-row := ToggleRow {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;

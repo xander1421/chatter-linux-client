@@ -262,8 +262,8 @@ export component MeshPeerSheet inherits Rectangle {
                             destructive: true; show-chevron: false; touch: root.touch;
                             clicked => { MeshGlobal.private-remove-pending = MeshGlobal.sheet-peer-id; } }
                     }
-                    Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
-                        SettingsRow { icon: Icons.slash; title: MeshGlobal.sheet-peer-blocked ? "Unblock" : "Block";
+                    Rectangle { height: block-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                        block-row := SettingsRow { icon: Icons.slash; title: MeshGlobal.sheet-peer-blocked ? "Unblock" : "Block";
                             destructive: !MeshGlobal.sheet-peer-blocked; show-chevron: false; touch: root.touch;
                             clickable: MeshGlobal.sheet-peer-id != "";
                             clicked => { MeshGlobal.toggle-peer-block(MeshGlobal.sheet-peer-id); } }

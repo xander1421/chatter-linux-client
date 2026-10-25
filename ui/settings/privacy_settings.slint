@@ -188,6 +188,7 @@ export component PrivacySettings inherits VerticalLayout {
     // Offered without Tor too (see the chat-list
     // header shield); only the Tor promise is gated.
     Rectangle {
+        height: shield-row.preferred-height;
         background: Colors.surface-section;
         border-radius: Spacing.radius-lg;
         drop-shadow-blur: Elevation.card-blur;
@@ -196,7 +197,7 @@ export component PrivacySettings inherits VerticalLayout {
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
 
-        ToggleRow {
+        shield-row := ToggleRow {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
@@ -319,6 +320,7 @@ export component PrivacySettings inherits VerticalLayout {
 
     // Read Receipts setting
     Rectangle {
+        height: read-receipts-row.preferred-height;
         background: Colors.surface-section;
         border-radius: Spacing.radius-lg;
         drop-shadow-blur: Elevation.card-blur;
@@ -327,7 +329,7 @@ export component PrivacySettings inherits VerticalLayout {
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
 
-        ToggleRow {
+        read-receipts-row := ToggleRow {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
@@ -355,6 +357,7 @@ export component PrivacySettings inherits VerticalLayout {
 
     // Typing Indicators setting
     Rectangle {
+        height: typing-indicators-row.preferred-height;
         background: Colors.surface-section;
         border-radius: Spacing.radius-lg;
         drop-shadow-blur: Elevation.card-blur;
@@ -363,7 +366,7 @@ export component PrivacySettings inherits VerticalLayout {
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
 
-        ToggleRow {
+        typing-indicators-row := ToggleRow {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;
