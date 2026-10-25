@@ -6,6 +6,34 @@ impl ChatterClient {
     // The presentation layer copies these straight onto its display struct and
     // must not branch on conversation type or re-resolve names itself.
 
+    /// Header shown when an attachment is opened from the current conversation.
+    /// Resolves the owner from the message rather than from attachment metadata,
+    /// which has no sender or sent time.
+    pub fn media_viewer_header(
+        &self,
+        conversation: &crate::state::ActiveConversation,
+        message_id: Option<&crate::domain::ids::MessageId>,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Option<(String, String)> {
+        let message = message_id
+            .and_then(|id| self.get_message_local(id))
+            .filter(|message| !message.is_deleted && message.attachments.contains(attachment_id))
+            .or_else(|| {
+                self.get_messages(conversation, i32::MAX as u32)
+                    .ok()?
+                    .into_iter()
+                    .find(|message| !message.is_deleted && message.attachments.contains(attachment_id))
+            })?;
+        let sender = self.message_sender_display_name(&message);
+        let sender = match message.sender_id.as_ref() {
+            Some(id) => self.quote_author_name(id, || sender),
+            None => sender,
+        };
+        let date = message.created_at.with_timezone(&chrono::Local).format("%b %-d, %Y");
+        let time = crate::util::time::format_message_time(message.created_at.clone());
+        Some((sender, format!("{date} · {time}")))
+    }
+
     /// Sender display name, scoped to the conversation so anon channels show
     /// the per-channel name instead of the global profile. `None` sender →
     /// "Anonymous".

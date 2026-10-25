@@ -10,7 +10,7 @@ static HAS_NEXT: AtomicBool = AtomicBool::new(false);
 static POSITION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::AttachmentId;
+use chatter_core::domain::ids::{AttachmentId, MessageId};
 use chatter_core::services::media_gallery::{GalleryAttachment, GalleryMessage, ordered_media};
 use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model};
@@ -124,6 +124,40 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
     }
     w.global::<crate::ChatPane>()
         .set_media_viewer_attachment_id(id.into());
+    w.global::<crate::ChatPane>()
+        .set_image_viewer_sender("".into());
+    w.global::<crate::ChatPane>()
+        .set_image_viewer_datetime("".into());
+    if let Some(client) = CLIENT.get() {
+        let client = client.clone();
+        let weak = w.as_weak();
+        let selected = id.to_string();
+        let message_id = w.global::<crate::ChatPane>()
+            .get_messages()
+            .iter()
+            .chain(w.global::<crate::ChatPane>().get_thread_replies().iter())
+            .find(|message| message.attachments.iter().any(|attachment| attachment.id == id))
+            .and_then(|message| message.message_id.as_str().parse::<MessageId>().ok());
+        let header_conversation = conversation.clone();
+        std::thread::spawn(move || {
+            let attachment_id = selected.parse::<AttachmentId>()
+                .unwrap_or_else(|_| AttachmentId::from_cdn_key(&selected));
+            let header = client.media_viewer_header(&header_conversation, message_id.as_ref(), &attachment_id);
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                if !is_current(request)
+                    || w.global::<crate::ChatPane>().get_media_viewer_attachment_id().as_str() != selected
+                    || client.active_conversation() != header_conversation
+                    || client.auth_snapshot().session_revision != session_revision
+                {
+                    return;
+                }
+                if let Some((sender, datetime)) = header {
+                    w.global::<crate::ChatPane>().set_image_viewer_sender(sender.into());
+                    w.global::<crate::ChatPane>().set_image_viewer_datetime(datetime.into());
+                }
+            });
+        });
+    }
     w.global::<crate::ChatPane>()
         .set_media_viewer_has_previous(index.is_some_and(|i| i > 0));
     w.global::<crate::ChatPane>()
