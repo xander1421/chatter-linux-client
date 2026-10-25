@@ -84,7 +84,7 @@ export component EncryptionSettings inherits VerticalLayout {
                 alignment: space-between;
 
                 Text {
-                    width: max(0px, parent.width - (root.compact-mode ? 0px : copy-button.width));
+                    width: max(0px, parent.width - (root.compact-mode ? 0px : Spacing.button-min-width));
                     text: "To verify a contact, compare safety numbers from their profile";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -92,7 +92,7 @@ export component EncryptionSettings inherits VerticalLayout {
                     vertical-alignment: center;
                 }
 
-                if !root.compact-mode: copy-button := Button {
+                if !root.compact-mode: Button {
                     touch: root.mobile-platform;
                     text: "Copy";
                     variant: "ghost";
