@@ -57,6 +57,8 @@ export component ThreadPanel inherits Rectangle {
     // Same kind as ChatHeader's. Only channels get the "#":
     // a thread in Saved Messages or a DM read "# Saved Messages".
     in property <ConversationKind> conversation-kind;
+    // Private groups carry no "#": that marks a public channel, as in the sidebar.
+    in property <bool> private-channel: false;
 
     // Replies list (reuses MessageItemData pattern)
     in property <[MessageItemData]> replies: [];
@@ -239,7 +241,7 @@ export component ThreadPanel inherits Rectangle {
 
                     // Channel name (small, muted)
                     if root.channel-name != "": Text {
-                        text: (root.conversation-kind == ConversationKind.channel ? "# " : "")
+                        text: (root.conversation-kind == ConversationKind.channel && !root.private-channel ? "# " : "")
                             + root.channel-name;
                         color: Colors.text-muted;
                         font-size: Typography.xs;
