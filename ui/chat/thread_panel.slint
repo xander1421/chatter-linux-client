@@ -423,7 +423,7 @@ export component ThreadPanel inherits Rectangle {
                 triggered => {
                     self.running = false;
                     if (replies-view.user-scrolling) {
-                        replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 6px;
+                        replies-view.following-tail = replies-view.viewport-height + replies-view.viewport-y <= replies-view.height + 40px;
                         replies-view.user-scrolling = false;
                     }
                 }
@@ -491,7 +491,7 @@ export component ThreadPanel inherits Rectangle {
                     if (self.visible) { self.following-tail = true; settle.start(); settle.restart(); }
                 }
                 flicked => {
-                    self.following-tail = self.viewport-height + self.viewport-y <= self.height + 6px;
+                    self.following-tail = self.viewport-height + self.viewport-y <= self.height + 40px;
                     self.preserving-anchor = false;
                     self.user-scrolling = true;
                     at-rest.start(); at-rest.restart();

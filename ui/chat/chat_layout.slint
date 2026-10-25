@@ -319,18 +319,22 @@ export component ChatLayout inherits Rectangle {
         border-top-left-radius: root.rounded-page-top && !root.hide-header
             ? (root.mobile ? Spacing.header-height-touch : Spacing.header-height) / 2 : 0px;
         border-top-right-radius: self.border-top-left-radius;
-        // Keep the full pane as the viewport so older bubbles travel beneath
-        // the composer glass. Only the drawer's real top edge clips the rows.
+        // With the keyboard up, end the viewport at the composer so rows
+        // cannot show in the strip between its bottom and the IME. Otherwise
+        // older bubbles can still travel beneath the composer glass.
         clip: true;
         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
-        height: max(0px, root.height - root.drawer-occupied-height
-            - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px));
+        height: root.keyboard-open ? max(0px, bottom-chrome.y)
+            : max(0px, root.height - root.drawer-occupied-height
+                - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px));
         top-inset: top-chrome.height;
         // The last virtual row owns scroll clearance; reducing the viewport
-        // here would expose a hard cut above the floating composer.
-        bottom-inset: bottom-chrome.height + composer.list-clearance-extra
-            - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);
+        // while the keyboard is closed would expose a hard cut above the glass.
+        // The open-keyboard viewport already ends at the composer's top.
+        bottom-inset: root.keyboard-open ? composer.list-clearance-extra
+            : bottom-chrome.height + composer.list-clearance-extra
+                - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);
         messages: root.messages;
         loading: root.loading-messages;
         selection-mode: root.selection-mode;
