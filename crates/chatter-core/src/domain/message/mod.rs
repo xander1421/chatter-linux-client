@@ -299,24 +299,24 @@ mod tests {
             m
         };
         assert_eq!(
-            call(them, CallMessageType::Missed).sidebar_preview(Some(&me), None),
+            call(them, CallMessageType::Missed).sidebar_preview(Some(&me), None, None),
             "\u{1F4DE} Missed call"
         );
         assert_eq!(
-            call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None),
+            call(them, CallMessageType::Ended).sidebar_preview(Some(&me), None, None),
             "\u{1F4DE} Incoming call"
         );
         assert_eq!(
-            call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None),
+            call(me, CallMessageType::Ended).sidebar_preview(Some(&me), None, None),
             "\u{1F4DE} Outgoing call"
         );
         assert_eq!(
-            call(them, CallMessageType::Declined).sidebar_preview(Some(&me), None),
+            call(them, CallMessageType::Declined).sidebar_preview(Some(&me), None, None),
             "\u{1F4DE} Declined call"
         );
         // The caller's side of a declined call says so too, as its Calls tab does.
         assert_eq!(
-            call(me, CallMessageType::Declined).sidebar_preview(Some(&me), None),
+            call(me, CallMessageType::Declined).sidebar_preview(Some(&me), None, None),
             "\u{1F4DE} Declined call"
         );
     }
@@ -338,16 +338,16 @@ mod tests {
 
         // Plain text, and the same text from us.
         assert_eq!(
-            text(them, "hello").sidebar_preview(Some(&me), None),
+            text(them, "hello").sidebar_preview(Some(&me), None, None),
             "hello"
         );
         assert_eq!(
-            text(me, "hello").sidebar_preview(Some(&me), None),
+            text(me, "hello").sidebar_preview(Some(&me), None, None),
             "You: hello"
         );
         // Emoji-only is just text — it must survive, not become "[Message]".
         assert_eq!(
-            text(them, "\u{1F389}").sidebar_preview(Some(&me), None),
+            text(them, "\u{1F389}").sidebar_preview(Some(&me), None, None),
             "\u{1F389}"
         );
 
@@ -355,22 +355,22 @@ mod tests {
         let mut file = text(them, "");
         file.attachments = vec![AttachmentId::new(), AttachmentId::new()];
         assert_eq!(
-            file.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo +1")),
+            file.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo +1"), None),
             "\u{1F4F7} Photo +1"
         );
         assert_eq!(
-            file.sidebar_preview(Some(&me), None),
+            file.sidebar_preview(Some(&me), None, None),
             "\u{1F4CE} 2 attachments"
         );
         // Ours says so too — a voice note sent by us was a bare "You:".
         let mut voice = text(me, "");
         voice.attachments = vec![AttachmentId::new()];
         assert_eq!(
-            voice.sidebar_preview(Some(&me), Some("\u{1F3A4} Voice message")),
+            voice.sidebar_preview(Some(&me), Some("\u{1F3A4} Voice message"), None),
             "You: \u{1F3A4} Voice message"
         );
         assert_eq!(
-            voice.sidebar_preview(Some(&me), None),
+            voice.sidebar_preview(Some(&me), None, None),
             "You: \u{1F4CE} 1 attachment"
         );
 
@@ -378,17 +378,45 @@ mod tests {
         let mut captioned = text(me, "beach");
         captioned.attachments = vec![AttachmentId::new()];
         assert_eq!(
-            captioned.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo")),
+            captioned.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo"), None),
             "You: \u{1F4F7} beach"
         );
 
         // Nothing renderable at all still names the row.
-        assert_eq!(text(them, "").sidebar_preview(Some(&me), None), "[Message]");
+        assert_eq!(text(them, "").sidebar_preview(Some(&me), None, None), "[Message]");
 
         // A pin marks every kind, and does not eat the body.
         let mut pinned = text(them, "hello");
         pinned.is_pinned = true;
-        assert_eq!(pinned.sidebar_preview(Some(&me), None), "\u{1F4CC} hello");
+        assert_eq!(pinned.sidebar_preview(Some(&me), None, None), "\u{1F4CC} hello");
+    }
+
+    #[test]
+    fn test_sidebar_preview_names_other_group_sender() {
+        let me = UserId::new();
+        let them = UserId::new();
+        let group = Message::new_text(
+            ChannelId::new(),
+            ConversationType::AnonGroup,
+            Some(them),
+            "hello".to_string(),
+            0,
+        );
+        assert_eq!(
+            group.sidebar_preview(Some(&me), None, Some("Alpha Example")),
+            "Alpha: hello"
+        );
+        assert_eq!(
+            group.sidebar_preview(Some(&me), None, Some("@alpha")),
+            "@alpha: hello"
+        );
+
+        let mut dm = group;
+        dm.conversation_type = ConversationType::ServerDm;
+        assert_eq!(
+            dm.sidebar_preview(Some(&me), None, Some("Alpha Example")),
+            "hello"
+        );
     }
 
     #[test]
