@@ -197,7 +197,7 @@ export component AccountMenu inherits Rectangle {
                             MenuRow { icon: Icons.user; label: "My profile"; clicked => { root.my-profile(); } }
                             // Shield mode has no Saved Messages or channels.
                             if !AnonMode.enabled: MenuDivider { }
-                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
+                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved messages"; clicked => { root.saved-messages(); } }
                         }
                     }
                     Rectangle {
