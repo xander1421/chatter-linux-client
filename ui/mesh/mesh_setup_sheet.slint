@@ -148,7 +148,8 @@ export component MeshSetupSheet inherits Rectangle {
                                 Input { placeholder: "Nickname"; text <=> root.name-draft;
                                     control-height: Spacing.touch-target-min; horizontal-stretch: 1;
                                     accepted(value) => { MeshGlobal.set-nickname(value); } }
-                                Button { text: "Done"; variant: "ghost"; touch: root.touch;
+                                // "Save", not "Done": the sheet's own Done closes it.
+                                Button { text: "Save"; variant: "ghost"; touch: root.touch;
                                     clicked => { MeshGlobal.set-nickname(root.name-draft); } }
                             }
                         }
