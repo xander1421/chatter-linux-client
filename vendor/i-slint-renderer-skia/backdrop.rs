@@ -46,26 +46,33 @@ half4 main(float2 p) {
 }
 "#;
 
+// Negative brightness darkens by scaling, not by subtracting: an offset of
+// -0.14 clamped every channel of a dark chat (values below ~36/255) to black,
+// so dark-mode glass showed nothing of the content behind it. Scaling keeps
+// dark content visible and still bounds bright content. Positive values lift.
 fn color_matrix(saturation: f32, brightness: f32) -> [f32; 20] {
     let s = saturation.max(0.0);
-    let [r, g, b] = [0.2126, 0.7152, 0.0722].map(|l| l * (1.0 - s));
     let v = brightness.clamp(-1.0, 1.0);
+    let k = if v < 0.0 { 1.0 + v } else { 1.0 };
+    let lift = v.max(0.0);
+    let [r, g, b] = [0.2126, 0.7152, 0.0722].map(|l| l * (1.0 - s) * k);
+    let s = s * k;
     [
         r + s,
         g,
         b,
         0.0,
-        v,
+        lift,
         r,
         g + s,
         b,
         0.0,
-        v,
+        lift,
         r,
         g,
         b + s,
         0.0,
-        v,
+        lift,
         0.0,
         0.0,
         0.0,
@@ -215,8 +222,13 @@ mod tests {
     fn saturation_preserves_neutrals_and_brightness_preserves_alpha() {
         let matrix = color_matrix(1.8, -0.2);
         for row in matrix[..15].chunks_exact(5) {
+            assert!((row[..3].iter().sum::<f32>() - 0.8).abs() < 0.00001);
+            assert_eq!(row[4], 0.0);
+        }
+        let lifted = color_matrix(1.8, 0.1);
+        for row in lifted[..15].chunks_exact(5) {
             assert!((row[..3].iter().sum::<f32>() - 1.0).abs() < 0.00001);
-            assert_eq!(row[4], -0.2);
+            assert_eq!(row[4], 0.1);
         }
         assert_eq!(&matrix[15..], &[0.0, 0.0, 0.0, 1.0, 0.0]);
     }

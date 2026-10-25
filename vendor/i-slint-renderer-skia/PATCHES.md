@@ -6,7 +6,8 @@ Keep upstream licensing files.
 - `backdrop.rs`: blur -> saturation/brightness colour matrix -> optional rounded
   edge refraction RuntimeEffect; cache shader compilation once, plus raster
   pixel and matrix/SkSL tests. Blur is Gaussian sigma in logical pixels, scaled
-  once by the renderer. Refraction is clamped to 0..1, brightness to -1..1.
+  once by the renderer. Refraction is clamped to 0..1, brightness to -1..1; negative brightness
+  scales colour (1 + b) rather than offsetting it, so dark content stays visible.
 - `itemrenderer.rs`: initialize SaveLayerRec with the backdrop filter, clear
   its rectangular corner area before compositing, then clip sharp children to
   the rounded rect. The explicit corner mask covers Skia surfaces that apply
