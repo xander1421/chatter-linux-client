@@ -8,6 +8,21 @@ import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
 
+// Every request list's empty state: icon, title, one hint — as Blocked.
+component RequestsEmpty inherits VerticalLayout {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> hint;
+    alignment: center;
+    spacing: Spacing.sm;
+    HorizontalLayout {
+        alignment: center;
+        Image { source: root.icon; width: 40px; height: 40px; colorize: Colors.text-muted; }
+    }
+    Text { text: root.title; color: Colors.text-muted; font-size: Typography.base; horizontal-alignment: center; }
+    Text { text: root.hint; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; wrap: word-wrap; }
+}
+
 export component RequestsTab inherits VerticalLayout {
     in property <bool> mobile-mode;
     in property <bool> loading;
@@ -62,15 +77,14 @@ export component RequestsTab inherits VerticalLayout {
     if root.requests-sub-tab == "received": VerticalLayout {
         vertical-stretch: 1;
 
-        if root.received-requests.length == 0 && !root.read-error: VerticalLayout {
-            alignment: center;
+        if root.received-requests.length == 0 && !root.read-error: RequestsEmpty {
 
-            Text {
-                text: "No pending requests";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-            }
+            icon: Icons.user-plus;
+
+            title: "No pending requests";
+
+            hint: "Friend requests you receive appear here";
+
         }
 
         if root.received-requests.length > 0: Rectangle {
@@ -181,15 +195,14 @@ export component RequestsTab inherits VerticalLayout {
     if root.requests-sub-tab == "sent": VerticalLayout {
         vertical-stretch: 1;
 
-        if root.sent-requests.length == 0 && !root.read-error: VerticalLayout {
-            alignment: center;
+        if root.sent-requests.length == 0 && !root.read-error: RequestsEmpty {
 
-            Text {
-                text: "No outgoing requests";
-                color: Colors.text-muted;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-            }
+            icon: Icons.user-plus;
+
+            title: "No outgoing requests";
+
+            hint: "Requests you send appear here until they are answered";
+
         }
 
         if root.sent-requests.length > 0: Rectangle {
@@ -298,11 +311,9 @@ export component RequestsTab inherits VerticalLayout {
             alignment: center;
             spacing: Spacing.sm;
 
-            Text {
-                text: "\u{1F510}";  // Lock emoji
-                font-family: Typography.font-family-emoji;
-                font-size: Typography.huge;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Image { source: Icons.lock; width: 40px; height: 40px; colorize: Colors.text-muted; }
             }
 
             Text {
@@ -604,10 +615,9 @@ export component RequestsTab inherits VerticalLayout {
             alignment: center;
             spacing: Spacing.sm;
 
-            Text {
-                text: "\u{0023}";  // Hash
-                font-size: Typography.huge;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Image { source: Icons.hash; width: 40px; height: 40px; colorize: Colors.text-muted; }
             }
 
             Text {
