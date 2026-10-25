@@ -61,7 +61,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "Anyone finds and joins. New members see messages from when they join.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -113,7 +113,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "Hidden from discovery. Invite or password to join.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -165,7 +165,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "End-to-end encrypted. Server can't see it exists.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;

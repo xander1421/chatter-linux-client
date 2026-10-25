@@ -140,7 +140,7 @@ export component ChannelMembersSection inherits VerticalLayout {
 
     // Member list
     if root.members.length == 0: Text {
-        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+        width: parent.width;
         text: root.loading ? "Loading members…" : "No members to show yet";
         color: Colors.text-secondary;
         font-size: Typography.sm;
@@ -327,7 +327,7 @@ export component ChannelMembersSection inherits VerticalLayout {
                 padding: Spacing.xs;
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: root.confirm-action == "ban"
                         ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
                         : root.confirm-action == "owner"

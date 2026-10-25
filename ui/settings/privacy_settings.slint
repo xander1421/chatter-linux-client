@@ -69,7 +69,7 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: "Everyone else sees your initials. Narrowing this gives your profile a new key, so people who could see it before can't.";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -136,7 +136,7 @@ export component PrivacySettings inherits VerticalLayout {
                 spacing: Spacing.sm;
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: parent.width;
                     text: "Enter your PIN to change this";
                     color: Colors.text-secondary;
                     font-size: Typography.xs;
@@ -174,7 +174,7 @@ export component PrivacySettings inherits VerticalLayout {
             }
 
             if root.profile-visibility-error != "": Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: root.profile-visibility-error;
                 color: Colors.error;
                 font-size: Typography.xs;
@@ -251,7 +251,7 @@ export component PrivacySettings inherits VerticalLayout {
                 font-weight: Typography.medium;
             }
             Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: root.username-discoverable
                     ? "Anyone who types your exact username can find you"
                     : "Only people with your friend code or username link can find you";

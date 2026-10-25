@@ -63,7 +63,7 @@ export component NotificationsSettings inherits VerticalLayout {
             font-size: Typography.xs;
         }
         if NotificationDelivery.error != "": Text {
-            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+            width: parent.width;
             text: NotificationDelivery.error;
             color: Colors.error;
             font-size: Typography.xs;
@@ -104,7 +104,7 @@ export component NotificationsSettings inherits VerticalLayout {
             }
 
             Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: "What message notifications show on this device";
                 color: Colors.text-muted;
                 font-size: Typography.xs;

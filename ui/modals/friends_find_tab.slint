@@ -101,7 +101,7 @@ export component FindTab inherits VerticalLayout {
 
             // Status message
             if root.code-status != "": Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: root.code-status;
                 color: (root.code-status == "Friend request sent!" || root.code-status == "Secret chat started!") ? Colors.success :
                        (root.code-status == "Copied to clipboard!" || root.code-status == "Pasted from clipboard"

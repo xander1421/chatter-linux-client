@@ -89,11 +89,11 @@ export component MeshSetupSheet inherits Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout { padding: Spacing.md; spacing: Spacing.sm;
                                 Text {
-                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                    width: parent.width;
                                     text: MeshGlobal.pending-private-peer + " invited you to " + MeshGlobal.pending-private-name;
                                     color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; wrap: word-wrap; }
                                 Text {
-                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                    width: parent.width;
                                     text: "Peer names are self-asserted until you verify in person.";
                                     color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                                 HorizontalLayout { spacing: Spacing.sm;
@@ -134,7 +134,7 @@ export component MeshSetupSheet inherits Rectangle {
                             }
                         }
                         if MeshGlobal.nearby-peers.length == 0: Text {
-                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            width: parent.width;
                             text: "Nearby devices will appear here when discovered.";
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                         }
@@ -153,12 +153,12 @@ export component MeshSetupSheet inherits Rectangle {
                             }
                         }
                         Text {
-                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            width: parent.width;
                             text: "Visible to anyone nearby. Names are self-asserted.";
                             color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     }
                     if MeshGlobal.notice != "": Text {
-                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        width: parent.width;
                         text: MeshGlobal.notice; color: Colors.text-secondary;
                         font-size: Typography.sm; wrap: word-wrap; }
                     VerticalLayout {
@@ -183,7 +183,7 @@ export component MeshSetupSheet inherits Rectangle {
                 background: Colors.surface-section; border-radius: Spacing.radius-lg;
                 wipe-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
                     Text {
-                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        width: parent.width;
                         text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
                         color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
                     Button { text: "Erase Mesh Data"; variant: "destructive"; touch: root.touch;

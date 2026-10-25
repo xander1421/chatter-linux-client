@@ -72,7 +72,7 @@ export component SealedSenderIntroModal inherits Rectangle {
                 spacing: Spacing.md;
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "Sealed sender: private by default";
                     color: Colors.text-primary;
                     font-size: Typography.xl;
@@ -82,7 +82,7 @@ export component SealedSenderIntroModal inherits Rectangle {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "Chatter delivers your messages without the server learning who you are talking to. Your messages are always sent this way — nothing to turn on.";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
@@ -91,7 +91,7 @@ export component SealedSenderIntroModal inherits Rectangle {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "This is privacy from the server. It is not anonymity from the person you message — they still see who you are.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -141,7 +141,7 @@ export component SealedSenderIntroModal inherits Rectangle {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: max(0px, parent.width - parent.padding * 2);
                     text: "Off (recommended): only your contacts can reach you this way. On: anyone can. You can change this later in Settings.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;

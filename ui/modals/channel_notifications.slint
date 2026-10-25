@@ -17,7 +17,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     alignment: start;
 
     Text {
-        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+        width: parent.width;
         text: "Notification Preferences";
         color: Colors.text-primary;
         font-size: Typography.lg;
@@ -81,7 +81,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     }
 
     Text {
-        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+        width: parent.width;
         text: "When not muted, notify me for:";
         color: Colors.text-secondary;
         font-size: Typography.sm;

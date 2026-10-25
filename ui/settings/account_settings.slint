@@ -277,7 +277,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: parent.width;
                     text: "Your current recovery codes stop working and a new set is shown once. Enter your password to confirm.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -384,7 +384,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 if root.change-pin-error != "": Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: parent.width;
                     text: root.change-pin-error;
                     color: Colors.error;
                     font-size: Typography.xs;
@@ -471,7 +471,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 if root.backup-retry-error != "": Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: parent.width;
                     text: root.backup-retry-error;
                     color: Colors.error;
                     font-size: Typography.xs;
@@ -544,7 +544,7 @@ export component AccountSettings inherits VerticalLayout {
             }
 
             if root.message-backup-passphrase == "": Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: "Enter a backup passphrase to enable file export and restore.";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -585,7 +585,7 @@ export component AccountSettings inherits VerticalLayout {
             }
 
             if root.message-backup-pin == "": Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: "Enter your PIN to enable server backup and restore.";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -619,7 +619,7 @@ export component AccountSettings inherits VerticalLayout {
             }
 
             if root.message-backup-busy || root.message-backup-status != "": Text {
-                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                width: max(0px, parent.width - parent.padding * 2);
                 text: root.message-backup-busy ? "Working on message backup…" : root.message-backup-status;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -772,7 +772,7 @@ export component AccountSettings inherits VerticalLayout {
                 }
 
                 Text {
-                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                    width: parent.width;
                     text: "This permanently deletes your account and all associated data. This cannot be undone. Enter your password to confirm.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;

@@ -172,7 +172,7 @@ export component MeshComposeSheet inherits Rectangle {
                             }
                         }
                         Text {
-                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            width: parent.width;
                             text: "Only devices you invite can read it. You can add members after creating it.";
                             color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
                     }
@@ -221,12 +221,12 @@ export component MeshComposeSheet inherits Rectangle {
                             }
                         }
                         Text {
-                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            width: parent.width;
                             text: "Location cells use geohashes and available relays to connect devices in an area.";
                             color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
                     }
                     if MeshGlobal.notice != "": Text {
-                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        width: parent.width;
                         text: MeshGlobal.notice; color: Colors.text-secondary;
                         font-size: Typography.sm; wrap: word-wrap; }
                 }
