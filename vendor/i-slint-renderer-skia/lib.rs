@@ -188,6 +188,7 @@ pub struct SkiaRenderer {
     dirty_region_debug_mode: DirtyRegionDebugMode,
     /// Tracking dirty regions indexed by buffer age - 1. More than 3 back buffers aren't supported, but also unlikely to happen.
     dirty_region_history: RefCell<[DirtyRegion; 3]>,
+    gpu_cleanup_pending: Cell<bool>,
     shared_context: SkiaSharedContext,
 }
 
@@ -209,6 +210,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -244,6 +246,7 @@ impl SkiaRenderer {
             partial_rendering_state: PartialRenderingState::default().into(),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -279,6 +282,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -314,6 +318,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -349,6 +354,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -384,6 +390,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -419,6 +426,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -454,6 +462,7 @@ impl SkiaRenderer {
             partial_rendering_state: create_partial_renderer_state(None),
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -494,6 +503,7 @@ impl SkiaRenderer {
             partial_rendering_state,
             dirty_region_debug_mode: Default::default(),
             dirty_region_history: Default::default(),
+            gpu_cleanup_pending: Cell::new(false),
             shared_context: context.clone(),
         }
     }
@@ -838,6 +848,17 @@ impl SkiaRenderer {
 
         if let Some(ctx) = gr_context.as_mut() {
             ctx.flush(None);
+            #[cfg(target_os = "android")]
+            if self.gpu_cleanup_pending.replace(false) {
+                // A dismissed full-screen component can leave its offscreen layers
+                // in Skia's scratch cache after its item resources are released.
+                let screen_bytes = (window.size().width as usize)
+                    .saturating_mul(window.size().height as usize)
+                    .saturating_mul(4);
+                if ctx.resource_cache_purgeable_bytes() >= screen_bytes {
+                    ctx.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::AllResources);
+                }
+            }
         }
 
         dirty_region
@@ -975,8 +996,12 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         items: &mut dyn Iterator<Item = std::pin::Pin<i_slint_core::items::ItemRef<'_>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.image_cache.component_destroyed(component);
+        self.layer_cache.component_destroyed(component);
         self.path_cache.component_destroyed(component);
         self.text_layout_cache.component_destroyed(component);
+
+        #[cfg(target_os = "android")]
+        self.gpu_cleanup_pending.set(true);
 
         if let Some(partial_rendering_state) = self.partial_rendering_state() {
             partial_rendering_state.free_graphics_resources(items);

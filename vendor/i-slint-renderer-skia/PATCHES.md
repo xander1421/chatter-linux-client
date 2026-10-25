@@ -16,6 +16,10 @@ Keep upstream licensing files.
 - `lib.rs`: register the filter module. Core partial-rendering trait advertises
   backdrop support. Android/OpenGL Surface defaults to full repaint; core also
   handles Skia surfaces that opt into partial repaint conservatively.
+- `lib.rs`: release cached layer images with their component, and on Android
+  purge Skia's unlocked GPU resource cache after a component closes if at least
+  one screen-sized RGBA allocation is purgeable. This releases transient viewer
+  surfaces without changing the backdrop filter or its colour matrix.
 
 Effects default ON. Set `SLINT_BACKDROP_EFFECTS=0` (also `off`/`false`) before
 process startup to bypass filters; children still render, with rounded clipping.
