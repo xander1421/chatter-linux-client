@@ -55,6 +55,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.can-scan
                     ? "Scan the QR code on your new device, or paste its link. You'll be asked to confirm with your password or PIN to authorize."
                     : "Paste the link from your new device. You'll be asked to confirm with your password or PIN to authorize.";
@@ -99,6 +100,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                         font-weight: Typography.medium;
                     }
                     if root.preview-server-url != "": Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                         text: "Server: " + root.preview-server-url;
                         color: Colors.text-muted;
                         font-size: Typography.xs;
@@ -114,6 +116,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
                         background: Colors.divider;
                     }
                     Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                         text: "Verify this code matches the new device:";
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
@@ -141,6 +144,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
             }
 
             if status != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.status;
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
@@ -148,6 +152,7 @@ export component LinkDeviceApproveModal inherits Rectangle {
             }
 
             if error != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.error;
                 color: Colors.error;
                 font-size: Typography.sm;

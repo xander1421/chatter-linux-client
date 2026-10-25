@@ -120,6 +120,7 @@ export component DevicesSettings inherits VerticalLayout {
             font-size: Typography.sm;
         }
         if root.sessions-error != "": Text {
+            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
             text: root.sessions-error;
             color: Colors.error;
             font-size: Typography.sm;

@@ -40,7 +40,7 @@ export component RequestsTab inherits VerticalLayout {
     if root.read-error: HorizontalLayout {
         spacing: Spacing.sm;
         Text { text: "Could not refresh requests. Showing the last loaded list."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; horizontal-stretch: 1; vertical-alignment: center; }
-        Button { text: "Retry"; clicked => { root.retry(); } }
+        retry-button := Button { text: "Retry"; clicked => { root.retry(); } }
     }
 
     // Sub-tab bar

@@ -36,7 +36,7 @@ export component NotificationsSettings inherits VerticalLayout {
             spacing: Spacing.sm;
             init => { NotificationDelivery.load(); }
 
-        ToggleRow {
+        push-row := ToggleRow {
             accessible-text: "Account push notifications";
             label-spacing: Spacing.sm;
             checked <=> NotificationDelivery.push-enabled;
@@ -50,6 +50,7 @@ export component NotificationsSettings inherits VerticalLayout {
                 font-weight: Typography.medium;
             }
             Text {
+                width: push-row.label-width;
                 text: "Allow server push notifications for all devices on this account. Device notification settings still apply.";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -62,6 +63,7 @@ export component NotificationsSettings inherits VerticalLayout {
             font-size: Typography.xs;
         }
         if NotificationDelivery.error != "": Text {
+            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
             text: NotificationDelivery.error;
             color: Colors.error;
             font-size: Typography.xs;
@@ -102,6 +104,7 @@ export component NotificationsSettings inherits VerticalLayout {
             }
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "What message notifications show on this device";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -249,6 +252,7 @@ export component NotificationsSettings inherits VerticalLayout {
                 font-weight: Typography.medium;
             }
             Text {
+                width: sound-row.label-width;
                 text: "Play a sound when a message notification arrives";
                 color: Colors.text-muted;
                 font-size: Typography.xs;

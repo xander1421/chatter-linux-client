@@ -25,6 +25,7 @@ export component EncryptionSettings inherits VerticalLayout {
     }
 
     Text {
+        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
         text: "Your messages are protected with Signal Protocol end-to-end encryption";
         color: Colors.text-muted;
         font-size: Typography.sm;
@@ -83,6 +84,7 @@ export component EncryptionSettings inherits VerticalLayout {
                 alignment: space-between;
 
                 Text {
+                    width: max(0px, parent.width - (root.compact-mode ? 0px : Spacing.button-min-width));
                     text: "To verify a contact, compare safety numbers from their profile";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
@@ -139,6 +141,7 @@ export component EncryptionSettings inherits VerticalLayout {
                 font-weight: Typography.medium;
             }
             Text {
+                width: sealed-sender-row.label-width;
                 text: "Accept messages from unknown senders without revealing your identity";
                 color: Colors.text-muted;
                 font-size: Typography.xs;

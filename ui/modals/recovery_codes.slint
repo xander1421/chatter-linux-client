@@ -87,6 +87,7 @@ export component RecoveryCodesModal inherits Rectangle {
 
                 // Subtitle
                 Text {
+                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                     text: "These codes can recover your account if you forget your password and PIN. Save them somewhere safe. They will not be shown again.";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;

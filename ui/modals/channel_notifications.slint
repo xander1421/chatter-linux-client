@@ -17,6 +17,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     alignment: start;
 
     Text {
+        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
         text: "Notification Preferences";
         color: Colors.text-primary;
         font-size: Typography.lg;
@@ -25,7 +26,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     }
 
     // Mute toggle
-    ToggleRow {
+    mute-row := ToggleRow {
         checked <=> root.is-muted;
         accessible-text: root.is-private-group ? "Mute Group" : "Mute Channel";
         toggled(value) => {
@@ -33,12 +34,14 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         }
 
         Text {
+            width: mute-row.label-width;
             text: root.is-private-group ? "Mute Group" : "Mute Channel";
             color: Colors.text-primary;
             font-size: Typography.sm;
             wrap: word-wrap;
         }
         Text {
+            width: mute-row.label-width;
             text: root.is-private-group ? "You won't receive any notifications from this group" : "You won't receive any notifications from this channel";
             color: Colors.text-muted;
             font-size: Typography.xs;
@@ -47,7 +50,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     }
 
     // Anonymous groups are local-only in core's AI policy.
-    ToggleRow {
+    ai-row := ToggleRow {
         checked <=> root.ai-enabled;
         accessible-text: "AI assistant";
         toggled(value) => {
@@ -55,12 +58,14 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         }
 
         Text {
+            width: ai-row.label-width;
             text: "AI assistant";
             color: Colors.text-primary;
             font-size: Typography.sm;
             wrap: word-wrap;
         }
         Text {
+            width: ai-row.label-width;
             text: root.is-private-group
                 ? "Let local AI read this group when you ask it something here. Cloud AI cannot access this group. Off by default."
                 : "Let the AI read this channel when you ask it something here. Off by default.";
@@ -76,6 +81,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     }
 
     Text {
+        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
         text: "When not muted, notify me for:";
         color: Colors.text-secondary;
         font-size: Typography.sm;

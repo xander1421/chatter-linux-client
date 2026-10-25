@@ -163,6 +163,7 @@ export component OfflineMeshNotice inherits Rectangle {
         // account and this notice must not read as though the choice were
         // permanent — the server may well be back in a minute.
         if root.account-free-surfaces: Text {
+            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
             text: "Your channels and DMs stay where they are. Sign in whenever the server is back.";
             color: Colors.text-muted;
             font-size: Typography.xxs;

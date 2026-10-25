@@ -288,6 +288,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 alignment: center;
 
                                 Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                     text: root.error-message;
                                     color: Colors.error;
                                     font-size: Typography.sm;
@@ -333,6 +334,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
                                 }
                                 Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                     text: root.channel-name == "" ? (root.loading ? "Loading…" : "Info unavailable") : root.channel-name;
                                     color: Colors.text-primary; font-size: Typography.xl;
                                     font-weight: Typography.semibold; horizontal-alignment: center;
@@ -361,10 +363,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                             if root.loading: Text { text: "Loading group info…"; color: Colors.text-secondary; font-size: Typography.sm; }
                             if root.channel-description != "": Text {
+                                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                 text: root.channel-description; color: Colors.text-secondary;
                                 font-size: Typography.sm; wrap: word-wrap;
                             }
                             if root.channel-description == "" && root.can-edit && !root.loading: Text {
+                                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                 text: "Add a description so members know what this is for";
                                 color: Colors.text-secondary; font-size: Typography.sm;
                                 horizontal-alignment: center; wrap: word-wrap;
@@ -519,6 +523,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     colorize: Colors.text-muted;
                                 }
                                 Text {
+                                    width: max(0px, parent.width - 16px - parent.spacing);
                                     horizontal-stretch: 1;
                                     text: "Messages disappear after " + DisappearingGlobal.active-label + " (set when the channel was created)";
                                     color: Colors.text-secondary;
@@ -558,6 +563,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if !root.can-edit: Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                     text: root.channel-name;
                                     color: Colors.text-primary;
                                     font-size: Typography.base;
@@ -588,6 +594,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if !root.can-edit: Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                     text: root.channel-description != "" ? root.channel-description : "No description";
                                     color: root.channel-description != "" ? Colors.text-primary : Colors.text-muted;
                                     font-size: Typography.base;

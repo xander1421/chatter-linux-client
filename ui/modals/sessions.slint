@@ -71,12 +71,14 @@ export component SessionsModal inherits Rectangle {
             spacing: Spacing.md;
 
             if root.error != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.error;
                 color: Colors.error;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
             if root.notice != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.notice;
                 color: Colors.text-secondary;
                 font-size: Typography.sm;

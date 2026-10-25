@@ -57,6 +57,7 @@ export component AnonModePinModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Shield hides your channels and Saved Messages and shows your anonymous DMs. Your DMs with friends stay, and are sent through anonymous mailboxes instead of the server. Your network location is hidden behind Tor — if Tor can't be reached you will be told. Enter your PIN to enable. On a device checking online, wrong attempts can delete your key backup.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
@@ -97,6 +98,7 @@ export component AnonModePinModal inherits Rectangle {
             }
 
             if root.error != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.error;
                 color: Colors.error;
                 font-size: Typography.sm;

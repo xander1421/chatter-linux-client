@@ -171,7 +171,9 @@ export component MeshComposeSheet inherits Rectangle {
                                     horizontal-stretch: 1; accepted(value) => { root.submit(); } }
                             }
                         }
-                        Text { text: "Only devices you invite can read it. You can add members after creating it.";
+                        Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            text: "Only devices you invite can read it. You can add members after creating it.";
                             color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
                     }
                     if root.page == "channel": VerticalLayout {
@@ -218,10 +220,14 @@ export component MeshComposeSheet inherits Rectangle {
                                     accepted(value) => { root.submit(); } }
                             }
                         }
-                        Text { text: "Location cells use geohashes and available relays to connect devices in an area.";
+                        Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            text: "Location cells use geohashes and available relays to connect devices in an area.";
                             color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; }
                     }
-                    if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary;
+                    if MeshGlobal.notice != "": Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        text: MeshGlobal.notice; color: Colors.text-secondary;
                         font-size: Typography.sm; wrap: word-wrap; }
                 }
             }

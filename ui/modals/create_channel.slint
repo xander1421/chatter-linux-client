@@ -652,6 +652,7 @@ export component CreateChannelModal inherits Rectangle {
                                 if root.ai-models-error != "": VerticalLayout {
                                     spacing: Spacing.xxs;
                                     Text {
+                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: root.ai-models-error;
                                         color: Colors.error;
                                         font-size: Typography.xs;
@@ -710,6 +711,7 @@ export component CreateChannelModal inherits Rectangle {
             // Error banner
             // ============================================================
             if root.error-message != "" && root.channel-name != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.error-message;
                 color: Colors.error;
                 font-size: Typography.sm;
