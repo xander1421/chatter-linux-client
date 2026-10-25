@@ -41,9 +41,9 @@ export component MediaActions inherits HorizontalLayout {
     IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
     if root.can-copy: IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
     IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
-    IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
-    Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
-    IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+    if root.has-previous || root.has-next: Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
+    if root.has-previous || root.has-next: IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
 }
 
 export component ImageViewer inherits Rectangle {
@@ -56,6 +56,8 @@ export component ImageViewer inherits Rectangle {
     in property <image> source;
     in property <string> filename: "";
     in property <string> size-display: "";
+    in property <string> sender: "";
+    in property <string> datetime: "";
     property <float> zoom: 1.0;
     property <length> pan-x: 0px;
     property <length> pan-y: 0px;
@@ -209,7 +211,7 @@ export component ImageViewer inherits Rectangle {
     }
     Rectangle {
         width: 100%; height: 100%;
-        background: Materials.scrim-media;
+        background: root.touch ? #000000f5 : Materials.scrim-media;
         opacity: root.arrival * (1.0 - root.dismiss-progress * 0.82);
     }
 
@@ -224,8 +226,8 @@ export component ImageViewer inherits Rectangle {
     // The image owns the layout. Chrome is anchored to its fitted bounds,
     // with an overlay fallback for portrait media that reaches the safe edge.
     viewer-area := Rectangle {
-        x: root.compact-layout ? Spacing.sm : Spacing.xl;
-        y: root.compact-layout ? Spacing.sm : Spacing.xl;
+        x: root.touch ? 0px : root.compact-layout ? Spacing.sm : Spacing.xl;
+        y: root.touch ? 0px : root.compact-layout ? Spacing.sm : Spacing.xl;
         width: root.width - 2 * self.x;
         height: root.height - 2 * self.y;
         clip: true;
@@ -370,7 +372,7 @@ export component ImageViewer inherits Rectangle {
         ? viewer-area.fit-width : min(viewer-area.width, viewer-area.height * root.target-image.width / root.target-image.height);
     property <length> target-fit-height: root.target-image.width <= 0 || root.target-image.height <= 0
         ? viewer-area.fit-height : min(viewer-area.height, viewer-area.width * root.target-image.height / root.target-image.width);
-    // Chrome follows the image as drawn: zoomed past the viewport it pins to the edges.
+    // Desktop chrome follows the fitted image; touch chrome occupies the safe edges.
     property <length> shown-width: min(viewer-area.width, viewer-area.fit-width * root.zoom);
     property <length> shown-height: min(viewer-area.height, viewer-area.fit-height * root.zoom);
     property <length> chrome-fit-width: root.shown-width + (root.target-fit-width - root.shown-width) * root.page-progress;
@@ -385,39 +387,76 @@ export component ImageViewer inherits Rectangle {
     animate chrome-alpha { duration: Materials.motion-quick; easing: Materials.settle; }
 
     GlassSurface {
-        x: root.chrome-x;
-        y: root.header-y + root.visual-dismiss-offset - (1.0 - root.arrival) * 12px;
-        width: root.chrome-width;
-        height: 48px * Appearance.text-grow;
-        material-enabled: true;
-        border-radius: Spacing.radius-lg;
+        x: root.touch ? 0px : root.chrome-x;
+        y: root.touch ? 0px : root.header-y + root.visual-dismiss-offset - (1.0 - root.arrival) * 12px;
+        width: root.touch ? root.width : root.chrome-width;
+        height: root.touch ? 64px * Appearance.text-grow : 48px * Appearance.text-grow;
+        material-enabled: !root.touch;
+        background: root.touch ? #101010e8 : transparent;
+        border-radius: root.touch ? 0px : Spacing.radius-lg;
         opacity: root.chrome-alpha * root.arrival;
         visible: root.chrome-visible || self.opacity > 0;
         TouchArea { width: 100%; height: 100%; }
         HorizontalLayout {
+            width: parent.width;
+            height: parent.height;
             padding-left: Spacing.md;
             padding-right: Spacing.md;
             alignment: space-between;
+            if root.touch: DismissButton { back: true; clicked => { root.request-close(); } }
             VerticalLayout {
                 horizontal-stretch: 1;
+                height: parent.height;
                 alignment: center;
-                Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
-                if root.size-display != "": Text { text: root.size-display; color: Colors.text-muted; font-size: Typography.xs; }
+                if root.touch: Text { text: root.sender; overflow: elide; color: Colors.on-media; font-size: Typography.base; font-weight: Typography.medium; }
+                if root.touch: Text { text: root.datetime; overflow: elide; color: Colors.on-media-muted; font-size: Typography.xs; }
+                if !root.touch: Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
+                if !root.touch && root.size-display != "": Text { text: root.size-display; color: Colors.text-muted; font-size: Typography.xs; }
             }
-            DismissButton { clicked => { root.request-close(); } }
+            if !root.touch: DismissButton { clicked => { root.request-close(); } }
         }
     }
 
     GlassSurface {
-        x: root.chrome-x;
-        y: root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
-        width: root.chrome-width;
-        height: root.action-size;
-        border-radius: Spacing.radius-lg;
+        x: root.touch ? 0px : root.chrome-x;
+        y: root.touch ? root.height - self.height : root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
+        width: root.touch ? root.width : root.chrome-width;
+        height: root.touch ? root.action-size + 28px * Appearance.text-grow : root.action-size;
+        material-enabled: !root.touch;
+        background: root.touch ? #101010e8 : transparent;
+        border-radius: root.touch ? 0px : Spacing.radius-lg;
         visible: root.chrome-visible || self.opacity > 0;
         opacity: root.chrome-alpha * root.arrival;
         TouchArea { width: 100%; height: 100%; }
-        MediaActions {
+        if root.touch: VerticalLayout {
+            width: parent.width;
+            height: parent.height;
+            alignment: center;
+            MediaActions {
+                width: parent.width;
+                height: root.action-size;
+                action-size: root.action-size;
+                can-copy: true;
+                position-label: root.position-label;
+                has-previous: root.has-previous;
+                has-next: root.has-next;
+                download => { root.download(); }
+                copy-image => { root.copy-image(); }
+                open-downloads => { root.open-downloads(); }
+                previous => { root.move-page(-1); }
+                next => { root.move-page(1); }
+            }
+            Text {
+                width: parent.width;
+                height: 24px * Appearance.text-grow;
+                text: root.filename + (root.size-display != "" ? " · " + root.size-display : "");
+                color: Colors.on-media-muted;
+                font-size: Typography.xs;
+                overflow: elide;
+                horizontal-alignment: center;
+            }
+        }
+        if !root.touch: MediaActions {
             action-size: root.action-size;
             can-copy: true;
             position-label: root.position-label;
