@@ -2,6 +2,15 @@
 
 use super::ChatterClient;
 
+/// One row in the pinned-messages sheet, resolved from stored pins.
+pub struct PinnedDisplayItem {
+    pub message_id: crate::domain::ids::MessageId,
+    pub preview: String,
+    pub sender_name: String,
+    pub sent_time: String,
+    pub thumbnail: Vec<u8>,
+}
+
 impl ChatterClient {
     pub fn clear_pinned(&self) {
         self.services.chat_state.clear_pinned();
@@ -51,7 +60,7 @@ impl ChatterClient {
     pub async fn pinned_display_items(
         &self,
         conversation: crate::state::ActiveConversation,
-    ) -> Vec<crate::services::pin_service::PinnedMessageData> {
+    ) -> Vec<PinnedDisplayItem> {
         let Some((mut kind, id)) = conversation.routing_key() else {
             return Vec::new();
         };
@@ -61,9 +70,39 @@ impl ChatterClient {
         let Ok(id) = id.parse() else {
             return Vec::new();
         };
-        self.load_pinned_for_channel(&id, &kind)
+        let pins = self.load_pinned_for_channel(&id, &kind)
             .await
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let messages: Vec<_> = pins
+            .iter()
+            .filter_map(|pin| self.get_message_local(&pin.message_id))
+            .collect();
+        let names = self.search_sender_display_names(&messages);
+        let mut details: std::collections::HashMap<_, _> = messages
+            .into_iter()
+            .zip(names)
+            .map(|(message, sender_name)| {
+                (
+                    message.id,
+                    (
+                        sender_name,
+                        crate::util::time::format_message_time(message.created_at),
+                    ),
+                )
+            })
+            .collect();
+        pins.into_iter()
+            .filter_map(|pin| {
+                let (sender_name, sent_time) = details.remove(&pin.message_id)?;
+                Some(PinnedDisplayItem {
+                    message_id: pin.message_id,
+                    preview: pin.preview,
+                    sender_name,
+                    sent_time,
+                    thumbnail: pin.thumbnail,
+                })
+            })
+            .collect()
     }
 
     // ── Pin / pinned messages façade ────────────────────────────────────
