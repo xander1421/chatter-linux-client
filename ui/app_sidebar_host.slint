@@ -1,4 +1,5 @@
 import { SidebarPane } from "app_sidebar_pane.slint";
+import { AnonMode } from "anon_mode/anon_mode_global.slint";
 import { SearchPane } from "app_search_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { CallView } from "app_call_view.slint";
@@ -113,6 +114,8 @@ export component AppSidebarHost inherits Rectangle {
             SidebarPane.saved-messages-clicked();
         }
         friends-clicked => {
+            // The row says "Friends" (the list) or, in Shield, "Add Contact".
+            ModalHostState.friends-modal-tab = AnonMode.enabled ? "find" : "friends";
             SidebarPane.active-tab = "contacts";
         }
         // Wide-layout entry to the Calls screen — the same modal and

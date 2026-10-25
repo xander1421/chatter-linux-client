@@ -25,10 +25,8 @@ export component AppBottomNavigation inherits MobileBottomNav {
             root.selected-tab = "calls";
             root.calls-tab-clicked();
         } else if (tab == "contacts") {
-            // Land on the contacts list. The default tab is the
-            // add-by-code form, which is the right landing spot for
-            // a "Friends" dialog opened deliberately, and the wrong
-            // one for a Contacts tab you press to see your contacts.
+            // Land on the contacts list, not the add-by-code form
+            // (the default tab), as the desktop Friends row does.
             root.friends-modal-tab = "friends";
             root.selected-tab = "contacts";
         } else if (tab == "profile") {
