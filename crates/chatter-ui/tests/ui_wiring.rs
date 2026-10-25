@@ -5367,20 +5367,20 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
         ("profile", "none")
     );
 
-    // Night Mode shows the palette in force and pins the opposite one.
+    // Night mode shows the palette in force and pins the opposite one.
     let appearance = w.global::<Appearance>();
     appearance.set_theme("dark".into());
-    tap_switch(&w, "Night Mode");
+    tap_switch(&w, "Night mode");
     assert_eq!(
         appearance.get_theme().as_str(),
         "light",
-        "Night Mode off did not pick Light"
+        "Night mode off did not pick Light"
     );
-    tap_switch(&w, "Night Mode");
+    tap_switch(&w, "Night mode");
     assert_eq!(
         appearance.get_theme().as_str(),
         "dark",
-        "Night Mode on did not pick Dark"
+        "Night mode on did not pick Dark"
     );
 
     // Phone: the FAB is on the Chats list and opens the create menu, and is

@@ -1,9 +1,8 @@
 // AccountMenu — the Profile tab (owner decision 2026-09-26).
 //
-// An account menu in the Telegram drawer shape: who you are at the top, then
-// the places that belong to your account. Settings is reached from here, not
-// from the tab bar. On a two-pane layout the sidebar's avatar and gear open
-// the same menu as a card.
+// The Profile tab groups account destinations below the signed-in identity.
+// Settings is reached from here, not from the tab bar. On a two-pane layout
+// the sidebar's avatar and gear open the compact version as a card.
 //
 // Presentation only: every row fires a callback and app.slint routes it.
 
@@ -17,6 +16,7 @@ import { Avatar } from "../components/avatar.slint";
 import { Toggle } from "../components/toggle.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { Materials } from "../theme/materials.slint";
+import { Elevation } from "../theme/elevation.slint";
 
 export component MenuRow inherits Rectangle {
     in property <image> icon;
@@ -71,9 +71,14 @@ export component MenuRow inherits Rectangle {
     }
 }
 
-component Divider inherits Rectangle {
+component MenuDivider inherits Rectangle {
     height: 1px;
-    background: Colors.divider;
+    Rectangle {
+        x: Spacing.md + 24px + Spacing.lg;
+        width: parent.width - self.x - Spacing.md;
+        height: 1px;
+        background: Colors.divider;
+    }
 }
 
 export component AccountMenu inherits Rectangle {
@@ -114,21 +119,51 @@ export component AccountMenu inherits Rectangle {
         menu-body := Rectangle {
             preferred-height: menu.preferred-height;
             property <length> chrome-inset: account-modal.content-top-inset;
-            Flickable {
+            ScrollView {
                 x: 0;
                 y: root.mobile-mode ? -menu-body.chrome-inset : 0px;
                 width: parent.width;
                 height: root.mobile-mode ? root.height : parent.height;
+                mouse-drag-pan-enabled: true;
                 viewport-width: self.width;
                 viewport-height: menu.preferred-height;
 
                 menu := VerticalLayout {
+                    width: parent.width;
                     padding-top: root.mobile-mode ? menu-body.chrome-inset : Spacing.none;
                     padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                    padding-left: root.mobile-mode ? Spacing.md : Spacing.none;
+                    padding-right: root.mobile-mode ? Spacing.md : Spacing.none;
+                    spacing: root.mobile-mode ? Spacing.lg : Spacing.sm;
                     alignment: start;
 
-                    // Header: who is signed in.
-                    VerticalLayout {
+                    if root.mobile-mode: VerticalLayout {
+                        spacing: Spacing.sm;
+                        padding-top: Spacing.lg;
+                        padding-bottom: Spacing.md;
+                        HorizontalLayout {
+                            alignment: center;
+                            Avatar { size: 88px; source: root.avatar; fallback-text: root.initials; name: root.display-name; }
+                        }
+                        Text {
+                            width: max(0px, root.width - 2 * Spacing.lg - 2 * Spacing.md);
+                            text: root.display-name;
+                            color: Colors.text-primary;
+                            font-size: Typography.xl;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        if root.username != "": Text {
+                            width: max(0px, root.width - 2 * Spacing.lg - 2 * Spacing.md);
+                            text: "@" + root.username;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    if !root.mobile-mode: VerticalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
                         padding-bottom: Spacing.md;
@@ -148,55 +183,84 @@ export component AccountMenu inherits Rectangle {
                             overflow: elide;
                         }
                     }
-                    Divider { }
-
-                    MenuRow { icon: Icons.user; label: "My Profile"; clicked => { root.my-profile(); } }
-                    Divider { }
-
-                    // Shield mode has no Saved Messages and no channels
-                    // (sidebar.slint hides both), so neither is offered here.
-                    if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
-                    if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
-                    MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
-                    MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
-                    Divider { }
-
-                    // Night Mode reads the palette actually in force, so on
-                    // "system" it shows what the OS picked; flipping it pins an
-                    // explicit Light or Dark. The row's TouchArea is declared
-                    // after the switch so it takes every tap: the switch's own
-                    // would write `checked` and cut its binding to the palette.
                     Rectangle {
-                        height: Spacing.list-row-height-touch;
-                        accessible-role: switch;
-                        accessible-label: "Night Mode";
-                        accessible-checkable: true;
-                        accessible-checked: Appearance.dark;
-                        accessible-action-default => { root.toggle-night(); }
-                        background: night-touch.pressed ? Materials.pressed
-                            : night-touch.has-hover ? Colors.surface-hover : transparent;
-                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
-                        HorizontalLayout {
-                            padding-left: Spacing.md;
-                            padding-right: Spacing.md;
-                            spacing: Spacing.lg;
-                            VerticalLayout { alignment: center; horizontal-stretch: 0;
-                                Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
-                            }
-                            Text {
-                                text: "Night Mode";
-                                color: Colors.text-primary;
-                                font-size: Typography.base;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                            }
-                            VerticalLayout { alignment: center; horizontal-stretch: 0;
-                                Toggle { checked: Appearance.dark; }
-                            }
+                        height: profile-group.preferred-height;
+                        background: root.mobile-mode ? Colors.surface-section : transparent;
+                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
+                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
+                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
+                        border-color: Elevation.card-rim;
+                        profile-group := VerticalLayout {
+                            MenuRow { icon: Icons.user; label: "My Profile"; clicked => { root.my-profile(); } }
+                            // Shield mode has no Saved Messages or channels.
+                            if !AnonMode.enabled: MenuDivider { }
+                            if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
                         }
-                        night-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.toggle-night(); }
+                    }
+                    Rectangle {
+                        height: activity-group.preferred-height;
+                        background: root.mobile-mode ? Colors.surface-section : transparent;
+                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
+                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
+                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
+                        border-color: Elevation.card-rim;
+                        activity-group := VerticalLayout {
+                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
+                            if !AnonMode.enabled: MenuDivider { }
+                            MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
+                        }
+                    }
+                    Rectangle {
+                        height: settings-group.preferred-height;
+                        background: root.mobile-mode ? Colors.surface-section : transparent;
+                        border-radius: root.mobile-mode ? Spacing.radius-lg : 0px;
+                        drop-shadow-blur: root.mobile-mode ? Elevation.card-blur : 0px;
+                        drop-shadow-offset-y: root.mobile-mode ? Elevation.card-offset : 0px;
+                        drop-shadow-color: Elevation.card-shadow;
+                        border-width: root.mobile-mode ? Elevation.rim-width : 0px;
+                        border-color: Elevation.card-rim;
+                        settings-group := VerticalLayout {
+                            MenuRow { icon: Icons.settings; label: "Settings"; clicked => { root.settings(); } }
+                            MenuDivider { }
+                            // The switch reflects the active palette; the row handles taps
+                            // so the Toggle's checked binding stays attached to it.
+                            Rectangle {
+                                height: Spacing.list-row-height-touch;
+                                accessible-role: switch;
+                                accessible-label: "Night mode";
+                                accessible-checkable: true;
+                                accessible-checked: Appearance.dark;
+                                accessible-action-default => { root.toggle-night(); }
+                                background: night-touch.pressed ? Materials.pressed
+                                    : night-touch.has-hover ? Colors.surface-hover : transparent;
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                HorizontalLayout {
+                                    padding-left: Spacing.md;
+                                    padding-right: Spacing.md;
+                                    spacing: Spacing.lg;
+                                    VerticalLayout { alignment: center; horizontal-stretch: 0;
+                                        Image { source: Icons.moon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
+                                    }
+                                    Text {
+                                        text: "Night mode";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.base;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    VerticalLayout { alignment: center; horizontal-stretch: 0;
+                                        Toggle { checked: Appearance.dark; }
+                                    }
+                                }
+                                night-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.toggle-night(); }
+                                }
+                            }
                         }
                     }
                 }
