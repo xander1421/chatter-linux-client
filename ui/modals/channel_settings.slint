@@ -162,13 +162,16 @@ export component ChannelSettingsModal inherits Rectangle {
         }
 
         // One content column on every screen; phones use Modal's full-screen page.
+        // Stretch: the content area fills the fixed card. Members has no
+        // preferred height (it owns the viewport) and was 0px tall at start.
         VerticalLayout {
             spacing: 0;
-            alignment: start;
+            alignment: stretch;
 
             if root.active-section != "general" && root.active-section != "destructive": Rectangle {
                 min-height: Spacing.touch-target-min + Spacing.sm * 2;
                 preferred-height: Spacing.touch-target-min + Spacing.sm * 2;
+                vertical-stretch: 0;
                 background: transparent;
 
                 settings-tabs := Rectangle {
