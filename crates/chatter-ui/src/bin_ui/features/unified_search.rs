@@ -998,12 +998,8 @@ fn search_messages(
             channel_name: hit.channel_name.into(),
             sender_name: hit.sender_name.into(),
             content_preview: hit.preview.into(),
-            timestamp: hit
-                .created_at
-                .with_timezone(&chrono::Local)
-                .format("%b %d, %H:%M")
-                .to_string()
-                .into(),
+            // The chat list's short date: today's hits read "23:04".
+            timestamp: crate::bin_ui::converters::sidebar_time(hit.created_at).into(),
             highlight_start: start,
             highlight_end: end,
             preview_before: before.into(),
