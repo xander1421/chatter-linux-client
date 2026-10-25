@@ -34,137 +34,153 @@ export component EditProfileModal inherits Rectangle {
         show: root.show-modal;
         title: "Edit profile";
         modal-width: 440px;
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
         }
 
         VerticalLayout {
-            spacing: Spacing.lg;
-            padding: Spacing.md;
+            spacing: Spacing.md;
 
-            // Avatar Section
-            VerticalLayout {
-                spacing: Spacing.sm;
-                alignment: center;
+            Flickable {
+                vertical-stretch: 1;
+                viewport-height: profile-fields.preferred-height;
+                viewport-width: self.width;
 
-                HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 96px;
-                        height: 96px;
-                        background: transparent;
-                        accessible-role: button;
-                        accessible-label: "Edit profile photo";
-                        Avatar {
-                            size: 96px;
-                            name: root.display-name;
-                            source: root.avatar;
-                            fallback-text: "?";
-                            fallback-bg: root.avatar-color;
-                            fallback-fg: Colors.on-action;
-                        }
-                        Rectangle {
-                            x: parent.width - self.width;
-                            y: parent.height - self.height;
-                            width: 30px;
-                            height: 30px;
-                            border-radius: 15px;
-                            background: Colors.action-fill;
-                            border-width: Spacing.stroke;
-                            border-color: Colors.surface;
-                            Image { source: Icons.edit; width: 16px; height: 16px; colorize: Colors.on-action; }
-                        }
-                        TouchArea { enabled: !root.loading; clicked => { root.avatar-menu-open = !root.avatar-menu-open; } }
-                    }
-                }
-                if root.avatar-menu-open: HorizontalLayout {
-                    alignment: center;
-                    spacing: Spacing.sm;
-                    Button {
-                        text: "Choose photo";
-                        variant: "secondary";
-                        clicked => { root.avatar-menu-open = false; root.change-avatar(); }
-                    }
-                    if root.has-photo: Button {
-                        text: "Remove photo";
-                        variant: "secondary";
-                        clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
-                    }
-                }
-            }
-
-            AvatarPicker {
-                choices: root.avatar-options;
-                selected-index: root.selected-default-idx;
-                name: root.display-name;
-                disabled: root.loading;
-                selected(i) => { root.select-default-avatar(i); }
-            }
-
-            // Display Name Section
-            VerticalLayout {
-                spacing: Spacing.xs;
-                Text {
-                    text: "Display name";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                }
-                Input {
-                    text <=> root.display-name;
-                    placeholder: "Your name";
-                }
-            }
-
-            // Bio Section
-            VerticalLayout {
-                spacing: Spacing.xs;
-                Text {
-                    text: "Bio";
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                }
-                // Using a manual multi-line text input — Neo inset
-                Rectangle {
-                    height: 80px;
-                    border-radius: Spacing.radius-md;
-                    background: Colors.inset;
-                    border-width: Spacing.stroke;
-                    border-color: bio-input.has-focus ? Colors.primary : Colors.border;
-                    animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
-
-                    bio-input := TextInput {
-                        x: Spacing.md;
-                        y: Spacing.sm;
-                        width: parent.width - Spacing.md * 2;
-                        height: parent.height - Spacing.sm * 2;
-                        color: Colors.text-primary;
-                        font-size: Typography.base;
-                        text <=> root.bio;
-                        wrap: word-wrap;
-                        single-line: false;
-                    }
-                }
-            }
-
-            Rectangle {
-                height: root.error-message != "" ? error-label.preferred-height : 0px;
-                opacity: root.error-message != "" ? 1 : 0;
-                clip: true;
-                animate height { duration: Materials.motion-standard; easing: root.error-message != "" ? Materials.spring : Materials.glide; }
-                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
-                error-label := Text {
+                profile-fields := VerticalLayout {
                     width: parent.width;
-                    text: root.error-message;
-                    color: Colors.error;
-                    font-size: Typography.sm;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
+                    spacing: Spacing.lg;
+                    padding: Spacing.md;
+
+                    // Avatar Section
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        alignment: center;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 96px;
+                                height: 96px;
+                                background: transparent;
+                                accessible-role: button;
+                                accessible-label: "Edit profile photo";
+                                Avatar {
+                                    size: 96px;
+                                    name: root.display-name;
+                                    source: root.avatar;
+                                    fallback-text: "?";
+                                    fallback-bg: root.avatar-color;
+                                    fallback-fg: Colors.on-action;
+                                }
+                                Rectangle {
+                                    x: parent.width - self.width;
+                                    y: parent.height - self.height;
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 15px;
+                                    background: Colors.action-fill;
+                                    border-width: Spacing.stroke;
+                                    border-color: Colors.surface;
+                                    Image { source: Icons.edit; width: 16px; height: 16px; colorize: Colors.on-action; }
+                                }
+                                TouchArea { enabled: !root.loading; clicked => { root.avatar-menu-open = !root.avatar-menu-open; } }
+                            }
+                        }
+                        if root.avatar-menu-open: HorizontalLayout {
+                            alignment: center;
+                            spacing: Spacing.sm;
+                            Button {
+                                text: "Choose photo";
+                                variant: "secondary";
+                                clicked => { root.avatar-menu-open = false; root.change-avatar(); }
+                            }
+                            if root.has-photo: Button {
+                                text: "Remove photo";
+                                variant: "secondary";
+                                clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
+                            }
+                        }
+                    }
+
+                    AvatarPicker {
+                        choices: root.avatar-options;
+                        selected-index: root.selected-default-idx;
+                        name: root.display-name;
+                        disabled: root.loading;
+                        selected(i) => { root.select-default-avatar(i); }
+                    }
+
+                    // Display Name Section
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        Text {
+                            text: "Display name";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+                        Input {
+                            text <=> root.display-name;
+                            placeholder: "Your name";
+                        }
+                    }
+
+                    // Bio Section
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        Text {
+                            text: "Bio";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+                        // Using a manual multi-line text input — Neo inset
+                        Rectangle {
+                            height: 80px;
+                            border-radius: Spacing.radius-md;
+                            background: Colors.inset;
+                            border-width: Spacing.stroke;
+                            border-color: bio-input.has-focus ? Colors.primary : Colors.border;
+                            animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
+
+                            bio-input := TextInput {
+                                x: Spacing.md;
+                                y: Spacing.sm;
+                                width: parent.width - Spacing.md * 2;
+                                height: parent.height - Spacing.sm * 2;
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                text <=> root.bio;
+                                wrap: word-wrap;
+                                single-line: false;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: root.error-message != "" ? error-label.preferred-height : 0px;
+                        opacity: root.error-message != "" ? 1 : 0;
+                        clip: true;
+                        animate height { duration: Materials.motion-standard; easing: root.error-message != "" ? Materials.spring : Materials.glide; }
+                        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                        error-label := Text {
+                            width: parent.width;
+                            text: root.error-message;
+                            color: Colors.error;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+
                 }
             }
 
             // Action Buttons
             HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
                 spacing: Spacing.md;
                 alignment: end;
                 

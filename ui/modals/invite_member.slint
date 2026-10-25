@@ -47,6 +47,8 @@ export component InviteMemberModal inherits Rectangle {
         show: root.show-modal;
         title: "Invite members";
         modal-width: 480px;
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
@@ -94,7 +96,6 @@ export component InviteMemberModal inherits Rectangle {
             // User list (scrollable)
             Rectangle {
                 min-height: 200px;
-                max-height: 300px;
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
