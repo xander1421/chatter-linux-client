@@ -22,6 +22,22 @@ pub enum ChannelMemberFailure {
     Bans(String),
 }
 
+fn sort_channel_member_roster(members: &mut [crate::domain::channel::MemberWithProfile]) {
+    use crate::domain::channel::MemberRole;
+    let rank = |role| match role {
+        MemberRole::Owner => 0,
+        MemberRole::Admin => 1,
+        MemberRole::Moderator => 2,
+        MemberRole::Member => 3,
+    };
+    members.sort_by(|a, b| {
+        rank(a.membership.role)
+            .cmp(&rank(b.membership.role))
+            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+            .then_with(|| a.membership.user_id.to_string().cmp(&b.membership.user_id.to_string()))
+    });
+}
+
 /// User-facing wording for a channel lifecycle event.
 pub enum ChannelEventNotice<'a> {
     Moderation { action: &'a str, reason: Option<&'a str> },
@@ -67,6 +83,7 @@ impl ChatterClient {
                 Ok(rows) => rows,
                 Err(error) => {
                     tracing::warn!(%error, page, "Failed to list channel members");
+                    sort_channel_member_roster(&mut members);
                     let failure_stage = if members.is_empty() {
                         ChannelMemberFailure::Members(error.to_string())
                     } else {
@@ -90,6 +107,7 @@ impl ChatterClient {
                 break;
             }
             if page == MAX_PAGES {
+                sort_channel_member_roster(&mut members);
                 return ChannelMemberLists {
                     members,
                     bans: None,
@@ -98,6 +116,7 @@ impl ChatterClient {
                 };
             }
         }
+        sort_channel_member_roster(&mut members);
         match self.list_banned_members(channel_id).await {
             Ok(bans) => ChannelMemberLists {
                 members,

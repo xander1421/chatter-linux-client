@@ -104,8 +104,7 @@ export component ChannelSettingsModal inherits Rectangle {
     property <bool> show-delete-confirm: false;
     property <bool> show-leave-confirm: false;
     property <bool> show-discard-confirm: false;
-    // user-id whose action row (role picker + Remove) is expanded in the
-    // member list ("" = none).
+    // user-id whose member action menu is open ("" = none).
     property <string> role-picker-user: "";
     // "remove" / "ban" while that member's action asks for confirmation
     // ("" = none). Nothing leaves the UI until the second tap.
@@ -228,9 +227,10 @@ export component ChannelSettingsModal inherits Rectangle {
                 clip: true;
                 min-height: 0px;
                 vertical-stretch: 1;
-                preferred-height: content-area.preferred-height;
+                preferred-height: root.active-section == "members" ? 0px : content-area.preferred-height;
 
                 settings-scroll := ScrollView {
+                    visible: root.active-section != "members";
                     // The fluent ScrollView only pans with the wheel; a finger drag needs this.
                     mouse-drag-pan-enabled: true;
                     // Fill the area the layout gave us and scroll inside it.
@@ -674,34 +674,6 @@ export component ChannelSettingsModal inherits Rectangle {
                             link-needs-approval <=> root.link-needs-approval;
                         }
 
-                        // ========== Members Section ==========
-                        if root.active-section == "members": ChannelMembersSection {
-                            can-manage-members: root.can-manage-members;
-                            can-invite: root.can-invite;
-                            can-view-bans: root.can-view-bans;
-                            channel-name: root.channel-name;
-                            confirm-action <=> root.confirm-action;
-                            is-owner: root.is-owner;
-                            is-private-group: root.is-private-group;
-                            loading: root.loading;
-                            member-count: root.member-count;
-                            members: root.members;
-                            roster-rows: root.roster-rows;
-                            // Fixed: tying it to settings-scroll.height made a layout binding loop.
-                            roster-height: 480px;
-                            narrow: root.narrow;
-                            role-picker-user <=> root.role-picker-user;
-                            ban-member(arg0) => { root.ban-member(arg0); }
-                            block-member(arg0, arg1) => { root.block-member(arg0, arg1); }
-                            change-member-role(arg0, arg1) => { root.change-member-role(arg0, arg1); }
-                            invite-channel-members() => { root.invite-channel-members(); }
-                            invite-members() => { root.invite-members(); }
-                            remove-member(arg0) => { root.remove-member(arg0); }
-                            set-member-muted(arg0, arg1, arg2) => { root.set-member-muted(arg0, arg1, arg2); }
-                            transfer-ownership(arg0) => { root.transfer-ownership(arg0); }
-                            unban-member(arg0) => { root.unban-member(arg0); }
-                        }
-
                         // ========== Danger Zone Section ==========
                         if root.active-section == "destructive": ChannelDangerSection {
                             active-section <=> root.active-section;
@@ -724,6 +696,37 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     }
                 }
+                // Members own the whole content viewport, outside the Info scroll.
+                if root.active-section == "members": ChannelMembersSection {
+                    x: Spacing.md;
+                    y: Spacing.md;
+                    width: parent.width - Spacing.md * 2;
+                    height: parent.height - Spacing.md * 2;
+                    can-manage-members: root.can-manage-members;
+                    can-invite: root.can-invite;
+                    can-view-bans: root.can-view-bans;
+                    channel-name: root.channel-name;
+                    confirm-action <=> root.confirm-action;
+                    is-owner: root.is-owner;
+                    is-private-group: root.is-private-group;
+                    loading: root.loading;
+                    error-message: root.error-message;
+                    member-count: root.member-count;
+                    members: root.members;
+                    roster-rows: root.roster-rows;
+                    narrow: root.narrow;
+                    role-picker-user <=> root.role-picker-user;
+                    ban-member(arg0) => { root.ban-member(arg0); }
+                    block-member(arg0, arg1) => { root.block-member(arg0, arg1); }
+                    change-member-role(arg0, arg1) => { root.change-member-role(arg0, arg1); }
+                    invite-channel-members() => { root.invite-channel-members(); }
+                    invite-members() => { root.invite-members(); }
+                    remove-member(arg0) => { root.remove-member(arg0); }
+                    set-member-muted(arg0, arg1, arg2) => { root.set-member-muted(arg0, arg1, arg2); }
+                    transfer-ownership(arg0) => { root.transfer-ownership(arg0); }
+                    unban-member(arg0) => { root.unban-member(arg0); }
+                }
+
             }
         }
     }
