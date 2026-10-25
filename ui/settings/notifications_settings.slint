@@ -38,6 +38,7 @@ export component NotificationsSettings inherits VerticalLayout {
 
         ToggleRow {
             accessible-text: "Account push notifications";
+            label-spacing: Spacing.sm;
             checked <=> NotificationDelivery.push-enabled;
             disabled: NotificationDelivery.busy || !NotificationDelivery.loaded;
             toggled(value) => { NotificationDelivery.push-enabled-changed(value); }
@@ -46,6 +47,7 @@ export component NotificationsSettings inherits VerticalLayout {
                 text: "Account push notifications";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
+                font-weight: Typography.medium;
             }
             Text {
                 text: "Allow server push notifications for all devices on this account. Device notification settings still apply.";
