@@ -187,36 +187,34 @@ impl AppContext {
         self.infrastructure.group_fanout.get().cloned()
     }
 
-    /// Initialize the call worker (call after grpc connect).
+    /// Initialize the call worker on the first call (after grpc connect).
     ///
     /// Also spawns the EventBus → orchestrator bridge so incoming-call offers
     /// reach the worker without UI-layer dispatch, and the orchestrator →
     /// `call_history` recorder that feeds the Calls screen.
     #[cfg(feature = "media")]
-    pub fn init_call_service(&self) {
-        let mut newly_created = false;
+    pub fn init_call_service(&self, session_revision: Option<u64>) {
         self.call_service.get_or_init(|| {
-            newly_created = true;
-            CallWorkerHandle::spawn(self.infrastructure.grpc_pool.call_client())
-        });
-        if newly_created {
-            if let Some(handle) = self.call_service.get().cloned() {
-                let signaling = crate::services::call_signaling::CallSignalingService::new(
-                    self.core_services.message_service.clone(),
-                    self.core_services.channel_service.clone(),
-                );
-                crate::services::call_history_recorder::spawn_call_history_recorder(
-                    &handle,
-                    self.infrastructure.database.clone(),
-                    self.core_services.message_service.clone(),
-                );
-                let _ = crate::services::call_worker::spawn_call_orchestrator_bridge(
-                    &self.core_services.event_bus,
-                    handle,
-                    signaling,
-                );
+            let handle = CallWorkerHandle::spawn(self.infrastructure.grpc_pool.call_client());
+            if let Some(revision) = session_revision {
+                handle.incoming_presentation_state().begin_session(revision);
             }
-        }
+            let signaling = crate::services::call_signaling::CallSignalingService::new(
+                self.core_services.message_service.clone(),
+                self.core_services.channel_service.clone(),
+            );
+            crate::services::call_history_recorder::spawn_call_history_recorder(
+                &handle,
+                self.infrastructure.database.clone(),
+                self.core_services.message_service.clone(),
+            );
+            let _ = crate::services::call_worker::spawn_call_orchestrator_bridge(
+                &self.core_services.event_bus,
+                handle.clone(),
+                signaling,
+            );
+            handle
+        });
     }
 
     /// Get the call worker handle.

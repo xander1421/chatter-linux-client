@@ -6,7 +6,7 @@
 //! Each dial hands tonic a [`DataStream`] tunnelled through Tor to the pinned
 //! `.onion`, which hides both the client's and the server's IP.
 //!
-//! The [`arti_client::TorClient`] bootstraps at app launch and is cached in a
+//! The [`arti_client::TorClient`] bootstraps on first use or explicit warmup and is cached in a
 //! shared [`OnceCell`]. Authenticated, unidentified, and secret-chat channels
 //! use distinct isolation groups; a slow hidden-service dial gets a second
 //! isolated attempt after a short head start.

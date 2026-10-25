@@ -197,7 +197,6 @@ async fn android_core(
     if !client.is_logged_in() && !allow_signed_out {
         return Err(chatter_core::client::StartupError { kind: chatter_core::client::StartupErrorKind::Other });
     }
-    client.prewarm_tor();
     crate::platform::android::call_actions::register_call_client(client.clone());
     crate::platform::android::notification_route::register_client(client.clone());
     client.start_notification_listener();
