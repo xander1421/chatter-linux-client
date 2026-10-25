@@ -130,6 +130,8 @@ export component UserProfileModal inherits Rectangle {
     in property <[SharedTab]> shared-tabs: [];
     in-out property <string> shared-tab: "";
     in property <[SharedContentItem]> shared-items: [];
+    in property <bool> shared-has-previous: false;
+    in property <bool> shared-has-more: false;
     in property <bool> shared-loading: false;
     in property <string> shared-error: "";
 
@@ -162,6 +164,8 @@ export component UserProfileModal inherits Rectangle {
     callback start-call(bool /* is-video */);
     callback shared-tab-selected(string /* category */);
     callback shared-load-more();
+    callback shared-load-previous();
+    callback shared-page-closed();
     callback shared-retry();
     callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */, string /* selected-url */);
 
@@ -246,7 +250,7 @@ export component UserProfileModal inherits Rectangle {
                     // has scrolled behind this bar.
                     if root.shared-page-open: DismissButton {
                         back: true;
-                        clicked => { root.shared-page-open = false; }
+                        clicked => { root.shared-page-open = false; root.shared-page-closed(); }
                     }
 
                     if root.mobile-mode && !root.root-screen && !root.shared-page-open: DismissButton {
@@ -687,6 +691,10 @@ export component UserProfileModal inherits Rectangle {
                         spacing: Spacing.md;
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Text { text: root.shared-title; color: Colors.text-primary; font-size: Typography.xl; font-weight: Typography.semibold; }
+                        if root.shared-has-previous: Button {
+                            text: "Load earlier";
+                            clicked => { root.shared-load-previous(); }
+                        }
                         if root.shared-tab == "photo" || root.shared-tab == "video" || root.shared-tab == "gif": ProfileSharedGrid {
                             shared-items: root.shared-items;
                             open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
@@ -694,6 +702,10 @@ export component UserProfileModal inherits Rectangle {
                         if root.shared-tab != "photo" && root.shared-tab != "video" && root.shared-tab != "gif": ProfileSharedList {
                             shared-items: root.shared-items; mobile-mode: root.mobile-mode; row-height: root.row-height;
                             open-shared-item(message-id, attachment-id, category, selected-url) => { root.open-shared-item(message-id, attachment-id, category, selected-url); }
+                        }
+                        if root.shared-has-more && !root.shared-loading: Button {
+                            text: "Load more";
+                            clicked => { root.shared-load-more(); }
                         }
                         if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
                         if root.shared-error != "": VerticalLayout {

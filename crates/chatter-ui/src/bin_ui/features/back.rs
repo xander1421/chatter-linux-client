@@ -105,6 +105,14 @@ fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
     if w.global::<crate::ModalHostState>()
         .get_modal_stack()
         .iter()
+        .any(|s| s == "user-profile")
+        && !stack.iter().any(|s| s == "user-profile")
+    {
+        crate::bin_ui::features::modals::profile::clear_shared_content(w);
+    }
+    if w.global::<crate::ModalHostState>()
+        .get_modal_stack()
+        .iter()
         .any(|s| s == "edit-profile")
         && !stack.iter().any(|s| s == "edit-profile")
     {

@@ -129,6 +129,8 @@ export global ModalHostState {
     in property <[SharedTab]> profile-shared-tabs: [];
     in-out property <string> profile-shared-tab: "";
     in property <[SharedContentItem]> profile-shared-items: [];
+    in property <bool> profile-shared-has-previous: false;
+    in property <bool> profile-shared-has-more: false;
     in property <bool> profile-shared-loading: false;
     in property <string> profile-shared-error: "";
     // Presence as words ("last seen yesterday 4:12 pm"), shaped by core.
@@ -281,6 +283,8 @@ export global ModalHostState {
     callback profile-start-call(bool /* is-video */);
     callback profile-shared-tab-selected(string /* category */);
     callback profile-shared-load-more();
+    callback profile-shared-load-previous();
+    callback profile-shared-page-closed();
     callback profile-shared-retry();
     // message-id, attachment-id, category, selected-url
     callback profile-open-shared-item(string, string, string, string);
