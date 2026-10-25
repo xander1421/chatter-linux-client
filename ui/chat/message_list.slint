@@ -32,6 +32,9 @@ export component MessageList inherits Rectangle {
     // them in viewport-height and its bottom clamp. Chrome overlays the view.
     in property <length> top-inset: 0px;
     in property <length> bottom-inset: 0px;
+    // Room under the last row for the scroll-to-bottom FAB. The host drops
+    // it while the keyboard is up, where it left a blank band above the composer.
+    in property <length> tail-clearance: Spacing.md + Spacing.touch-target-min;
     property <bool> bubble-swiping: false;
     // Properties
     in property <[MessageItemData]> messages: [];
@@ -782,7 +785,7 @@ export component MessageList inherits Rectangle {
                 // scroll-to-bottom FAB (44px, docked bottom-right) never
                 // covers its corner.
                 padding-bottom: idx == root.messages.length - 1
-                    ? root.bottom-inset + Spacing.md + Spacing.touch-target-min
+                    ? root.bottom-inset + root.tail-clearance
                     : Spacing.message-gap;
                 spacing: Spacing.xxs;
 
