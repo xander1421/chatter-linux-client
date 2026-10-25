@@ -255,9 +255,11 @@ export component UserProfileModal inherits Rectangle {
                     }
 
                     Text {
+                        // Once the large name has scrolled under the header: the
+                        // body (inside an `if`) cannot be measured from here, so
+                        // this uses the avatar plus the name row's height.
                         visible: root.mobile-mode && !root.shared-page-open
-                            && profile-body.y + profile-name-row.y + profile-name-row.height
-                                + page-scroll.viewport-y <= profile-header.y + profile-header.height;
+                            && -page-scroll.viewport-y >= root.avatar-size + Spacing.md + 40px;
                         text: root.display-name;
                         color: Colors.text-primary;
                         font-size: Typography.sm;
