@@ -6,9 +6,10 @@ import { Typography } from "../theme/typography.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Icons } from "../theme/icons.slint";
+import { HoldArea } from "../components/hold_area.slint";
 
 export struct ServerRecordRow { id: string, title: string, body: string, primary: string, secondary: string }
-export struct NotificationViewRow { id: string, title: string, body: string, kind: string, actor-id: string, channel-id: string, avatar: image, when: string, read: bool, status: string }
+export struct NotificationViewRow { id: string, title: string, body: string, kind: string, actor-id: string, channel-id: string, avatar: image, when: string, read: bool, quiet: bool, status: string }
 export global ServerRecordsGlobal {
     in-out property <string> kind;
     in-out property <string> channel;
@@ -31,6 +32,10 @@ export component ServerRecordsScreen inherits Rectangle {
     callback close();
     callback open-notification(string, string, string, string);
     in property <bool> show: true;
+    private property <string> menu-id: "";
+    private property <bool> menu-read: false;
+    private property <length> menu-x: 0px;
+    private property <length> menu-y: 0px;
     Timer {
         interval: 20s;
         running: root.show && ServerRecordsGlobal.kind == "notifications";
@@ -48,9 +53,10 @@ export component ServerRecordsScreen inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 spacing: Spacing.sm;
-                Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                if ServerRecordsGlobal.kind != "notifications": Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                Rectangle { horizontal-stretch: 1; }
                 if ServerRecordsGlobal.kind == "notifications": Button {
-                    text: "Mark all read"; variant: "secondary"; disabled: ServerRecordsGlobal.loading || ServerRecordsGlobal.notifications.length == 0;
+                    text: "Mark all read"; variant: "ghost"; size: "small"; disabled: ServerRecordsGlobal.loading || ServerRecordsGlobal.notifications.length == 0;
                     clicked => { ServerRecordsGlobal.act("", "Mark all read"); }
                 }
             }
@@ -97,18 +103,41 @@ export component ServerRecordsScreen inherits Rectangle {
                     spacing: 1px;
                     for row in ServerRecordsGlobal.notifications: Rectangle {
                         width: inbox.visible-width;
-                        height: inbox-row-content.preferred-height;
-                        background: row.read ? Colors.surface : Colors.surface-section;
-                        TouchArea { clicked => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); } }
+                        height: max(44px + 2 * Spacing.md, inbox-row-content.preferred-height);
+                        background: row.read || row.quiet ? Colors.surface : Colors.surface-section;
+                        accessible-role: button;
+                        accessible-label: row.title;
+                        accessible-action-default => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); }
+                        row-keys := FocusScope {
+                            width: 0px; height: 0px;
+                            key-pressed(event) => {
+                                if event.text == Key.Return || event.text == Key.Space {
+                                    root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status);
+                                    return accept;
+                                }
+                                if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                                    root.menu-id = row.id; root.menu-read = row.read;
+                                    root.menu-x = parent.absolute-position.x + parent.width / 2;
+                                    root.menu-y = parent.absolute-position.y + parent.height / 2;
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        HoldArea {
+                            mouse-cursor: pointer;
+                            clicked => { if !self.hold-fired { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); } }
+                            held => { root.menu-id = row.id; root.menu-read = row.read; root.menu-x = self.anchor-x; root.menu-y = self.anchor-y; }
+                        }
                         inbox-row-content := HorizontalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.sm;
+                            padding: Spacing.md;
+                            spacing: Spacing.md;
                             Rectangle {
-                                min-width: 42px; max-width: 42px; height: 42px;
-                                border-radius: 21px;
+                                min-width: 44px; max-width: 44px; height: 44px;
+                                border-radius: 22px;
                                 background: row.kind == "friend-request" || row.kind == "friend-accepted" ? transparent : Colors.surface-control;
                                 if row.kind == "friend-request" || row.kind == "friend-accepted": Avatar {
-                                    name: row.title; source: row.avatar; size: 42px;
+                                    name: row.title; source: row.avatar; size: 44px;
                                 }
                                 if row.kind == "device-linked": Image {
                                     source: Icons.smartphone; width: 22px; height: 22px;
@@ -126,30 +155,18 @@ export component ServerRecordsScreen inherits Rectangle {
                                 spacing: 2px;
                                 HorizontalLayout {
                                     spacing: Spacing.sm;
-                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
-                                    Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; vertical-alignment: center; }
-                                    Rectangle {
-                                        min-width: 8px; max-width: 8px; height: 8px;
-                                        border-radius: 4px; background: row.read ? transparent : Colors.primary;
+                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read || row.quiet ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                                    if !row.read && !row.quiet: Rectangle {
+                                        min-width: 6px; max-width: 6px; height: 6px;
+                                        border-radius: 3px; background: Colors.primary;
                                     }
-                                    Button {
-                                        text: "×"; label: "Delete notification"; variant: "icon"; size: "small";
-                                        min-width: 36px; max-width: 36px;
-                                        disabled: ServerRecordsGlobal.loading;
-                                        clicked => { ServerRecordsGlobal.act(row.id, "Delete"); }
-                                    }
+                                    Text { text: row.when; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
                                 }
                                 Text {
-                                    text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                                if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
-                                Button {
-                                    text: "Details"; variant: "ghost"; size: "small";
-                                    disabled: ServerRecordsGlobal.loading;
-                                    clicked => {
-                                        ServerRecordsGlobal.details(row.id);
-                                        if !row.read { ServerRecordsGlobal.act(row.id, "Mark read"); }
-                                    }
+                                    width: max(0px, inbox.visible-width - 2 * Spacing.md - 44px - Spacing.md);
+                                    text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap;
                                 }
+                                if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
                             }
                         }
                     }
@@ -199,6 +216,27 @@ export component ServerRecordsScreen inherits Rectangle {
             if ServerRecordsGlobal.next != "": Button {
                 text: "Load more"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
                 clicked => { ServerRecordsGlobal.load(true); }
+            }
+        }
+    }
+    if root.show && root.menu-id != "": Rectangle {
+        z: 10;
+        width: 100%; height: 100%;
+        background: transparent;
+        TouchArea { clicked => { root.menu-id = ""; } }
+        Rectangle {
+            x: max(Spacing.md, min(root.menu-x, parent.width - self.width - Spacing.md));
+            y: max(Spacing.md, min(root.menu-y, parent.height - self.height - Spacing.md));
+            width: 196px;
+            height: root.menu-read ? 2 * Spacing.button-height + 2 * Spacing.sm : 3 * Spacing.button-height + 2 * Spacing.sm;
+            background: Colors.surface-section;
+            border-radius: Spacing.radius-lg;
+            TouchArea { }
+            VerticalLayout {
+                padding: Spacing.sm;
+                Button { text: "Details"; variant: "ghost"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
+                if !root.menu-read: Button { text: "Mark read"; variant: "ghost"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
+                Button { text: "Delete"; variant: "danger-ghost"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
             }
         }
     }
