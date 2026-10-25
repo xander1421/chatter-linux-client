@@ -57,8 +57,9 @@ export component MessageComposer inherits GlassSurface {
     in property <int> attachment-prepare-serial;
     in property <int> attachment-restore-serial;
     in property <int> caret-end-seq;
+    // Caret only: drafts are restored through this serial too, and taking
+    // focus here opened the keyboard whenever a thread was opened.
     changed caret-end-seq => {
-        text-input.focus();
         text-input.set-selection-offsets(2147483647, 2147483647);
     }
     private property <bool> attachment-suspended: false;
