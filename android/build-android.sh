@@ -215,6 +215,12 @@ fi
 # CHATTER_KEY_PASSWORD (read by app/build.gradle.kts).
 RUST_PROFILE=debug; CARGO_PROFILE_FLAG=""; GRADLE_TASK=assembleDebug; APK="app/build/outputs/apk/debug/app-debug.apk"
 GRADLE_ARGS=()
+# OPT=1: debug-signed APK with optimized Rust ([profile.release-dev]), so a
+# device build installs over the dev app while measuring near-release memory
+# (the profile.dev .so is ~225 MB of mapped code; release-dev is a fraction).
+if [ "${OPT:-0}" = "1" ] && [ "${RELEASE:-0}" != "1" ]; then
+    RUST_PROFILE=release-dev; CARGO_PROFILE_FLAG="--profile release-dev"
+fi
 if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
     GRADLE_ARGS+=(-PmultiInstance=true)
     APK="app/build/outputs/apk/base/debug/app-base-debug.apk"
