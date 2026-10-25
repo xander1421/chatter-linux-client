@@ -12,7 +12,11 @@ export component ChannelAccessSection inherits VerticalLayout {
 
     spacing: Spacing.md;
 
+    // Wrapped Text measures its height at its unwrapped width unless its width
+    // is fixed; this section is sized to its preferred height, so an
+    // under-measured line squeezed Create link onto the Join requests text.
     Text {
+        width: parent.width;
         text: "Access";
         color: Colors.text-primary;
         font-size: Typography.lg;
@@ -36,6 +40,7 @@ export component ChannelAccessSection inherits VerticalLayout {
     }
 
     if MembershipGlobal.access-join-summary != "": Text {
+        width: parent.width;
         text: MembershipGlobal.access-join-summary;
         color: Colors.text-secondary;
         font-size: Typography.sm;
@@ -82,6 +87,7 @@ export component ChannelAccessSection inherits VerticalLayout {
             font-weight: Typography.medium;
         }
         Text {
+            width: parent.width;
             text: "Anyone with a link can join. The link can be copied only now, when it is created.";
             color: Colors.text-muted;
             font-size: Typography.xs;
@@ -207,6 +213,7 @@ export component ChannelAccessSection inherits VerticalLayout {
     }
 
     if MembershipGlobal.access-status != "": Text {
+        width: parent.width;
         text: MembershipGlobal.access-status;
         color: Colors.text-secondary;
         font-size: Typography.xs;
