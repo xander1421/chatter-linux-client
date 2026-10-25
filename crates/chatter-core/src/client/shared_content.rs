@@ -137,12 +137,80 @@ impl ChatterClient {
 }
 
 impl ChatterClient {
+    /// Count visible search rows without retaining the index or its thumbnails.
+    pub fn count_shared_content_visible(
+        &self,
+        query: &SearchQuery,
+        exclude: &std::collections::HashSet<crate::domain::ids::MessageId>,
+    ) -> [i32; 7] {
+        let joined_channels: std::collections::HashSet<String> = self
+            .list_channels().unwrap_or_default().into_iter()
+            .map(|channel| channel.id.to_string()).collect();
+        let mut seen = exclude.clone();
+        let mut counts = [0; 7];
+        let mut offset = 0;
+        const BATCH: u32 = 250;
+        loop {
+            let batch = match self.shared_content_repo().search_global_scoped(
+                &query.text,
+                query.from.as_deref(),
+                query.in_chat.as_deref(),
+                query.since.as_ref().and_then(|date| date.timestamp_nanos_opt()),
+                query.until.as_ref().and_then(|date| date.timestamp_nanos_opt()),
+                None, "newest", BATCH, offset,
+            ) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    tracing::error!(%error, "shared content search count");
+                    break;
+                }
+            };
+            let count = batch.len();
+            for row in batch {
+                let Ok(message_id) = row.message_id.parse() else { continue };
+                if !seen.insert(message_id) { continue; }
+                let Some(message) = self.get_message_local(&message_id) else { continue };
+                if message.conversation_type == crate::domain::message::ConversationType::Channel
+                    && !joined_channels.contains(&message.conversation_id.to_string())
+                {
+                    continue;
+                }
+                if message.conversation_type.is_secret_chat()
+                    || !self.visible_in_mode(&message.conversation_type)
+                    || self.is_blocked_conversation(
+                        &message.conversation_type,
+                        &message.conversation_id.to_string(),
+                    )
+                {
+                    continue;
+                }
+                let category = SearchCategory::from_shared_kind(&row.category);
+                if query.category != SearchCategory::All && query.category != category {
+                    continue;
+                }
+                counts[0] += 1;
+                let slot = match category {
+                    SearchCategory::Media => 3,
+                    SearchCategory::Files => 4,
+                    SearchCategory::Links => 5,
+                    SearchCategory::Voice => 6,
+                    _ => continue,
+                };
+                counts[slot] += 1;
+            }
+            if count < BATCH as usize { break; }
+            offset += BATCH;
+        }
+        counts
+    }
+
     /// Search the local shared-content index across only conversations that
     /// are visible in the current Shield mode. No server query is involved.
     pub fn search_shared_content_visible(
         &self,
         query: &SearchQuery,
         limit: usize,
+        exclude: &std::collections::HashSet<crate::domain::ids::MessageId>,
     ) -> Vec<SharedContentRow> {
         let joined_channels: std::collections::HashSet<String> = self
             .list_channels()
@@ -150,10 +218,12 @@ impl ChatterClient {
             .into_iter()
             .map(|channel| channel.id.to_string())
             .collect();
-        let mut rows = Vec::new();
+        let mut candidates = Vec::with_capacity(limit.min(250));
+        let mut seen = exclude.clone();
         let mut offset = 0;
         const BATCH: u32 = 250;
-        loop {
+        while candidates.len() < limit {
+            let fetch = BATCH;
             let batch = match self.shared_content_repo().search_global_scoped(
                 &query.text,
                 query.from.as_deref(),
@@ -167,7 +237,12 @@ impl ChatterClient {
                     SearchCategory::Voice => Some("voice"),
                     _ => None,
                 },
-                BATCH,
+                match query.sort {
+                    crate::services::search::SearchSort::Oldest => "oldest",
+                    crate::services::search::SearchSort::Largest => "largest",
+                    _ => "newest",
+                },
+                fetch,
                 offset,
             ) {
                 Ok(batch) => batch,
@@ -177,37 +252,38 @@ impl ChatterClient {
                 }
             };
             let count = batch.len();
-            rows.extend(batch);
-            if count < BATCH as usize {
+            for row in batch {
+                let Ok(message_id) = row.message_id.parse() else { continue };
+                if !seen.insert(message_id) { continue; }
+                let Some(message) = self.get_message_local(&message_id) else { continue };
+                if message.conversation_type == crate::domain::message::ConversationType::Channel
+                    && !joined_channels.contains(&message.conversation_id.to_string())
+                {
+                    continue;
+                }
+                if message.conversation_type.is_secret_chat()
+                    || !self.visible_in_mode(&message.conversation_type)
+                    || self.is_blocked_conversation(
+                        &message.conversation_type,
+                        &message.conversation_id.to_string(),
+                    )
+                {
+                    continue;
+                }
+                let category = SearchCategory::from_shared_kind(&row.category);
+                candidates.push(SharedSearchHit {
+                    sender_id: message.sender_id.map(|id| id.to_string()),
+                    chat_id: message.conversation_id.to_string(),
+                    row,
+                    category,
+                });
+                if candidates.len() == limit { break; }
+            }
+            if count < fetch as usize {
                 break;
             }
-            offset += BATCH;
+            offset += fetch;
         }
-        let candidates = rows.into_iter().filter_map(|row| {
-            let message_id = row.message_id.parse().ok()?;
-            let message = self.get_message_local(&message_id)?;
-            if message.conversation_type == crate::domain::message::ConversationType::Channel
-                && !joined_channels.contains(&message.conversation_id.to_string())
-            {
-                return None;
-            }
-            if message.conversation_type.is_secret_chat()
-                || !self.visible_in_mode(&message.conversation_type)
-                || self.is_blocked_conversation(
-                    &message.conversation_type,
-                    &message.conversation_id.to_string(),
-                )
-            {
-                return None;
-            }
-            let category = SearchCategory::from_shared_kind(&row.category);
-            Some(SharedSearchHit {
-                sender_id: message.sender_id.map(|id| id.to_string()),
-                chat_id: message.conversation_id.to_string(),
-                row,
-                category,
-            })
-        });
         query
             .apply(candidates)
             .into_iter()

@@ -122,8 +122,22 @@ impl ChatterClient {
         }
         let mut all_request = request.clone();
         all_request.category = SearchCategory::All;
-        if request.category != SearchCategory::Chats {
-            for item in self.search_shared_content_visible(&all_request, usize::MAX) {
+        let shared_counts = if request.category == SearchCategory::Chats {
+            [0; 7]
+        } else {
+            self.count_shared_content_visible(&all_request, &seen)
+        };
+        let shared_categories = [SearchCategory::Media, SearchCategory::Files,
+            SearchCategory::Links, SearchCategory::Voice];
+        for shared_category in shared_categories {
+            if request.category != SearchCategory::All && request.category != shared_category {
+                continue;
+            }
+            let slot = category_slot(shared_category).expect("shared category has a slot");
+            let shared_limit = page_limits.get(slot).copied().unwrap_or(50).max(0) as usize;
+            let mut shared_request = request.clone();
+            shared_request.category = shared_category;
+            for item in self.search_shared_content_visible(&shared_request, shared_limit, &seen) {
                 let Ok(id) = item.message_id.parse() else {
                     continue;
                 };
@@ -150,8 +164,9 @@ impl ChatterClient {
         // Count the same filtered set that provides the rows. Category
         // selection retains the first pass's stable sort within a section.
         let candidates = all_request.apply(candidates);
-        let mut counts = [0; 7];
+        let mut counts = shared_counts;
         for candidate in &candidates {
+            if candidate.shared.is_some() { continue; }
             counts[0] += 1;
             if let Some(slot) = category_slot(candidate.category) {
                 counts[slot] += 1;
@@ -194,10 +209,10 @@ impl ChatterClient {
                     } else {
                         item.title.clone()
                     };
-                    (
-                        self.search_result_preview(&label, &request.text),
-                        item.thumbnail.clone(),
-                    )
+                    let thumbnail = item.attachment_id.parse().ok()
+                        .and_then(|id| self.get_attachment_metadata(&id))
+                        .and_then(|attachment| attachment.metadata.thumbnail);
+                    (self.search_result_preview(&label, &request.text), thumbnail)
                 } else {
                     let name = candidate
                         .attachment

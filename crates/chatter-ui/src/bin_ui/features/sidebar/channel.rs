@@ -434,9 +434,13 @@ pub(crate) async fn load_channel_into_ui_owned(
         .unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
-    let anchor_page = messages.clone();
+    let anchor = ui_ctx_gifs.opening_unread_anchor(anchor);
+    let unread_index = anchor.divider_index(&messages);
     crate::run_history_ui!(weak, owner, |w| {
-        super::apply_unread_anchor(&w, ui_ctx_gifs.opening_unread_anchor(anchor), &anchor_page);
+        let pane = w.global::<crate::ChatPane>();
+        pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
+        pane.set_unread_count(anchor.unread_count as i32);
+        pane.set_is_at_bottom(unread_index.is_none());
         metadata.apply(&w);
         crate::bin_ui::converters::set_conversation_kind(
             &w,

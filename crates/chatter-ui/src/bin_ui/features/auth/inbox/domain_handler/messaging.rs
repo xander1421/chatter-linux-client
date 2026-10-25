@@ -68,7 +68,7 @@ pub(super) fn handle_message_received(
         &message,
         &sender_name,
         &resolved_attachments,
-        sender_avatar,
+        sender_avatar.map(std::sync::Arc::<[u8]>::from),
     );
     display_data.mention_members = ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
 
