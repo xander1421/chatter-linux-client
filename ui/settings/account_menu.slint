@@ -194,7 +194,7 @@ export component AccountMenu inherits Rectangle {
                         border-width: root.mobile-mode ? Elevation.rim-width : 0px;
                         border-color: Elevation.card-rim;
                         profile-group := VerticalLayout {
-                            MenuRow { icon: Icons.user; label: "My Profile"; clicked => { root.my-profile(); } }
+                            MenuRow { icon: Icons.user; label: "My profile"; clicked => { root.my-profile(); } }
                             // Shield mode has no Saved Messages or channels.
                             if !AnonMode.enabled: MenuDivider { }
                             if !AnonMode.enabled: MenuRow { icon: Icons.bookmark; label: "Saved Messages"; clicked => { root.saved-messages(); } }
@@ -210,7 +210,7 @@ export component AccountMenu inherits Rectangle {
                         border-width: root.mobile-mode ? Elevation.rim-width : 0px;
                         border-color: Elevation.card-rim;
                         activity-group := VerticalLayout {
-                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
+                            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New channel"; clicked => { root.new-channel(); } }
                             if !AnonMode.enabled: MenuDivider { }
                             MenuRow { icon: Icons.bell; label: "Notification inbox"; clicked => { root.notifications(); } }
                         }
