@@ -78,6 +78,16 @@ export component MessageItem inherits Rectangle {
     in property <bool> has-attachments: false;
     in property <int> attachment-count: 0;
     in property <[MessageAttachmentData]> attachments: [];
+    // The current attachment renderer is a vertical list; only a single photo
+    // can own the bubble edges and carry a stamp without covering another tile.
+    property <bool> photo-message: root.has-attachments && root.attachments.length == 1 && root.attachments[0].is-image;
+    property <bool> photo-only: root.photo-message && root.content == "" && !root.is-reply && !root.is-thread-reply;
+    property <float> photo-aspect: root.photo-message && root.attachments[0].height > 0
+        ? root.attachments[0].width / max(1, root.attachments[0].height) : 1.5;
+    property <length> photo-width: root.photo-message
+        ? (root.attachments[0].width > 0 && root.attachments[0].height > 0
+            ? max(100px, min(min(280px, root.width * 0.7 - Spacing.md), 380px * root.photo-aspect))
+            : 180px) : 0px;
 
     // Audio playback state
     in property <string> current-playing-attachment-id: "";
@@ -553,10 +563,11 @@ export component MessageItem inherits Rectangle {
                     border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                     border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
                     border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
+                    clip: root.photo-message;
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
-                    width: bubble-content.preferred-width + (root.is-ai ? 4px : 0);
+                    width: (root.photo-message ? root.photo-width : bubble-content.preferred-width) + (root.is-ai && !root.photo-message ? 4px : 0);
 
                     Rectangle {
                         y: 0;
@@ -680,15 +691,17 @@ export component MessageItem inherits Rectangle {
 
                     bubble-content := VerticalLayout {
                         y: 0;
+                        width: root.photo-message ? root.photo-width : self.preferred-width;
                         height: self.preferred-height;
-                        padding: Spacing.sm + Spacing.xxs;
-                        padding-left: root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
-                        spacing: Spacing.xs;
+                        padding: root.photo-message ? 0px : Spacing.sm + Spacing.xxs;
+                        padding-left: root.photo-message ? 0px : root.is-ai ? Spacing.sm + Spacing.sm : Spacing.sm + Spacing.xxs;
+                        spacing: root.photo-message ? 0px : Spacing.xs;
 
                         // Sender name + timestamp (only in channels for others, hidden in continuations)
                         if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: HorizontalLayout {
                             spacing: Spacing.sm;
                             alignment: start;
+                            padding: root.photo-message ? Spacing.sm : 0px;
 
                             Text {
                                 text: root.sender-name;
@@ -723,6 +736,7 @@ export component MessageItem inherits Rectangle {
                         if root.is-thread-reply: HorizontalLayout {
                             spacing: Spacing.xs;
                             alignment: start;
+                            padding: root.photo-message ? Spacing.sm : 0px;
 
                             VerticalLayout {
                                 alignment: center;
@@ -743,29 +757,33 @@ export component MessageItem inherits Rectangle {
                         }
 
                         // Quote / reply-to bubble
-                        if root.is-reply: MessageQuote {
-                            audio-elapsed: root.audio-elapsed;
-                            audio-progress: root.audio-progress;
-                            current-playing-attachment-id: root.current-playing-attachment-id;
-                            is-media-playing: root.is-media-playing;
-                            mobile: root.mobile;
-                            reply-to-attachment-id: root.reply-to-attachment-id;
-                            reply-to-category: root.reply-to-category;
-                            reply-to-duration: root.reply-to-duration;
-                            reply-to-filename: root.reply-to-filename;
-                            reply-to-has-thumbnail: root.reply-to-has-thumbnail;
-                            reply-to-message-id: root.reply-to-message-id;
-                            reply-to-not-found: root.reply-to-not-found;
-                            reply-to-preview: root.reply-to-preview;
-                            reply-to-sender-name: root.reply-to-sender-name;
-                            reply-to-thumbnail: root.reply-to-thumbnail;
-                            reply-to-thumbnail-height: root.reply-to-thumbnail-height;
-                            reply-to-thumbnail-width: root.reply-to-thumbnail-width;
-                            reply-to-waveform: root.reply-to-waveform;
-                            text-max-width: root.text-max-width;
-                            quote-clicked(a0) => { root.quote-clicked(a0); }
-                            open-other-attachment(a0) => { root.open-other-attachment(a0); }
-                            audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
+                        if root.is-reply: HorizontalLayout {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            padding: root.photo-message ? Spacing.sm : 0px;
+                            MessageQuote {
+                                audio-elapsed: root.audio-elapsed;
+                                audio-progress: root.audio-progress;
+                                current-playing-attachment-id: root.current-playing-attachment-id;
+                                is-media-playing: root.is-media-playing;
+                                mobile: root.mobile;
+                                reply-to-attachment-id: root.reply-to-attachment-id;
+                                reply-to-category: root.reply-to-category;
+                                reply-to-duration: root.reply-to-duration;
+                                reply-to-filename: root.reply-to-filename;
+                                reply-to-has-thumbnail: root.reply-to-has-thumbnail;
+                                reply-to-message-id: root.reply-to-message-id;
+                                reply-to-not-found: root.reply-to-not-found;
+                                reply-to-preview: root.reply-to-preview;
+                                reply-to-sender-name: root.reply-to-sender-name;
+                                reply-to-thumbnail: root.reply-to-thumbnail;
+                                reply-to-thumbnail-height: root.reply-to-thumbnail-height;
+                                reply-to-thumbnail-width: root.reply-to-thumbnail-width;
+                                reply-to-waveform: root.reply-to-waveform;
+                                text-max-width: root.photo-message ? root.photo-width - Spacing.sm * 2 : root.text-max-width;
+                                quote-clicked(a0) => { root.quote-clicked(a0); }
+                                open-other-attachment(a0) => { root.open-other-attachment(a0); }
+                                audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
+                            }
                         }
 
                         // Message content. A body with markdown arrives as
@@ -775,7 +793,7 @@ export component MessageItem inherits Rectangle {
                         // Non-link text and right-click pass through to bubble-touch.
                         // Link taps own their stream and feed the same hold timer
                         // through pointer-event (vendored core/compiler patch).
-                        if root.content != "": MessageBody {
+                        if !root.photo-message && root.content != "": MessageBody {
                             bubble-right: bubble.absolute-position.x + bubble.width;
                             bubble-y: bubble.absolute-position.y;
                             content: root.content;
@@ -801,7 +819,21 @@ export component MessageItem inherits Rectangle {
 
                         // Attachments
                         if root.has-attachments: MessageAttachments {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
                             attachments: root.attachments;
+                            edge-to-edge: root.photo-message;
+                            media-width: root.photo-width;
+                            overlay-stamp: root.photo-only;
+                            timestamp: root.timestamp;
+                            timestamp-ns: root.timestamp-ns;
+                            sender-id: root.sender-id;
+                            message-id: root.message-id;
+                            delivery-status: root.delivery-status;
+                            failure-reason: root.failure-reason;
+                            is-own: root.is-own;
+                            is-edited: root.is-edited;
+                            is-pinned: root.is-pinned;
+                            mesh-delivery: root.mesh-delivery;
                             audio-elapsed: root.audio-elapsed;
                             audio-progress: root.audio-progress;
                             current-playing-attachment-id: root.current-playing-attachment-id;
@@ -821,10 +853,53 @@ export component MessageItem inherits Rectangle {
                             open-other-attachment(a0) => { root.open-other-attachment(a0); }
                             request-menu(a0, a1, a2, a3, a4, a5) => { root.request-menu(a0, a1, a2, a3, a4, a5); }
                             audio-seek(a0, a1) => { root.audio-seek(a0, a1); }
+                            message-clicked(a0) => { root.message-clicked(a0); }
+                        }
+
+                        // Message content. A body with markdown arrives as
+                        // blocks: each inline run is ONE StyledText, so mixed
+                        // bold/italic/strike/code flow and word-wrap in one
+                        // paragraph; fenced code blocks are boxes of their own.
+                        // Non-link text and right-click pass through to bubble-touch.
+                        // Link taps own their stream and feed the same hold timer
+                        // through pointer-event (vendored core/compiler patch).
+                        if root.photo-message && root.content != "": HorizontalLayout {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            padding: root.photo-message ? Spacing.sm : 0px;
+                            MessageBody {
+                                width: root.photo-message ? root.photo-width - Spacing.sm * 2 : self.preferred-width;
+                                bubble-right: bubble.absolute-position.x + bubble.width;
+                                bubble-y: bubble.absolute-position.y;
+                                content: root.content;
+                                hold-tier: root.hold-tier;
+                                is-own: root.is-own;
+                                message-id: root.message-id;
+                                media-caption: root.photo-message;
+                                mobile: root.mobile;
+                                press-anchor-x: bubble-touch.absolute-position.x;
+                                press-anchor-y: bubble-touch.absolute-position.y + bubble-touch.height;
+                                rich-content: root.rich-content;
+                                selection-mode: root.selection-mode;
+                                swipe-active: root.swipe-active;
+                                text-max-width: root.photo-message ? root.photo-width - Spacing.sm * 2 : root.text-max-width;
+                                begin-message-press(a0, a1, a2, a3, a4, a5) => { root.begin-message-press(a0, a1, a2, a3, a4, a5); }
+                                move-message-press(a0, a1) => { root.move-message-press(a0, a1); }
+                                end-swipe(a0) => { root.end-swipe(a0); }
+                                cancel-hold() => { root.cancel-hold(); }
+                                selection-toggled(a0) => { root.selection-toggled(a0); }
+                                open-message-link(a0) => { root.open-message-link(a0); }
+                                message-clicked(a0) => { root.message-clicked(a0); }
+                                clear-hold-tier() => { root.hold-tier = 0; }
+                            }
                         }
 
                         // Footer: reactions start, clock and status end, on one row.
-                        MessageFooter {
+                        if !root.photo-only || root.has-reactions: MessageFooter {
+                            width: root.photo-message ? root.photo-width : self.preferred-width;
+                            show-meta: !root.photo-only;
+                            padding-left: root.photo-message ? Spacing.sm : 0px;
+                            padding-right: root.photo-message ? Spacing.sm : 0px;
+                            padding-bottom: root.photo-message ? Spacing.sm : 0px;
                             delivery-status: root.delivery-status;
                             failure-reason: root.failure-reason;
                             has-reactions: root.has-reactions;

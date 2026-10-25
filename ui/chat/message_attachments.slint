@@ -5,6 +5,7 @@ import { Icons } from "../theme/icons.slint";
 import { AudioPlayer } from "audio_player.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { MessageAttachmentData } from "types.slint";
+import { MessageFooter } from "message_footer.slint";
 
 export component MessageAttachments inherits VerticalLayout {
     in property <[MessageAttachmentData]> attachments;
@@ -20,6 +21,19 @@ export component MessageAttachments inherits VerticalLayout {
     in property <bool> mobile;
     in property <bool> swipe-active;
     in property <length> text-max-width;
+    in property <bool> edge-to-edge: false;
+    in property <length> media-width: 0px;
+    in property <bool> overlay-stamp: false;
+    in property <string> timestamp;
+    in property <string> timestamp-ns;
+    in property <string> sender-id;
+    in property <string> message-id;
+    in property <string> delivery-status;
+    in property <string> failure-reason;
+    in property <bool> is-own;
+    in property <bool> is-edited;
+    in property <bool> is-pinned;
+    in property <bool> mesh-delivery;
     callback begin-swipe(length, length);
     callback move-swipe(length, length);
     callback end-swipe(bool);
@@ -27,15 +41,16 @@ export component MessageAttachments inherits VerticalLayout {
     callback open-other-attachment(string);
     callback request-menu(length, length, length, length, length, length);
     callback audio-seek(string, float);
+    callback message-clicked(string);
 
-    spacing: Spacing.sm;
+    spacing: root.edge-to-edge ? 0px : Spacing.sm;
 
     for attachment in root.attachments: HorizontalLayout {
         // Let the media set the bubble's preferred width. The
         // row may grow with a wider caption, where image and
         // video attachments stay centered.
-        max-width: root.text-max-width;
-        alignment: attachment.is-image || attachment.category == "video" ? center : start;
+        max-width: root.edge-to-edge ? root.media-width : root.text-max-width;
+        alignment: root.edge-to-edge ? start : attachment.is-image || attachment.category == "video" ? center : start;
 
         // Image attachments
         if attachment.is-image: Rectangle {
@@ -48,17 +63,17 @@ export component MessageAttachments inherits VerticalLayout {
             // Reserve the final geometry from stored dimensions before
             // the thumbnail is decoded, so rows above the viewport do
             // not grow and pull the opening anchor away from the end.
-            width: attachment.width > 0 && attachment.height > 0 ? max(100px, calc-w) : 180px;
+            width: root.edge-to-edge ? root.media-width : attachment.width > 0 && attachment.height > 0 ? max(100px, calc-w) : 180px;
             height: attachment.width > 0 && attachment.height > 0 ? max(60px, calc-h) : 140px;
             background: Colors.bubble-inset;
-            border-radius: Spacing.radius-sm;
+            border-radius: root.edge-to-edge ? 0px : Spacing.radius-sm;
             clip: true;
 
             if attachment.has-thumbnail: Image {
                 width: 100%;
                 height: 100%;
                 source: attachment.thumbnail;
-                image-fit: contain;
+                image-fit: root.edge-to-edge ? cover : contain;
             }
 
             if !attachment.has-thumbnail: Rectangle {
@@ -156,6 +171,36 @@ export component MessageAttachments inherits VerticalLayout {
                     root.request-menu(self.anchor-x, self.anchor-y,
                         root.bubble-y, root.bubble-y + root.bubble-height,
                         root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+
+            if root.overlay-stamp: media-stamp := Rectangle {
+                width: stamp-content.preferred-width + Spacing.sm * 2;
+                height: stamp-content.preferred-height + Spacing.xs * 2;
+                x: parent.width - self.width - Spacing.sm;
+                y: parent.height - self.height - Spacing.sm;
+                border-radius: Spacing.radius-full;
+                background: #00000073;
+
+                stamp-content := MessageFooter {
+                    x: Spacing.sm;
+                    y: Spacing.xs;
+                    width: self.preferred-width;
+                    height: self.preferred-height;
+                    has-reactions: false;
+                    overlay-media: true;
+                    delivery-status: root.delivery-status;
+                    failure-reason: root.failure-reason;
+                    is-edited: root.is-edited;
+                    is-own: root.is-own;
+                    is-pinned: root.is-pinned;
+                    mesh-delivery: root.mesh-delivery;
+                    message-id: root.message-id;
+                    mobile: root.mobile;
+                    sender-id: root.sender-id;
+                    timestamp: root.timestamp;
+                    timestamp-ns: root.timestamp-ns;
+                    message-clicked(a0) => { root.message-clicked(a0); }
                 }
             }
         }
