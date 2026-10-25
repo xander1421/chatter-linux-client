@@ -49,6 +49,11 @@ export component ForwardMessageModal inherits Rectangle {
         show: root.show-modal;
         title: root.contact-share ? "Share contact" : "Forward message";
         modal-width: 480px;
+        // The list takes the spare height and the buttons stay pinned: sized
+        // to content, preview + search + a 300px list overran the 600px cap
+        // and the Forward button was cut off at the bottom of a phone sheet.
+        max-modal-height: 640px;
+        fill-height: true;
 
         close => {
             root.close();
@@ -111,8 +116,7 @@ export component ForwardMessageModal inherits Rectangle {
 
             // Target list (scrollable)
             Rectangle {
-                min-height: 200px;
-                max-height: 300px;
+                min-height: 160px;
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
