@@ -15,7 +15,7 @@ use crate::MessageItemData;
 /// label and the avatar initial.
 pub fn row_to_item(row: JarvisRow) -> MessageItemData {
     let ts = chrono::DateTime::from_timestamp_nanos(row.timestamp_ns as i64);
-    let (content, rich_content) = crate::bin_ui::converters::body_fields(&row.content);
+    let (content, rich_content) = crate::bin_ui::converters::body_fields(&row.content, &[], false);
     MessageItemData {
         message_id: row.id.into(),
         sender_id: if row.is_own { "me" } else { "jarvis" }.into(),

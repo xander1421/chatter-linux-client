@@ -24,7 +24,7 @@ mod tests {
         let body = "**bold** *italic* ~~strike~~ `code`".to_owned();
         assert_eq!(text_preview(&body), "bold italic strike code");
         assert_eq!(body, "**bold** *italic* ~~strike~~ `code`");
-        let blocks = super::super::markdown::parse_blocks(&body);
+        let blocks = super::super::markdown::parse_blocks(&body, &[], false);
         let [super::super::markdown::MarkdownBlock::Inline(paragraphs)] = blocks.as_slice() else {
             panic!("Original must retain its formatted inline paragraph");
         };

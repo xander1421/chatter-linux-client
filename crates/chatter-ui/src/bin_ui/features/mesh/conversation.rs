@@ -118,6 +118,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),
+            |_| Vec::new(),
         );
 
         crate::run_history_ui!(weak, owner, |w| {
@@ -290,6 +291,7 @@ pub(super) fn append_incoming(
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
+        |_| Vec::new(),
     );
 
     let local_user = super::local_user_id(ui_ctx);

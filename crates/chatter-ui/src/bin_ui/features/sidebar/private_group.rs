@@ -82,6 +82,7 @@ pub fn load_private_group_messages(
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),
+            |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
         );
 
         // Update UI to show selected group and messages
@@ -287,6 +288,7 @@ async fn load_private_group_messages_internal(
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
+        |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
     );
 
     let group_name = group.name.clone();

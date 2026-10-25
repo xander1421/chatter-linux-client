@@ -9,6 +9,7 @@ use crate::{MessageItemData, RichTextBlock};
 
 use super::attachment::{AttachmentDisplayData, attachment_to_display_data};
 use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
+use chatter_core::domain::mention::MentionMember;
 use super::utils::{format_count, reaction_counts_to_entries};
 
 /// A message body as a row renders it: `rich_content` is the blocks the
@@ -21,9 +22,13 @@ use super::utils::{format_count, reaction_counts_to_entries};
 /// and live rows (`to_slint_with_user`), edits (`apply_edit`), the sender's
 /// own echo (`features/chat/helpers.rs` `build_own_message_item`) and local
 /// Jarvis rows. A path that set `content` itself drew the raw markers.
-pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
+pub fn body_fields(
+    raw: &str,
+    members: &[MentionMember],
+    broadcast: bool,
+) -> (slint::SharedString, ModelRc<RichTextBlock>) {
     let trimmed = raw.trim();
-    let blocks = parse_blocks(trimmed);
+    let blocks = parse_blocks(trimmed, members, broadcast);
     let plain = match blocks.as_slice() {
         [] => true,
         [MarkdownBlock::Inline(paras)] => paras
@@ -65,14 +70,21 @@ pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
 /// `rich_content` whenever it is non-empty, so an edit that patched only
 /// `content` kept showing the old text under an "edited" badge until the
 /// conversation was reopened.
-pub fn apply_edit(row: &mut MessageItemData, new_text: &str) {
-    (row.content, row.rich_content) = body_fields(new_text);
+pub fn apply_edit(
+    row: &mut MessageItemData,
+    new_text: &str,
+    members: &[MentionMember],
+    broadcast: bool,
+) {
+    (row.content, row.rich_content) = body_fields(new_text, members, broadcast);
     row.is_edited = true;
 }
 
 /// Data needed to create message UI (can be sent across threads).
 #[derive(Clone, Debug)]
 pub struct MessageDisplayData {
+    pub mention_members: Vec<MentionMember>,
+    pub mention_broadcast: bool,
     pub message_id: String,
     pub sender_id: String,
     pub sender_name: String,
@@ -259,7 +271,11 @@ impl MessageDisplayData {
             .then(|| self.content.strip_prefix(self.sender_name.as_str()))
             .flatten()
             .map(|rest| format!("You{rest}"));
-        let (content, rich_content) = body_fields(own_notice.as_deref().unwrap_or(&self.content));
+        let (content, rich_content) = body_fields(
+            own_notice.as_deref().unwrap_or(&self.content),
+            &self.mention_members,
+            self.mention_broadcast,
+        );
 
         MessageItemData {
             // Multi-select marking is applied by features::chat::selection after
@@ -415,6 +431,8 @@ pub fn message_to_display_data_with_replies(
     };
 
     MessageDisplayData {
+        mention_members: Vec::new(),
+        mention_broadcast: matches!(msg.conversation_type, chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup),
         message_id: msg.id.to_string(),
         // Actions and inbound updates address the stored event author; caller
         // identity is used separately for presentation and call direction.
@@ -575,6 +593,7 @@ pub fn messages_to_display_batch(
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
+    mention_members: impl Fn(&Message) -> Vec<MentionMember>,
 ) -> Vec<MessageDisplayData> {
     messages_to_display_batch_impl(
         messages,
@@ -584,6 +603,7 @@ pub fn messages_to_display_batch(
         reply_author_name,
         reply_not_found,
         reply_parent_media,
+        mention_members,
         true,
     )
 }
@@ -596,6 +616,7 @@ pub fn messages_to_display_batch_deferred(
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
+    mention_members: impl Fn(&Message) -> Vec<MentionMember>,
 ) -> Vec<MessageDisplayData> {
     messages_to_display_batch_impl(
         messages,
@@ -605,6 +626,7 @@ pub fn messages_to_display_batch_deferred(
         reply_author_name,
         reply_not_found,
         reply_parent_media,
+        mention_members,
         false,
     )
 }
@@ -617,9 +639,14 @@ fn messages_to_display_batch_impl(
     reply_author_name: impl Fn(&Message) -> String,
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
+    mention_members: impl Fn(&Message) -> Vec<MentionMember>,
     decode_media: bool,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
+    let mut mention_cache: std::collections::HashMap<
+        (chatter_core::domain::message::ConversationType, chatter_core::domain::ids::ChannelId),
+        Vec<MentionMember>,
+    > = std::collections::HashMap::new();
     // The whole page's names in one call (core batches the lookup).
     let display_senders: Vec<_> = messages.iter().map(call_display_sender).collect();
     let names = if display_senders
@@ -664,6 +691,10 @@ fn messages_to_display_batch_impl(
 
         let mut display_data =
             message_to_display_data(msg, &sender, &resolved_attachments, avatar_bytes);
+        display_data.mention_members = mention_cache
+            .entry((msg.conversation_type.clone(), msg.conversation_id))
+            .or_insert_with(|| mention_members(msg))
+            .clone();
         display_data.sender_avatar_decoded = avatar_pixels;
 
         if display_data.is_reply {
@@ -786,14 +817,14 @@ mod tests {
     #[test]
     fn apply_edit_replaces_the_blocks_the_bubble_draws() {
         let mut row = MessageItemData::default();
-        (row.content, row.rich_content) = body_fields("hi again");
+        (row.content, row.rich_content) = body_fields("hi again", &[], false);
         assert_eq!(
             row.rich_content.row_count(),
             0,
             "plain text draws through the plain Text"
         );
 
-        apply_edit(&mut row, "hi **againX**");
+        apply_edit(&mut row, "hi **againX**", &[], false);
 
         let blocks: Vec<_> = row.rich_content.iter().collect();
         assert_eq!(blocks.len(), 1, "one inline run, one StyledText");
@@ -807,16 +838,16 @@ mod tests {
     #[test]
     fn unstyled_link_uses_the_rich_clickable_path_and_edit_removes_it() {
         let mut row = MessageItemData::default();
-        (row.content, row.rich_content) = body_fields("[web](https://example.org)");
+        (row.content, row.rich_content) = body_fields("[web](https://example.org)", &[], false);
         assert_eq!(row.content, "web");
         assert_eq!(row.rich_content.row_count(), 1);
-        apply_edit(&mut row, "web");
+        apply_edit(&mut row, "web", &[], false);
         assert_eq!(row.rich_content.row_count(), 0);
     }
 
     #[test]
     fn code_blocks_are_their_own_rows() {
-        let (_, blocks) = body_fields("look\n```\nlet x = 1;\n```");
+        let (_, blocks) = body_fields("look\n```\nlet x = 1;\n```", &[], false);
         let blocks: Vec<_> = blocks.iter().collect();
         assert_eq!(blocks.len(), 2);
         assert!(!blocks[0].is_code_block);

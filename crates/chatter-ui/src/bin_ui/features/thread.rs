@@ -576,6 +576,7 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                     |m| ui_ctx.reply_author_display_name(m),
                     |m| ui_ctx.reply_parent_missing_for(m),
                     |m| ui_ctx.reply_parent_media(m),
+                    |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
                 );
                 let current_user_id = ui_ctx
                     .session_current_user_id()
@@ -676,6 +677,8 @@ fn request_thread_tail(w: &MainWindow) {
 /// The caller has already checked the edit is for the conversation on screen.
 pub fn apply_thread_edit(
     w: &MainWindow,
+    members: &[chatter_core::domain::mention::MentionMember],
+    broadcast: bool,
     message_id: &str,
     author: &str,
     target_sent_timestamp: u64,
@@ -683,6 +686,8 @@ pub fn apply_thread_edit(
 ) {
     patch_edited_row(
         &w.global::<crate::ChatPane>().get_thread_replies(),
+        members,
+        broadcast,
         message_id,
         author,
         target_sent_timestamp,
@@ -708,6 +713,8 @@ pub fn apply_thread_edit(
 /// matched.
 fn patch_edited_row(
     rows: &ModelRc<MessageItemData>,
+    members: &[chatter_core::domain::mention::MentionMember],
+    broadcast: bool,
     message_id: &str,
     author: &str,
     target_sent_timestamp: u64,
@@ -733,7 +740,7 @@ fn patch_edited_row(
     let Some(mut row) = model.row_data(i) else {
         return false;
     };
-    crate::bin_ui::converters::apply_edit(&mut row, new_text);
+    crate::bin_ui::converters::apply_edit(&mut row, new_text, members, broadcast);
     model.set_row_data(i, row);
     true
 }
@@ -780,6 +787,7 @@ pub fn thread_reply_display(
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
+        |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
     );
     display.remove(0)
 }
@@ -832,6 +840,7 @@ pub fn load_thread_data(
                 |m| ui_ctx.reply_author_display_name(m),
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
+                |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
             );
             let current_user_id = ui_ctx
                 .session_current_user_id()
@@ -942,16 +951,16 @@ mod tests {
         ]));
 
         // Another member reusing the reply's timestamp does not rewrite it.
-        assert!(!patch_edited_row(&rows, "b", "mallory", 200, "forged"));
+        assert!(!patch_edited_row(&rows, &[], false, "b", "mallory", 200, "forged"));
         assert_eq!(rows.row_data(1).unwrap().content, "two");
 
-        assert!(patch_edited_row(&rows, "b", "alice", 200, "two edited"));
+        assert!(patch_edited_row(&rows, &[], false, "b", "alice", 200, "two edited"));
         assert_eq!(rows.row_data(1).unwrap().content, "two edited");
         assert!(rows.row_data(1).unwrap().is_edited);
         assert_eq!(rows.row_data(0).unwrap().content, "one");
 
         // Timestamp is the identity: a message-id match on another row is not enough.
-        assert!(!patch_edited_row(&rows, "a", "alice", 999, "wrong"));
+        assert!(!patch_edited_row(&rows, &[], false, "a", "alice", 999, "wrong"));
         assert_eq!(rows.row_data(0).unwrap().content, "one");
     }
 }

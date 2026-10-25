@@ -226,6 +226,7 @@ fn open(
         |m| client.reply_author_display_name(m),
         |m| client.reply_parent_missing_for(m),
         |m| client.reply_parent_media(m),
+        |m| client.mention_members(&m.conversation_type, &m.conversation_id),
     );
     let me = f.me.to_string();
     let rows: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&me)).collect();

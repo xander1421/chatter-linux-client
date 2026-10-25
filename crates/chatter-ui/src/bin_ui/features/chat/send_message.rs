@@ -106,11 +106,17 @@ pub(crate) fn show_pending_bubble(
                 )
             })
             .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
+        let kind = ui_ctx.conversation_type_of(&conversation);
+        let members = kind.as_ref().zip(conversation.channel_id())
+            .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
+        let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
         let item = super::helpers::build_own_message_item(
             &row,
             &user_id,
             &user_name,
             &text,
+            &members,
+            broadcast,
             &crate::bin_ui::converters::format_timestamp(now),
             now_ns,
             attachments.iter().map(|a| a.to_slint()).collect(),
@@ -1087,11 +1093,17 @@ async fn deliver_inner(
                         )
                     })
                     .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
+            let kind = ui_ctx.conversation_type_of(&conversation);
+            let members = kind.as_ref().zip(conversation.channel_id())
+                .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
+            let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
             let mut msg_item = super::helpers::build_own_message_item(
                 &msg_id,
                 &current_user_id,
                 &current_user_name,
                 &sent_text,
+                &members,
+                broadcast,
                 &timestamp_str,
                 sent_at,
                 slint_attachments,
