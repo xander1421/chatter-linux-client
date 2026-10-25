@@ -309,9 +309,9 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     chatter_ui::bin_ui::features::back::push(&w, "settings");
     pump(&w);
     // Android file backup goes through the system document picker (SAF).
-    scroll_to_label(&w, "Backup passphrase (for file backup)");
+    scroll_to_label(&w, "File backup passphrase");
     assert!(
-        ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
+        ElementHandle::find_by_accessible_label(&w, "File backup passphrase")
             .next()
             .is_some(),
         "mobile file backup asks for its passphrase"
@@ -325,9 +325,9 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     );
     w.set_is_mobile_platform(false);
     pump(&w);
-    scroll_to_label(&w, "Backup passphrase (for file backup)");
+    scroll_to_label(&w, "File backup passphrase");
     let passphrase =
-        ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
+        ElementHandle::find_by_accessible_label(&w, "File backup passphrase")
             .next()
             .expect("file backup passphrase input");
     click(&w, &passphrase);

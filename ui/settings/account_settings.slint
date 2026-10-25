@@ -535,7 +535,7 @@ export component AccountSettings inherits VerticalLayout {
             }
 
             Input {
-                placeholder: "Backup passphrase (for file backup)";
+                placeholder: "File backup passphrase";
                 password: true;
                 disabled: root.message-backup-busy;
                 text <=> root.message-backup-passphrase;
