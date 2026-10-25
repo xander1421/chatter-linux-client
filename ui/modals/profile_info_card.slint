@@ -151,7 +151,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     spacing: Spacing.sm;
 
                     Button {
-                        text: root.share-link == "" ? "Create link" : "Copy Link";
+                        text: root.share-link == "" ? "Create link" : "Copy link";
                         variant: "secondary";
                         horizontal-stretch: 1;
                         clicked => {
@@ -164,7 +164,7 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     }
 
                     if root.share-link != "": Button {
-                        text: "Reset Link";
+                        text: "Reset link";
                         variant: "secondary";
                         horizontal-stretch: 1;
                         clicked => { root.reset-share-link(); }

@@ -143,7 +143,7 @@ export component AudioPlayer inherits HorizontalLayout {
         }
 
         Text {
-            text: root.is-download-failed ? "Download failed · Tap to retry" : (root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.duration-display);
+            text: root.is-download-failed ? "Download failed · tap to retry" : (root.is-this-playing ? root.audio-elapsed + " / " + root.duration-display : root.duration-display);
             color: root.is-download-failed ? Colors.primary : Colors.text-muted;
             font-size: Typography.xs;
         }

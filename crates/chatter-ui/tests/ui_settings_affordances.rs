@@ -213,7 +213,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
     pump(&w);
     assert!(
-        ElementHandle::find_by_accessible_label(&w, "Group Settings")
+        ElementHandle::find_by_accessible_label(&w, "Group settings")
             .next()
             .is_some()
     );
@@ -317,9 +317,9 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         "mobile file backup asks for its passphrase"
     );
     // The server actions remain present, with their original production callbacks.
-    scroll_to_label(&w, "Back Up to Server");
+    scroll_to_label(&w, "Back up to server");
     assert!(
-        ElementHandle::find_by_accessible_label(&w, "Back Up to Server")
+        ElementHandle::find_by_accessible_label(&w, "Back up to server")
             .next()
             .is_some()
     );

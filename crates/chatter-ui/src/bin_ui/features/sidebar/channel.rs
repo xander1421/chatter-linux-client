@@ -246,7 +246,7 @@ impl ChannelMetadata {
         let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
         Self {
             name: if is_saved {
-                "Saved Messages".into()
+                "Saved messages".into()
             } else {
                 channel.name.clone()
             },

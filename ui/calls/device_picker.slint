@@ -81,7 +81,7 @@ component DeviceItem inherits Rectangle {
 
 export component DevicePicker inherits Rectangle {
     in property <bool> show: false;
-    in property <string> title: "Select Device";
+    in property <string> title: "Select device";
     in property <string> picker-type: "audio"; // "audio", "audio_output", "screen"
 
     // Audio input devices (microphones)
@@ -231,7 +231,7 @@ export component DevicePicker inherits Rectangle {
                                 }
 
                                 DeviceItem {
-                                    name: "Share Screen";
+                                    name: "Share screen";
                                     icon: Icons.monitor;
                                     subtitle: "Opens system dialog to select screen or window";
                                     clicked => { root.screen-selected("0"); }

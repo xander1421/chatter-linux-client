@@ -107,7 +107,7 @@ fn wire_scan_friend_code(window: &MainWindow) {
                         let state = w.global::<crate::ModalHostState>();
                         state.set_friends_code_input(text.trim().into());
                         state.set_friends_code_caret_end_seq(state.get_friends_code_caret_end_seq() + 1);
-                        w.global::<crate::ModalHostState>().set_friends_code_status("Code scanned — tap Connect".into());
+                        w.global::<crate::ModalHostState>().set_friends_code_status("Code scanned — tap connect".into());
                     }
                     qr_scanner::ScanOutcome::Cancelled => w.global::<crate::ModalHostState>().set_friends_code_status("".into()),
                     qr_scanner::ScanOutcome::CameraDenied => w.global::<crate::ModalHostState>().set_friends_code_status(

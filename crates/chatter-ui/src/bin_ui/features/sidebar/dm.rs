@@ -75,7 +75,7 @@ fn apply_anon_dm_header(
 ) {
     let (name, avatar) = ui_ctx
         .anon_dm_peer_card(id)
-        .unwrap_or_else(|| ("Private Chat".to_string(), None));
+        .unwrap_or_else(|| ("Private chat".to_string(), None));
     let image = avatar
         .as_deref()
         .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
@@ -90,7 +90,7 @@ fn apply_anon_dm_header(
 
 /// Repaint the open secret chat's header and composer after its peer's name,
 /// avatar or acceptance changed (RC108 O1: the initiator's header kept
-/// "Private Chat" after the peer accepted until the chat was reopened).
+/// "Private chat" after the peer accepted until the chat was reopened).
 pub(crate) fn refresh_open_anon_dm(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,

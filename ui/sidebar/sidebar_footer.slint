@@ -189,10 +189,10 @@ export component SidebarFooter inherits GlassSurface {
                 // Ungated, like the expanded header shield.
                 TooltipArea {
                     height: root.rail-icon-size; width: 44px; x: (parent.width - self.width) / 2;
-                    tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
+                    tooltip-text: AnonMode.enabled ? "Anon mode (active) - tap to disable" : "Anon mode";
                     tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
-                        accessible-role: button; accessible-label: "Anon Mode";
+                        accessible-role: button; accessible-label: "Anon mode";
                         accessible-action-default => { root.anon-mode-clicked(); }
                         border-width: rail-anon-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-anon-keys := FocusScope { width: 0px; height: 0px;

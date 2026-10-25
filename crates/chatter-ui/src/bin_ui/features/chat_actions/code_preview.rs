@@ -107,7 +107,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
                 let data = content.data.clone();
                 tokio::spawn(async move {
                     let config = FilePickerConfig::new()
-                        .with_title("Save Code File")
+                        .with_title("Save code file")
                         .with_default_path(
                             dirs::download_dir()
                                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))

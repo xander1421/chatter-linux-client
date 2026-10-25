@@ -5171,7 +5171,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     let before = w
         .global::<chatter_ui::SettingsPane>()
         .get_settings_read_receipts();
-    tap_text(&w, "Read Receipts");
+    tap_text(&w, "Read receipts");
     assert_eq!(
         w.global::<chatter_ui::SettingsPane>()
             .get_settings_read_receipts(),
@@ -5399,7 +5399,7 @@ fn ux3_account_menu_pushes_settings_and_fab_opens_create_menu() {
     assert_eq!(w.get_active_modal().as_str(), "create-menu");
     assert!(fab().is_none(), "the FAB stayed up over its own menu");
     assert!(
-        testing::ElementHandle::find_by_accessible_label(&w, "New Section")
+        testing::ElementHandle::find_by_accessible_label(&w, "New section")
             .next()
             .is_some(),
         "the create menu has no New Section"

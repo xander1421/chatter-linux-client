@@ -116,7 +116,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let picked = {
                     let config = chatter_core::media::FilePickerConfig::new()
-                        .with_title("Select Channel Icon")
+                        .with_title("Select channel icon")
                         .with_filter(chatter_core::media::FileFilter::images());
                     chatter_core::media::FilePicker::pick_file(config).await
                 };

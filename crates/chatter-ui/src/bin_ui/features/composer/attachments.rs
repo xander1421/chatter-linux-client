@@ -241,7 +241,7 @@ pub(crate) fn wire_attachment_clicked(
                     };
 
                     let config = FilePickerConfig::new()
-                        .with_title("Select Attachment")
+                        .with_title("Select attachment")
                         .with_filter(FileFilter::all()) // Default to all files
                         .with_filter(FileFilter::images())
                         .with_filter(FileFilter::videos())

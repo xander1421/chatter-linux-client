@@ -126,7 +126,7 @@ export component ActivitySheet inherits Rectangle {
                 height: Spacing.touch-target-min;
                 Rectangle {
                     width: 90px; height: Spacing.touch-target-min;
-                    accessible-role: button; accessible-label: "Close Activity";
+                    accessible-role: button; accessible-label: "Close activity";
                     accessible-action-default => { root.close(); }
                     Text { text: "Done"; color: Colors.primary; font-size: Typography.base;
                         vertical-alignment: center; }
@@ -137,10 +137,10 @@ export component ActivitySheet inherits Rectangle {
                     vertical-alignment: center; horizontal-stretch: 1; }
                 Rectangle {
                     width: 90px; height: Spacing.touch-target-min;
-                    accessible-role: button; accessible-label: "Mark All Read";
+                    accessible-role: button; accessible-label: "Mark all read";
                     accessible-enabled: ActivityGlobal.unread-count > 0;
                     accessible-action-default => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } }
-                    Text { text: "Mark All Read"; color: ActivityGlobal.unread-count > 0 ? Colors.primary : Colors.text-muted;
+                    Text { text: "Mark all read"; color: ActivityGlobal.unread-count > 0 ? Colors.primary : Colors.text-muted;
                         font-size: Typography.xs; font-weight: Typography.semibold;
                         horizontal-alignment: right; vertical-alignment: center; }
                     TouchArea { enabled: ActivityGlobal.unread-count > 0; mouse-cursor: pointer;

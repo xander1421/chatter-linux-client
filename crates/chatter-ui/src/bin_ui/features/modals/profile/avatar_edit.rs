@@ -376,7 +376,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let picked = chatter_core::media::FilePicker::pick_file(
                     chatter_core::media::FilePickerConfig::new()
-                        .with_title("Select Profile Picture")
+                        .with_title("Select profile picture")
                         .with_filter(chatter_core::media::FileFilter::images()),
                 )
                 .await;

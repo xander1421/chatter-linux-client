@@ -1117,7 +1117,7 @@ async fn save_file_from_buffer(
     let data = secure_buffer.as_slice().to_vec();
 
     let config = FilePickerConfig::new()
-        .with_title("Save Attachment As")
+        .with_title("Save attachment as")
         .with_default_path(
             dirs::download_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))

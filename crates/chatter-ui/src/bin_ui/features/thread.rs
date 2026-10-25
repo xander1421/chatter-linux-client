@@ -172,7 +172,7 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let selected = {
                     use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
                     FilePicker::pick_files(FilePickerConfig::new()
-                        .with_title("Select Attachment")
+                        .with_title("Select attachment")
                         .with_filter(FileFilter::all())
                         .with_multiple(true)).await
                 };

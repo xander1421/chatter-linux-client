@@ -139,27 +139,27 @@ export component MeshPeerSheet inherits Rectangle {
                         Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout {
-                                SettingsRow { icon: Icons.image; title: "Show My QR Code"; touch: root.touch;
+                                SettingsRow { icon: Icons.image; title: "Show my QR code"; touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.search; title: "Scan Their Code"; touch: root.touch;
+                                SettingsRow { icon: Icons.search; title: "Scan their code"; touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.shield; title: "Verify Known Contact"; touch: root.touch;
+                                SettingsRow { icon: Icons.shield; title: "Verify known contact"; touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.verify-known-contact(MeshGlobal.sheet-peer-id); } }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                SettingsRow { icon: Icons.send; title: "Share My Chatter Identity"; touch: root.touch;
+                                SettingsRow { icon: Icons.send; title: "Share my Chatter identity"; touch: root.touch;
                                     clickable: MeshGlobal.sheet-peer-id != "";
                                     clicked => { MeshGlobal.share-identity(MeshGlobal.sheet-peer-id); } }
                                 if root.active-dm: Rectangle { height: 1px; background: Colors.divider; }
                                 if root.active-dm: ToggleRow {
                                     checked <=> MeshGlobal.active-signal-enabled;
-                                    accessible-text: "Use Signal Encryption";
+                                    accessible-text: "Use Signal encryption";
                                     row-padding: Spacing.md;
-                                    Text { text: "Use Signal Encryption"; color: Colors.text-primary;
+                                    Text { text: "Use Signal encryption"; color: Colors.text-primary;
                                         font-size: Typography.base; }
                                     toggled(value) => { MeshGlobal.toggle-signal-mesh(MeshGlobal.active-scope); }
                                 }

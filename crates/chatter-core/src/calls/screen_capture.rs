@@ -261,7 +261,7 @@ impl ScreenCapture {
         if is_wayland() {
             tracing::info!("Wayland detected - using XDG Desktop Portal for screen sharing");
             return Ok(vec![ScreenSource {
-                name: "Share Screen (Portal)".to_string(),
+                name: "Share screen (Portal)".to_string(),
                 id: 0, // Special ID for portal
                 display_id: 0,
                 source_type: ScreenSourceType::Monitor,

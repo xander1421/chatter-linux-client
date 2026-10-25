@@ -59,7 +59,7 @@ export component MeshSetupSheet inherits Rectangle {
 
     ModalContainer {
         show: root.show-modal;
-        accessible-title: "Mesh Settings";
+        accessible-title: "Mesh settings";
         modal-width: 540px;
         max-modal-height: 760px;
         fill-height: true;
@@ -70,7 +70,7 @@ export component MeshSetupSheet inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 height: Spacing.touch-target-min;
-                                Text { text: "Mesh Settings"; color: Colors.text-primary; font-size: Typography.lg;
+                                Text { text: "Mesh settings"; color: Colors.text-primary; font-size: Typography.lg;
                     font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
                 Button { text: "Done"; variant: "ghost"; touch: root.touch; clicked => { root.close(); } }
             }
@@ -165,7 +165,7 @@ export component MeshSetupSheet inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.sm;
                         Rectangle { height: erase-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
-                            erase-row := SettingsRow { icon: Icons.trash; title: "Erase Mesh Data…"; destructive: true;
+                            erase-row := SettingsRow { icon: Icons.trash; title: "Erase Mesh data…"; destructive: true;
                                 touch: root.touch; show-chevron: false; clicked => { root.confirming-wipe = true; } }
                         }
                     }
@@ -187,7 +187,7 @@ export component MeshSetupSheet inherits Rectangle {
                         width: parent.width;
                         text: "Erase this device's mesh identity, messages, carried mail and favourites? Your Chatter account stays intact. This cannot be undone.";
                         color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
-                    Button { text: "Erase Mesh Data"; variant: "destructive"; touch: root.touch;
+                    Button { text: "Erase Mesh data"; variant: "destructive"; touch: root.touch;
                         clicked => { root.confirming-wipe = false; MeshGlobal.panic-wipe(); } }
                 }
             }
