@@ -147,7 +147,8 @@ export component ChannelListItem inherits Rectangle {
         // On touch it takes the DM avatar's column width so both row kinds put
         // their text on the same left edge.
         Rectangle {
-            width: root.icon-box;
+            // + the DM avatar's 4px presence ring.
+            width: root.icon-box + 4px;
             height: parent.height;
 
             if root.has-avatar: Rectangle {
@@ -171,14 +172,22 @@ export component ChannelListItem inherits Rectangle {
             // channel is plaintext by design and gets '#'. It used to be an
             // 8px dot, which read as presence/unread, plus a second green
             // lock at the row's far right.
-            if !root.has-avatar: Image {
-                source: root.channel-type == "public" ? Icons.hash
-                      : root.channel-type == "private" ? Icons.lock : Icons.users;
-                width: root.glyph-size;
-                height: root.glyph-size;
+            // On a phone the glyph sits in an avatar-sized disc so the
+            // row lines up with DM rows' avatars.
+            if !root.has-avatar: Rectangle {
+                width: root.icon-box;
+                height: root.icon-box;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.primary : Colors.text-secondary;
+                border-radius: self.width / 2;
+                background: root.mobile-mode ? Colors.surface-control : transparent;
+                Image {
+                    source: root.channel-type == "public" ? Icons.hash
+                          : root.channel-type == "private" ? Icons.lock : Icons.users;
+                    width: root.glyph-size;
+                    height: root.glyph-size;
+                    colorize: root.selected ? Colors.primary : Colors.text-secondary;
+                }
             }
         }
 
