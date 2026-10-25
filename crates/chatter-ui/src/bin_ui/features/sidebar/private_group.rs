@@ -74,7 +74,7 @@ pub fn load_private_group_messages(
             }
         };
 
-        let display_messages = crate::bin_ui::converters::messages_to_display_batch(
+        let display_messages = crate::bin_ui::converters::messages_to_display_batch_deferred(
             &messages,
             |ms| ui_ctx.message_sender_display_names(ms),
             |m| ui_ctx.message_sender_avatar(m),
@@ -136,7 +136,7 @@ pub fn load_private_group_messages(
             // Convert and set messages
             let slint_messages: Vec<_> = display_messages
                 .iter()
-                .map(|m| m.to_slint_with_user(&current_user_id_str))
+                .map(|m| m.to_slint_preview_with_user(&current_user_id_str))
                 .collect();
             w.global::<crate::ChatPane>()
                 .set_messages(ModelRc::new(VecModel::from(slint_messages)));
@@ -280,7 +280,7 @@ async fn load_private_group_messages_internal(
         })
         .unwrap_or_default();
 
-    let display_messages = crate::bin_ui::converters::messages_to_display_batch(
+    let display_messages = crate::bin_ui::converters::messages_to_display_batch_deferred(
         &messages,
         |ms| ui_ctx.message_sender_display_names(ms),
         |m| ui_ctx.message_sender_avatar(m),
@@ -331,7 +331,7 @@ async fn load_private_group_messages_internal(
 
         let slint_messages: Vec<_> = display_messages
             .iter()
-            .map(|m| m.to_slint_with_user(&current_user_id_str))
+            .map(|m| m.to_slint_preview_with_user(&current_user_id_str))
             .collect();
         w.global::<crate::ChatPane>()
             .set_messages(ModelRc::new(VecModel::from(slint_messages)));

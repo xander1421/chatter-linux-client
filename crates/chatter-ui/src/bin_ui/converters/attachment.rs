@@ -1,6 +1,7 @@
 //! Attachment converters.
 
 use slint::{Image, ModelRc, VecModel};
+use std::sync::Arc;
 
 use chatter_core::domain::attachment::{Attachment, AttachmentStatus};
 use chatter_core::state::PendingAttachment;
@@ -38,7 +39,7 @@ pub struct AttachmentDisplayData {
     pub is_download_failed: bool,
     pub progress: f32,
     /// Thumbnail JPEG bytes from sender (for instant preview without download).
-    pub thumbnail_bytes: Vec<u8>,
+    pub thumbnail_bytes: Arc<[u8]>,
     /// Decoded thumbnail, from `decode_cache` — decode before the UI thread.
     /// Shared with the cache, so the UI thread wraps it without copying.
     pub thumbnail_pixels: Option<crate::bin_ui::decode_cache::Pixels>,
@@ -58,7 +59,7 @@ impl AttachmentDisplayData {
                 }
                 match client.decrypt_and_extract_video_thumbnail(&id) {
                     Ok(result) => {
-                        self.thumbnail_bytes = result.image_bytes;
+                        self.thumbnail_bytes = result.image_bytes.into();
                         self.width = result.width as i32;
                         self.height = result.height as i32;
                     }
@@ -86,7 +87,7 @@ impl AttachmentDisplayData {
         }
         // The stored thumbnail is not a postage stamp: it is generated at
         // `INLINE_THUMBNAIL_MAX_SIZE` = 768px (media/image_processor.rs), ~2.7x
-        // the ~280 logical px the bubble draws. Decoding it costs ~0.08 ms.
+        // the ~280 logical px the bubble draws. Keep decoded pixels at 320px.
         //
         // This used to prefer the full-resolution original instead, downscaled
         // with Lanczos3 "so the bubble is crisp". Measured on a 12 MP photo
@@ -98,7 +99,7 @@ impl AttachmentDisplayData {
             let bytes = &self.thumbnail_bytes;
             self.thumbnail_pixels =
                 crate::bin_ui::decode_cache::thumbnail(&self.id, bytes.len(), || {
-                    image::load_from_memory(bytes).ok()
+                    image::load_from_memory(bytes).ok().map(|img| img.thumbnail(320, 320))
                 });
             if self.thumbnail_pixels.is_some() {
                 return;
@@ -114,9 +115,8 @@ impl AttachmentDisplayData {
                 .as_deref()
                 .filter(|p| std::path::Path::new(p).exists())
             {
-                // Cap the long edge; ample even at 2x HiDPI while staying
-                // cheap to hold in memory.
-                const DISPLAY_MAX: u32 = 1024;
+                // Match the inline bubble's decoded thumbnail size.
+                const DISPLAY_MAX: u32 = 320;
                 self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail(&self.id, 0, || {
                     image::open(path)
                         .ok()
@@ -343,7 +343,7 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         progress: 0.0, // Will be updated by progress callback
         // Use stored thumbnail from sender (for instant preview)
         thumbnail_bytes: {
-            let bytes = meta.thumbnail.clone().unwrap_or_default();
+            let bytes: Arc<[u8]> = meta.thumbnail.as_deref().unwrap_or_default().into();
             if meta.is_image() || meta.is_video() {
                 tracing::debug!(
                     "attachment_to_display_data: {} thumbnail_bytes={}, waveform_samples={:?}",
