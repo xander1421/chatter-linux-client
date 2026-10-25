@@ -197,15 +197,32 @@ fn handle_gif(
         // Convert to Slint buffers
         let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = Vec::new();
         let mut all_delays: Vec<u64> = Vec::new();
+        let mut retained_bytes = 0usize;
+        let mut skipped_delay_ms = 0u64;
 
         for frame in &full_result.frames {
+            let delay_ms = frame.delay.as_millis() as u64;
+            let (data, width, height) = crate::bin_ui::gif_state::fit_frame(
+                frame.data.clone(), frame.width, frame.height,
+                crate::bin_ui::gif_state::INLINE_FRAME_PX,
+                crate::bin_ui::gif_state::INLINE_FRAME_PX,
+            );
+            if all_buffers.len() >= crate::bin_ui::gif_state::MAX_VIEWER_FRAMES
+                || data.is_empty()
+                || data.len() > crate::bin_ui::gif_state::MAX_ANIMATION_BYTES.saturating_sub(retained_bytes)
+            {
+                skipped_delay_ms = skipped_delay_ms.saturating_add(delay_ms);
+                continue;
+            }
+            retained_bytes += data.len();
             let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &frame.data,
-                frame.width,
-                frame.height,
+                &data, width, height,
             );
             all_buffers.push(pixel_buffer);
-            all_delays.push(frame.delay.as_millis() as u64);
+            all_delays.push(delay_ms);
+        }
+        if let Some(last) = all_delays.last_mut() {
+            *last = last.saturating_add(skipped_delay_ms);
         }
 
         tracing::info!(

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use super::MAX_INLINE_GIFS;
+use super::{MAX_ANIMATION_BYTES, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS, INLINE_FRAME_PX};
 use crate::MainWindow;
 
 thread_local! {
@@ -40,6 +40,12 @@ pub(crate) struct InlineGifState {
 }
 
 impl InlineGifState {
+    fn bytes(&self) -> usize {
+        self.frames.iter().map(|frame| {
+            let size = frame.size();
+            size.width as usize * size.height as usize * 4
+        }).sum()
+    }
     pub(crate) fn current_image(&self) -> Image {
         self.frames
             .get(self.current_frame)
@@ -70,22 +76,26 @@ impl InlineGifState {
 
 /// Insert an inline GIF with LRU eviction (used by viewer module).
 pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
-    // Evict oldest GIFs if at capacity (LRU)
+    let new_bytes = state.bytes();
+    if new_bytes > MAX_INLINE_GIF_BYTES {
+        return;
+    }
     INLINE_LRU.with(|lru| {
         let mut lru = lru.borrow_mut();
-
-        // Remove from LRU if already exists
         lru.retain(|id| id != &att_id);
-
-        // Evict oldest if at capacity
-        while lru.len() >= MAX_INLINE_GIFS {
+        INLINE_GIFS.with(|gifs| { gifs.borrow_mut().remove(&att_id); });
+        while lru.len() >= MAX_INLINE_GIFS || INLINE_GIFS.with(|gifs| {
+            gifs.borrow().values().map(InlineGifState::bytes).sum::<usize>()
+                > MAX_INLINE_GIF_BYTES.saturating_sub(new_bytes)
+        }) {
             if let Some(oldest) = lru.pop_front() {
                 INLINE_GIFS.with(|gifs| {
                     gifs.borrow_mut().remove(&oldest);
                 });
+            } else {
+                break;
             }
         }
-
         lru.push_back(att_id.clone());
     });
 
@@ -165,30 +175,7 @@ pub fn register_inline_gif_from_images(
         accumulated_ms,
     };
 
-    // Evict oldest GIFs if at capacity (LRU)
-    INLINE_LRU.with(|lru| {
-        let mut lru = lru.borrow_mut();
-
-        // Remove from LRU if already exists (will re-add at end)
-        lru.retain(|id| id != &att_id_string);
-
-        // Evict oldest if at capacity
-        while lru.len() >= MAX_INLINE_GIFS {
-            if let Some(oldest) = lru.pop_front() {
-                INLINE_GIFS.with(|gifs| {
-                    gifs.borrow_mut().remove(&oldest);
-                });
-                tracing::debug!("Evicted oldest inline GIF: {}", oldest);
-            }
-        }
-
-        // Add new GIF to LRU (most recent)
-        lru.push_back(att_id_string.clone());
-    });
-
-    INLINE_GIFS.with(|gifs| {
-        gifs.borrow_mut().insert(att_id_string, state);
-    });
+    insert_inline_gif(att_id_string, state);
 
     tracing::info!(
         "Registered inline GIF animation: id={}, frames={}",
@@ -211,6 +198,22 @@ fn append_inline_gif_from_buffers(
         if let Some(state) = gifs.borrow_mut().get_mut(attachment_id) {
             state.frames.extend(buffers.into_iter().map(Image::from_rgba8));
             state.delays.extend(delays);
+        }
+    });
+    // Progressive batches can grow an existing entry beyond the global cap.
+    INLINE_LRU.with(|lru| {
+        let mut lru = lru.borrow_mut();
+        while INLINE_GIFS.with(|gifs| gifs.borrow().values().map(InlineGifState::bytes).sum::<usize>()) > MAX_INLINE_GIF_BYTES {
+            let Some(oldest) = lru.pop_front() else { break; };
+            INLINE_GIFS.with(|gifs| { gifs.borrow_mut().remove(&oldest); });
+        }
+    });
+}
+
+fn extend_last_delay(attachment_id: &str, extra_ms: u64) {
+    INLINE_GIFS.with(|gifs| {
+        if let Some(last) = gifs.borrow_mut().get_mut(attachment_id).and_then(|state| state.delays.last_mut()) {
+            *last = last.saturating_add(extra_ms);
         }
     });
 }
@@ -544,9 +547,9 @@ pub fn register_gif_attachment(
         // Register first frame on UI thread immediately (for instant display)
         let att_id_for_ui = attachment_id.clone();
         let window_weak_clone = window_weak.clone();
-        let first_rgba = first_frame.data.clone();
-        let first_width = first_frame.width;
-        let first_height = first_frame.height;
+        let (first_rgba, first_width, first_height) = super::fit_frame(
+            first_frame.data, first_frame.width, first_frame.height, INLINE_FRAME_PX, INLINE_FRAME_PX,
+        );
 
         let _ = slint::invoke_from_event_loop(move || {
             // Show first frame immediately
@@ -583,6 +586,7 @@ pub fn register_gif_attachment(
         let mut pending_buffers = Vec::new();
         let mut pending_delays = Vec::new();
         let mut decoded_bytes = 0usize;
+        let mut skipped_delay_ms = 0u64;
         const BATCH_SIZE: usize = 5;
         const MAX_FRAMES: usize = 100;
 
@@ -606,13 +610,16 @@ pub fn register_gif_attachment(
 
             let buffer = frame.into_buffer();
             let (width, height) = buffer.dimensions();
-            let raw_data = buffer.into_raw();
+            let (raw_data, width, height) = super::fit_frame(
+                buffer.into_raw(), width, height, INLINE_FRAME_PX, INLINE_FRAME_PX,
+            );
 
             if !chatter_core::media::gif::frame_fits_budget(
                 all_buffers.len(), decoded_bytes, raw_data.len(),
-                MAX_FRAMES, chatter_core::media::gif::MAX_UI_GIF_BYTES,
+                MAX_FRAMES, MAX_ANIMATION_BYTES,
             ) {
-                break;
+                skipped_delay_ms = skipped_delay_ms.saturating_add(delay_ms);
+                continue;
             }
             decoded_bytes += raw_data.len();
 
@@ -657,6 +664,9 @@ pub fn register_gif_attachment(
 
         // Final update with all frames
         if all_buffers.len() > 1 {
+            if let Some(last) = all_delays.last_mut() {
+                *last = last.saturating_add(skipped_delay_ms);
+            }
             crate::bin_ui::decode_cache::put_gif(
                 &attachment_id,
                 all_buffers.clone(),
@@ -666,7 +676,13 @@ pub fn register_gif_attachment(
                 let att_id_full = attachment_id.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     append_inline_gif_from_buffers(&att_id_full, pending_buffers, pending_delays);
+                    if skipped_delay_ms > 0 { extend_last_delay(&att_id_full, skipped_delay_ms); }
                     tracing::info!("Completed sent GIF animation: {}", att_id_full);
+                });
+            } else if skipped_delay_ms > 0 {
+                let att_id_full = attachment_id.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    extend_last_delay(&att_id_full, skipped_delay_ms);
                 });
             }
         }

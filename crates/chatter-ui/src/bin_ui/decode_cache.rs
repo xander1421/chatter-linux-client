@@ -31,9 +31,9 @@ pub type Pixels = SharedPixelBuffer<Rgba8Pixel>;
 /// lossless WebP, ~4.5 ms to decode on desktop and ~1 MB of RGBA per copy.
 pub const AVATAR_PX: u32 = 128;
 
-const AVATAR_BUDGET: usize = 8 << 20;
-const THUMBNAIL_BUDGET: usize = 48 << 20;
-const GIF_BUDGET: usize = 48 << 20;
+const AVATAR_BUDGET: usize = 6 << 20;
+const THUMBNAIL_BUDGET: usize = 32 << 20;
+const GIF_BUDGET: usize = 24 << 20;
 
 /// Every frame of one inline GIF, with its delays in ms.
 #[derive(Clone)]
