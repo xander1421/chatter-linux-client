@@ -1,4 +1,3 @@
-import { Checkbox } from "../components/checkbox.slint";
 // CreateChannelModal - Single-page adaptive form.
 //
 // UX: one-step form with access-model pills (Open / Invite-only / Private group),
@@ -12,6 +11,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
+import { ToggleRow } from "../components/toggle_row.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -500,31 +500,24 @@ export component CreateChannelModal inherits Rectangle {
                     VerticalLayout {
                         spacing: Spacing.xs;
 
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-                            alignment: start;
+                        ephemeral-row := ToggleRow {
+                            checked <=> root.use-ephemeral;
+                            accessible-text: "Auto-delete messages";
 
-                            Checkbox {
-                                checked <=> root.use-ephemeral;
-                                label: "Auto-delete messages";
+                            Text {
+                                width: ephemeral-row.label-width;
+                                text: "Auto-delete messages";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                                wrap: word-wrap;
                             }
-
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: Spacing.xxs;
-
-                                Text {
-                                    text: "Auto-delete messages";
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.medium;
-                                }
-
-                                Text {
-                                    text: "Messages expire after the chosen time.";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                }
+                            Text {
+                                width: ephemeral-row.label-width;
+                                text: "Messages expire after the chosen time.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
                             }
                         }
 
@@ -574,31 +567,24 @@ export component CreateChannelModal inherits Rectangle {
                     if AiIntegrationGlobal.channel-template-enabled: VerticalLayout {
                         spacing: Spacing.xs;
 
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-                            alignment: start;
+                        ai-row := ToggleRow {
+                            checked <=> root.use-ai;
+                            accessible-text: "Enable AI assistant";
 
-                            Checkbox {
-                                checked <=> root.use-ai;
-                                label: "Enable AI assistant";
+                            Text {
+                                width: ai-row.label-width;
+                                text: "AI assistant";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                                wrap: word-wrap;
                             }
-
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: Spacing.xxs;
-
-                                Text {
-                                    text: "AI assistant";
-                                    color: Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.medium;
-                                }
-
-                                Text {
-                                    text: "Add an AI bot that replies in this channel.";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                }
+                            Text {
+                                width: ai-row.label-width;
+                                text: "Add an AI bot that replies in this channel.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
                             }
                         }
 
