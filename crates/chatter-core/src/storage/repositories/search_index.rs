@@ -62,7 +62,7 @@ impl SearchIndex {
                 "SELECT message_id, conversation_id, bm25(messages_fts) as score
                  FROM messages_fts
                  WHERE messages_fts MATCH ?1 AND conversation_id = ?2
-                 ORDER BY score
+                 ORDER BY score, rowid DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt.query(params![escaped_query, cid.to_string(), limit])?;
@@ -72,7 +72,7 @@ impl SearchIndex {
                 "SELECT message_id, conversation_id, bm25(messages_fts) as score
                  FROM messages_fts
                  WHERE messages_fts MATCH ?1
-                 ORDER BY score
+                 ORDER BY score, rowid DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![escaped_query, limit])?;
@@ -106,7 +106,7 @@ impl SearchIndex {
                AND (?3 IS NULL OR m.conversation_id = ?3)
                AND (?4 IS NULL OR m.sent_at >= ?4)
                AND (?5 IS NULL OR m.sent_at < ?5)
-             ORDER BY score, messages_fts.rowid LIMIT ?6 OFFSET ?7",
+             ORDER BY score, m.sent_at DESC, messages_fts.rowid DESC LIMIT ?6 OFFSET ?7",
         )?;
         let mut rows = stmt.query(params![
             escaped_query,
