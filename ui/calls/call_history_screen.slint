@@ -136,16 +136,11 @@ export component CallHistoryScreen inherits Rectangle {
         }
 
         Rectangle {
-            // Modal puts its children in a Rectangle, not a layout. Fill that
-            // allocated body explicitly so the list cannot size this wrapper
-            // from its own preferred height and cover the shared header.
-            width: parent.width;
-            height: parent.height;
+            vertical-stretch: 1;
 
         VerticalLayout {
             spacing: Spacing.md;
-            width: parent.width;
-            height: parent.height;
+            vertical-stretch: 1;
 
             // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
             // height as the header row's dismissal control above it.
