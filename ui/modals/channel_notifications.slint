@@ -18,7 +18,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
 
     Text {
         width: parent.width;
-        text: "Notification Preferences";
+        text: "Notifications";
         color: Colors.text-primary;
         font-size: Typography.lg;
         font-weight: Typography.semibold;
@@ -28,14 +28,14 @@ export component ChannelNotificationsSection inherits VerticalLayout {
     // Mute toggle
     mute-row := ToggleRow {
         checked <=> root.is-muted;
-        accessible-text: root.is-private-group ? "Mute Group" : "Mute Channel";
+        accessible-text: root.is-private-group ? "Mute group" : "Mute channel";
         toggled(value) => {
             root.toggle-mute(value);
         }
 
         Text {
             width: mute-row.label-width;
-            text: root.is-private-group ? "Mute Group" : "Mute Channel";
+            text: root.is-private-group ? "Mute group" : "Mute channel";
             color: Colors.text-primary;
             font-size: Typography.sm;
             wrap: word-wrap;
@@ -43,32 +43,6 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         Text {
             width: mute-row.label-width;
             text: root.is-private-group ? "You won't receive any notifications from this group" : "You won't receive any notifications from this channel";
-            color: Colors.text-muted;
-            font-size: Typography.xs;
-            wrap: word-wrap;
-        }
-    }
-
-    // Anonymous groups are local-only in core's AI policy.
-    ai-row := ToggleRow {
-        checked <=> root.ai-enabled;
-        accessible-text: "AI assistant";
-        toggled(value) => {
-            root.toggle-ai(value);
-        }
-
-        Text {
-            width: ai-row.label-width;
-            text: "AI assistant";
-            color: Colors.text-primary;
-            font-size: Typography.sm;
-            wrap: word-wrap;
-        }
-        Text {
-            width: ai-row.label-width;
-            text: root.is-private-group
-                ? "Let local AI read this group when you ask it something here. Cloud AI cannot access this group. Off by default."
-                : "Let the AI read this channel when you ask it something here. Off by default.";
             color: Colors.text-muted;
             font-size: Typography.xs;
             wrap: word-wrap;
@@ -127,7 +101,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
                 min-width: 0px;
 
                 Text {
-                    text: "All Messages";
+                    text: "All messages";
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     wrap: word-wrap;
@@ -185,7 +159,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
                 min-width: 0px;
 
                 Text {
-                    text: "Mentions Only";
+                    text: "Mentions only";
                     color: Colors.text-primary;
                     font-size: Typography.sm;
                     wrap: word-wrap;
@@ -261,5 +235,35 @@ export component ChannelNotificationsSection inherits VerticalLayout {
             clicked => { root.change-notification("none"); }
         }
     }
-                    
+
+    Rectangle {
+        height: 1px;
+        background: Colors.divider;
+    }
+
+    // Anonymous groups are local-only in core's AI policy.
+    ai-row := ToggleRow {
+        checked <=> root.ai-enabled;
+        accessible-text: "AI assistant";
+        toggled(value) => {
+            root.toggle-ai(value);
+        }
+
+        Text {
+            width: ai-row.label-width;
+            text: "AI assistant";
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+        }
+        Text {
+            width: ai-row.label-width;
+            text: root.is-private-group
+                ? "Let local AI read this group when you ask it something here. Cloud AI cannot access this group. Off by default."
+                : "Let the AI read this channel when you ask it something here. Off by default.";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+        }
+    }
 }

@@ -86,7 +86,7 @@ export component ServerRecordsScreen inherits Rectangle {
             }
             if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
             if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && (ServerRecordsGlobal.kind == "notifications" ? ServerRecordsGlobal.notifications.length == 0 : ServerRecordsGlobal.rows.length == 0): Text {
-                text: ServerRecordsGlobal.kind == "notifications" ? "You're all caught up" : "No records yet"; color: Colors.text-secondary;
+                text: ServerRecordsGlobal.kind == "notifications" ? "You're all caught up" : ServerRecordsGlobal.kind == "integrations" ? "No integrations yet" : "No calls yet"; color: Colors.text-secondary;
             }
             if ServerRecordsGlobal.kind == "notifications": inbox := ScrollView {
                 mouse-drag-pan-enabled: true;

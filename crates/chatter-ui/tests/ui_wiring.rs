@@ -5120,7 +5120,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     slint::platform::update_timers_and_animations();
     tap_text(&w, "Notifications");
 
-    tap_text(&w, "Mute Channel");
+    tap_text(&w, "Mute channel");
     assert!(
         w.global::<chatter_ui::ModalHostState>()
             .get_channel_settings_muted(),
@@ -5132,7 +5132,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
         "the Mute row tap did not reach the handler once"
     );
 
-    tap_switch(&w, "Mute Channel");
+    tap_switch(&w, "Mute channel");
     assert!(
         !w.global::<chatter_ui::ModalHostState>()
             .get_channel_settings_muted(),
