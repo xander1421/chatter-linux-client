@@ -603,6 +603,10 @@ export component SettingsScreen inherits Rectangle {
                             variant: root.active-section == item.id ? "secondary" : "ghost";
                             clicked => {
                                 root.active-section = item.id;
+                                // Centre the chosen chip so it is never left
+                                // half off the edge ("Linked d…").
+                                tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width,
+                                    (tabs.width - self.width) / 2 - self.x));
                             }
                         }
                     }
