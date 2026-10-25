@@ -333,7 +333,8 @@ export component ChatLayout inherits Rectangle {
         // while the keyboard is closed would expose a hard cut above the glass.
         // The open-keyboard viewport already ends at the composer's top.
         tail-clearance: root.keyboard-open ? Spacing.sm : Spacing.md + Spacing.touch-target-min;
-        bottom-inset: root.keyboard-open ? composer.list-clearance-extra
+        // bottom-chrome already includes the lifted circle row.
+        bottom-inset: root.keyboard-open ? 0px
             : bottom-chrome.height + composer.list-clearance-extra
                 - (root.drawer-occupied-height > 0px ? Spacing.sm : 0px);
         messages: root.messages;
