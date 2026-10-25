@@ -299,6 +299,8 @@ export component AppSecondaryModals inherits Rectangle {
         close => { ModalHostState.nav-close("create-menu"); }
         new-chat => {
             ModalHostState.nav-close("create-menu");
+            ModalHostState.new-chat-query = "";
+            ModalHostState.new-chat-query-changed("");
             ModalHostState.nav-push("new-chat");
         }
         new-channel => {
@@ -357,8 +359,20 @@ export component AppSecondaryModals inherits Rectangle {
     if root.is-presented("new-chat"): NewChatPicker {
         show: root.active-modal == "new-chat";
         mobile-mode: root.compact-layout;
-        friends: ModalHostState.friends-list;
+        friends: ModalHostState.new-chat-friends;
+        query <=> ModalHostState.new-chat-query;
+        query-changed(query) => { ModalHostState.new-chat-query-changed(query); }
         close => { ModalHostState.nav-close("new-chat"); }
+        new-channel => {
+            ModalHostState.nav-close("new-chat");
+            ModalHostState.start-create-channel();
+        }
+        add-friend => {
+            ModalHostState.nav-close("new-chat");
+            ModalHostState.friends-modal-tab = "find";
+            SidebarPane.active-tab = "contacts";
+            ModalHostState.friends-modal-switch-tab("find");
+        }
         // Same path as Contacts' Message button: core opens the DM and
         // returns to Chats with the conversation showing.
         pick(user-id) => { ModalHostState.friends-start-dm(user-id); }

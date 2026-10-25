@@ -89,6 +89,7 @@ impl FriendDataExt for chatter_core::ui::sidebar_data::FriendDataSendData {
             display_name: self.display_name.into(),
             username: self.username.into(),
             presence_status: self.presence_status.into(),
+            last_seen_label: "".into(),
             custom_status: self.custom_status.into(),
             is_anon: self.is_anon,
             avatar_source,

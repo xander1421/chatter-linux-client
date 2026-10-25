@@ -148,7 +148,7 @@ impl ChatterClient {
                         // without the profile key holds `User <id8>`, and a
                         // known username reads better (REVIEW-R4 P0-3).
                         display_name: self.display_name(&friendship.addressee_id),
-                        username: String::new(),
+                        username: self.known_username(&friendship.addressee_id).unwrap_or_default(),
                         avatar_bytes: self.user_avatar(&friendship.addressee_id),
                         presence_status: self
                             .peer_presence(&friendship.addressee_id)
@@ -209,7 +209,7 @@ impl ChatterClient {
                 FriendDataSendData {
                     user_id: peer.to_string(),
                     display_name: self.display_name(&peer),
-                    username: String::new(),
+                    username: self.known_username(&peer).unwrap_or_default(),
                     avatar_bytes,
                     presence_status: self.peer_presence(&peer).as_str().to_string(),
                     custom_status: String::new(),

@@ -219,6 +219,10 @@ pub(super) fn handle_presence_changed(
     let presence_str = presence.as_str();
 
     let presence_slint: slint::SharedString = presence_str.into();
+    let last_seen_label: slint::SharedString = ui_ctx.peer_last_seen(&user_id)
+        .map(|(_, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+        .unwrap_or_default()
+        .into();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
@@ -284,7 +288,9 @@ pub(super) fn handle_presence_changed(
             if let Some(mut f) = friends.row_data(i) {
                 if !f.is_anon && f.user_id == user_id_str {
                     f.presence_status = presence_slint.clone();
+                    f.last_seen_label = last_seen_label.clone();
                     friends.set_row_data(i, f);
+                    crate::bin_ui::features::modals::friends::refresh_new_chat_results(&w);
                     break;
                 }
             }
