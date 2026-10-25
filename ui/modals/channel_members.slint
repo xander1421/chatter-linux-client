@@ -6,6 +6,8 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
+import { ScrollView } from "std-widgets.slint";
 
 component ListView inherits Flickable {
     out property <length> visible-height: self.height;
@@ -13,9 +15,63 @@ component ListView inherits Flickable {
     @children
 }
 
-export component ChannelMembersSection inherits VerticalLayout {
+component MemberMenuItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <bool> destructive: false;
+    callback clicked();
+    height: Spacing.touch-target-min;
+    border-radius: Spacing.radius-sm;
+    background: item-touch.pressed ? Materials.pressed : item-touch.has-hover ? Colors.surface-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.md;
+        Image {
+            source: root.icon;
+            width: 18px;
+            height: 18px;
+            colorize: root.destructive ? Colors.error : Colors.text-secondary;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            color: root.destructive ? Colors.error : Colors.text-primary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        if root.selected: Image {
+            source: Icons.check;
+            width: 18px;
+            height: 18px;
+            colorize: Colors.primary;
+            vertical-alignment: center;
+        }
+    }
+    item-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ChannelMembersSection inherits Rectangle {
     in property <[ChannelRosterRowData]> roster-rows;
-    in property <length> roster-height: 420px;
     in property <bool> can-manage-members;
     in property <bool> can-invite;
     in property <bool> can-view-bans;
@@ -24,10 +80,21 @@ export component ChannelMembersSection inherits VerticalLayout {
     in property <bool> is-owner;
     in property <bool> is-private-group;
     in property <bool> loading;
+    in property <string> error-message;
     in property <int> member-count;
     in property <[ChannelMemberData]> members;
     in property <bool> narrow;
     in-out property <string> role-picker-user;
+    private property <ChannelMemberData> menu-member;
+    private property <length> menu-content-height: 28px
+        + (!root.is-private-group && root.can-manage-members ? 24px + Spacing.touch-target-min * 3 : 0px)
+        + (root.menu-member.can-mute ? 1px + (root.menu-member.muted ? Spacing.touch-target-min : 24px + Spacing.touch-target-min * 3) : 0px)
+        + (root.menu-member.can-make-owner || (root.menu-member.can-block && !root.menu-member.invited) ? 1px : 0px)
+        + (root.menu-member.can-make-owner ? Spacing.touch-target-min : 0px)
+        + (root.menu-member.can-block && !root.menu-member.invited ? Spacing.touch-target-min : 0px)
+        + ((root.can-manage-members && root.menu-member.role != "owner") || root.menu-member.can-ban ? 1px : 0px)
+        + (root.can-manage-members && root.menu-member.role != "owner" ? Spacing.touch-target-min : 0px)
+        + (root.menu-member.can-ban ? Spacing.touch-target-min : 0px);
     callback ban-member(string);
     callback block-member(string, bool);
     callback change-member-role(string, string);
@@ -64,10 +131,14 @@ export component ChannelMembersSection inherits VerticalLayout {
         { role: "admin", label: "Admin" },
     ];
 
-    spacing: Spacing.md;
-    alignment: start;
+    members-layout := VerticalLayout {
+        width: root.width;
+        height: root.height;
+        spacing: Spacing.md;
+        alignment: start;
 
     HorizontalLayout {
+        height: Spacing.touch-target-min;
         spacing: Spacing.sm;
 
         Text {
@@ -138,6 +209,15 @@ export component ChannelMembersSection inherits VerticalLayout {
         }
     }
 
+    if root.error-message != "": Text {
+        width: root.width;
+        height: 44px;
+        text: root.error-message;
+        color: Colors.error;
+        font-size: Typography.sm;
+        wrap: word-wrap;
+    }
+
     // Member list
     if root.members.length == 0: Text {
         width: parent.width;
@@ -147,25 +227,26 @@ export component ChannelMembersSection inherits VerticalLayout {
         wrap: word-wrap;
     }
     roster-list := ListView {
-        height: root.roster-height;
+        height: max(0px, root.height - Spacing.touch-target-min - Spacing.md
+            - (root.error-message != "" ? 44px + Spacing.md : 0px));
         viewport-width: self.width;
         for row in root.roster-rows: Rectangle {
         width: roster-list.width;
         property <ChannelMemberData> member: row.member;
-        height: row.kind == "member" ? member-col.preferred-height : row.kind == "banned" ? 52px : 42px;
+        height: row.kind == "member" || row.kind == "banned" ? 52px : 42px;
         background: row.kind == "member" && root.role-picker-user == member.user-id ? Colors.surface-section : transparent;
         border-radius: Spacing.radius-md;
         clip: true;
         animate height { duration: Materials.motion-standard; easing: Materials.glide; }
         animate background { duration: Materials.motion-quick; easing: Materials.settle; }
 
-        // Unconditional wrapper so the row height can read its preferred height.
         member-col := VerticalLayout {
         if row.kind == "member": VerticalLayout {
             HorizontalLayout {
                 height: 52px;
                 spacing: Spacing.sm;
-                padding: Spacing.xs;
+                padding-left: Spacing.md;
+                padding-right: Spacing.xs;
 
                 // Photo in a clipped circle, initials when there is none.
                 Avatar {
@@ -281,10 +362,8 @@ export component ChannelMembersSection inherits VerticalLayout {
                     }
                 }
 
-                // One ⋮ instead of Role + Remove, which on a phone
-                // squeezed the name to "…". Tapping it expands the
-                // action row below. Only if can manage and not owner.
-                // Also for a moderator/admin who can only mute or ban.
+                // One ⋮ opens the shared menu without changing row height.
+                // Moderators/admins may have only mute or ban actions.
                 if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner || member.can-block: Rectangle {
                     width: Spacing.touch-target-min;
                     height: Spacing.touch-target-min;
@@ -299,6 +378,7 @@ export component ChannelMembersSection inherits VerticalLayout {
                     accessible-role: button;
                     accessible-label: "Actions for " + member.display-name;
                     accessible-action-default => {
+                        root.menu-member = member;
                         root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
                     }
 
@@ -315,269 +395,13 @@ export component ChannelMembersSection inherits VerticalLayout {
                     member-more := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
+                            root.menu-member = member;
                             root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
                         }
                     }
                 }
             }
 
-            // Remove / Ban / Make owner confirmation, like Block in user_profile.
-            if root.role-picker-user == member.user-id && root.confirm-action != "": VerticalLayout {
-                spacing: Spacing.sm;
-                padding: Spacing.xs;
-
-                Text {
-                    width: max(0px, parent.width - parent.padding * 2);
-                    text: root.confirm-action == "ban"
-                        ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
-                        : root.confirm-action == "owner"
-                        ? "Make " + member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
-                        : member.invited && root.is-private-group
-                        ? "Cancel " + member.display-name + "'s invite?"
-                        : "Remove " + member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    wrap: word-wrap;
-                    height: self.preferred-height;
-                }
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-
-                    Button {
-                        height: Spacing.touch-target-min;
-                        text: "Cancel";
-                        variant: "secondary";
-                        horizontal-stretch: 1;
-                        clicked => { root.confirm-action = ""; }
-                    }
-
-                    Button {
-                        height: Spacing.touch-target-min;
-                        text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : member.invited && root.is-private-group ? "Cancel invite" : "Remove";
-                        variant: root.confirm-action == "owner" ? "primary" : "destructive";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            if root.confirm-action == "ban" {
-                                root.ban-member(member.user-id);
-                            } else if root.confirm-action == "owner" {
-                                root.transfer-ownership(member.user-id);
-                            } else {
-                                root.remove-member(member.user-id);
-                            }
-                            root.role-picker-user = "";
-                        }
-                    }
-                }
-            }
-
-            // Roles are a server-channel concept (anon groups have
-            // no role RPC), and ownership moves only by transfer
-            // ("Make owner…"; the role RPC rejects OWNER), so the
-            // picker offers only the three assignable roles.
-            // On a phone the pane is ~230px wide (360dp); the three
-            // role buttons alone need ~270px, so the actions stack
-            // one per line there instead of running off the card.
-            if root.role-picker-user == member.user-id && root.confirm-action == "" && root.narrow: VerticalLayout {
-                spacing: Spacing.xs;
-                padding: Spacing.xs;
-
-                if !root.is-private-group && root.can-manage-members: VerticalLayout {
-                    spacing: Spacing.xs;
-
-                    Text {
-                        text: "Role";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-
-                    for r in root.role-options: Button {
-                        height: Spacing.touch-target-min;
-                        text: r.label;
-                        variant: r.role == member.role ? "primary" : "secondary";
-
-                        clicked => {
-                            root.role-picker-user = "";
-                            if r.role != member.role {
-                                root.change-member-role(member.user-id, r.role);
-                            }
-                        }
-                    }
-                }
-
-                if member.can-mute && member.muted: Button {
-                    height: Spacing.touch-target-min;
-                    text: "Unmute";
-                    variant: "secondary";
-
-                    clicked => {
-                        root.role-picker-user = "";
-                        root.set-member-muted(member.user-id, false, 0);
-                    }
-                }
-
-                // Timed or until unmuted (minutes 0); the server lifts a timed mute.
-                if member.can-mute && !member.muted: VerticalLayout {
-                    spacing: Spacing.xs;
-
-                    Text {
-                        text: "Mute in channel";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-
-                    for opt in root.mute-options: Button {
-                        height: Spacing.touch-target-min;
-                        text: opt.label;
-                        variant: "secondary";
-
-                        clicked => {
-                            root.role-picker-user = "";
-                            root.set-member-muted(member.user-id, true, opt.minutes);
-                        }
-                    }
-                }
-
-                if member.can-make-owner: Button {
-                    height: Spacing.touch-target-min;
-                    text: "Make owner…";
-                    variant: "secondary";
-
-                    clicked => { root.confirm-action = "owner"; }
-                }
-
-                if member.can-block && !member.invited: Button {
-                    height: Spacing.touch-target-min;
-                    text: member.blocked ? "Unblock in group" : "Block in group";
-                    variant: "secondary";
-
-                    clicked => {
-                        root.role-picker-user = "";
-                        root.block-member(member.user-id, !member.blocked);
-                    }
-                }
-
-                if root.can-manage-members && member.role != "owner": Button {
-                    height: Spacing.touch-target-min;
-                    text: member.invited && root.is-private-group ? "Cancel invite" : root.is-private-group ? "Remove from group" : "Remove from channel";
-                    variant: "destructive";
-
-                    clicked => { root.confirm-action = "remove"; }
-                }
-
-                if member.can-ban: Button {
-                    height: Spacing.touch-target-min;
-                    text: "Ban (can't rejoin)";
-                    variant: "destructive";
-
-                    clicked => { root.confirm-action = "ban"; }
-                }
-            }
-
-            // Wide: one row per group (roles, mute, Remove/Ban).
-            // All eight buttons on one line ran past the modal edge.
-            if root.role-picker-user == member.user-id && root.confirm-action == "" && !root.narrow: VerticalLayout {
-                spacing: Spacing.xs;
-                padding: Spacing.xs;
-
-                if !root.is-private-group && root.can-manage-members: HorizontalLayout {
-                    spacing: Spacing.xs;
-                    alignment: end;
-
-                    for r in root.role-options: Button {
-                        height: Spacing.touch-target-min;
-                        text: r.label;
-                        variant: r.role == member.role ? "primary" : "secondary";
-
-                        clicked => {
-                            root.role-picker-user = "";
-                            if r.role != member.role {
-                                root.change-member-role(member.user-id, r.role);
-                            }
-                        }
-                    }
-                }
-
-                if member.can-mute && member.muted: HorizontalLayout {
-                    alignment: end;
-
-                    Button {
-                        height: Spacing.touch-target-min;
-                        text: "Unmute";
-                        variant: "secondary";
-
-                        clicked => {
-                            root.role-picker-user = "";
-                            root.set-member-muted(member.user-id, false, 0);
-                        }
-                    }
-                }
-
-                // Timed or until unmuted (minutes 0); the server lifts a timed mute.
-                if member.can-mute && !member.muted: HorizontalLayout {
-                    spacing: Spacing.xs;
-                    alignment: end;
-
-                    for opt in root.mute-options: Button {
-                        height: Spacing.touch-target-min;
-                        text: opt.label;
-                        variant: "secondary";
-
-                        clicked => {
-                            root.role-picker-user = "";
-                            root.set-member-muted(member.user-id, true, opt.minutes);
-                        }
-                    }
-                }
-
-                if member.can-make-owner: HorizontalLayout {
-                    alignment: end;
-
-                    Button {
-                        height: Spacing.touch-target-min;
-                        text: "Make owner…";
-                        variant: "secondary";
-
-                        clicked => { root.confirm-action = "owner"; }
-                    }
-                }
-
-                if member.can-block && !member.invited: HorizontalLayout {
-                    alignment: end;
-
-                    Button {
-                        height: Spacing.touch-target-min;
-                        text: member.blocked ? "Unblock in group" : "Block in group";
-                        variant: "secondary";
-
-                        clicked => {
-                            root.role-picker-user = "";
-                            root.block-member(member.user-id, !member.blocked);
-                        }
-                    }
-                }
-
-                if (root.can-manage-members && member.role != "owner") || member.can-ban: HorizontalLayout {
-                    spacing: Spacing.xs;
-                    alignment: end;
-
-                    if root.can-manage-members && member.role != "owner": Button {
-                        height: Spacing.touch-target-min;
-                        text: member.invited && root.is-private-group ? "Cancel invite" : "Remove";
-                        variant: "destructive";
-
-                        clicked => { root.confirm-action = "remove"; }
-                    }
-
-                    if member.can-ban: Button {
-                        height: Spacing.touch-target-min;
-                        text: "Ban";
-                        variant: "destructive";
-
-                        clicked => { root.confirm-action = "ban"; }
-                    }
-                }
-            }
         }
         }
 
@@ -623,6 +447,181 @@ export component ChannelMembersSection inherits VerticalLayout {
                 clicked => { root.unban-member(row.banned.user-id); }
             }
         }
+        }
+    }
+    }
+
+    // One menu floats over the list. The roster rows stay 52px high while it
+    // is open; on a phone the card rests at the bottom of this tab.
+    if root.role-picker-user != "": Rectangle {
+        width: root.width;
+        height: root.height;
+        background: root.narrow ? Materials.scrim : transparent;
+        TouchArea {
+            clicked => { root.role-picker-user = ""; }
+        }
+
+        if root.confirm-action == "": GlassSurface {
+            width: min(280px, root.width - Spacing.md * 2);
+            height: min(root.height - Spacing.md * 2, root.menu-content-height + Spacing.sm * 2);
+            x: root.narrow ? (root.width - self.width) / 2 : root.width - self.width - Spacing.md;
+            y: root.narrow ? root.height - self.height - Spacing.sm : Spacing.sm;
+            elevation: 4;
+            material-level: 3;
+            menu-scroll := ScrollView {
+                x: Spacing.xs;
+                y: Spacing.xs;
+                width: parent.width - Spacing.sm;
+                height: parent.height - Spacing.sm;
+                viewport-width: self.width;
+                viewport-height: root.menu-content-height;
+                mouse-drag-pan-enabled: true;
+                menu-content := VerticalLayout {
+                    width: parent.width;
+                    spacing: 0px;
+                    Text {
+                        text: root.menu-member.display-name;
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                        height: 28px;
+                        vertical-alignment: center;
+                    }
+                    if !root.is-private-group && root.can-manage-members: Text {
+                        text: "ROLE";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        height: 24px;
+                        vertical-alignment: center;
+                    }
+                    if !root.is-private-group && root.can-manage-members: VerticalLayout {
+                        for r in root.role-options: MemberMenuItem {
+                            icon: Icons.user;
+                            label: r.label;
+                            selected: r.role == root.menu-member.role;
+                            clicked => {
+                                root.role-picker-user = "";
+                                if r.role != root.menu-member.role {
+                                    root.change-member-role(root.menu-member.user-id, r.role);
+                                }
+                            }
+                        }
+                    }
+                    if root.menu-member.can-mute: Rectangle { height: 1px; background: Colors.divider; }
+                    if root.menu-member.can-mute && root.menu-member.muted: MemberMenuItem {
+                        icon: Icons.volume-2;
+                        label: "Unmute";
+                        clicked => {
+                            root.role-picker-user = "";
+                            root.set-member-muted(root.menu-member.user-id, false, 0);
+                        }
+                    }
+                    if root.menu-member.can-mute && !root.menu-member.muted: VerticalLayout {
+                        Text {
+                            text: "MUTE IN CHANNEL";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            height: 24px;
+                            vertical-alignment: center;
+                        }
+                        for opt in root.mute-options: MemberMenuItem {
+                            icon: Icons.volume-x;
+                            label: opt.label;
+                            clicked => {
+                                root.role-picker-user = "";
+                                root.set-member-muted(root.menu-member.user-id, true, opt.minutes);
+                            }
+                        }
+                    }
+                    if root.menu-member.can-make-owner || (root.menu-member.can-block && !root.menu-member.invited): Rectangle {
+                        height: 1px; background: Colors.divider;
+                    }
+                    if root.menu-member.can-make-owner: MemberMenuItem {
+                        icon: Icons.shield;
+                        label: "Make owner…";
+                        clicked => { root.confirm-action = "owner"; }
+                    }
+                    if root.menu-member.can-block && !root.menu-member.invited: MemberMenuItem {
+                        icon: root.menu-member.blocked ? Icons.unlock : Icons.lock;
+                        label: root.menu-member.blocked ? "Unblock in group" : "Block in group";
+                        clicked => {
+                            root.role-picker-user = "";
+                            root.block-member(root.menu-member.user-id, !root.menu-member.blocked);
+                        }
+                    }
+                    if (root.can-manage-members && root.menu-member.role != "owner") || root.menu-member.can-ban: Rectangle {
+                        height: 1px; background: Colors.divider;
+                    }
+                    if root.can-manage-members && root.menu-member.role != "owner": MemberMenuItem {
+                        icon: Icons.trash;
+                        label: root.menu-member.invited && root.is-private-group ? "Cancel invite"
+                            : root.is-private-group ? "Remove from group" : "Remove from channel";
+                        destructive: true;
+                        clicked => { root.confirm-action = "remove"; }
+                    }
+                    if root.menu-member.can-ban: MemberMenuItem {
+                        icon: Icons.shield;
+                        label: "Ban";
+                        destructive: true;
+                        clicked => { root.confirm-action = "ban"; }
+                    }
+                }
+            }
+        }
+
+        if root.confirm-action != "": GlassSurface {
+            width: min(360px, root.width - Spacing.md * 2);
+            height: confirm-content.preferred-height + Spacing.md * 2;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            elevation: 5;
+            material-level: 3;
+            confirm-content := VerticalLayout {
+                x: Spacing.md;
+                y: Spacing.md;
+                width: parent.width - Spacing.md * 2;
+                spacing: Spacing.md;
+                Text {
+                    width: confirm-content.width;
+                    text: root.confirm-action == "ban"
+                        ? "Ban " + root.menu-member.display-name + "? They will be removed and can't rejoin."
+                        : root.confirm-action == "owner"
+                        ? "Make " + root.menu-member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
+                        : root.menu-member.invited && root.is-private-group
+                        ? "Cancel " + root.menu-member.display-name + "'s invite?"
+                        : "Remove " + root.menu-member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                    height: self.preferred-height;
+                }
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: "Cancel";
+                        variant: "secondary";
+                        horizontal-stretch: 1;
+                        clicked => { root.confirm-action = ""; }
+                    }
+                    Button {
+                        height: Spacing.touch-target-min;
+                        text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : root.menu-member.invited && root.is-private-group ? "Cancel invite" : "Remove";
+                        variant: root.confirm-action == "owner" ? "primary" : "destructive";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            if root.confirm-action == "ban" {
+                                root.ban-member(root.menu-member.user-id);
+                            } else if root.confirm-action == "owner" {
+                                root.transfer-ownership(root.menu-member.user-id);
+                            } else {
+                                root.remove-member(root.menu-member.user-id);
+                            }
+                            root.role-picker-user = "";
+                        }
+                    }
+                }
+            }
         }
     }
 }
