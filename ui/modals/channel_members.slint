@@ -42,12 +42,15 @@ component MemberMenuItem inherits Rectangle {
         padding-left: Spacing.md;
         padding-right: Spacing.md;
         spacing: Spacing.md;
-        Image {
-            source: root.icon;
-            width: 18px;
-            height: 18px;
-            colorize: root.destructive ? Colors.error : Colors.text-secondary;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: root.icon;
+                width: 18px;
+                height: 18px;
+                colorize: root.destructive ? Colors.error : Colors.text-secondary;
+            }
         }
         Text {
             text: root.label;
@@ -56,12 +59,15 @@ component MemberMenuItem inherits Rectangle {
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
-        if root.selected: Image {
-            source: Icons.check;
-            width: 18px;
-            height: 18px;
-            colorize: Colors.primary;
-            vertical-alignment: center;
+        if root.selected: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Image {
+                source: Icons.check;
+                width: 18px;
+                height: 18px;
+                colorize: Colors.primary;
+            }
         }
     }
     item-touch := TouchArea {
@@ -249,13 +255,17 @@ export component ChannelMembersSection inherits Rectangle {
                 padding-right: Spacing.xs;
 
                 // Photo in a clipped circle, initials when there is none.
-                Avatar {
-                    size: 36px;
-                    source: member.avatar-source;
-                    // Private-group members are anonymous identities.
-                    anonymous: root.is-private-group;
-                    name: member.display-name;
-                    fallback-text: "?";
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Avatar {
+                        size: 36px;
+                        source: member.avatar-source;
+                        // Private-group members are anonymous identities.
+                        anonymous: root.is-private-group;
+                        name: member.display-name;
+                        fallback-text: "?";
+                    }
                 }
 
                 // Name on its own line so it gets the whole
@@ -424,11 +434,15 @@ export component ChannelMembersSection inherits Rectangle {
             spacing: Spacing.sm;
             padding: Spacing.xs;
 
-            Avatar {
-                size: 36px;
-                source: row.banned.avatar-source;
-                name: row.banned.display-name;
-                fallback-text: "?";
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Avatar {
+                    size: 36px;
+                    source: row.banned.avatar-source;
+                    name: row.banned.display-name;
+                    fallback-text: "?";
+                }
             }
 
             Text {
@@ -479,21 +493,21 @@ export component ChannelMembersSection inherits Rectangle {
                 menu-content := VerticalLayout {
                     width: parent.width;
                     spacing: 0px;
-                    Text {
+                    HorizontalLayout { padding-left: Spacing.md; padding-right: Spacing.md; Text {
                         text: root.menu-member.display-name;
                         color: Colors.text-secondary;
                         font-size: Typography.xs;
                         font-weight: Typography.semibold;
                         height: 28px;
                         vertical-alignment: center;
-                    }
-                    if !root.is-private-group && root.can-manage-members: Text {
+                    } }
+                    if !root.is-private-group && root.can-manage-members: HorizontalLayout { padding-left: Spacing.md; Text {
                         text: "ROLE";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         height: 24px;
                         vertical-alignment: center;
-                    }
+                    } }
                     if !root.is-private-group && root.can-manage-members: VerticalLayout {
                         for r in root.role-options: MemberMenuItem {
                             icon: Icons.user;
@@ -517,13 +531,13 @@ export component ChannelMembersSection inherits Rectangle {
                         }
                     }
                     if root.menu-member.can-mute && !root.menu-member.muted: VerticalLayout {
-                        Text {
+                        HorizontalLayout { padding-left: Spacing.md; Text {
                             text: "MUTE IN CHANNEL";
                             color: Colors.text-muted;
                             font-size: Typography.xs;
                             height: 24px;
                             vertical-alignment: center;
-                        }
+                        } }
                         for opt in root.mute-options: MemberMenuItem {
                             icon: Icons.volume-x;
                             label: opt.label;
