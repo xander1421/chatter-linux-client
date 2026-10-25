@@ -128,19 +128,7 @@ fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
 
 /// The chat list's short local date, shared with call history.
 pub fn sidebar_time(at: DateTime<Utc>) -> String {
-    sidebar_time_at(at, Local::now())
-}
-
-pub fn sidebar_time_at(at: DateTime<Utc>, now: DateTime<Local>) -> String {
-    let local = at.with_timezone(&Local);
-    let days = (now.date_naive() - local.date_naive()).num_days();
-    match days {
-        ..=0 => local.format("%H:%M").to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => local.format("%a").to_string(),
-        _ if local.year() == now.year() => local.format("%b %-d").to_string(),
-        _ => local.format("%b %-d, %Y").to_string(),
-    }
+    chatter_core::services::server_records::sidebar_time_at(at, Local::now())
 }
 
 pub fn call_detail(

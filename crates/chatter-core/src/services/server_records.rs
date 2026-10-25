@@ -2,6 +2,7 @@
 //! encrypted call history or treats server call events as signaling authority.
 use crate::error::NetworkError;
 use crate::network::grpc::GrpcClientPool;
+use chrono::{DateTime, Datelike, Local, Utc};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default)]
@@ -42,20 +43,35 @@ pub struct NotificationRow {
     pub kind: String,
     pub when: String,
     pub read: bool,
+    /// Old acceptance events stay actionable as unread but lose the new-event emphasis.
+    pub quiet: bool,
     pub status: String,
 }
 
 fn relative_time(timestamp: u64) -> String {
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let seconds = now.saturating_sub(timestamp / 1_000_000_000);
+    let Some(at) = DateTime::from_timestamp((timestamp / 1_000_000_000) as i64, 0) else {
+        return String::new();
+    };
+    let now = Local::now();
+    let seconds = now.timestamp().max(0).saturating_sub(at.timestamp()) as u64;
     match seconds {
         0..=59 => "Now".into(),
         60..=3599 => format!("{}m", seconds / 60),
-        3600..=86399 => format!("{}h", seconds / 3600),
-        86400..=604799 => format!("{}d", seconds / 86400),
-        _ => chrono::DateTime::from_timestamp((timestamp / 1_000_000_000) as i64, 0)
-            .map(|t| t.format("%d %b %Y").to_string())
-            .unwrap_or_default(),
+        3600..=14399 => format!("{}h", seconds / 3600),
+        _ => sidebar_time_at(at, now),
+    }
+}
+
+/// Short local dates used by the chat list and notification inbox.
+pub fn sidebar_time_at(at: DateTime<Utc>, now: DateTime<Local>) -> String {
+    let local = at.with_timezone(&Local);
+    let days = (now.date_naive() - local.date_naive()).num_days();
+    match days {
+        ..=0 => local.format("%H:%M").to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => local.format("%a").to_string(),
+        _ if local.year() == now.year() => local.format("%b %-d").to_string(),
+        _ => local.format("%b %-d, %Y").to_string(),
     }
 }
 
@@ -157,10 +173,13 @@ pub async fn page(
                 let actor_id = if kind == "friend-request" || kind == "friend-accepted" {
                     notification_actor(n.actor_id, &n.metadata)
                 } else { n.actor_id };
+                let quiet = kind == "friend-accepted"
+                    && Utc::now().timestamp().max(0) as u64
+                        >= (n.created_at / 1_000_000_000).saturating_add(7 * 24 * 60 * 60);
                 NotificationRow { id: n.id, title, body,
                     actor_id, avatar: None,
                     device_id, channel_id: n.channel_id,
-                    kind: kind.into(), when: relative_time(n.created_at), read: n.read,
+                    kind: kind.into(), when: relative_time(n.created_at), read: n.read, quiet,
                     status: String::new() }
             }).collect();
             Ok(RecordPage {

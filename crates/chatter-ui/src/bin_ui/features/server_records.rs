@@ -183,6 +183,7 @@ fn request(
                                 .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
                                 .unwrap_or_default(),
                             read: r.read,
+                            quiet: r.quiet,
                             status: r.status.into(),
                         })
                         .collect::<Vec<_>>();
