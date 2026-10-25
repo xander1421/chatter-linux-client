@@ -133,7 +133,7 @@ export component UserProfileModal inherits Rectangle {
     in property <bool> shared-loading: false;
     in property <string> shared-error: "";
 
-    property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
+    property <length> row-height: root.mobile-mode ? Spacing.list-row-height-touch : 56px * Appearance.text-grow;
     property <length> avatar-size: root.mobile-mode ? 112px : 96px;
     property <length> name-size: root.mobile-mode ? Typography.xxxl : Typography.xxl;
     property <length> header-stretch: min(36px, max(0px, -page-scroll.viewport-y));
