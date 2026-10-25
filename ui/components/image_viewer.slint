@@ -211,7 +211,7 @@ export component ImageViewer inherits Rectangle {
     }
     Rectangle {
         width: 100%; height: 100%;
-        background: root.touch ? #000000f5 : Materials.scrim-media;
+        background: root.touch ? #000000 : Materials.scrim-media;
         opacity: root.arrival * (1.0 - root.dismiss-progress * 0.82);
     }
 
@@ -402,7 +402,7 @@ export component ImageViewer inherits Rectangle {
             height: parent.height;
             padding-left: Spacing.md;
             padding-right: Spacing.md;
-            alignment: space-between;
+            spacing: Spacing.sm;
             if root.touch: DismissButton { back: true; clicked => { root.request-close(); } }
             VerticalLayout {
                 horizontal-stretch: 1;
