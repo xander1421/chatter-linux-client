@@ -459,16 +459,33 @@ export component CallHistoryScreen inherits Rectangle {
                                     alignment: center;
                                     spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
 
-                                    Text {
-                                        // A missed call is the one thing on this
-                                        // screen you came looking for, so it is the
-                                        // name that carries the colour, not a badge
-                                        // tucked into the second line.
-                                        text: row.name;
-                                        color: row.is-missed ? Colors.error : Colors.text-primary;
-                                        font-size: root.row-name-size;
-                                        font-weight: Typography.medium;
-                                        overflow: elide;
+                                    // The time sits on the name line so the
+                                    // outcome below gets the full width; on the
+                                    // phone "Yesterday" beside it elided
+                                    // "Incoming · 0:16" to "Incoming · …".
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            // A missed call is the one thing on this
+                                            // screen you came looking for, so it is the
+                                            // name that carries the colour, not a badge
+                                            // tucked into the second line.
+                                            text: row.name;
+                                            color: row.is-missed ? Colors.error : Colors.text-primary;
+                                            font-size: root.row-name-size;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+
+                                        Text {
+                                            text: row.timestamp;
+                                            color: Colors.text-muted;
+                                            font-size: root.row-sub-size;
+                                            horizontal-stretch: 0;
+                                            vertical-alignment: center;
+                                        }
                                     }
 
                                     HorizontalLayout {
@@ -482,25 +499,12 @@ export component CallHistoryScreen inherits Rectangle {
                                             y: (parent.height - self.height) / 2;
                                         }
 
-                                        // The outcome takes all the slack and may
-                                        // elide; the time keeps its natural width
-                                        // and never does. Sizing the outcome to
-                                        // exactly its preferred width (FX4) still
-                                        // elided "Incoming · 0:16" to "0…" on the
-                                        // phone with the row half empty.
                                         Text {
                                             text: row.detail;
                                             color: Colors.text-muted;
                                             font-size: root.row-sub-size;
                                             overflow: elide;
                                             horizontal-stretch: 1;
-                                        }
-
-                                        Text {
-                                            text: row.timestamp;
-                                            color: Colors.text-muted;
-                                            font-size: root.row-sub-size;
-                                            horizontal-stretch: 0;
                                         }
                                     }
                                 }
