@@ -114,6 +114,7 @@ export component ModalContainer inherits Rectangle {
             height: root.full-screen ? parent.height - root.bottom-inset : parent.height;
             enabled: root.show;
             clicked => { root.close(); }
+            scroll-event(event) => { return accept; }
         }
 
         // Modal card - centered and sized to content
@@ -225,6 +226,9 @@ export component ModalContainer inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 clicked => { root.release-focus(); }
+                // Inner Flickables get the wheel first. Stop any unhandled
+                // wheel motion here instead of passing it to the chat below.
+                scroll-event(event) => { return accept; }
             }
 
             // The height cap above can be smaller than the content: on Android
@@ -302,5 +306,6 @@ export component ModalContainer inherits Rectangle {
     if !root.show: TouchArea {
         width: 100%;
         height: 100%;
+        scroll-event(event) => { return accept; }
     }
 }
