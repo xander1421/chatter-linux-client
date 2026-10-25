@@ -84,6 +84,10 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 crate::bin_ui::features::back::close(&w, "forward-message");
                                 if ui_ctx.active_conversation() == target {
                                     crate::bin_ui::features::sidebar::select_conversation(&w, target);
+                                } else {
+                                    w.set_toast_message("Contact shared".into());
+                                    w.set_toast_variant("success".into());
+                                    w.set_toast_visible(true);
                                 }
                             } else {
                                 w.set_toast_message("Could not share contact".into());
@@ -120,6 +124,13 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             // Reopen it through the sidebar path to reload.
                             if ui_ctx.active_conversation() == target {
                                 crate::bin_ui::features::sidebar::select_conversation(&w, target);
+                            } else if failed == 0 {
+                                // The copy lands in another chat; without this
+                                // the sheet just closed and nothing confirmed it.
+                                let msg = if total == 1 { "Message forwarded".to_string() } else { format!("{total} messages forwarded") };
+                                w.set_toast_message(msg.into());
+                                w.set_toast_variant("success".into());
+                                w.set_toast_visible(true);
                             }
                         }
                         if failed > 0 {
