@@ -299,12 +299,15 @@ impl Message {
     /// - Other empty-body messages with no attachments render as "[Message]".
     /// - If `current_user_id` is provided and matches this message's sender,
     ///   the preview is prefixed with "You: " (text and attachments alike).
+    /// - Other senders in channels and groups use the first word of the
+    ///   resolved bubble sender name, followed by ": ". DMs, calls, and
+    ///   system notices do not use this prefix.
     /// - A pinned message carries a 📌 marker, so the row says *why* this is
     ///   the last thing that happened here.
     ///
     /// Attachment names and MIME types live in storage, not on the message, so
-    /// the typed label is passed in — `ChatterClient::message_sidebar_preview`
-    /// is the one caller that resolves it.
+    /// the typed label and bubble sender name are passed in by
+    /// `ChatterClient::message_sidebar_preview`.
     ///
     /// Lives in core because "how do we describe a message in the sidebar"
     /// is a domain decision shared by every UI surface, not a presentation
@@ -314,6 +317,7 @@ impl Message {
         &self,
         current_user_id: Option<&crate::domain::ids::UserId>,
         attachment_label: Option<&str>,
+        sender_display_name: Option<&str>,
     ) -> String {
         let is_own = matches!(
             (current_user_id, self.sender_id),
@@ -352,10 +356,22 @@ impl Message {
             let suffix = if att_count == 1 { "" } else { "s" };
             format!("\u{1F4CE} {} attachment{}", att_count, suffix)
         } else {
-            return format!("{}[Message]", pin);
+            "[Message]".to_string()
         };
         if is_own {
             format!("{}You: {}", pin, body)
+        } else if matches!(
+            &self.conversation_type,
+            ConversationType::Channel | ConversationType::AnonGroup | ConversationType::Mesh
+        ) {
+            let name = sender_display_name
+                .and_then(|name| name.split_whitespace().next())
+                .unwrap_or("");
+            if name.is_empty() {
+                format!("{}{}", pin, body)
+            } else {
+                format!("{}{}: {}", pin, name, body)
+            }
         } else {
             format!("{}{}", pin, body)
         }

@@ -974,7 +974,7 @@ mod tests {
             .expect("GIF attachment row must ride the archive");
         let label = restored.metadata.preview_label();
         assert_eq!(
-            channel_msg.sidebar_preview(None, Some(&label)),
+            channel_msg.sidebar_preview(None, Some(&label), None),
             "\u{1F39E}\u{FE0F} GIF",
             "a GIF must preview as GIF on the linked device, not as a bare attachment count"
         );

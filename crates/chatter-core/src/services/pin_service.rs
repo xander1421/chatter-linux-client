@@ -206,7 +206,7 @@ impl PinService {
                 format!("📎 {} attachments", message.attachments.len())
             }
         } else {
-            message.sidebar_preview(None, None)
+            message.sidebar_preview(None, None, None)
         }
     }
 }

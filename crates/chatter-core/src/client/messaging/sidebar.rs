@@ -109,13 +109,25 @@ impl ChatterClient {
     }
 
     /// The one-line sidebar preview for a message. `Message::sidebar_preview`
-    /// owns the wording; this adds the attachment lookup the domain type has no
-    /// storage handle for.
+    /// owns the wording; this adds the attachment and bubble sender name
+    /// lookups the domain type has no storage handle for.
     pub fn message_sidebar_preview(&self, message: &crate::domain::message::Message) -> String {
         let label = self.attachment_preview_label(message);
+        let current_user = self.auth_state().get().current_user_id;
+        let needs_sender_name = matches!(
+            &message.content,
+            crate::domain::message::MessageContent::System(_)
+        ) || (matches!(
+            &message.conversation_type,
+            crate::domain::message::ConversationType::Channel
+                | crate::domain::message::ConversationType::AnonGroup
+                | crate::domain::message::ConversationType::Mesh
+        ) && message.sender_id != current_user);
+        let sender_name = needs_sender_name.then(|| self.message_sender_display_name(message));
         let preview = message.sidebar_preview(
-            self.auth_state().get().current_user_id.as_ref(),
+            current_user.as_ref(),
             label.as_deref(),
+            sender_name.as_deref(),
         );
         // A notice is worded to follow its actor ("left the channel"), as the
         // message list renders it; alone in a preview it named nobody.
@@ -125,7 +137,7 @@ impl ChatterClient {
         ) {
             return plain_sidebar_preview(&format!(
                 "{} {}",
-                self.message_sender_display_name(message),
+                sender_name.unwrap_or_default(),
                 preview
             ));
         }
