@@ -40,7 +40,7 @@ pub(crate) struct InlineGifState {
 }
 
 impl InlineGifState {
-    fn bytes(&self) -> usize {
+    pub(super) fn bytes(&self) -> usize {
         self.frames.iter().map(|frame| {
             let size = frame.size();
             size.width as usize * size.height as usize * 4

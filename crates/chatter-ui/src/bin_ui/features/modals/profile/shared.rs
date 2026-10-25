@@ -37,7 +37,7 @@ pub(super) struct SharedPage {
     pub(super) in_flight: bool,
 }
 
-pub(super) fn clear_shared_content(w: &MainWindow) {
+pub(crate) fn clear_shared_content(w: &MainWindow) {
     SHARED_PAGE.with(|page| {
         let mut page = page.borrow_mut();
         let generation = page.generation.wrapping_add(1);
