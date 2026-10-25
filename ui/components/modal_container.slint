@@ -255,7 +255,11 @@ export component ModalContainer inherits Rectangle {
 
                 content := Rectangle {
                     width: body.width;
-                    height: root.full-screen || root.fill-height ? body.height
+                    // A fill-height card keeps at least its minimum: capped
+                    // under the keyboard on Android 10, it scrolls instead of
+                    // clipping its footer (New channel › Join, Cancel/Join).
+                    height: root.full-screen ? body.height
+                        : root.fill-height ? max(self.min-height, body.height)
                         : max(self.preferred-height, body.height);
                     // Keep the surface populated through its exit; the outer
                     // close shield blocks input while this content settles.
