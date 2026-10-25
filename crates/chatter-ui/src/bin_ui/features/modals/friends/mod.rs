@@ -18,12 +18,19 @@ pub(crate) use private_requests::{BlockedUserRow, blocked_user_rows, refresh_blo
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::MainWindow;
 
 /// Wire friends modal callbacks.
 pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    window.global::<crate::ModalHostState>().on_new_chat_query_changed(move |query| {
+        if let Some(w) = weak.upgrade() {
+            w.global::<crate::ModalHostState>().set_new_chat_query(query);
+            refresh_new_chat_results(&w);
+        }
+    });
     // Tab switch → refresh that tab's data (push events keep lists fresh too;
     // this covers anything missed while the modal was closed).
     wire_switch_tab(window, ui_ctx);
@@ -52,6 +59,37 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     private_requests::wire_accept_private_request(window, ui_ctx);
     private_requests::wire_decline_private_request(window, ui_ctx);
     private_requests::wire_block_private_request(window, ui_ctx);
+}
+
+/// Apply core's search to the Contacts snapshot while retaining its decoded avatars.
+pub(crate) fn refresh_new_chat_results(window: &MainWindow) {
+    let host = window.global::<crate::ModalHostState>();
+    let source = host.get_friends_list();
+    let rows: Vec<_> = (0..source.row_count())
+        .filter_map(|i| source.row_data(i))
+        .map(|friend| chatter_core::ui::sidebar_data::FriendDataSendData {
+            user_id: friend.user_id.to_string(),
+            display_name: friend.display_name.to_string(),
+            username: friend.username.to_string(),
+            avatar_bytes: None,
+            presence_status: friend.presence_status.to_string(),
+            custom_status: friend.custom_status.to_string(),
+            is_anon: friend.is_anon,
+        })
+        .collect();
+    let matches = chatter_core::ui::sidebar_data::matching_friend_rows(
+        &rows,
+        host.get_new_chat_query().as_str(),
+    );
+    let selected: Vec<_> = matches
+        .iter()
+        .filter_map(|row| {
+            (0..source.row_count())
+                .filter_map(|i| source.row_data(i))
+                .find(|friend| friend.user_id == row.user_id)
+        })
+        .collect();
+    host.set_new_chat_friends(ModelRc::new(VecModel::from(selected)));
 }
 
 fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

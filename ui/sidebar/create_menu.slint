@@ -21,6 +21,8 @@ import { Avatar } from "../components/avatar.slint";
 import { MenuRow } from "../settings/account_menu.slint";
 import { FriendData } from "../modals/friends.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { Input } from "../components/input.slint";
+import { VirtualKeyboard } from "../components/modal_container.slint";
 
 export component CreateMenu inherits Rectangle {
     in property <length> card-x;
@@ -130,12 +132,16 @@ export component CreateMenu inherits Rectangle {
 export component NewChatPicker inherits Rectangle {
     in property <bool> mobile-mode: false;
     in property <[FriendData]> friends: [];
+    in-out property <string> query: "";
 
     callback close();
     callback pick(/* user-id */ string);
+    callback query-changed(string);
+    callback new-channel();
+    callback add-friend();
 
     in property <bool> show: true;
-    Modal {
+    modal := Modal {
         show: root.show;
         title: "New chat";
         modal-width: 420px;
@@ -148,8 +154,26 @@ export component NewChatPicker inherits Rectangle {
         // static children only; `if` children are dynamic, so without this
         // layout the list counted as 0px tall and the card showed nothing.
         VerticalLayout {
+            spacing: Spacing.sm;
+            Input {
+                placeholder: "Search contacts";
+                text <=> root.query;
+                edited(value) => { root.query-changed(value); }
+            }
+            if !AnonMode.enabled: MenuRow {
+                icon: Icons.megaphone;
+                label: "New channel";
+                clicked => { modal.release-focus(); root.new-channel(); }
+            }
+            MenuRow {
+                icon: Icons.user-plus;
+                label: "Add friend";
+                clicked => { modal.release-focus(); root.add-friend(); }
+            }
+
             if root.friends.length == 0: Text {
-                text: "No friends yet. Add one from Contacts.";
+                text: root.query != "" ? "No contacts match “" + root.query + "”" : "No friends yet. Add one from Contacts.";
+                width: parent.width;
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 horizontal-alignment: center;
@@ -162,6 +186,8 @@ export component NewChatPicker inherits Rectangle {
                 // scrolls in here.
                 min-height: min(list.preferred-height, 480px);
                 viewport-height: list.preferred-height;
+                mouse-drag-pan-enabled: true;
+                changed viewport-y => { if VirtualKeyboard.height > 0px { modal.release-focus(); } }
                 list := VerticalLayout {
                     alignment: start;
                     for friend in root.friends: Rectangle {
@@ -170,26 +196,39 @@ export component NewChatPicker inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         accessible-role: button;
                         accessible-label: friend.display-name;
-                        accessible-action-default => { if root.show { root.pick(friend.user-id); } }
+                        accessible-action-default => { if root.show { modal.release-focus(); root.pick(friend.user-id); } }
                         HorizontalLayout {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;
-                            Avatar {
-                                size: root.mobile-mode ? Spacing.row-avatar-touch : 32px;
-                                source: friend.avatar-source;
-                                fallback-text: friend.initials;
-                                name: friend.display-name;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 0;
+                                Avatar {
+                                    size: root.mobile-mode ? Spacing.row-avatar-touch : 32px;
+                                    source: friend.avatar-source;
+                                    fallback-text: friend.initials;
+                                    name: friend.display-name;
+                                }
                             }
-                            Text {
-                                text: friend.display-name;
-                                color: Colors.text-primary;
-                                font-size: Typography.base;
-                                vertical-alignment: center;
+                            VerticalLayout {
                                 horizontal-stretch: 1;
-                                overflow: elide;
+                                alignment: center;
+                                spacing: Spacing.xxs;
+                                Text {
+                                    text: friend.display-name;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: friend.last-seen-label;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    overflow: elide;
+                                }
                             }
                         }
-                        row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.pick(friend.user-id); } }
+                        row-touch := TouchArea { mouse-cursor: pointer; clicked => { modal.release-focus(); root.pick(friend.user-id); } }
                     }
                 }
             }

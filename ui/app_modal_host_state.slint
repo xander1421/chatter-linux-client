@@ -149,6 +149,9 @@ export global ModalHostState {
     // Friends modal properties
     in-out property <string> friends-modal-tab: "find";  // "find", "friends", "requests", "blocked"
     in property <[FriendData]> friends-list: [];
+    in-out property <string> new-chat-query: "";
+    in property <[FriendData]> new-chat-friends: [];
+    callback new-chat-query-changed(string);
     in-out property <string> friends-requests-sub-tab: "received";
     in property <[FriendRequestData]> friends-received-requests: [];
     in property <[FriendRequestData]> friends-sent-requests: [];

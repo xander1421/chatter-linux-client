@@ -165,6 +165,21 @@ pub struct FriendDataSendData {
     pub is_anon: bool,
 }
 
+/// Filter the already name-ordered Contacts rows for the New Chat picker.
+/// A leading @ is optional when searching a known handle.
+pub fn matching_friend_rows(rows: &[FriendDataSendData], query: &str) -> Vec<FriendDataSendData> {
+    let needle = query.trim().trim_start_matches('@').to_lowercase();
+    rows.iter()
+        .filter(|row| {
+            needle.is_empty()
+                || row.display_name.to_lowercase().contains(&needle)
+                || (!row.username.is_empty()
+                    && row.username.to_lowercase().contains(&needle))
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -141,9 +141,22 @@ fn publish_friends(
         if !stamp.is_current(&ui_ctx) {
             return;
         }
-        let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
+        let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| {
+            let label = if f.is_anon {
+                "online".to_string()
+            } else {
+                f.user_id.parse::<chatter_core::domain::ids::UserId>().ok()
+                    .and_then(|id| ui_ctx.peer_last_seen(&id))
+                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                    .unwrap_or_default()
+            };
+            let mut row = f.to_slint();
+            row.last_seen_label = label.into();
+            row
+        }).collect();
         w.global::<crate::ModalHostState>()
             .set_friends_list(ModelRc::new(VecModel::from(slint_list)));
+        crate::bin_ui::features::modals::friends::refresh_new_chat_results(&w);
     });
 }
 
