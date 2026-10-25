@@ -2,6 +2,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
+import { Icons } from "../theme/icons.slint";
 export component ProfileSafetyNumber inherits VerticalLayout {
     in property <string> safety-number;
     in property <bool> is-verified;
@@ -37,11 +38,15 @@ export component ProfileSafetyNumber inherits VerticalLayout {
                 vertical-alignment: center;
             }
 
-            Text {
-                text: root.show-safety-number ? "\u{25B2}" : "\u{25BC}";
-                color: safety-number-toggle.has-hover ? Colors.text-primary : Colors.text-muted;
-                font-size: Typography.xxs;
-                vertical-alignment: center;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: Icons.chevron-right;
+                    width: 16px;
+                    height: 16px;
+                    transform-rotation: root.show-safety-number ? 270deg : 90deg;
+                    colorize: safety-number-toggle.has-hover ? Colors.text-primary : Colors.text-muted;
+                }
             }
         }
     }

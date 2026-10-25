@@ -42,7 +42,11 @@ export component ProfileActionTiles inherits HorizontalLayout {
         { id: "call", label: "Call", icon: Icons.phone },
         { id: "more", label: "More", icon: Icons.more-horizontal },
     ]: Rectangle {
+        // Equal tiles, as in iOS Contacts: a zero preferred width makes the
+        // stretch split the row evenly instead of by label length.
         horizontal-stretch: 1;
+        preferred-width: 0px;
+        min-width: 0px;
         height: 62px;
         border-radius: Spacing.radius-md;
         background: act-touch.has-hover ? Colors.surface-hover : Colors.inset;
