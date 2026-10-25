@@ -22,6 +22,7 @@ import { Materials } from "../theme/materials.slint";
 
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -241,9 +242,8 @@ export component UserProfileModal inherits Rectangle {
                     padding-right: Spacing.xs;
 
                     // Full-screen page → back chevron, leading. Floating card →
-                    // X, trailing. The bar carries no title on purpose; the name
-                    // below is the title. (No kebab: every action it would hold is
-                    // already a tile or a row on this page.)
+                    // X, trailing. The compact title appears once the large name
+                    // has scrolled behind this bar.
                     if root.shared-page-open: DismissButton {
                         back: true;
                         clicked => { root.shared-page-open = false; }
@@ -254,7 +254,21 @@ export component UserProfileModal inherits Rectangle {
                         clicked => { root.close(); }
                     }
 
-                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        visible: root.mobile-mode && !root.shared-page-open
+                            && profile-body.y + profile-name-row.y + profile-name-row.height
+                                + page-scroll.viewport-y <= profile-header.y + profile-header.height;
+                        text: root.display-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    if !root.mobile-mode: Rectangle { horizontal-stretch: 1; }
 
 
                     if !root.mobile-mode && !root.shared-page-open: DismissButton {
@@ -297,7 +311,7 @@ export component UserProfileModal inherits Rectangle {
                     alignment: start;
                     spacing: Spacing.md;
 
-                    if !root.shared-page-open: VerticalLayout {
+                    if !root.shared-page-open: profile-body := VerticalLayout {
                         spacing: Spacing.md;
                     // ── Avatar ────────────────────────────────────────
                     HorizontalLayout {
@@ -315,7 +329,7 @@ export component UserProfileModal inherits Rectangle {
                     }
 
                     // ── Name + verification badge ─────────────────────
-                    HorizontalLayout {
+                    profile-name-row := HorizontalLayout {
                         alignment: center;
                         spacing: Spacing.xs;
 
@@ -424,7 +438,12 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
                             height: more-content.preferred-height;
-                            background: Colors.inset; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
                             more-content := VerticalLayout {
                                 padding: Spacing.sm; spacing: Spacing.xs;
                                 if !root.scoped-member && !root.is-anonymous: Button { text: "Video call"; variant: "secondary"; clicked => { root.more-open = false; root.start-call(true); } }
@@ -448,8 +467,13 @@ export component UserProfileModal inherits Rectangle {
 
                         Rectangle {
                             height: timer-card.preferred-height;
-                            background: Colors.inset;
+                            background: Colors.surface-section;
                             border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
 
                             timer-card := VerticalLayout {
                                 padding: Spacing.md;
@@ -469,7 +493,7 @@ export component UserProfileModal inherits Rectangle {
                                             width: 20px;
                                             height: 20px;
                                             y: (parent.height - self.height) / 2;
-                                            colorize: Colors.primary;
+                                            colorize: Colors.text-secondary;
                                         }
 
                                         VerticalLayout {
@@ -598,7 +622,12 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
                             height: shared-card.preferred-height;
-                            background: Colors.inset; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
                             shared-card := VerticalLayout {
                                 for category in root.shared-tabs: Rectangle {
                                     height: root.row-height;
@@ -609,7 +638,7 @@ export component UserProfileModal inherits Rectangle {
                                     HorizontalLayout {
                                         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
                                         VerticalLayout { alignment: center;
-                                            Image { source: root.shared-icon(category.id); width: 20px; height: 20px; colorize: Colors.primary; }
+                                            Image { source: root.shared-icon(category.id); width: 20px; height: 20px; colorize: Colors.text-secondary; }
                                         }
                                         Text { text: category.label; color: Colors.text-primary; font-size: Typography.base; vertical-alignment: center; horizontal-stretch: 1; }
                                         VerticalLayout { alignment: center;
@@ -626,7 +655,12 @@ export component UserProfileModal inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         Rectangle {
                             height: actions-card.preferred-height;
-                            background: Colors.inset; border-radius: Spacing.radius-lg;
+                            background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
                             actions-card := VerticalLayout {
                                 ProfileActionRow { icon: Icons.send; text: "Share this contact"; row-height: root.row-height;
                                     clicked => { root.share-contact(); } }

@@ -3,6 +3,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
+import { Elevation } from "../theme/elevation.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 export component ProfileActionTiles inherits HorizontalLayout {
     in property <bool> scoped-member;
@@ -49,7 +50,12 @@ export component ProfileActionTiles inherits HorizontalLayout {
         min-width: 0px;
         height: 62px;
         border-radius: Spacing.radius-md;
-        background: act-touch.has-hover ? Colors.surface-hover : Colors.inset;
+        background: act-touch.has-hover ? Colors.surface-hover : Colors.surface-section;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
         transform-scale-x: act-touch.pressed ? 96% : 100%;
         transform-scale-y: act-touch.pressed ? 94% : 100%;

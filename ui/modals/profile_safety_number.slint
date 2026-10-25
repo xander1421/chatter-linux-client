@@ -3,6 +3,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Icons } from "../theme/icons.slint";
+import { Elevation } from "../theme/elevation.slint";
 export component ProfileSafetyNumber inherits VerticalLayout {
     in property <string> safety-number;
     in property <bool> is-verified;
@@ -32,9 +33,8 @@ export component ProfileSafetyNumber inherits VerticalLayout {
             Text {
                 text: root.is-verified ? "✓ Verified" : "Not verified · Safety number";
                 color: root.is-verified ? Colors.online : Colors.text-muted;
-                font-size: Typography.xs2;
-                font-weight: Typography.bold;
-                letter-spacing: 0.5px;
+                font-size: Typography.sm;
+                font-weight: Typography.medium;
                 vertical-alignment: center;
             }
 
@@ -75,8 +75,13 @@ export component ProfileSafetyNumber inherits VerticalLayout {
         // wrapped number ran out of it over the buttons below.
         Rectangle {
             height: safety-number-content.preferred-height;
-            background: Colors.inset;
+            background: Colors.surface-section;
             border-radius: Spacing.radius-md;
+            drop-shadow-blur: Elevation.card-blur;
+            drop-shadow-offset-y: Elevation.card-offset;
+            drop-shadow-color: Elevation.card-shadow;
+            border-width: Elevation.rim-width;
+            border-color: Elevation.card-rim;
 
             safety-number-content := VerticalLayout {
                 padding: Spacing.md;
