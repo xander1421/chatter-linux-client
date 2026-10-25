@@ -222,8 +222,8 @@ export component ActivitySheet inherits Rectangle {
                             if i == 0 || item.section != ActivityGlobal.items[i - 1].section: Text {
                                 text: item.section; color: Colors.text-muted; font-size: Typography.xs;
                                 font-weight: Typography.semibold; height: 28px; vertical-alignment: center; }
-                            Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-md; clip: true;
-                                ActivityFeedRow { item-id: item.id; kind: item.kind; title: item.title;
+                            Rectangle { height: feed-row.height; background: Colors.surface-section; border-radius: Spacing.radius-md; clip: true;
+                                feed-row := ActivityFeedRow { item-id: item.id; kind: item.kind; title: item.title;
                                     preview: item.preview; time-label: item.time-label; unread: item.unread; touch: root.touch; }
                             }
                         }
