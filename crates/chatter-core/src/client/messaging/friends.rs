@@ -158,6 +158,7 @@ impl ChatterClient {
                         is_anon: false,
                     });
                 }
+                sort_by_name(&mut out);
                 out
             }
             Err(e) => {
@@ -196,10 +197,12 @@ impl ChatterClient {
                     is_anon: true,
                 });
             }
+            sort_by_name(&mut out);
             return out;
         }
 
-        self.listed_friends()
+        let mut out = self
+            .listed_friends()
             .into_iter()
             .map(|peer| {
                 let avatar_bytes = self.user_avatar(&peer);
@@ -213,6 +216,13 @@ impl ChatterClient {
                     is_anon: false,
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        sort_by_name(&mut out);
+        out
     }
+}
+
+/// Friends-tab order: by name, case-insensitively, as Signal lists contacts.
+fn sort_by_name(rows: &mut [crate::ui::sidebar_data::FriendDataSendData]) {
+    rows.sort_by_cached_key(|f| f.display_name.to_lowercase());
 }
