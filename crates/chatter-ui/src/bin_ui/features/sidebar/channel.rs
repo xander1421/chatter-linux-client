@@ -470,13 +470,6 @@ pub(crate) async fn load_channel_into_ui_owned(
         }
         if open_started.is_some() {
             crate::trace_chat_open_model(display_messages.len(), 0);
-            let fill_weak = w.as_weak();
-            crate::trace_chat_open_after_content(move || {
-                super::fill_open_media(fill_weak, owner, display_messages, current_user_id)
-            });
-        } else {
-            // Non-sidebar reloads have no open-frame trace to defer against.
-            super::fill_open_media(w.as_weak(), owner, display_messages, current_user_id);
         }
         w.global::<crate::ChatPane>().set_loading_messages(false);
         super::super::header::finish_pending_jump(&w, &ui_ctx);

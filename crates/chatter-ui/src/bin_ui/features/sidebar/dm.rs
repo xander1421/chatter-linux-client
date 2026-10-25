@@ -410,8 +410,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
                     w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));
                     crate::trace_chat_open_model(initial_count, 0);
-                    let fill_weak = w.as_weak();
-                    crate::trace_chat_open_after_content(move || super::fill_open_media(fill_weak, owner, display_messages, current_user_id));
                     tracing::info!(kind = "secret_dm", stage = "model_replaced", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                     tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                     w.global::<crate::ChatPane>().set_loading_messages(false);
@@ -522,7 +520,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let refresh_ctx = ui_ctx.clone();
             let anchor_page = messages.clone();
-            let media_owner = owner.clone();
             crate::run_history_ui!(weak, owner, |w| {
                 super::apply_unread_anchor(
                     &w,
@@ -534,8 +531,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));
                 tracing::info!(kind = "dm", stage = "model_replaced", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 crate::trace_chat_open_model(display_messages.len(), 0);
-                let fill_weak = w.as_weak();
-                crate::trace_chat_open_after_content(move || super::fill_open_media(fill_weak, media_owner, display_messages, current_user_id));
                 tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                 w.global::<crate::ChatPane>().set_loading_messages(false);
                 super::super::header::finish_pending_jump(&w, &ui_ctx);

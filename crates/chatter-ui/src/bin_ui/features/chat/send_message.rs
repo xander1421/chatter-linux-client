@@ -257,7 +257,7 @@ fn pending_attachment_to_display_data(
         is_downloading: false,
         is_download_failed: false,
         progress: 0.0,
-        thumbnail_bytes: Vec::new(),
+        thumbnail_bytes: std::sync::Arc::<[u8]>::from(Vec::new()),
         thumbnail_pixels: None,
     }
 }

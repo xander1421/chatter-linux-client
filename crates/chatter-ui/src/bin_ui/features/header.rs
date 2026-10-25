@@ -11,7 +11,7 @@ use chatter_core::domain::ids::MessageId;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
-use crate::bin_ui::converters::messages_to_display_batch;
+use crate::bin_ui::converters::messages_to_display_batch_deferred;
 
 thread_local! {
     static PENDING_VISIBLE_THUMBNAILS: std::cell::RefCell<std::collections::HashSet<String>> =
@@ -95,10 +95,33 @@ fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 }
 
-/// Resolve previews only for placeholder images in the viewport. Older pages
-/// can have a downloaded original but no sidecar thumbnail in their metadata.
-/// Opening the viewer derives and stores a thumbnail, so this also runs when
-/// the viewer closes to refresh the row without reopening the conversation.
+// Keep one small scroll cushion so a thumbnail is ready before its row enters
+// the viewport. Indices change when older history is prepended.
+fn media_window(first: i32, last: i32, row_count: usize) -> Option<std::ops::RangeInclusive<usize>> {
+    if row_count == 0 || last < first || last < 0 {
+        return None;
+    }
+    let start = (first.max(0) as usize).saturating_sub(8).min(row_count - 1);
+    let end = (last as usize).saturating_add(8).min(row_count - 1);
+    Some(start..=end)
+}
+
+#[cfg(test)]
+mod media_window_tests {
+    use super::media_window;
+
+    #[test]
+    fn scroll_cushion_clamps_at_model_edges_and_rejects_empty_ranges() {
+        assert_eq!(media_window(0, 3, 20), Some(0..=11));
+        assert_eq!(media_window(17, 19, 20), Some(9..=19));
+        assert_eq!(media_window(0, -1, 20), None);
+        assert_eq!(media_window(0, 0, 0), None);
+    }
+}
+
+/// Keep only viewport thumbnails plus a small scroll cushion in the model.
+/// Older pages can have a downloaded original but no sidecar thumbnail in
+/// their metadata; opening the viewer also refreshes those visible rows.
 pub(crate) fn refresh_visible_media(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
@@ -114,13 +137,35 @@ pub(crate) fn refresh_visible_media(
     }
     let owner = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
     let model = window.global::<crate::ChatPane>().get_messages();
+    let Some(window_rows) = media_window(first, last, model.row_count()) else {
+        return;
+    };
+    // Slint rows own the decoded pixel buffer. Drop it as soon as a row is
+    // outside the cushion; the bounded decode cache can then evict it.
+    for index in 0..model.row_count() {
+        if window_rows.contains(&index) {
+            continue;
+        }
+        let Some(row) = model.row_data(index) else { continue };
+        if let Some(attachments) = row.attachments.as_any()
+            .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>() {
+            for attachment_index in 0..attachments.row_count() {
+                let Some(mut attachment) = attachments.row_data(attachment_index) else { continue };
+                if attachment.has_thumbnail {
+                    attachment.thumbnail = slint::Image::default();
+                    attachment.has_thumbnail = false;
+                    attachments.set_row_data(attachment_index, attachment);
+                }
+            }
+        }
+    }
     let mut ids = Vec::new();
-    for index in first.max(0) as usize..=(last as usize).min(model.row_count().saturating_sub(1)) {
+    for index in window_rows {
         let Some(row) = model.row_data(index) else {
             continue;
         };
         for attachment in row.attachments.iter() {
-            if attachment.is_image && !attachment.has_thumbnail {
+            if (attachment.is_image || attachment.is_video) && !attachment.has_thumbnail {
                 let id = attachment.id.to_string();
                 let inserted = PENDING_VISIBLE_THUMBNAILS
                     .with(|pending| pending.borrow_mut().insert(id.clone()));
@@ -169,7 +214,7 @@ pub(crate) fn refresh_visible_media(
                     let decode_id = id.clone();
                     tokio::task::spawn_blocking(move || {
                         crate::bin_ui::decode_cache::thumbnail(&decode_id, bytes.len(), || {
-                            image::load_from_memory(&bytes).ok()
+                            image::load_from_memory(&bytes).ok().map(|img| img.thumbnail(320, 320))
                         })
                     })
                     .await
@@ -191,7 +236,12 @@ pub(crate) fn refresh_visible_media(
                 }
                 let Some(pixels) = pixels else { return };
                 let model = w.global::<crate::ChatPane>().get_messages();
-                for row_index in 0..model.row_count() {
+                let Some(window_rows) = media_window(
+                    w.global::<crate::ChatPane>().get_message_first_visible_row(),
+                    w.global::<crate::ChatPane>().get_message_last_visible_row(),
+                    model.row_count(),
+                ) else { return };
+                for row_index in window_rows {
                     let Some(row) = model.row_data(row_index) else {
                         continue;
                     };
@@ -888,7 +938,7 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             return;
         }
         // Convert older messages to display data
-        let mut display_messages = messages_to_display_batch(
+        let mut display_messages = messages_to_display_batch_deferred(
             &messages,
             |ms| ui_ctx.message_sender_display_names(ms),
             |m| ui_ctx.message_sender_avatar(m),
@@ -918,7 +968,7 @@ fn load_history(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, load: HistoryLoad) 
             // Convert display data to Slint types (must be done on UI thread)
             let slint_messages: Vec<_> = display_messages
                 .iter()
-                .map(|d| d.to_slint_with_user(&current_user_id))
+                .map(|d| d.to_slint_preview_with_user(&current_user_id))
                 .collect();
 
             let HistoryLoad::Reaching(target) = load else {
