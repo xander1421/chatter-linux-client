@@ -63,6 +63,7 @@ export component AISettings inherits VerticalLayout {
 
     // Enable Local AI toggle
     Rectangle {
+        height: local-ai-row.preferred-height;
         background: Colors.surface-section;
         border-radius: Spacing.radius-lg;
         drop-shadow-blur: Elevation.card-blur;
@@ -71,7 +72,7 @@ export component AISettings inherits VerticalLayout {
         border-width: Elevation.rim-width;
         border-color: Elevation.card-rim;
 
-        ToggleRow {
+        local-ai-row := ToggleRow {
             row-padding: Spacing.md;
             row-spacing: Spacing.md;
             label-spacing: Spacing.sm;

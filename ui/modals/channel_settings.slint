@@ -431,9 +431,10 @@ export component ChannelSettingsModal inherits Rectangle {
                                 Text { text: root.is-private-group ? "Manage group" : "Manage channel"; color: Colors.text-secondary;
                                     font-size: Typography.sm; font-weight: Typography.medium; }
                                 Rectangle {
+                                    height: manage-row.preferred-height;
                                     background: Colors.surface-section;
                                     border-radius: Spacing.radius-lg;
-                                    SettingsRow {
+                                    manage-row := SettingsRow {
                                         touch: true;
                                     icon: Icons.alert-triangle; title: "Leave, archive or delete";
                                     destructive: true;

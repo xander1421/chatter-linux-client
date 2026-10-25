@@ -154,8 +154,8 @@ export component MeshSetupSheet inherits Rectangle {
                         font-size: Typography.sm; wrap: word-wrap; }
                     VerticalLayout {
                         spacing: Spacing.sm;
-                        Rectangle { background: Colors.surface-section; border-radius: Spacing.radius-lg;
-                            SettingsRow { icon: Icons.trash; title: "Erase Mesh Data…"; destructive: true;
+                        Rectangle { height: erase-row.preferred-height; background: Colors.surface-section; border-radius: Spacing.radius-lg;
+                            erase-row := SettingsRow { icon: Icons.trash; title: "Erase Mesh Data…"; destructive: true;
                                 touch: root.touch; show-chevron: false; clicked => { root.confirming-wipe = true; } }
                         }
                     }
