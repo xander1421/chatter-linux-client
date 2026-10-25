@@ -367,9 +367,20 @@ export component MessageList inherits Rectangle {
     callback list-geometry(float, float, bool); // visible height, content height, tail seek
     callback visible-media-rows(int, int);
 
+    // A resize (keyboard, emoji panel) keeps the newest row in view when the
+    // reader was at the bottom — including a chat opened on its unread
+    // divider whose newest rows were already showing and that has not been
+    // scrolled since (`flicked` clears both flags). That case keeps
+    // is-at-bottom false so the divider stays; without it the panel covered
+    // the unread rows.
+    pure function keeps-tail() -> bool {
+        return !root.scrolling && root.jump-row < 0
+            && ((root.is-at-bottom && !root.opening-on-unread)
+                || (root.opening-on-unread && root.seen-opening-tail));
+    }
+
     changed bottom-inset => {
-        if (root.is-at-bottom && !root.opening-on-unread
-                && !root.scrolling && root.jump-row < 0) { root.go-to-end(); }
+        if (root.keeps-tail()) { root.go-to-end(); }
     }
 
     // The same ambient page as the chat list, so a conversation is not a
@@ -618,8 +629,7 @@ export component MessageList inherits Rectangle {
                 // classify the new geometry as a user scroll away from bottom.
                 if (root.seen-view-height != self.height) {
                     root.seen-view-height = self.height;
-                    if (root.is-at-bottom && !root.opening-on-unread
-                            && !root.scrolling && root.jump-row < 0) {
+                    if (root.keeps-tail()) {
                         root.go-to-end();
                     }
                 }
