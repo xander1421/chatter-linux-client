@@ -8,7 +8,7 @@ use chatter_core::domain::message::{Message, MessageContent};
 use crate::{MessageItemData, RichTextBlock};
 
 use super::attachment::{AttachmentDisplayData, attachment_to_display_data};
-use super::markdown::{MarkdownBlock, parse_blocks_with_mentions, strip_markdown};
+use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
 use chatter_core::domain::mention::MentionMember;
 use super::utils::{format_count, reaction_counts_to_entries};
 
@@ -22,17 +22,13 @@ use super::utils::{format_count, reaction_counts_to_entries};
 /// and live rows (`to_slint_with_user`), edits (`apply_edit`), the sender's
 /// own echo (`features/chat/helpers.rs` `build_own_message_item`) and local
 /// Jarvis rows. A path that set `content` itself drew the raw markers.
-pub fn body_fields(raw: &str) -> (slint::SharedString, ModelRc<RichTextBlock>) {
-    body_fields_with_mentions(raw, &[], false)
-}
-
-pub fn body_fields_with_mentions(
+pub fn body_fields(
     raw: &str,
     members: &[MentionMember],
     broadcast: bool,
 ) -> (slint::SharedString, ModelRc<RichTextBlock>) {
     let trimmed = raw.trim();
-    let blocks = parse_blocks_with_mentions(trimmed, members, broadcast);
+    let blocks = parse_blocks(trimmed, members, broadcast);
     let plain = match blocks.as_slice() {
         [] => true,
         [MarkdownBlock::Inline(paras)] => paras
@@ -74,18 +70,13 @@ pub fn body_fields_with_mentions(
 /// `rich_content` whenever it is non-empty, so an edit that patched only
 /// `content` kept showing the old text under an "edited" badge until the
 /// conversation was reopened.
-pub fn apply_edit(row: &mut MessageItemData, new_text: &str) {
-    (row.content, row.rich_content) = body_fields(new_text);
-    row.is_edited = true;
-}
-
-pub fn apply_edit_with_mentions(
+pub fn apply_edit(
     row: &mut MessageItemData,
     new_text: &str,
     members: &[MentionMember],
     broadcast: bool,
 ) {
-    (row.content, row.rich_content) = body_fields_with_mentions(new_text, members, broadcast);
+    (row.content, row.rich_content) = body_fields(new_text, members, broadcast);
     row.is_edited = true;
 }
 
@@ -280,7 +271,7 @@ impl MessageDisplayData {
             .then(|| self.content.strip_prefix(self.sender_name.as_str()))
             .flatten()
             .map(|rest| format!("You{rest}"));
-        let (content, rich_content) = body_fields_with_mentions(
+        let (content, rich_content) = body_fields(
             own_notice.as_deref().unwrap_or(&self.content),
             &self.mention_members,
             self.mention_broadcast,
@@ -826,14 +817,14 @@ mod tests {
     #[test]
     fn apply_edit_replaces_the_blocks_the_bubble_draws() {
         let mut row = MessageItemData::default();
-        (row.content, row.rich_content) = body_fields("hi again");
+        (row.content, row.rich_content) = body_fields("hi again", &[], false);
         assert_eq!(
             row.rich_content.row_count(),
             0,
             "plain text draws through the plain Text"
         );
 
-        apply_edit(&mut row, "hi **againX**");
+        apply_edit(&mut row, "hi **againX**", &[], false);
 
         let blocks: Vec<_> = row.rich_content.iter().collect();
         assert_eq!(blocks.len(), 1, "one inline run, one StyledText");
@@ -847,16 +838,16 @@ mod tests {
     #[test]
     fn unstyled_link_uses_the_rich_clickable_path_and_edit_removes_it() {
         let mut row = MessageItemData::default();
-        (row.content, row.rich_content) = body_fields("[web](https://example.org)");
+        (row.content, row.rich_content) = body_fields("[web](https://example.org)", &[], false);
         assert_eq!(row.content, "web");
         assert_eq!(row.rich_content.row_count(), 1);
-        apply_edit(&mut row, "web");
+        apply_edit(&mut row, "web", &[], false);
         assert_eq!(row.rich_content.row_count(), 0);
     }
 
     #[test]
     fn code_blocks_are_their_own_rows() {
-        let (_, blocks) = body_fields("look\n```\nlet x = 1;\n```");
+        let (_, blocks) = body_fields("look\n```\nlet x = 1;\n```", &[], false);
         let blocks: Vec<_> = blocks.iter().collect();
         assert_eq!(blocks.len(), 2);
         assert!(!blocks[0].is_code_block);

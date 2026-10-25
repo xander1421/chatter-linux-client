@@ -740,7 +740,7 @@ fn patch_edited_row(
     let Some(mut row) = model.row_data(i) else {
         return false;
     };
-    crate::bin_ui::converters::apply_edit_with_mentions(&mut row, new_text, members, broadcast);
+    crate::bin_ui::converters::apply_edit(&mut row, new_text, members, broadcast);
     model.set_row_data(i, row);
     true
 }

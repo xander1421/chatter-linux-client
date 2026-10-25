@@ -43,6 +43,8 @@ pub fn build_own_message_item(
     sender_id: &str,
     sender_name: &str,
     text: &str,
+    mention_members: &[chatter_core::domain::mention::MentionMember],
+    mention_broadcast: bool,
     timestamp: &str,
     timestamp_ns: u64,
     slint_attachments: Vec<crate::MessageAttachmentData>,
@@ -58,7 +60,7 @@ pub fn build_own_message_item(
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
 
-    let (content, rich_content) = crate::bin_ui::converters::body_fields(text);
+    let (content, rich_content) = crate::bin_ui::converters::body_fields(text, mention_members, mention_broadcast);
     crate::MessageItemData {
         // See converters::message — selection marking is applied afterwards.
         message_id: message_id.into(),
@@ -330,6 +332,8 @@ mod own_echo_tests {
             "me",
             "Me",
             "**bold** *italic* ~~strike~~ and normal text",
+            &[],
+            false,
             "12:00",
             1,
             Vec::new(),

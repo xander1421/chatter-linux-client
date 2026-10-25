@@ -106,11 +106,17 @@ pub(crate) fn show_pending_bubble(
                 )
             })
             .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
-        let mut item = super::helpers::build_own_message_item(
+        let kind = ui_ctx.conversation_type_of(&conversation);
+        let members = kind.as_ref().zip(conversation.channel_id())
+            .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
+        let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
+        let item = super::helpers::build_own_message_item(
             &row,
             &user_id,
             &user_name,
             &text,
+            &members,
+            broadcast,
             &crate::bin_ui::converters::format_timestamp(now),
             now_ns,
             attachments.iter().map(|a| a.to_slint()).collect(),
@@ -124,12 +130,6 @@ pub(crate) fn show_pending_bubble(
             &Default::default(),
             "sending",
         );
-        if let (Some(kind), Some(id)) = (ui_ctx.conversation_type_of(&conversation), conversation.channel_id()) {
-            (item.content, item.rich_content) = crate::bin_ui::converters::body_fields_with_mentions(
-                &text, &ui_ctx.mention_members(&kind, &id),
-                matches!(kind, chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup),
-            );
-        }
         upsert_message_in_ui(&w, &row, item);
     });
 }
@@ -1093,11 +1093,17 @@ async fn deliver_inner(
                         )
                     })
                     .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
+            let kind = ui_ctx.conversation_type_of(&conversation);
+            let members = kind.as_ref().zip(conversation.channel_id())
+                .map(|(kind, id)| ui_ctx.mention_members(kind, &id)).unwrap_or_default();
+            let broadcast = matches!(kind, Some(chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup));
             let mut msg_item = super::helpers::build_own_message_item(
                 &msg_id,
                 &current_user_id,
                 &current_user_name,
                 &sent_text,
+                &members,
+                broadcast,
                 &timestamp_str,
                 sent_at,
                 slint_attachments,
@@ -1111,12 +1117,6 @@ async fn deliver_inner(
                 &reply_media,
                 &delivery_status,
             );
-            if let (Some(kind), Some(id)) = (ui_ctx.conversation_type_of(&conversation), conversation.channel_id()) {
-                (msg_item.content, msg_item.rich_content) = crate::bin_ui::converters::body_fields_with_mentions(
-                    &sent_text, &ui_ctx.mention_members(&kind, &id),
-                    matches!(kind, chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup),
-                );
-            }
             {
                 use slint::Model;
                 tracing::info!(

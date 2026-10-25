@@ -545,7 +545,7 @@ pub(super) fn handle_user_profile_updated(
             };
             row.sender_name = name.clone().into();
             row.sender_initials = crate::bin_ui::converters::initials_from_name(&name).into();
-            (row.content, row.rich_content) = crate::bin_ui::converters::body_fields(&content);
+            (row.content, row.rich_content) = crate::bin_ui::converters::body_fields(&content, &[], false);
             messages.set_row_data(i, row);
         }
 

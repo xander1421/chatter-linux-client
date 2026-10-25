@@ -40,11 +40,7 @@ pub(crate) enum MarkdownBlock {
 /// into lines) and fenced code blocks. Newlines that only separate a code
 /// block from its neighbours are dropped, so a code block does not gain a
 /// blank line above and below it.
-pub(crate) fn parse_blocks(input: &str) -> Vec<MarkdownBlock> {
-    parse_blocks_with_mentions(input, &[], false)
-}
-
-pub(crate) fn parse_blocks_with_mentions(
+pub(crate) fn parse_blocks(
     input: &str,
     members: &[MentionMember],
     broadcast: bool,
@@ -383,7 +379,7 @@ mod tests {
     fn mentions_are_styled_and_linked_only_outside_code() {
         let user_id = chatter_core::domain::ids::UserId::new();
         let members = [MentionMember { user_id, names: vec!["Alpha".into()] }];
-        let blocks = parse_blocks_with_mentions("hey @Alpha `@Alpha` @here", &members, true);
+        let blocks = parse_blocks("hey @Alpha `@Alpha` @here", &members, true);
         let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else { panic!("inline block expected") };
         let [para] = paras.as_slice() else { panic!("one paragraph expected") };
         assert_eq!(para.links.len(), 1);
@@ -394,7 +390,7 @@ mod tests {
 
     /// The single inline paragraph of `input`, as (text, [(styled text, style)]).
     fn one_paragraph(input: &str) -> (String, Vec<(String, Style)>) {
-        let blocks = parse_blocks(input);
+        let blocks = parse_blocks(input, &[], false);
         let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else {
             panic!("{input:?}: expected one inline block, got {blocks:?}");
         };
@@ -461,7 +457,7 @@ mod tests {
 
     #[test]
     fn lines_become_paragraphs_and_a_style_crossing_one_is_split() {
-        let blocks = parse_blocks("a **b\r\nc** d");
+        let blocks = parse_blocks("a **b\r\nc** d", &[], false);
         let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else {
             panic!("{blocks:?}")
         };
@@ -485,7 +481,7 @@ mod tests {
 
     #[test]
     fn code_blocks_stand_alone_without_padding_lines() {
-        let blocks = parse_blocks("before\n```rust\nlet x = 1;\n```\nafter");
+        let blocks = parse_blocks("before\n```rust\nlet x = 1;\n```\nafter", &[], false);
         let texts: Vec<_> = blocks
             .iter()
             .map(|b| match b {
@@ -587,7 +583,7 @@ mod link_tests {
         assert_eq!(paras[0].links[0].0, 0..1);
         assert_eq!(paras[1].links[0].0, 0..1);
         assert!(matches!(
-            &parse_blocks("```\n[x](https://example.org)\n```")[0],
+            &parse_blocks("```\n[x](https://example.org)\n```", &[], false)[0],
             MarkdownBlock::Code(_)
         ));
     }
