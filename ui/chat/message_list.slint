@@ -786,10 +786,6 @@ export component MessageList inherits Rectangle {
                     : Spacing.message-gap;
                 spacing: Spacing.xxs;
 
-                // Unread divider — everything below this line arrived while
-                // the user was away.
-                if idx == root.unread-index: UnreadDivider { width: 100%; }
-
                 // Date separator: wherever core's day label changes from the
                 // row above. Derived here from the neighbour rather than stored
                 // per row, so no insert/prepend/delete path can leave it stale.
@@ -798,6 +794,11 @@ export component MessageList inherits Rectangle {
                     width: 100%;
                     label: item.date-separator-text;
                 }
+
+                // Unread divider — everything below this line arrived while
+                // the user was away. Under the day label, directly above the
+                // first unread message.
+                if idx == root.unread-index: UnreadDivider { width: 100%; }
 
                 message-bubble := MessageItem {
                     width: 100%;
