@@ -633,6 +633,7 @@ export component UserProfileModal inherits Rectangle {
                                 ProfileActionRow { icon: Icons.edit; text: "Edit contact"; row-height: root.row-height;
                                     clicked => { root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
                                 if root.is-friend: ProfileActionRow { icon: Icons.trash; text: "Delete contact"; row-height: root.row-height;
+                                    destructive: true;
                                     clicked => { root.confirm-remove = true; } }
                                 ProfileActionRow { icon: Icons.slash; text: root.is-blocked ? "Unblock user" : "Block user"; row-height: root.row-height;
                                     destructive: !root.is-blocked;
