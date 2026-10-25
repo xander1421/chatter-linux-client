@@ -311,6 +311,8 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .map(|item| crate::PinnedItem {
                             message_id: item.message_id.to_string().into(),
                             preview: item.preview.into(),
+                            sender_name: item.sender_name.into(),
+                            sent_time: item.sent_time.into(),
                             thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(
                                 &item.thumbnail,
                             )

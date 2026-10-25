@@ -440,14 +440,7 @@ pub fn message_to_display_data_with_replies(
         sender_name: sender_name.to_string(),
         sender_initials: crate::bin_ui::converters::initials_from_name(sender_name),
         content,
-        timestamp: {
-            // Convert UTC to local time for display (consistent with sidebar)
-            use chrono::Local;
-            msg.created_at
-                .with_timezone(&Local)
-                .format("%H:%M")
-                .to_string()
-        },
+        timestamp: chatter_core::util::time::format_message_time(msg.created_at.clone()),
         timestamp_ns: msg.sent_at.to_string(),
         day_label: crate::bin_ui::converters::day_label(msg.created_at),
         is_edited: msg.is_edited,

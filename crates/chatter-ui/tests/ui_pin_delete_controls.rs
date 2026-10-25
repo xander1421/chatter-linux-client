@@ -77,6 +77,8 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         .set_pinned_items(ModelRc::new(VecModel::from(vec![PinnedItem {
             message_id: "pin".into(),
             preview: "A long pinned message\nwith multiple lines\nto make a taller row".into(),
+            sender_name: "You".into(),
+            sent_time: "12:00".into(),
             thumbnail,
         }])));
     for dark in [false, true] {
@@ -108,7 +110,7 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         assert_eq!(images[0].size().height, 40.0);
         let row = visible(
             &w,
-            "A long pinned message\nwith multiple lines\nto make a taller row",
+            "You: A long pinned message\nwith multiple lines\nto make a taller row",
         )
         .unwrap();
         assert!(

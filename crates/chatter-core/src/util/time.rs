@@ -12,7 +12,12 @@ use std::fmt;
 use std::ops::{Add, Sub};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
+
+/// Local clock label shown beside a sent message.
+pub fn format_message_time(sent_at: DateTime<Utc>) -> String {
+    sent_at.with_timezone(&Local).format("%H:%M").to_string()
+}
 
 #[cfg(test)]
 use chrono::Datelike;

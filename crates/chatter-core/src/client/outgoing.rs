@@ -454,10 +454,9 @@ impl ChatterClient {
             (real_message_id, "sent")
         };
 
-        let timestamp_display = chrono::DateTime::from_timestamp_nanos(result.sent_at as i64)
-            .with_timezone(&chrono::Local)
-            .format("%H:%M")
-            .to_string();
+        let timestamp_display = crate::util::time::format_message_time(
+            chrono::DateTime::from_timestamp_nanos(result.sent_at as i64),
+        );
 
         // Bootstrap sends carry attachments only after the key exchange, so
         // report an empty list for the "sending" placeholder. Non-bootstrap

@@ -138,6 +138,7 @@ mod activity;
 pub use activity::ActivityStatus;
 mod picker_history;
 mod pin;
+pub use pin::PinnedDisplayItem;
 mod profile;
 mod profile_visibility;
 mod presence;
