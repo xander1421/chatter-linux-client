@@ -29,8 +29,7 @@ export component MessageBody inherits VerticalLayout {
 
     if root.content != "" && root.rich-content.length > 0: VerticalLayout {
         spacing: Spacing.xs;
-        width: root.media-caption ? root.text-max-width : self.preferred-width;
-        max-width: root.text-max-width;
+        width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
 
         for block in root.rich-content: VerticalLayout {
             if block.is-code-block: Rectangle {
@@ -52,7 +51,7 @@ export component MessageBody inherits VerticalLayout {
             }
 
             if !block.is-code-block: StyledText {
-                width: root.media-caption ? root.text-max-width : self.preferred-width;
+                width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
                 text: block.text;
                 link-color: Colors.primary;
                 pointer-event(event) => {
@@ -85,19 +84,17 @@ export component MessageBody inherits VerticalLayout {
                 accessible-label: block.plain;
                 default-color: Colors.text-primary;
                 default-font-size: Typography.sm;
-                max-width: root.text-max-width;
             }
         }
     }
 
     // A body with no markdown: one plain Text.
     if root.content != "" && root.rich-content.length == 0: Text {
-        width: root.media-caption ? root.text-max-width : self.preferred-width;
+        width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
         text: root.content;
         color: Colors.text-primary;
         font-size: Typography.sm;
         wrap: word-wrap;
-        max-width: root.text-max-width;
 
         // Text owns its pointer events. Give touch the same
         // swipe/hold stream as the surrounding bubble;
