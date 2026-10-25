@@ -186,7 +186,6 @@ export component NewChatPicker inherits Rectangle {
                 // scrolls in here.
                 min-height: min(list.preferred-height, 480px);
                 viewport-height: list.preferred-height;
-                mouse-drag-pan-enabled: true;
                 changed viewport-y => { if VirtualKeyboard.height > 0px { modal.release-focus(); } }
                 list := VerticalLayout {
                     alignment: start;
