@@ -11,6 +11,7 @@ export component MessageBody inherits VerticalLayout {
     in property <bool> is-own;
     in property <string> message-id;
     in property <bool> mobile;
+    in property <bool> media-caption: false;
     in property <length> press-anchor-x;
     in property <length> press-anchor-y;
     in property <[RichTextBlock]> rich-content;
@@ -28,6 +29,7 @@ export component MessageBody inherits VerticalLayout {
 
     if root.content != "" && root.rich-content.length > 0: VerticalLayout {
         spacing: Spacing.xs;
+        width: root.media-caption ? root.text-max-width : self.preferred-width;
         max-width: root.text-max-width;
 
         for block in root.rich-content: VerticalLayout {
@@ -50,6 +52,7 @@ export component MessageBody inherits VerticalLayout {
             }
 
             if !block.is-code-block: StyledText {
+                width: root.media-caption ? root.text-max-width : self.preferred-width;
                 text: block.text;
                 link-color: Colors.primary;
                 pointer-event(event) => {
@@ -89,6 +92,7 @@ export component MessageBody inherits VerticalLayout {
 
     // A body with no markdown: one plain Text.
     if root.content != "" && root.rich-content.length == 0: Text {
+        width: root.media-caption ? root.text-max-width : self.preferred-width;
         text: root.content;
         color: Colors.text-primary;
         font-size: Typography.sm;
