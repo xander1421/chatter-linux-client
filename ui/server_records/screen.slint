@@ -7,6 +7,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Icons } from "../theme/icons.slint";
 import { HoldArea } from "../components/hold_area.slint";
+import { MenuRow } from "../settings/account_menu.slint";
 
 export struct ServerRecordRow { id: string, title: string, body: string, primary: string, secondary: string }
 export struct NotificationViewRow { id: string, title: string, body: string, kind: string, actor-id: string, channel-id: string, avatar: image, when: string, read: bool, quiet: bool, status: string }
@@ -227,16 +228,18 @@ export component ServerRecordsScreen inherits Rectangle {
         Rectangle {
             x: max(Spacing.md, min(root.menu-x, parent.width - self.width - Spacing.md));
             y: max(Spacing.md, min(root.menu-y, parent.height - self.height - Spacing.md));
-            width: 196px;
-            height: root.menu-read ? 2 * Spacing.button-height + 2 * Spacing.sm : 3 * Spacing.button-height + 2 * Spacing.sm;
+            width: 220px;
+            height: menu-rows.preferred-height;
             background: Colors.surface-section;
             border-radius: Spacing.radius-lg;
+            clip: true;
             TouchArea { }
-            VerticalLayout {
-                padding: Spacing.sm;
-                Button { text: "Details"; variant: "ghost"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
-                if !root.menu-read: Button { text: "Mark read"; variant: "ghost"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
-                Button { text: "Delete"; variant: "danger-ghost"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
+            menu-rows := VerticalLayout {
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                MenuRow { icon: Icons.info; label: "Details"; clicked => { ServerRecordsGlobal.details(root.menu-id); if !root.menu-read { ServerRecordsGlobal.act(root.menu-id, "Mark read"); } root.menu-id = ""; } }
+                if !root.menu-read: MenuRow { icon: Icons.check; label: "Mark read"; clicked => { ServerRecordsGlobal.act(root.menu-id, "Mark read"); root.menu-id = ""; } }
+                MenuRow { icon: Icons.trash; label: "Delete"; destructive: true; clicked => { ServerRecordsGlobal.act(root.menu-id, "Delete"); root.menu-id = ""; } }
             }
         }
     }

@@ -22,6 +22,7 @@ import { Elevation } from "../theme/elevation.slint";
 export component MenuRow inherits Rectangle {
     in property <image> icon;
     in property <string> label;
+    in property <bool> destructive: false;
     callback clicked();
 
     height: Spacing.list-row-height-touch;
@@ -51,11 +52,11 @@ export component MenuRow inherits Rectangle {
         padding-right: Spacing.md;
         spacing: Spacing.lg;
         VerticalLayout { alignment: center; horizontal-stretch: 0;
-            Image { source: root.icon; width: 24px; height: 24px; colorize: Colors.text-secondary; }
+            Image { source: root.icon; width: 24px; height: 24px; colorize: root.destructive ? Colors.danger : Colors.text-secondary; }
         }
         Text {
             text: root.label;
-            color: Colors.text-primary;
+            color: root.destructive ? Colors.danger : Colors.text-primary;
             font-size: Typography.base;
             vertical-alignment: center;
             horizontal-stretch: 1;
