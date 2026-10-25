@@ -8,6 +8,36 @@ use std::sync::Arc;
 use super::ChatterClient;
 
 impl ChatterClient {
+    /// Bring up call services when a call is placed or an incoming ring arrives.
+    /// A cold-started push can reach the inbox before notification setup runs.
+    #[cfg(feature = "media")]
+    pub(crate) fn ensure_call_service(&self) {
+        let auth = self.auth_state().get();
+        let revision = auth.current_user_id.map(|_| auth.session_revision);
+        self.ctx.init_call_service(revision);
+        let Some(revision) = revision else { return };
+        let Some(worker) = self.call_service().get() else { return };
+        worker.incoming_presentation_state().begin_session(revision);
+
+        // The authenticated notification stream may have started while no
+        // call worker existed. Attach its ring bridge to this same session.
+        let owner = self.authed_notif_session.lock();
+        if *owner != Some(revision) {
+            return;
+        }
+        let mut bridge = self.call_notification_bridge.lock();
+        if bridge.is_none() {
+            *bridge = Some((
+                revision,
+                crate::services::call_notification_bridge::spawn_session_call_notification_bridge(
+                    worker.for_presentation_session(revision),
+                    self.services.notification_service.clone(),
+                ),
+            ));
+            tracing::info!("call → notification bridge started");
+        }
+    }
+
     /// Spawn a background task that routes domain events to privacy-aware
     /// desktop notifications. Respects the active conversation (no notifications
     /// for the channel the user is currently viewing) and skips own messages.
@@ -135,10 +165,6 @@ impl ChatterClient {
                 );
             *self.call_notification_bridge.lock() = Some((revision, bridge));
             tracing::info!("call → notification bridge started");
-        } else {
-            tracing::warn!(
-                "call service not ready — call ring notifications disabled this session"
-            );
         }
     }
 

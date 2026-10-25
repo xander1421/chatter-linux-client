@@ -19,7 +19,7 @@ use std::time::Duration;
 use zeroize::Zeroizing;
 
 /// Number of reader connections in the pool.
-const READER_POOL_SIZE: usize = 4;
+const READER_POOL_SIZE: usize = 2;
 
 /// SQLCipher database connection pool.
 pub struct Database {
@@ -151,7 +151,8 @@ impl ReaderPool {
             .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", "5000")?;
-        conn.pragma_update(None, "cache_size", "-65536")?;
+        // A reader has its own page cache; keep each one to 8 MiB.
+        conn.pragma_update(None, "cache_size", "-8192")?;
         // mmap intentionally not set: SQLCipher ignores on encrypted DBs.
 
         Ok(conn)
@@ -273,10 +274,9 @@ impl Database {
         // Signal Desktop uses the same setting.
         conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-        // Performance optimizations for large BLOB reads (attachments)
-        // cache_size: negative value = KB, so -65536 = 64MB cache (default is ~2MB)
-        // This significantly speeds up reading large attachments from SQLCipher
-        conn.pragma_update(None, "cache_size", "-65536")?;
+        // Negative cache_size values are KiB. Bound the writer's private
+        // SQLCipher page cache to 16 MiB; readers have separate 8 MiB caches.
+        conn.pragma_update(None, "cache_size", "-16384")?;
 
         // Intentionally NOT setting `mmap_size`: SQLCipher disables
         // mmap-based I/O on encrypted databases (see
@@ -367,7 +367,7 @@ impl Database {
         // Performance optimizations for large BLOB streaming.
         // Intentionally NOT setting `mmap_size` - SQLCipher refuses mmap
         // on encrypted databases; see writer-side comment.
-        conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache
+        conn.pragma_update(None, "cache_size", "-8192")?; // 8 MiB reader cache
 
         Ok(conn)
     }

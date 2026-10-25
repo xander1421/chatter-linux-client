@@ -1,7 +1,7 @@
 use super::*;
 
 impl ChatterClient {
-    /// Warm Tor directory/guard state during interactive app startup. This
+    /// Warm Tor directory/guard state when explicitly requested. This
     /// contacts Tor relays only, never the Chatter service; secret and Shield
     /// clients still derive their isolated circuits at first use. Explicit
     /// startup keeps SDK construction and offline tests free of network work.
@@ -39,7 +39,7 @@ impl ChatterClient {
     /// to avoid missing events.
     ///
     /// This initializes:
-    /// - Post-login infrastructure (device inbox, group fanout, call service)
+    /// - Post-login infrastructure (device inbox, group fanout)
     /// - Event handlers (DomainEvent → state store + DB persistence)
     /// - Inbox polling + protocol processor
     /// - Channel event stream, bootstrap, DM bootstrap
@@ -194,8 +194,7 @@ impl ChatterClient {
         let client = Arc::clone(self);
         let mut domain_rx = self.services.event_bus.subscribe_domain();
         tokio::spawn(async move {
-            // Wait for the call worker to be initialized. init_call_service runs
-            // before start() returns, but on Android it is deferred.
+            // Wait for the first incoming or outgoing call to create the worker.
             let (worker, mut rx) = loop {
                 if let Some(w) = client.ctx.get_call_service() {
                     let rx = w.subscribe_room_events();
@@ -339,18 +338,6 @@ impl ChatterClient {
             provider.set_app_visible(self.chat_state().is_app_visible());
         }
         self.ctx.init_group_fanout();
-        #[cfg(feature = "media")]
-        self.ctx.init_call_service();
-        #[cfg(feature = "media")]
-        if let Some(worker) = self.call_service().get() {
-            let auth = self.auth_state().get();
-            if auth.current_user_id.is_some() {
-                worker
-                    .incoming_presentation_state()
-                    .begin_session(auth.session_revision);
-            }
-        }
-
         // ── Event handling ──────────────────────────────────────────
         let mut listeners = StartupListeners {
             handles: Vec::new(),

@@ -117,6 +117,7 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         attempt: CallStartAttempt,
     ) -> Result<OutgoingCallStart, ClientError> {
+        self.ensure_call_service();
         let revision = self.auth_state().get().session_revision;
         owned_setup(
             &self.call_signaling().start_gate,
@@ -324,6 +325,7 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
     ) -> Result<crate::domain::ids::CallId, ClientError> {
+        self.ensure_call_service();
         let call_worker = self
             .call_service()
             .get()
@@ -351,6 +353,7 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         user_id: crate::domain::ids::UserId,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        self.ensure_call_service();
         let call_worker = self
             .call_service()
             .get()
