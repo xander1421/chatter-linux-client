@@ -35,6 +35,7 @@ pub use jarvis::{
 mod link_device;
 pub mod membership;
 mod messaging;
+mod mentions;
 mod search_visible;
 mod send_attempt;
 pub use search_visible::{SearchPage, VisibleSearchHit};

@@ -70,6 +70,7 @@ pub(super) fn handle_message_received(
         &resolved_attachments,
         sender_avatar,
     );
+    display_data.mention_members = ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
 
     // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
     // quote thumbnail/player immediately instead of a text label until reload.
@@ -537,6 +538,8 @@ pub(super) fn handle_message_edit(
     let mut new_text = new_text.to_string();
     let message_id = message_id.to_string();
     let author = author_id.to_string();
+    let members = ui_ctx.mention_members(&conversation_type, &conversation_id);
+    let broadcast = matches!(conversation_type, ConversationType::Channel | ConversationType::AnonGroup);
 
     let ui_ctx = ui_ctx.clone();
     crate::run_history_ui!(window, owner, |w| {
@@ -549,6 +552,8 @@ pub(super) fn handle_message_edit(
         }
         crate::bin_ui::features::thread::apply_thread_edit(
             &w,
+            &members,
+            broadcast,
             &message_id,
             &author,
             target_sent_timestamp,

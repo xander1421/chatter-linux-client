@@ -12,6 +12,7 @@
 //! fenced code and HTML that users type.
 
 use i_slint_core::styled_text::{FormattedSpan, Style, StyledTextParagraph};
+use chatter_core::domain::mention::{MentionExtractor, MentionMember, MentionType};
 
 /// A parsed inline span.
 ///
@@ -40,6 +41,14 @@ pub(crate) enum MarkdownBlock {
 /// block from its neighbours are dropped, so a code block does not gain a
 /// blank line above and below it.
 pub(crate) fn parse_blocks(input: &str) -> Vec<MarkdownBlock> {
+    parse_blocks_with_mentions(input, &[], false)
+}
+
+pub(crate) fn parse_blocks_with_mentions(
+    input: &str,
+    members: &[MentionMember],
+    broadcast: bool,
+) -> Vec<MarkdownBlock> {
     split_code_blocks(input.trim())
         .into_iter()
         .filter_map(|block| {
@@ -47,7 +56,29 @@ pub(crate) fn parse_blocks(input: &str) -> Vec<MarkdownBlock> {
                 return Some(MarkdownBlock::Code(block.text));
             }
             let text = block.text.trim_matches(|c| c == '\n' || c == '\r');
-            (!text.is_empty()).then(|| MarkdownBlock::Inline(paragraphs(&parse_inline(text))))
+            (!text.is_empty()).then(|| {
+                let mut paragraphs = paragraphs(&parse_inline(text));
+                for paragraph in &mut paragraphs {
+                    for mention in MentionExtractor::resolve_mentions(&paragraph.text, members, broadcast) {
+                        let range = mention.start_offset..mention.end_offset;
+                        if paragraph.formatting.iter().any(|span| span.style == Style::Code
+                            && span.range.start < range.end && range.start < span.range.end)
+                            || paragraph.links.iter().any(|(link, _)|
+                                link.start < range.end && range.start < link.end)
+                        {
+                            continue;
+                        }
+                        paragraph.formatting.push(FormattedSpan { range: range.clone(), style: Style::Link });
+                        paragraph.formatting.push(FormattedSpan { range: range.clone(), style: Style::Strong });
+                        if mention.mention_type == MentionType::User {
+                            if let Some(id) = mention.target_id {
+                                paragraph.links.push((range, format!("chatter-mention:{id}")));
+                            }
+                        }
+                    }
+                }
+                MarkdownBlock::Inline(paragraphs)
+            })
         })
         .collect()
 }
@@ -347,6 +378,19 @@ fn find_closing_single(chars: &[char], from: usize, c: char) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mentions_are_styled_and_linked_only_outside_code() {
+        let user_id = chatter_core::domain::ids::UserId::new();
+        let members = [MentionMember { user_id, names: vec!["Alpha".into()] }];
+        let blocks = parse_blocks_with_mentions("hey @Alpha `@Alpha` @here", &members, true);
+        let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else { panic!("inline block expected") };
+        let [para] = paras.as_slice() else { panic!("one paragraph expected") };
+        assert_eq!(para.links.len(), 1);
+        assert_eq!(&para.text[para.links[0].0.clone()], "@Alpha");
+        assert_eq!(para.links[0].1, format!("chatter-mention:{user_id}"));
+        assert_eq!(para.formatting.iter().filter(|span| span.style == Style::Link).count(), 2);
+    }
 
     /// The single inline paragraph of `input`, as (text, [(styled text, style)]).
     fn one_paragraph(input: &str) -> (String, Vec<(String, Style)>) {

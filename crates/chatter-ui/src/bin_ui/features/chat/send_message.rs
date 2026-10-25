@@ -106,7 +106,7 @@ pub(crate) fn show_pending_bubble(
                 )
             })
             .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
-        let item = super::helpers::build_own_message_item(
+        let mut item = super::helpers::build_own_message_item(
             &row,
             &user_id,
             &user_name,
@@ -124,6 +124,12 @@ pub(crate) fn show_pending_bubble(
             &Default::default(),
             "sending",
         );
+        if let (Some(kind), Some(id)) = (ui_ctx.conversation_type_of(&conversation), conversation.channel_id()) {
+            (item.content, item.rich_content) = crate::bin_ui::converters::body_fields_with_mentions(
+                &text, &ui_ctx.mention_members(&kind, &id),
+                matches!(kind, chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup),
+            );
+        }
         upsert_message_in_ui(&w, &row, item);
     });
 }
@@ -1105,6 +1111,12 @@ async fn deliver_inner(
                 &reply_media,
                 &delivery_status,
             );
+            if let (Some(kind), Some(id)) = (ui_ctx.conversation_type_of(&conversation), conversation.channel_id()) {
+                (msg_item.content, msg_item.rich_content) = crate::bin_ui::converters::body_fields_with_mentions(
+                    &sent_text, &ui_ctx.mention_members(&kind, &id),
+                    matches!(kind, chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup),
+                );
+            }
             {
                 use slint::Model;
                 tracing::info!(
