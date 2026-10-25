@@ -471,8 +471,17 @@ fn register_inline_from_viewer() {
         VIEWER_GIF_STATE.with(|state_cell| {
             if let Some(ref state) = *state_cell.borrow() {
                 if state.frames.len() > 1 {
+                    let frames = state.frames.iter().filter_map(|frame| {
+                        let pixels = frame.to_rgba8()?;
+                        let (data, width, height) = super::fit_frame(
+                            pixels.as_bytes().to_vec(), pixels.width(), pixels.height(),
+                            super::INLINE_FRAME_PX, super::INLINE_FRAME_PX,
+                        );
+                        (!data.is_empty()).then(|| crate::bin_ui::slint_conversions::rgba_to_slint_image(&data, width, height))
+                    }).collect::<Vec<_>>();
+                    if frames.len() != state.frames.len() { return; }
                     let inline_state = super::inline::InlineGifState {
-                        frames: state.frames.clone(),
+                        frames,
                         delays: state.delays.clone(),
                         current_frame: 0,
                         accumulated_ms: 0,
