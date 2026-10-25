@@ -54,6 +54,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.is-private-group ? "Leave Group" : "Leave Channel";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
@@ -61,6 +62,7 @@ export component ChannelDangerSection inherits VerticalLayout {
                 height: self.preferred-height;
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.is-private-group ? "The group and its messages are removed from this device" : "You will lose access to this channel's messages";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -84,6 +86,7 @@ export component ChannelDangerSection inherits VerticalLayout {
         spacing: Spacing.sm;
 
         Text {
+            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
             text: root.is-private-group
                 ? "Leave " + root.channel-name + "? You can only come back if a member invites you again."
                 : "Leave #" + root.channel-name + "? You won't get new messages, and an invite-only channel cannot be rejoined on your own.";
@@ -129,6 +132,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Transfer Ownership";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
@@ -136,6 +140,7 @@ export component ChannelDangerSection inherits VerticalLayout {
                 height: self.preferred-height;
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.is-private-group ? "Make another member the owner to leave." : "Transfer ownership to leave, or delete the channel.";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -165,6 +170,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.group-blocked ? "Unblock Group" : "Block Group";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
@@ -172,6 +178,7 @@ export component ChannelDangerSection inherits VerticalLayout {
                 height: self.preferred-height;
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.group-blocked
                     ? "Messages from this group are being dropped on this device"
                     : "Drop everything this group sends, on this device";
@@ -200,6 +207,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.is-archived ? "Unarchive Channel" : "Archive Channel";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
@@ -207,6 +215,7 @@ export component ChannelDangerSection inherits VerticalLayout {
                 height: self.preferred-height;
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -242,6 +251,7 @@ export component ChannelDangerSection inherits VerticalLayout {
             min-width: 0px;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Delete Channel";
                 color: Colors.error;
                 font-size: Typography.sm;
@@ -250,6 +260,7 @@ export component ChannelDangerSection inherits VerticalLayout {
                 height: self.preferred-height;
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Deletes the channel and all its messages. Can't be undone.";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -273,6 +284,7 @@ export component ChannelDangerSection inherits VerticalLayout {
         spacing: Spacing.sm;
 
         Text {
+            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
             text: "Delete \"" + root.channel-name + "\" permanently? Every message in it goes with it. This cannot be undone.";
             color: Colors.error;
             font-size: Typography.sm;

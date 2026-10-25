@@ -71,12 +71,14 @@ export component SessionsModal inherits Rectangle {
             spacing: Spacing.md;
 
             if root.error != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.error;
                 color: Colors.error;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
             if root.notice != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: root.notice;
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
@@ -144,6 +146,7 @@ export component SessionsModal inherits Rectangle {
                         }
 
                         Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: "Approved, waiting for it to finish linking (until " + link.expires + ")";
                             color: Colors.text-muted;
                             font-size: Typography.xs;
@@ -250,6 +253,7 @@ export component SessionsModal inherits Rectangle {
                                     spacing: Spacing.xxs;
 
                                     Text {
+                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: session.device-info;
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
@@ -280,6 +284,7 @@ export component SessionsModal inherits Rectangle {
                                     }
 
                                     if session.status-text != "": Text {
+                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: session.status-text;
                                         color: Colors.text-muted;
                                         wrap: word-wrap;
@@ -296,6 +301,7 @@ export component SessionsModal inherits Rectangle {
                                     // The server stamps last-active at login, so for
                                     // the device in hand it reads stale; it is in use now.
                                     Text {
+                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: session.is-current ? "Active now" : "Last active: " + session.last-used;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
@@ -303,6 +309,7 @@ export component SessionsModal inherits Rectangle {
                                     }
 
                                     Text {
+                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: "Since: " + session.created-at;
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
@@ -310,6 +317,7 @@ export component SessionsModal inherits Rectangle {
                                     }
 
                                     if root.confirm-revoke-id == session.device-id: Text {
+                                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                                         text: "Revoke this device? It must be linked again.";
                                         color: Colors.error;
                                         font-size: Typography.xs;

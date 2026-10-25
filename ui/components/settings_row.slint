@@ -76,6 +76,7 @@ export component SettingsRow inherits Rectangle {
                 overflow: elide;
             }
             if root.detail != "": Text {
+                width: parent.width;
                 text: root.detail;
                 color: root.detail-color;
                 font-size: Typography.xs;

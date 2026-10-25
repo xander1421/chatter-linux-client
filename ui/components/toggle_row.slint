@@ -22,6 +22,7 @@ export component ToggleRow inherits Rectangle {
     in property <length> row-padding: Spacing.none;
     in property <length> row-spacing: Spacing.sm;
     in property <length> label-spacing: Spacing.none;
+    out property <length> label-width: max(0px, root.width - root.row-padding * 2 - root.row-spacing - Spacing.touch-target-min);
 
     callback toggled(bool);
     // Keep wrapped labels from being compressed below the height the row asks for.

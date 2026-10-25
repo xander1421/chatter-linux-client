@@ -55,14 +55,17 @@ export component ServerRecordsScreen inherits Rectangle {
                 }
             }
             if ServerRecordsGlobal.kind == "integrations": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Install your configured integrations in this channel, or remove an installed integration.";
                 wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
             }
             if ServerRecordsGlobal.kind == "calls": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Call records from this channel’s server. Private call history stays in Calls.";
                 wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm;
             }
             if ServerRecordsGlobal.error != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: ServerRecordsGlobal.error; wrap: word-wrap; color: Colors.error;
             }
             if ServerRecordsGlobal.detail-title != "": Rectangle {
@@ -76,7 +79,9 @@ export component ServerRecordsScreen inherits Rectangle {
                         Text { text: ServerRecordsGlobal.detail-title; color: Colors.text-primary; font-weight: Typography.semibold; horizontal-stretch: 1; vertical-alignment: center; }
                         Button { text: "Close"; variant: "ghost"; clicked => { ServerRecordsGlobal.detail-title = ""; ServerRecordsGlobal.detail-body = ""; ServerRecordsGlobal.detail-id = ""; } }
                     }
-                    Text { text: ServerRecordsGlobal.detail-body; wrap: word-wrap; color: Colors.text-secondary; }
+                    Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        text: ServerRecordsGlobal.detail-body; wrap: word-wrap; color: Colors.text-secondary; }
                 }
             }
             if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
@@ -133,7 +138,9 @@ export component ServerRecordsScreen inherits Rectangle {
                                         clicked => { ServerRecordsGlobal.act(row.id, "Delete"); }
                                     }
                                 }
-                                Text { text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                                Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                    text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                                 if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
                                 Button {
                                     text: "Details"; variant: "ghost"; size: "small";
@@ -167,8 +174,12 @@ export component ServerRecordsScreen inherits Rectangle {
                         record-content := VerticalLayout {
                             padding: Spacing.md;
                             spacing: Spacing.sm;
-                            Text { text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; }
-                            Text { text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
+                            Text {
+                                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; }
+                            Text {
+                                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
                             if row.primary != "" || row.secondary != "": HorizontalLayout {
                                 spacing: Spacing.sm;
                                 if row.primary != "": Button {

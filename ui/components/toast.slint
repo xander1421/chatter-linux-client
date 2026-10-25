@@ -87,6 +87,7 @@ export component Toast inherits GlassSurface {
 
         // Message text
         Text {
+            width: max(0px, parent.width - parent.padding-left - parent.padding-right - parent.spacing * 2 - 8px - Spacing.touch-target-min);
             text: root.message;
             color: Colors.text-primary;
             font-size: Typography.sm;

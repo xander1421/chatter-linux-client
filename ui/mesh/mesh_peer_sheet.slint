@@ -124,10 +124,14 @@ export component MeshPeerSheet inherits Rectangle {
                         if MeshGlobal.sheet-comparison-code != "": Rectangle {
                             background: Colors.surface-section; border-radius: Spacing.radius-lg;
                             VerticalLayout { padding: Spacing.lg; spacing: Spacing.sm;
-                                Text { text: MeshGlobal.sheet-comparison-code; color: Colors.text-primary;
+                                Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                    text: MeshGlobal.sheet-comparison-code; color: Colors.text-primary;
                                     font-size: Typography.xl; font-family: Typography.font-family-mono;
                                     horizontal-alignment: center; wrap: word-wrap; letter-spacing: 1px; }
-                                Text { text: "Compare these numbers in person with " + MeshGlobal.sheet-peer-name + ".";
+                                Text {
+                                    width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                    text: "Compare these numbers in person with " + MeshGlobal.sheet-peer-name + ".";
                                     color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                                     horizontal-alignment: center; }
                             }
@@ -268,7 +272,9 @@ export component MeshPeerSheet inherits Rectangle {
                             clickable: MeshGlobal.sheet-peer-id != "";
                             clicked => { MeshGlobal.toggle-peer-block(MeshGlobal.sheet-peer-id); } }
                     }
-                    if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary;
+                    if MeshGlobal.notice != "": Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        text: MeshGlobal.notice; color: Colors.text-secondary;
                         font-size: Typography.xs; wrap: word-wrap; }
                 }
             }
@@ -284,7 +290,9 @@ export component MeshPeerSheet inherits Rectangle {
             Rectangle { height: remove-action.preferred-height;
                 background: Colors.surface-section; border-radius: Spacing.radius-lg;
                 remove-action := VerticalLayout { padding: Spacing.lg; spacing: Spacing.md;
-                    Text { text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
+                    Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        text: "Remove " + MeshGlobal.sheet-peer-name + " from " + MeshGlobal.active-title + "? The group key will rotate.";
                         color: Colors.text-muted; font-size: Typography.sm; wrap: word-wrap; horizontal-alignment: center; }
                     Button { text: "Remove and rotate key"; variant: "destructive"; touch: root.touch;
                         clicked => { MeshGlobal.private-remove-pending = "";

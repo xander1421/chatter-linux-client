@@ -68,6 +68,7 @@ export component ChannelAccessSection inherits VerticalLayout {
                 overflow: elide;
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: bot.label;
                 color: Colors.warning;
                 font-size: Typography.xs;
@@ -99,14 +100,14 @@ export component ChannelAccessSection inherits VerticalLayout {
             accessible-text: "Require approval";
             // Preferred height must measure both labels beside the switch, not at their unwrapped width.
             Text {
-                width: max(0px, approval-row.width - Spacing.touch-target-min - approval-row.row-spacing - approval-row.row-padding * 2);
+                width: approval-row.label-width;
                 text: "Require approval";
                 color: Colors.text-primary;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
             Text {
-                width: max(0px, approval-row.width - Spacing.touch-target-min - approval-row.row-spacing - approval-row.row-padding * 2);
+                width: approval-row.label-width;
                 text: "People who use the link wait until an admin lets them in";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
@@ -155,6 +156,7 @@ export component ChannelAccessSection inherits VerticalLayout {
             spacing: Spacing.sm;
             min-height: Spacing.touch-target-min;
             Text {
+                width: max(0px, parent.width - parent.spacing - revoke-button.width);
                 horizontal-stretch: 1;
                 text: link.summary;
                 color: Colors.text-primary;
@@ -162,7 +164,7 @@ export component ChannelAccessSection inherits VerticalLayout {
                 vertical-alignment: center;
                 wrap: word-wrap;
             }
-            Button {
+            revoke-button := Button {
                 height: Spacing.touch-target-min;
                 text: "Revoke";
                 variant: "destructive";

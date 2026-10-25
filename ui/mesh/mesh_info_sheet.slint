@@ -151,9 +151,12 @@ export component MeshInfoSheet inherits Rectangle {
                         title: "Add Members";
                         clicked => { root.adding-members = true; MeshGlobal.private-invite-visible = false; }
                     }
-                    Text { text: "Only invited devices can read this group. Removing someone rotates the key.";
+                    Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        text: "Only invited devices can read this group. Removing someone rotates the key.";
                         color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     if MeshGlobal.private-rekey-pending: Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                         text: "Waiting for the creator to rotate the group key. Sending is paused.";
                         color: Colors.warning; font-size: Typography.sm; wrap: word-wrap;
                     }
@@ -223,7 +226,9 @@ export component MeshInfoSheet inherits Rectangle {
                             }
                         }
                     }
-                    Text { text: "Invite sends the group key over the encrypted mesh link. QR shows a code the other person scans.";
+                    Text {
+                        width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                        text: "Invite sends the group key over the encrypted mesh link. QR shows a code the other person scans.";
                         color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                     if MeshGlobal.private-invite-visible: Rectangle {
                         height: 260px; border-radius: Spacing.radius-md; background: Colors.surface-section;
@@ -288,6 +293,7 @@ export component MeshInfoSheet inherits Rectangle {
                         padding-left: Spacing.md; padding-right: Spacing.md;
                         padding-top: Spacing.xs; padding-bottom: Spacing.xs;
                         Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: root.confirm-kind == "member"
                                 ? "Remove " + root.selected-member-name + "? The group key will rotate."
                                 : MeshGlobal.active-kind == "private-channel"

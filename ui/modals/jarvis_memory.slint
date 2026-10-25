@@ -146,6 +146,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                             font-weight: Typography.medium;
                         }
                         if root.facts.length == 0: Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: "Nothing yet — chat with Jarvis and durable facts land here automatically.";
                             color: Colors.text-muted;
                             font-size: Typography.xs;
@@ -212,6 +213,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                             font-weight: Typography.medium;
                         }
                         if root.entities.length == 0: Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: "No entities yet — Jarvis learns people, projects, and topics from conversations.";
                             color: Colors.text-muted;
                             font-size: Typography.xs;

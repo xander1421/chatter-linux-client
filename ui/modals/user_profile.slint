@@ -521,6 +521,7 @@ export component UserProfileModal inherits Rectangle {
                         spacing: Spacing.sm;
 
                         Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                             text: "You blocked this person.";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
@@ -586,7 +587,9 @@ export component UserProfileModal inherits Rectangle {
 
                     if !root.is-self && !root.shared-page-open && root.shared-error != "": VerticalLayout {
                         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.sm;
-                        Text { text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                        Text {
+                            width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                            text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                         Button { text: "Retry shared content"; clicked => { root.shared-retry(); } }
                     }
 
@@ -658,7 +661,9 @@ export component UserProfileModal inherits Rectangle {
                         if root.shared-loading: Text { text: "Loading…"; color: Colors.text-muted; font-size: Typography.sm; }
                         if root.shared-error != "": VerticalLayout {
                             spacing: Spacing.sm;
-                            Text { text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+                            Text {
+                                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                                text: root.shared-error; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                             Button { text: "Retry"; clicked => { root.shared-retry(); } }
                         }
                         if !root.shared-loading && root.shared-error == "" && root.shared-items.length == 0: Text { text: "Nothing shared yet."; color: Colors.text-muted; font-size: Typography.sm; }
@@ -680,6 +685,7 @@ export component UserProfileModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "They'll be removed from your friends. Your chat history stays.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
@@ -719,6 +725,7 @@ export component UserProfileModal inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Blocked people can't call or message you. You can unblock them from their profile or Contacts › Blocked.";
                 color: Colors.text-secondary;
                 font-size: Typography.sm;
@@ -771,7 +778,9 @@ export component UserProfileModal inherits Rectangle {
         close => { root.confirm-unblock = false; }
         VerticalLayout {
             spacing: Spacing.md;
-            Text { text: "They will be able to call and message you again."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
+            Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
+                text: "They will be able to call and message you again."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
             HorizontalLayout {
                 spacing: Spacing.sm;
                 Button { text: "Cancel"; variant: "secondary"; clicked => { root.confirm-unblock = false; } }

@@ -45,10 +45,12 @@ export component AboutSettings inherits VerticalLayout {
                 color: Colors.text-primary; font-size: Typography.sm;
             }
             if UpdateGlobal.error != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: UpdateGlobal.error; color: Colors.error;
                 font-size: Typography.sm; wrap: word-wrap;
             }
             if UpdateGlobal.notice != "": Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: UpdateGlobal.notice; color: Colors.text-secondary;
                 font-size: Typography.sm; wrap: word-wrap;
             }
@@ -68,6 +70,7 @@ export component AboutSettings inherits VerticalLayout {
                 clicked => { root.open-licenses(); }
             }
             Text {
+                width: max(0px, parent.width - parent.padding-left - parent.padding-right);
                 text: "Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.";
                 color: Colors.text-secondary;
                 font-size: Typography.xs;
