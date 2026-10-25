@@ -102,7 +102,8 @@ impl SharedContentRepository {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Page matching shared items after sender, chat, date and type filters.
+    /// Page search metadata after sender, chat, date and type filters.
+    /// Thumbnail blobs are fetched only for the hits the search UI displays.
     pub fn search_global_scoped(
         &self,
         query: &str,
@@ -111,6 +112,7 @@ impl SharedContentRepository {
         since: Option<i64>,
         until: Option<i64>,
         category: Option<&str>,
+        sort: &str,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<SharedContentRow>, StorageError> {
@@ -124,9 +126,8 @@ impl SharedContentRepository {
         );
         let mut stmt = conn.prepare(
             "SELECT s.message_id, s.attachment_id, s.category, s.sent_at,
-                    s.title, s.size_bytes, a.thumbnail_bytes
+                    s.title, s.size_bytes, NULL
              FROM shared_content s JOIN messages m ON m.id = s.message_id
-             LEFT JOIN attachments a ON a.id = s.attachment_id
              WHERE s.category != 'unsorted' AND m.is_deleted = 0
                AND s.title LIKE ?1 ESCAPE '\\'
                AND (?2 IS NULL OR m.sender_id = ?2)
@@ -138,7 +139,9 @@ impl SharedContentRepository {
                          WHEN s.category = 'voice' THEN 'voice'
                          WHEN s.category = 'link' THEN 'links'
                          ELSE 'files' END = ?6)
-             ORDER BY s.sent_at DESC, s.rowid DESC LIMIT ?7 OFFSET ?8",
+             ORDER BY CASE WHEN ?9 = 'oldest' THEN s.sent_at END ASC,
+                      CASE WHEN ?9 = 'largest' THEN s.size_bytes END DESC,
+                      s.sent_at DESC, s.rowid DESC LIMIT ?7 OFFSET ?8",
         )?;
         let rows = stmt.query_map(
             params![
@@ -149,7 +152,8 @@ impl SharedContentRepository {
                 until,
                 category,
                 limit,
-                offset
+                offset,
+                sort
             ],
             |row| {
                 Ok(SharedContentRow {

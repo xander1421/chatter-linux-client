@@ -180,9 +180,9 @@ impl MessageService {
 
     /// The conversation's rows from `target` to the newest, oldest first —
     /// the list a jump to a message older than what is loaded installs (a
-    /// search hit, a quote, a pin). Grown like a conversation opening on its
-    /// first unread ([`crate::domain::message::newest_page_reaching`]), then
-    /// cut so `target` is the first row: the list lands on row 0 exactly,
+    /// search hit, a quote, a pin). Cursor pages stay at or below 200 rows;
+    /// the target and nearby newer rows form the replacement page. It is cut
+    /// so `target` is the first row: the list lands on row 0 exactly,
     /// where a seek into a virtualized list only lands on an estimate that
     /// keeps moving as rows materialize. Older rows page in above it.
     ///
@@ -202,12 +202,12 @@ impl MessageService {
         }) else {
             return Ok(Vec::new());
         };
-        let page = crate::domain::message::newest_page_reaching(
-            Some(target.sent_at),
+        let page = crate::domain::message::newest_window_reaching(
+            target.sent_at,
             page_size,
-            |limit| {
+            |before, limit| {
                 self.message_repo
-                    .list_for_channel_asc(channel_id, conversation_type, None, limit)
+                    .list_for_channel_asc(channel_id, conversation_type, before, limit)
             },
         )?;
         let page = page.into_iter().skip_while(|m| m.id != target.id).collect();

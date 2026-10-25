@@ -396,14 +396,14 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let initial_count = display_messages.len();
                 tracing::info!(kind = "secret_dm", stage = "display_built", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
-                let anchor_page = messages.clone();
+                let anchor = ui_ctx.opening_unread_anchor(anchor);
+                let unread_index = anchor.divider_index(&messages);
                 crate::run_history_ui!(weak, owner, |w| {
                     use slint::Model;
-                    super::apply_unread_anchor(
-                        &w,
-                        ui_ctx.opening_unread_anchor(anchor),
-                        &anchor_page,
-                    );
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
+                    pane.set_unread_count(anchor.unread_count as i32);
+                    pane.set_is_at_bottom(unread_index.is_none());
                     let before = w.global::<crate::ChatPane>().get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
@@ -521,14 +521,14 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 });
 
             let refresh_ctx = ui_ctx.clone();
-            let anchor_page = messages.clone();
+            let anchor = ui_ctx.opening_unread_anchor(anchor);
+            let unread_index = anchor.divider_index(&messages);
             let media_owner = owner.clone();
             crate::run_history_ui!(weak, owner, |w| {
-                super::apply_unread_anchor(
-                    &w,
-                    ui_ctx.opening_unread_anchor(anchor),
-                    &anchor_page,
-                );
+                let pane = w.global::<crate::ChatPane>();
+                pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
+                pane.set_unread_count(anchor.unread_count as i32);
+                pane.set_is_at_bottom(unread_index.is_none());
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                 w.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(slint_messages)));

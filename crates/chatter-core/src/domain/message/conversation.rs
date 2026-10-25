@@ -231,3 +231,63 @@ pub fn newest_page_reaching<E>(
         limit = limit.saturating_mul(2);
     }
 }
+
+/// Walk toward an older target with cursor pages and retain only the target's
+/// nearby rows. No repository read or returned window exceeds 200 messages.
+pub fn newest_window_reaching<E>(
+    target_sent_at: u64,
+    page_size: u32,
+    mut load: impl FnMut(Option<&crate::domain::ids::MessageId>, u32) -> Result<Vec<Message>, E>,
+) -> Result<Vec<Message>, E> {
+    const MAX_WINDOW: usize = 200;
+    let mut before = None;
+    let mut newer = Vec::new();
+    let mut fetch = page_size.clamp(1, MAX_WINDOW as u32);
+    loop {
+        let mut page = load(before.as_ref(), fetch)?;
+        if page.is_empty() {
+            return Ok(newer);
+        }
+        let count = page.len();
+        if page.first().is_some_and(|oldest| oldest.sent_at < target_sent_at) {
+            let start = page.iter().position(|message| message.sent_at >= target_sent_at)
+                .unwrap_or(page.len());
+            let mut window = page.split_off(start);
+            window.extend(newer);
+            window.truncate(MAX_WINDOW);
+            return Ok(window);
+        }
+        before = page.first().map(|message| message.id);
+        newer = page;
+        if count < fetch as usize {
+            return Ok(newer);
+        }
+        fetch = MAX_WINDOW as u32;
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use crate::domain::ids::{ChannelId, UserId};
+
+    #[test]
+    fn distant_target_uses_bounded_cursor_pages() {
+        let channel = ChannelId::new();
+        let messages: Vec<_> = (0..650u64)
+            .map(|sent_at| Message::new_text(channel, ConversationType::Channel,
+                Some(UserId::new()), "row".into(), sent_at))
+            .collect();
+        let mut max_fetch = 0;
+        let window = newest_window_reaching(100, 50, |before, limit| {
+            max_fetch = max_fetch.max(limit);
+            let end = before.and_then(|id| messages.iter().position(|m| &m.id == id))
+                .unwrap_or(messages.len());
+            let start = end.saturating_sub(limit as usize);
+            Ok::<_, ()>(messages[start..end].to_vec())
+        }).unwrap();
+        assert!(max_fetch <= 200);
+        assert_eq!(window.first().map(|m| m.sent_at), Some(100));
+        assert!(window.len() <= 200);
+    }
+}

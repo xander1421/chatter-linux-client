@@ -295,13 +295,13 @@ async fn load_private_group_messages_internal(
     let group_id_str = group_id.to_string();
     let ui_ctx_gifs = ui_ctx.clone();
     let ui_ctx_for_ui = ui_ctx.clone();
-    let anchor_page = messages.clone();
+    let anchor = ui_ctx_for_ui.opening_unread_anchor(anchor);
+    let unread_index = anchor.divider_index(&messages);
     crate::run_history_ui!(weak, owner, |w| {
-        super::apply_unread_anchor(
-            &w,
-            ui_ctx_for_ui.opening_unread_anchor(anchor),
-            &anchor_page,
-        );
+        let pane = w.global::<crate::ChatPane>();
+        pane.set_unread_index(unread_index.map_or(-1, |i| i as i32));
+        pane.set_unread_count(anchor.unread_count as i32);
+        pane.set_is_at_bottom(unread_index.is_none());
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
             &w,

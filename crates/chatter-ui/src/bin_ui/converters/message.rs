@@ -144,7 +144,7 @@ pub struct MessageDisplayData {
     pub delivery_status: String,
     pub failure_reason: String,
     /// Raw avatar bytes for anonymous group members.
-    pub sender_avatar_bytes: Option<Vec<u8>>,
+    pub sender_avatar_bytes: Option<std::sync::Arc<[u8]>>,
     /// The sender's avatar at row size, shared by every row of that sender
     /// (`decode_cache::avatar`).
     pub sender_avatar_decoded: Option<crate::bin_ui::decode_cache::Pixels>,
@@ -356,7 +356,7 @@ pub fn message_to_display_data(
     msg: &Message,
     sender_name: &str,
     resolved_attachments: &[Attachment],
-    sender_avatar: Option<Vec<u8>>,
+    sender_avatar: Option<std::sync::Arc<[u8]>>,
 ) -> MessageDisplayData {
     message_to_display_data_with_replies(
         msg,
@@ -373,7 +373,7 @@ pub fn message_to_display_data_with_replies(
     sender_name: &str,
     resolved_attachments: &[Attachment],
     reply_count: Option<i32>,
-    sender_avatar: Option<Vec<u8>>,
+    sender_avatar: Option<std::sync::Arc<[u8]>>,
 ) -> MessageDisplayData {
     let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
         .iter()
@@ -656,7 +656,7 @@ fn messages_to_display_batch_impl(
     // avatar again for every row was most of a conversation open.
     let mut avatars: std::collections::HashMap<
         Option<chatter_core::domain::ids::UserId>,
-        (Option<Vec<u8>>, Option<crate::bin_ui::decode_cache::Pixels>),
+        (Option<std::sync::Arc<[u8]>>, Option<crate::bin_ui::decode_cache::Pixels>),
     > = std::collections::HashMap::new();
 
     for (i, msg) in messages.iter().enumerate() {
@@ -668,7 +668,7 @@ fn messages_to_display_batch_impl(
         let (avatar_bytes, avatar_pixels) = avatars
             .entry(identity.sender_id)
             .or_insert_with(|| {
-                let bytes = sender_avatar(identity);
+                let bytes = sender_avatar(identity).map(std::sync::Arc::<[u8]>::from);
                 let pixels = bytes
                     .as_deref()
                     .and_then(crate::bin_ui::decode_cache::avatar);
