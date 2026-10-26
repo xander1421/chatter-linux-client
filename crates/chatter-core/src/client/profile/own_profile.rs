@@ -57,7 +57,7 @@ impl ChatterClient {
                             .is_none_or(|n| n > crate::domain::anon_dm_init::MAX_AVATAR_SIZE)
                 }) {
                     return Err(UserError::InvalidInput(
-                        "that picture is too large".into(),
+                        "that picture is too large.".into(),
                     ));
                 }
                 let repositories = self.messages();
