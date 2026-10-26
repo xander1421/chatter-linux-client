@@ -790,28 +790,53 @@ pub async fn deliver(
     while let Some(part) = parts.next() {
         let frozen = part.clone();
         match deliver_inner(weak.clone(), ui_ctx.clone(), part, send_started).await {
-        PartOutcome::Sent => { first = false; continue; }
-        PartOutcome::Retained => return true,
-        PartOutcome::Unsent => {
-            let remaining = if first {
-                None // The original caller restores the whole unsent draft.
-            } else {
-                let mut unsent = frozen.clone();
-                unsent.text.extend(parts.map(|part| part.text));
-                Some(unsent)
-            };
-            let weak = weak.clone();
-            let ui_ctx = ui_ctx.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    remove_pending_bubble(&w, &frozen);
-                    if let Some(unsent) = remaining {
-                        recover_failed_send(&w, &ui_ctx, unsent);
-                    }
+            PartOutcome::Sent => {
+                first = false;
+                continue;
+            }
+            PartOutcome::Retained => {
+                let mut remaining = String::new();
+                for part in parts {
+                    remaining.push_str(&part.text);
                 }
-            });
-            return !first;
-        }
+                if !remaining.is_empty() {
+                    let mut unsent = frozen;
+                    unsent.attempt_id = uuid::Uuid::new_v4();
+                    unsent.text = remaining;
+                    unsent.reply = None;
+                    unsent.attachments.clear();
+                    let weak = weak.clone();
+                    let ui_ctx = ui_ctx.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            recover_failed_send(&w, &ui_ctx, unsent);
+                        }
+                    });
+                }
+                return true;
+            }
+            PartOutcome::Unsent => {
+                let remaining = if first {
+                    None // The original caller restores the whole unsent draft.
+                } else {
+                    let mut unsent = frozen.clone();
+                    for part in parts {
+                        unsent.text.push_str(&part.text);
+                    }
+                    Some(unsent)
+                };
+                let weak = weak.clone();
+                let ui_ctx = ui_ctx.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        remove_pending_bubble(&w, &frozen);
+                        if let Some(unsent) = remaining {
+                            recover_failed_send(&w, &ui_ctx, unsent);
+                        }
+                    }
+                });
+                return !first;
+            }
         }
     }
     true
