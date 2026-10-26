@@ -62,6 +62,7 @@ impl ChatRowExt for ChatRowSendData {
             mention_count: self.mention_count as i32,
             is_typing: self.is_typing,
             is_pinned: self.is_pinned,
+            is_muted: self.is_muted,
             can_leave: self.can_leave,
             can_delete: self.can_delete,
             is_selected: false,

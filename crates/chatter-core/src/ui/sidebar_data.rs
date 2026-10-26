@@ -81,6 +81,8 @@ pub struct ChatRowSendData {
     pub is_typing: bool,
     /// Local-only pin flag; pinned rows lead the list.
     pub is_pinned: bool,
+    /// Persisted notification mute state for this conversation.
+    pub is_muted: bool,
     /// Channel rows: invite-only (lock glyph rather than #).
     pub private_channel: bool,
     /// Private-group rows.
@@ -118,6 +120,7 @@ impl ChatRowSendData {
             mention_count: 0,
             is_typing: false,
             is_pinned: false,
+            is_muted: false,
             private_channel: false,
             member_count: 0,
             can_leave: false,

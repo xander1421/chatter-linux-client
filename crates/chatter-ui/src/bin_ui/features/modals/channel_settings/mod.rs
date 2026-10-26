@@ -1149,6 +1149,8 @@ fn wire_notification_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                             }
                         }
                     });
+                } else {
+                    crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx);
                 }
             });
         });
