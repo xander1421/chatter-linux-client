@@ -1,6 +1,42 @@
 use super::*;
 
 impl ConversationHandle {
+    /// The newest own message for which the context menu currently offers Edit.
+    /// Search persisted history so the shortcut also finds messages outside the
+    /// loaded UI page, and use the menu rule (including Saved's age exception).
+    pub fn last_editable_own_message(&self) -> ConversationResult<Option<(UserId, u64)>> {
+        let Some(own) = self.client.auth_state().get().current_user_id else {
+            return Ok(None);
+        };
+        let scope = self.storage_scope()?;
+        let now_ns = crate::util::time::TimestampNanos::now().as_u64();
+        let messages = self.client.messages();
+        let repo = &messages.message_repo;
+        let mut before = None;
+        loop {
+            let page = repo.list_for_conversation(&scope.id, &scope.kind, before, 100)?;
+            for message in &page {
+                if message.sender_id == Some(own)
+                    && stored_message_menu(message, true, now_ns).actions.edit
+                {
+                    return Ok(Some((own, message.sent_at)));
+                }
+            }
+            if scope.kind != ConversationType::SavedMessages
+                && page.last().is_some_and(|message| {
+                    now_ns.saturating_sub(message.sent_at)
+                        > crate::domain::message::REMOTE_ACTION_WINDOW_NS
+                })
+            {
+                return Ok(None);
+            }
+            if page.len() < 100 {
+                return Ok(None);
+            }
+            before = page.last().map(|message| message.sent_at);
+        }
+    }
+
     /// Get message text by sender + timestamp across any conversation type.
     pub fn get_message_text(
         &self,

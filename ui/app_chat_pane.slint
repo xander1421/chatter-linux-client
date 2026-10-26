@@ -324,6 +324,7 @@ export global ChatPane {
     callback visible-media-rows(int, int);
     callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
+    callback edit-last-requested();
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();

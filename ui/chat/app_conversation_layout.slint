@@ -176,6 +176,7 @@ export component AppConversationLayout inherits Rectangle {
     callback secret-request-decline-clicked();
     callback send(string) -> bool;
     callback send-edit(string, string);
+    callback edit-last-requested();
     callback sender-profile-requested(string);
     callback settle-composer();
     callback start-video-call();
@@ -391,6 +392,7 @@ export component AppConversationLayout inherits Rectangle {
     visible-media-rows(first, last) => { root.visible-media-rows(first, last); }
     send(text) => { return root.send(text); }
     send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
+    edit-last-requested => { root.edit-last-requested(); }
     cancel-edit => { root.cancel-edit(); }
     cancel-reply => { root.cancel-reply(); }
     attachment-clicked => { root.attachment-clicked(); }

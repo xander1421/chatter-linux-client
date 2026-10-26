@@ -31,6 +31,51 @@ fn next_generation() -> u64 {
     EDIT_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// Ask core for the newest message with the same Edit eligibility as the menu,
+/// then enter edit mode through the menu's existing callback.
+pub fn wire_edit_last_requested(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+
+    window.global::<crate::ChatPane>().on_edit_last_requested(move || {
+        let conversation = ui_ctx.active_conversation();
+        if matches!(conversation, ActiveConversation::None) {
+            return;
+        }
+        let owner = HistoryOwner::capture(&ui_ctx, conversation);
+        let handle = ui_ctx.conversation(conversation);
+        let weak = weak_window.clone();
+
+        tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
+            let Some((sender, timestamp)) = handle.last_editable_own_message().ok().flatten()
+            else {
+                return;
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if !owner.is_current() {
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    let pane = w.global::<crate::ChatPane>();
+                    if pane.get_composer_is_editing()
+                        || pane.get_composer_is_replying()
+                        || !pane.get_composer_text().is_empty()
+                    {
+                        return;
+                    }
+                    pane.invoke_edit_message(
+                        sender.to_string().into(),
+                        timestamp.to_string().into(),
+                    );
+                }
+            });
+        });
+    });
+}
+
 /// Wire edit-message callback - enters edit mode by populating composer.
 pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();

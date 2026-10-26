@@ -358,6 +358,7 @@ export component MessageComposer inherits GlassSurface {
     // Only clear the native draft/composition once core accepts ownership.
     callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
+    callback edit-last-requested();
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
@@ -679,6 +680,13 @@ export component MessageComposer inherits GlassSurface {
                         }
 
                         key-pressed(event) => {
+                            if (event.text == Key.UpArrow && !root.mobile
+                                && root.text == "" && self.preedit-text == ""
+                                && !root.is-editing && !root.is-replying
+                                && root.pending-attachments.length == 0) {
+                                root.edit-last-requested();
+                                return accept;
+                            }
                             // Wide tablet and desktop keyboards send with Enter;
                             // Shift+Enter remains a newline. Phone keyboards keep
                             // Enter for multi-line messages and use the send button.

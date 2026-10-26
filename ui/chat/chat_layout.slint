@@ -293,6 +293,7 @@ export component ChatLayout inherits Rectangle {
     // Composer callbacks
     callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
+    callback edit-last-requested();
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();
@@ -687,6 +688,7 @@ export component ChatLayout inherits Rectangle {
             send-edit(msg-id, text) => {
                 root.send-edit(msg-id, text);
             }
+            edit-last-requested => { root.edit-last-requested(); }
             cancel-edit => {
                 root.cancel-edit();
             }

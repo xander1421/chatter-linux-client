@@ -72,6 +72,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     reactions::wire_reaction_selected(window, ui_ctx);
     context_menu::wire_more_clicked(window, ui_ctx);
     edit::wire_edit_message(window, ui_ctx);
+    edit::wire_edit_last_requested(window, ui_ctx);
     edit::wire_send_edit(window, ui_ctx);
     edit::wire_cancel_edit(window);
     delete::wire_delete_message(window, ui_ctx);
