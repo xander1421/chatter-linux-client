@@ -82,8 +82,11 @@ component QuickReaction inherits Rectangle {
         height: 0px;
         changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
         key-pressed(event) => {
-            if event.text == Key.UpArrow { root.navigate(root.nav-index, -1); return accept; }
-            if event.text == Key.DownArrow { root.navigate(root.nav-index, 1); return accept; }
+            // The reactions are one row: Left/Right walk it, Down leaves it.
+            if event.text == Key.LeftArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.RightArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 3); return accept; }
+            if event.text == Key.UpArrow { return accept; }
             if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
             if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
             if event.text == Key.Space || event.text == Key.Return {
@@ -291,7 +294,10 @@ export component MessageContextMenu inherits Rectangle {
         ? root.delete-index + (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone ? 1 : 0)
         : root.more-index + (root.more-page ? 1 : 0);
     function move-focus(from: int, direction: int) {
+        // 3 = down out of the reaction row; Up from the first action goes back to it.
         root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
+            : direction == 3 ? min(root.focus-count - 1, root.primary-start)
+            : direction == -1 && from == root.primary-start && root.primary-start > 0 && !root.more-actions ? 0
             : max(0, min(root.focus-count - 1, from + direction));
     }
     function keep-visible(top: length, item-height: length) {
