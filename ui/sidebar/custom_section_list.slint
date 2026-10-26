@@ -33,6 +33,7 @@ export component CustomSectionHeader inherits Rectangle {
     in property <int> unread-count: 0;
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
+    in property <bool> keyboard-highlight: false;
 
     callback toggle-expanded();
     callback rename-clicked();
@@ -40,16 +41,17 @@ export component CustomSectionHeader inherits Rectangle {
     callback context-menu-requested(/* x */ length, /* y */ length);
 
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
-    accessible-role: button;
+    accessible-role: list-item;
     accessible-label: root.name;
     accessible-description: root.is-expanded ? "Expanded section. Press Shift+F10 or Menu for section options." : "Collapsed section. Press Shift+F10 or Menu for section options.";
     accessible-action-default => { root.toggle-expanded(); }
-    border-width: header-keys.has-focus ? 2px : 0px;
+    border-width: header-keys.has-focus || root.keyboard-highlight ? 2px : 0px;
     border-color: Colors.focus-ring;
 
     header-keys := FocusScope {
         width: 0px;
         height: 0px;
+        focus-on-tab-navigation: false;
         key-pressed(event) => {
             if event.text == Key.Space || event.text == Key.Return {
                 root.toggle-expanded();
@@ -171,6 +173,7 @@ export component CustomSectionHeader inherits Rectangle {
                 border-color: Colors.focus-ring;
                 rename-keys := FocusScope {
                     width: 0px; height: 0px;
+                    focus-on-tab-navigation: false;
                     key-pressed(event) => {
                         if event.text == Key.Space || event.text == Key.Return { root.rename-clicked(); return accept; }
                         return reject;
@@ -205,6 +208,7 @@ export component CustomSectionHeader inherits Rectangle {
                 border-color: Colors.focus-ring;
                 delete-keys := FocusScope {
                     width: 0px; height: 0px;
+                    focus-on-tab-navigation: false;
                     key-pressed(event) => {
                         if event.text == Key.Space || event.text == Key.Return { root.delete-clicked(); return accept; }
                         return reject;

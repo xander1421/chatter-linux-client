@@ -40,6 +40,23 @@ pub fn sidebar_slots(chat_count: usize, sections: &[(bool, usize)]) -> Vec<Sideb
     slots
 }
 
+/// Resolve a roving focus move among the indices of currently visible rows.
+/// `move_by` is -1/1 for a step, -2/2 for Home/End.
+pub fn sidebar_focus_target(visible: &[usize], current: usize, move_by: i32) -> Option<usize> {
+    if visible.is_empty() { return None; }
+    let position = visible.iter().position(|&index| index == current);
+    match move_by {
+        -2 => visible.first().copied(),
+        2 => visible.last().copied(),
+        -1 => position.and_then(|index| index.checked_sub(1))
+            .and_then(|index| visible.get(index).copied())
+            .or_else(|| visible.first().copied()),
+        1 => position.and_then(|index| visible.get(index + 1).copied())
+            .or_else(|| visible.first().copied()),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChatRowLabel {
     #[default]

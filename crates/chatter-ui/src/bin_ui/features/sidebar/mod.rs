@@ -163,6 +163,37 @@ pub use channel::load_channel_into_ui;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let focus_window = window.as_weak();
+    window.global::<crate::SidebarPane>().on_sidebar_focus_target(move |current, move_by, mobile, shield, requests| {
+        use slint::Model;
+        let Some(window) = focus_window.upgrade() else { return current; };
+        let rows = window.global::<crate::SidebarPane>().get_flat_rows();
+        let visible: Vec<_> = (0..rows.row_count()).filter(|&index| {
+            rows.row_data(index).is_some_and(|row| match row.kind.as_str() {
+                "saved" => !shield,
+                "friends" | "calls" => !mobile,
+                "requests" => requests,
+                "chat" | "section-chat" | "archived-chat" | "archive-entry" | "archive-back" | "section-header" => true,
+                _ => false,
+            })
+        }).collect();
+        chatter_core::ui::sidebar_data::sidebar_focus_target(&visible, current.max(0) as usize, move_by)
+            .map_or(current, |index| index as i32)
+    });
+    let navigation_client = ui_ctx.clone();
+    let navigation_window = window.as_weak();
+    window.global::<crate::SidebarPane>().on_navigate_chat(move |direction| {
+        let Some(window) = navigation_window.upgrade() else { return; };
+        let pane = window.global::<crate::SidebarPane>();
+        if let Some(target) = navigation_client.adjacent_sidebar_conversation(
+            direction > 0,
+            pane.get_archive_open(),
+        ) {
+            pane.set_active_tab("chats".into());
+            pane.set_mobile_show_chat(true);
+            select_conversation(&window, target);
+        }
+    });
     wire_context_menu_mute(window, ui_ctx);
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);

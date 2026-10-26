@@ -22,7 +22,30 @@ export component AppShortcuts inherits FocusScope {
     // Ctrl+K/F, Ctrl+, Ctrl+/ and Ctrl+J did nothing from the composer or
     // after a click in the chat.
     public function handle-command(event: KeyEvent) -> bool {
-        if (!self.enabled || !event.modifiers.control) { return false; }
+        if (!self.enabled) { return false; }
+        if (root.active-modal == "none" && !SearchPane.unified-search-open
+            && !SidebarPane.row-context-menu-open && !SidebarPane.section-context-menu-open
+            && !ChatPane.context-menu-visible && !ChatPane.reaction-picker-visible
+            && !ChatPane.composer-emoji-picker-visible && !ChatPane.composer-gif-picker-visible
+            && !CallView.calls-more-menu-visible) {
+            if (event.modifiers.control && event.text == "0") {
+                SidebarPane.active-tab = "chats";
+                SidebarPane.mobile-show-chat = true;
+                SidebarPane.saved-messages-clicked();
+                return true;
+            }
+            if ((event.modifiers.alt && event.text == Key.DownArrow)
+                || (event.modifiers.control && event.text == Key.Tab && !event.modifiers.shift)) {
+                SidebarPane.navigate-chat(1);
+                return true;
+            }
+            if ((event.modifiers.alt && event.text == Key.UpArrow)
+                || (event.modifiers.control && event.text == Key.Tab && event.modifiers.shift)) {
+                SidebarPane.navigate-chat(-1);
+                return true;
+            }
+        }
+        if (!event.modifiers.control) { return false; }
         // Ctrl+J: open the local AI channel
         if (root.active-modal == "none" && !SearchPane.unified-search-open
             && JarvisGlobal.enabled && event.modifiers.control && event.text == "j") {
