@@ -215,8 +215,11 @@ export component AppSidebarHost inherits Rectangle {
         remove-from-section(conv-id) => {
             SidebarPane.remove-from-section(conv-id);
         }
+        // The gear is labelled Settings and opens it, as Ctrl+, does; the
+        // avatar beside it opens the account menu.
         settings-clicked => {
-            SidebarPane.active-tab = "profile";
+            ModalHostState.nav-push("settings");
+            SidebarPane.settings-clicked();
         }
         mesh-setup-clicked => {
             ModalHostState.nav-push("mesh-setup");

@@ -142,9 +142,7 @@ export component SidebarFooter inherits GlassSurface {
                         bell-touch := TouchArea { clicked => { ActivityUi.open(); } }
                     }
                 }
-                // The gear opens the account menu (Settings is pushed from
-                // there, app.slint), like the avatar beside it. Not on mobile:
-                // the tab bar's Profile tab is the same menu.
+                // The gear opens Settings; the avatar opens the account menu.
                 if !false: VerticalLayout { alignment: center; horizontal-stretch: 0;
                     Rectangle {
                         width: root.footer-icon-size; height: root.footer-icon-size; border-radius: 4px;
