@@ -472,7 +472,12 @@ pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
     let model = window.global::<crate::SidebarPane>().get_chat_rows();
     for i in 0..model.row_count() {
         if let Some(mut row) = model.row_data(i) {
-            let named = row.conversation_id.as_str() == id || row.user_id.as_str() == id;
+            // By conversation only. A secret chat's row also carries the
+            // peer's user id, so matching `user_id` lit "typing" on the
+            // secret chat whenever its peer typed in the normal DM — tying
+            // the anonymous conversation to the identified one. A friend
+            // DM's conversation id is the peer id, so it still matches.
+            let named = row.conversation_id.as_str() == id;
             if named && row.is_typing != is_typing {
                 row.is_typing = is_typing;
                 model.set_row_data(i, row);
