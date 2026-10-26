@@ -72,6 +72,9 @@ export component AppSidebarHost inherits Rectangle {
         chat-rows-loading: AuthFlow.is-signed-in && SidebarPane.chat-rows-loading;
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;
+        ctx-menu-show <=> SidebarPane.row-context-menu-open;
+        section-header-ctx-menu-show <=> SidebarPane.section-context-menu-open;
+        ctx-menu-is-muted: SidebarPane.row-context-menu-muted;
         user-display-name: SidebarPane.user-display-name;
         user-avatar-source: SidebarPane.user-avatar-source;
         user-initials: SidebarPane.user-initials;
@@ -195,6 +198,12 @@ export component AppSidebarHost inherits Rectangle {
         }
         set-conversation-archived(conv-id, archived) => {
             SidebarPane.set-conversation-archived(conv-id, archived);
+        }
+        row-context-menu-opened(conv-id, kind) => {
+            SidebarPane.row-context-menu-opened(conv-id, kind);
+        }
+        set-conversation-muted(conv-id, kind, muted) => {
+            SidebarPane.set-conversation-muted(conv-id, kind, muted);
         }
         archive-view-changed(open) => {
             SidebarPane.archive-open = open;

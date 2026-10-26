@@ -163,6 +163,7 @@ pub use channel::load_channel_into_ui;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    wire_context_menu_mute(window, ui_ctx);
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
     dm::wire_delete_conversation(window, ui_ctx);
@@ -195,6 +196,36 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_archive(window, ui_ctx);
     anon_mode::wire(window, ui_ctx);
     refresh_flat_rows(window);
+}
+
+fn wire_context_menu_mute(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+    window.global::<crate::SidebarPane>().on_row_context_menu_opened(move |row_id, kind| {
+        let Some(w) = weak.upgrade() else { return };
+        let kind = crate::bin_ui::converters::conversation_type(kind);
+        let muted = ctx.resolve_row_conversation(row_id.as_str(), &kind)
+            .and_then(|conv| ctx.is_conversation_muted(conv).ok())
+            .unwrap_or(false);
+        w.global::<crate::SidebarPane>().set_row_context_menu_muted(muted);
+    });
+
+    let ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+    window.global::<crate::SidebarPane>().on_set_conversation_muted(move |row_id, kind, muted| {
+        let Some(w) = weak.upgrade() else { return };
+        let kind = crate::bin_ui::converters::conversation_type(kind);
+        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        match ctx.mute_conversation(conv, muted) {
+            Ok(()) => w.global::<crate::SidebarPane>().set_row_context_menu_muted(muted),
+            Err(error) => {
+                tracing::error!(%error, "Could not update conversation mute");
+                w.set_toast_message("Couldn't update mute setting".into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            }
+        }
+    });
 }
 
 /// Tell the message list where to open.

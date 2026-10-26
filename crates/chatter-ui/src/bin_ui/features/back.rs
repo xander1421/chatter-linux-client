@@ -329,6 +329,13 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    let sidebar = window.global::<crate::SidebarPane>();
+    if sidebar.get_row_context_menu_open() || sidebar.get_section_context_menu_open() {
+        sidebar.set_row_context_menu_open(false);
+        sidebar.set_section_context_menu_open(false);
+        return true;
+    }
+
     // The unified search palette is its own overlay, not a stacked screen,
     // so Back fell straight through it and backgrounded the app with the
     // palette still on screen (§112u).

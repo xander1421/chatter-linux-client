@@ -145,6 +145,8 @@ export component Sidebar inherits Rectangle {
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback set-conversation-archived(/* conversation-id */ string, /* archived */ bool);
+    callback row-context-menu-opened(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback set-conversation-muted(/* conversation-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback archive-view-changed(bool);
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
@@ -213,7 +215,7 @@ export component Sidebar inherits Rectangle {
     property <int> rail-button-count: MeshGlobal.enabled ? 7 : 6;
 
     // Context menu state
-    property <bool> ctx-menu-show: false;
+    in-out property <bool> ctx-menu-show: false;
     property <length> ctx-menu-x: 0;
     property <length> ctx-menu-y: 0;
     property <string> ctx-menu-conv-id: "";
@@ -221,12 +223,13 @@ export component Sidebar inherits Rectangle {
     property <string> ctx-menu-current-section-id: "";
     property <bool> ctx-menu-is-pinned: false;
     property <bool> ctx-menu-is-archived: false;
+    in property <bool> ctx-menu-is-muted: false;
     // Channel and group rows, as core decided it for the row.
     property <bool> ctx-menu-can-leave: false;
     property <bool> ctx-menu-can-delete-channel: false;
 
     // Section header context menu state
-    property <bool> section-header-ctx-menu-show: false;
+    in-out property <bool> section-header-ctx-menu-show: false;
     property <length> section-header-ctx-menu-x: 0;
     property <length> section-header-ctx-menu-y: 0;
     property <string> section-header-ctx-menu-section-id: "";
@@ -698,6 +701,8 @@ export component Sidebar inherits Rectangle {
                             root.ctx-menu-x = x;
                             root.ctx-menu-y = y;
                             root.ctx-menu-current-section-id = "";
+                            root.section-header-ctx-menu-show = false;
+                            root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
                             root.ctx-menu-show = true;
                         }
                     }
@@ -718,6 +723,7 @@ export component Sidebar inherits Rectangle {
                         root.section-header-ctx-menu-x = x;
                         root.section-header-ctx-menu-y = y;
                         root.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
+                        root.ctx-menu-show = false;
                         root.section-header-ctx-menu-show = true;
                     }
                 }
@@ -741,6 +747,8 @@ export component Sidebar inherits Rectangle {
                             root.ctx-menu-current-section-id = entry.section.section-id;
                             root.ctx-menu-is-pinned = entry.chat.is-pinned;
                             root.ctx-menu-is-archived = false;
+                            root.section-header-ctx-menu-show = false;
+                            root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
                             root.ctx-menu-show = true;
                         }
                     }
@@ -895,6 +903,7 @@ export component Sidebar inherits Rectangle {
         current-section-id: root.ctx-menu-current-section-id;
         is-pinned: root.ctx-menu-is-pinned;
         is-archived: root.ctx-menu-is-archived;
+        is-muted: root.ctx-menu-is-muted;
         can-leave: root.ctx-menu-can-leave;
         can-delete-channel: root.ctx-menu-can-delete-channel;
         mobile-mode: root.touch;
@@ -918,6 +927,9 @@ export component Sidebar inherits Rectangle {
         }
         set-archived(conv-id, archived) => {
             root.set-conversation-archived(conv-id, archived);
+        }
+        set-muted(conv-id, kind, muted) => {
+            root.set-conversation-muted(conv-id, kind, muted);
         }
         delete-chat(conv-id, conv-type) => {
             root.delete-conversation(conv-id, conv-type);
