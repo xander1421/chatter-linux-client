@@ -11,7 +11,7 @@ use slint::{Image, Timer, TimerMode, Weak};
 use chatter_core::media::gif::decode_first_frame_only;
 use tokio::sync::mpsc;
 
-use super::{MAX_ANIMATION_BYTES, MAX_VIEWER_FRAMES, VIEWER_FRAME_PX};
+use super::{VIEWER_ANIMATION_BYTES, MAX_VIEWER_FRAMES, VIEWER_FRAME_PX};
 use super::RawFrame;
 use crate::MainWindow;
 
@@ -80,14 +80,13 @@ pub fn prepare_first_gif_frame(
 
 /// Start GIF animation in viewer AND register for inline animation.
 ///
-/// Uses progressive decoding with a bounded GStreamer CPU path on desktop
-/// and the `image` crate when GStreamer is unavailable.
+/// Uses bounded background decoding with the `image` crate.
 ///
 /// For all backends:
 /// 1. Receive a first frame prepared on the decrypt worker
 /// 2. Start animation IMMEDIATELY (even with just 1 frame)
-/// 3. Background decoder sends frames via channel as they decode
-/// 4. Animation progressively gets smoother as frames arrive
+/// 3. Background decoder selects frames across the complete loop
+/// 4. Selected frames are sent to the animation channel
 /// 5. Also registers for inline message thumbnail animation (shared decode)
 ///
 /// Returns the first frame to display immediately, or None if not an animated GIF.
@@ -98,6 +97,7 @@ pub fn start_gif_animation_and_inline(
     first_frame: Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, u64)>,
 ) -> Option<Image> {
     let (pixels, first_delay) = first_frame?;
+    let gif_data = data.to_vec();
     let size = window.upgrade().map(|w| w.window().size());
     let max_width = size.map(|s| s.width.max(1).min(VIEWER_FRAME_PX)).unwrap_or(VIEWER_FRAME_PX);
     let max_height = size.map(|s| s.height.max(1).min(VIEWER_FRAME_PX)).unwrap_or(VIEWER_FRAME_PX);
@@ -140,13 +140,11 @@ pub fn start_gif_animation_and_inline(
         *cell.borrow_mut() = Some(rx);
     });
 
-    // Spawn background decoder - streams frames as they decode
-    let data_vec = data.to_vec();
+    // Spawn background decoder with the original GIF bytes.
     std::thread::spawn(move || {
         let bg_start = std::time::Instant::now();
 
-        // Try GStreamer CPU decode, then the image crate.
-        let decode_result = decode_gif_with_best_backend(&data_vec, &tx, max_width, max_height, first_bytes);
+        let decode_result = decode_gif_with_image_crate(&gif_data, &tx, max_width, max_height, first_delay);
 
         match decode_result {
             Ok(frame_count) => {
@@ -170,117 +168,59 @@ pub fn start_gif_animation_and_inline(
     Some(first_frame_image)
 }
 
-/// Decode GIF using the best available backend.
-///
-/// Tries GStreamer CPU decode, then the pure Rust `image` crate.
-fn decode_gif_with_best_backend(data: &[u8], tx: &mpsc::Sender<RawFrame>, max_width: u32, max_height: u32, first_bytes: usize) -> Result<usize, String> {
-    // GStreamer honors stride and stops at the frame and byte budget.
-    // The bounded result is then sent to the animation channel.
-    #[cfg(feature = "desktop-gstreamer")]
-    {
-        match chatter_core::media::gif::decode_frames_cpu_bounded(data, MAX_VIEWER_FRAMES, 48 << 20) {
-            Ok(frames) if frames.len() > 1 => {
-                let mut sent = 0;
-                let mut used = first_bytes;
-                let mut skipped_ms = 0u64;
-                // Skip frame 0 — already prepared on the decrypt worker.
-                for frame in frames.into_iter().skip(1) {
-                    let delay_ms = frame.delay.as_millis() as u64;
-                    let (data, width, height) = super::fit_frame(frame.data, frame.width, frame.height, max_width, max_height);
-                    if sent + 1 >= MAX_VIEWER_FRAMES || data.is_empty() || data.len() > MAX_ANIMATION_BYTES.saturating_sub(used) {
-                        skipped_ms = skipped_ms.saturating_add(delay_ms);
-                        continue;
-                    }
-                    used += data.len();
-                    if tx
-                        .blocking_send((
-                            data, width, height, delay_ms,
-                        ))
-                        .is_err()
-                    {
-                        return Ok(sent);
-                    }
-                    sent += 1;
-                }
-                if skipped_ms > 0 { let _ = tx.blocking_send((Vec::new(), 0, 0, skipped_ms)); }
-                return Ok(sent);
-            }
-            Ok(_) => {} // 0/1 frame — fall through to image crate
-            Err(e) => {
-                tracing::debug!("CPU GStreamer decode failed ({}), image crate fallback", e);
-            }
-        }
-    }
-
-    decode_gif_with_image_crate(data, tx, max_width, max_height, first_bytes)
-}
-
-/// Fallback decoder using the `image` crate (pure Rust, no GPU).
-fn decode_gif_with_image_crate(data: &[u8], tx: &mpsc::Sender<RawFrame>, max_width: u32, max_height: u32, first_bytes: usize) -> Result<usize, String> {
+/// Decode the complete loop before sending frames. A later budget crossing can
+/// thin earlier samples, so no animation frames are uploaded until selection ends.
+fn decode_gif_with_image_crate(
+    data: &[u8], tx: &mpsc::Sender<RawFrame>, max_width: u32, max_height: u32,
+    first_delay: u64,
+) -> Result<usize, String> {
     use image::AnimationDecoder;
     use image::codecs::gif::GifDecoder as ImageGifDecoder;
     use std::io::Cursor;
 
-    let cursor = Cursor::new(data);
-    let decoder = ImageGifDecoder::new(cursor)
+    let decoder = ImageGifDecoder::new(Cursor::new(data))
         .map_err(|e| format!("Image crate GIF decode failed: {}", e))?;
-
-    let frames_iter = decoder.into_frames();
-    let mut frame_count = 0;
-    let mut decoded_bytes = first_bytes;
-    let mut skipped_ms = 0u64;
-
-    for (idx, frame_result) in frames_iter.enumerate() {
-        // Skip first frame (already prepared on the decrypt worker)
-        if idx == 0 {
-            continue;
-        }
-
+    let mut selected = chatter_core::media::gif::DecimatedGif::default();
+    for (idx, frame_result) in decoder.into_frames().enumerate() {
         let frame = match frame_result {
-            Ok(f) => f,
+            Ok(frame) => frame,
             Err(e) => {
                 tracing::warn!("GIF frame {} error: {}", idx, e);
                 continue;
             }
         };
-
-        // Extract frame data
-        let delay = frame.delay();
-        let (numer, denom) = delay.numer_denom_ms();
-        let delay_ms = if denom == 0 {
-            100
-        } else {
-            (numer as u64) / (denom as u64)
-        };
-
+        let (numer, denom) = frame.delay().numer_denom_ms();
+        let delay_ms = if denom == 0 { 100 } else { numer as u64 / denom as u64 };
         let buffer = frame.into_buffer();
         let (width, height) = buffer.dimensions();
-        let (frame_data, width, height) = super::fit_frame(buffer.into_raw(), width, height, max_width, max_height);
-
-        if frame_count + 1 >= MAX_VIEWER_FRAMES
-            || frame_data.is_empty()
-            || frame_data.len() > MAX_ANIMATION_BYTES.saturating_sub(decoded_bytes)
-        {
-            skipped_ms = skipped_ms.saturating_add(delay_ms);
-            continue;
-        }
-        decoded_bytes += frame_data.len();
-
-        // Send frame immediately
-        if tx
-            .blocking_send((frame_data, width, height, delay_ms))
-            .is_err()
-        {
-            tracing::debug!("GIF receiver dropped at frame {}", idx);
-            break;
-        }
-
-        frame_count += 1;
+        let (pixels, width, height) = super::fit_frame(
+            buffer.into_raw(), width, height, max_width, max_height,
+        );
+        if pixels.is_empty() { continue; }
+        let bytes = pixels.len();
+        selected = chatter_core::media::gif::decimate_gif_frame(
+            selected, (pixels, width, height), delay_ms, bytes,
+            MAX_VIEWER_FRAMES, VIEWER_ANIMATION_BYTES,
+        );
     }
 
-    if skipped_ms > 0 { let _ = tx.blocking_send((Vec::new(), 0, 0, skipped_ms)); }
-
-    Ok(frame_count)
+    let mut samples = selected.frames.into_iter();
+    let Some(first) = samples.next() else { return Ok(0) };
+    let extra_first_delay = first.delay_ms.saturating_sub(first_delay);
+    if extra_first_delay > 0
+        && tx.blocking_send((Vec::new(), 0, 0, extra_first_delay)).is_err()
+    {
+        return Ok(0);
+    }
+    let mut sent = 0;
+    for sample in samples {
+        let (pixels, width, height) = sample.frame;
+        if tx.blocking_send((pixels, width, height, sample.delay_ms)).is_err() {
+            break;
+        }
+        sent += 1;
+    }
+    Ok(sent)
 }
 
 /// Start the frame advancement timer for image viewer.
@@ -415,7 +355,7 @@ fn poll_streaming_frames() -> usize {
                         state_cell
                             .borrow()
                             .as_ref()
-                            .map(|s| s.frames.len() >= MAX_VIEWER_FRAMES || data.len() > MAX_ANIMATION_BYTES.saturating_sub(s.bytes))
+                            .map(|s| s.frames.len() >= MAX_VIEWER_FRAMES || data.len() > VIEWER_ANIMATION_BYTES.saturating_sub(s.bytes))
                             .unwrap_or(true)
                     });
 
@@ -471,18 +411,28 @@ fn register_inline_from_viewer() {
         VIEWER_GIF_STATE.with(|state_cell| {
             if let Some(ref state) = *state_cell.borrow() {
                 if state.frames.len() > 1 {
-                    let frames = state.frames.iter().filter_map(|frame| {
-                        let pixels = frame.to_rgba8()?;
+                    let mut selected = chatter_core::media::gif::DecimatedGif::default();
+                    for (frame, delay_ms) in state.frames.iter().zip(&state.delays) {
+                        let Some(pixels) = frame.to_rgba8() else { return };
                         let (data, width, height) = super::fit_frame(
                             pixels.as_bytes().to_vec(), pixels.width(), pixels.height(),
                             super::INLINE_FRAME_PX, super::INLINE_FRAME_PX,
                         );
-                        (!data.is_empty()).then(|| crate::bin_ui::slint_conversions::rgba_to_slint_image(&data, width, height))
-                    }).collect::<Vec<_>>();
-                    if frames.len() != state.frames.len() { return; }
+                        if data.is_empty() { return; }
+                        let bytes = data.len();
+                        let image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                            &data, width, height,
+                        );
+                        selected = chatter_core::media::gif::decimate_gif_frame(
+                            selected, image, *delay_ms, bytes,
+                            MAX_VIEWER_FRAMES, super::INLINE_ANIMATION_BYTES,
+                        );
+                    }
+                    let (frames, delays): (Vec<_>, Vec<_>) = selected.frames.into_iter()
+                        .map(|sample| (sample.frame, sample.delay_ms)).unzip();
                     let inline_state = super::inline::InlineGifState {
                         frames,
-                        delays: state.delays.clone(),
+                        delays,
                         current_frame: 0,
                         accumulated_ms: 0,
                     };

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use super::{MAX_ANIMATION_BYTES, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS, INLINE_FRAME_PX};
+use super::{INLINE_ANIMATION_BYTES, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS, INLINE_FRAME_PX};
 use crate::MainWindow;
 
 thread_local! {
@@ -186,36 +186,6 @@ pub fn register_inline_gif_from_images(
     start_inline_timer_if_needed();
 
     Some(first_frame)
-}
-
-/// Append a progressive batch without rebuilding frames already on the UI thread.
-fn append_inline_gif_from_buffers(
-    attachment_id: &str,
-    buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
-    delays: Vec<u64>,
-) {
-    INLINE_GIFS.with(|gifs| {
-        if let Some(state) = gifs.borrow_mut().get_mut(attachment_id) {
-            state.frames.extend(buffers.into_iter().map(Image::from_rgba8));
-            state.delays.extend(delays);
-        }
-    });
-    // Progressive batches can grow an existing entry beyond the global cap.
-    INLINE_LRU.with(|lru| {
-        let mut lru = lru.borrow_mut();
-        while INLINE_GIFS.with(|gifs| gifs.borrow().values().map(InlineGifState::bytes).sum::<usize>()) > MAX_INLINE_GIF_BYTES {
-            let Some(oldest) = lru.pop_front() else { break; };
-            INLINE_GIFS.with(|gifs| { gifs.borrow_mut().remove(&oldest); });
-        }
-    });
-}
-
-fn extend_last_delay(attachment_id: &str, extra_ms: u64) {
-    INLINE_GIFS.with(|gifs| {
-        if let Some(last) = gifs.borrow_mut().get_mut(attachment_id).and_then(|state| state.delays.last_mut()) {
-            *last = last.saturating_add(extra_ms);
-        }
-    });
 }
 
 /// Unregister an inline GIF (when message is removed from view).
@@ -580,14 +550,9 @@ pub fn register_gif_attachment(
         };
 
         let frames_iter = decoder.into_frames();
-        let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = vec![];
-        let mut all_delays: Vec<u64> = vec![];
-        let mut animation_started = false;
-        let mut pending_buffers = Vec::new();
-        let mut pending_delays = Vec::new();
-        let mut decoded_bytes = 0usize;
-        let mut skipped_delay_ms = 0u64;
-        const BATCH_SIZE: usize = 5;
+        // Keep decoding bounded in memory until the retained set is final.
+        // Uploaded batches cannot be thinned after a later frame raises the stride.
+        let mut selected = chatter_core::media::gif::DecimatedGif::default();
         const MAX_FRAMES: usize = 100;
 
         for (_idx, frame_result) in frames_iter.enumerate() {
@@ -614,77 +579,37 @@ pub fn register_gif_attachment(
                 buffer.into_raw(), width, height, INLINE_FRAME_PX, INLINE_FRAME_PX,
             );
 
-            if !chatter_core::media::gif::frame_fits_budget(
-                all_buffers.len(), decoded_bytes, raw_data.len(),
-                MAX_FRAMES, MAX_ANIMATION_BYTES,
-            ) {
-                skipped_delay_ms = skipped_delay_ms.saturating_add(delay_ms);
+            if raw_data.is_empty() {
                 continue;
             }
-            decoded_bytes += raw_data.len();
-
-            // Convert to Slint pixel buffer IN THE BACKGROUND THREAD (Send)
+            let bytes = raw_data.len();
             let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                 &raw_data, width, height,
             );
-
-            all_buffers.push(pixel_buffer.clone());
-            all_delays.push(delay_ms);
-            pending_buffers.push(pixel_buffer);
-            pending_delays.push(delay_ms);
-
-            // Start animation as soon as we have enough frames
-            if !animation_started && all_buffers.len() >= 2 {
-                animation_started = true;
-                let buffers_batch = std::mem::take(&mut pending_buffers);
-                let delays_batch = std::mem::take(&mut pending_delays);
-                let att_id_batch = attachment_id.clone();
-                let weak_batch = window_weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(first_image) =
-                        register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch)
-                    {
-                        if let Some(w) = weak_batch.upgrade() {
-                            set_attachment_thumbnail(&w, &att_id_batch, first_image);
-                        }
-                        tracing::info!("Started sent GIF animation: {}", att_id_batch);
-                    }
-                });
-            }
-            // Update animation periodically with new frames
-            else if animation_started && all_buffers.len() % BATCH_SIZE == 0 {
-                let buffers_batch = std::mem::take(&mut pending_buffers);
-                let delays_batch = std::mem::take(&mut pending_delays);
-                let att_id_batch = attachment_id.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    append_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch);
-                });
-            }
+            selected = chatter_core::media::gif::decimate_gif_frame(
+                selected, pixel_buffer, delay_ms, bytes, MAX_FRAMES, INLINE_ANIMATION_BYTES,
+            );
         }
 
-        // Final update with all frames
-        if all_buffers.len() > 1 {
-            if let Some(last) = all_delays.last_mut() {
-                *last = last.saturating_add(skipped_delay_ms);
-            }
+        if selected.frames.len() > 1 {
+            let (all_buffers, all_delays): (Vec<_>, Vec<_>) = selected.frames.into_iter()
+                .map(|sample| (sample.frame, sample.delay_ms)).unzip();
             crate::bin_ui::decode_cache::put_gif(
                 &attachment_id,
                 all_buffers.clone(),
                 all_delays.clone(),
             );
-            if !pending_buffers.is_empty() {
-                let att_id_full = attachment_id.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    append_inline_gif_from_buffers(&att_id_full, pending_buffers, pending_delays);
-                    if skipped_delay_ms > 0 { extend_last_delay(&att_id_full, skipped_delay_ms); }
-                    tracing::info!("Completed sent GIF animation: {}", att_id_full);
-                });
-            } else if skipped_delay_ms > 0 {
-                let att_id_full = attachment_id.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    extend_last_delay(&att_id_full, skipped_delay_ms);
-                });
-            }
+            let att_id_full = attachment_id.clone();
+            let weak = window_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(first_image) = register_inline_gif_from_buffers(
+                    &att_id_full, all_buffers, all_delays,
+                ) {
+                    if let Some(w) = weak.upgrade() {
+                        set_attachment_thumbnail(&w, &att_id_full, first_image);
+                    }
+                }
+            });
         }
     });
 }

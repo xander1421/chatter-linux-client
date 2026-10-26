@@ -22,8 +22,9 @@ pub(crate) const MAX_VIEWER_FRAMES: usize = 100;
 /// Maximum inline GIF animations to keep in memory.
 pub(crate) const MAX_INLINE_GIFS: usize = 20;
 pub(crate) const MAX_INLINE_GIF_BYTES: usize = 24 << 20;
-pub(crate) const MAX_ANIMATION_BYTES: usize = 12 << 20;
-pub(crate) const INLINE_FRAME_PX: u32 = 840;
+pub(crate) const INLINE_ANIMATION_BYTES: usize = 16 << 20;
+pub(crate) const VIEWER_ANIMATION_BYTES: usize = 32 << 20;
+pub(crate) const INLINE_FRAME_PX: u32 = 320;
 pub(crate) const VIEWER_FRAME_PX: u32 = 1280;
 
 /// Resize a composited RGBA frame before it enters any UI animation state.
