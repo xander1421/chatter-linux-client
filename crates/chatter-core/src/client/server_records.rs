@@ -67,7 +67,9 @@ impl ChatterClient {
                     if row.kind == "friend-request" || row.kind == "friend-accepted" {
                         row.title = name;
                     } else if !name.starts_with("User ") {
-                        row.body = format!("{} · {}", name, row.body);
+                        row.body = crate::domain::message::format_preview_body(
+                            &format!("{} · ", name), &row.body, None,
+                        );
                     }
                     if row.kind == "friend-request" {
                         if let Some(ref received) = received {

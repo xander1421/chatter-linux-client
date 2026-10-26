@@ -2,6 +2,7 @@ use super::{CallMessageType, ConversationType, MessageContent, ReactionCount};
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 // ============================================================================
 // Message
@@ -291,7 +292,7 @@ impl Message {
     /// Compose a one-line sidebar preview for this message.
     ///
     /// - Text messages (emoji-only included — an emoji IS the text) are
-    ///   truncated to 50 chars.
+    ///   truncated to 50 graphemes.
     /// - A captioned attachment prefixes the caption with the label's icon.
     /// - Empty-body messages take `attachment_label` when the caller resolved
     ///   one ("🖼️ Photo", "📎 report.pdf"), else "📎 N attachment(s)".
@@ -359,8 +360,9 @@ impl Message {
         } else {
             "[Message]".to_string()
         };
+        let max = (!text.is_empty()).then_some(50);
         if is_own {
-            format!("{}You: {}", pin, body)
+            format!("{pin}{}", format_preview_body("You: ", &body, max))
         } else if matches!(
             &self.conversation_type,
             ConversationType::Channel | ConversationType::AnonGroup | ConversationType::Mesh
@@ -369,25 +371,31 @@ impl Message {
                 .and_then(|name| name.split_whitespace().next())
                 .unwrap_or("");
             if name.is_empty() {
-                format!("{}{}", pin, body)
+                format!("{pin}{}", format_preview_body("", &body, max))
             } else {
-                format!("{}{}: {}", pin, name, body)
+                format!("{pin}{}", format_preview_body(&format!("{name}: "), &body, max))
             }
         } else {
-            format!("{}{}", pin, body)
+            format!("{pin}{}", format_preview_body("", &body, max))
         }
     }
 }
 
-/// Truncate text for a single-line preview, cutting to `max` chars and
-/// appending `...` when the original overflowed. Counts by chars, not bytes,
-/// so emoji and multibyte glyphs are counted correctly.
+/// Keep a label in the surrounding text direction while the message body
+/// chooses its own direction. The ellipsis belongs to the body isolate.
+#[must_use]
+pub fn format_preview_body(label: &str, body: &str, max: Option<usize>) -> String {
+    let body = max.map_or_else(|| body.to_string(), |max| truncate_preview_text(body, max));
+    format!("{label}\u{2068}{body}\u{2069}")
+}
+
+/// Truncate text for a single-line preview at grapheme boundaries, preserving
+/// combining marks and emoji sequences.
 #[must_use]
 pub fn truncate_preview_text(text: &str, max: usize) -> String {
-    if text.chars().count() > max {
-        // Reserve 3 chars for the ellipsis.
+    if text.graphemes(true).count() > max {
         let head_len = max.saturating_sub(3);
-        let truncated: String = text.chars().take(head_len).collect();
+        let truncated: String = text.graphemes(true).take(head_len).collect();
         format!("{}...", truncated)
     } else {
         text.to_string()

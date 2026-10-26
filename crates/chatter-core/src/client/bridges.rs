@@ -3,10 +3,9 @@ use super::*;
 impl ChatterClient {
     // ── UI helpers / formatting ─────────────────────────────────────────
 
-    /// Truncate a message body to Signal-style quote-preview length (100 chars
-    /// with "..." appended when exceeded). Used by search results and quote UI.
+    /// Truncate a displayed message excerpt to 100 graphemes and isolate its direction.
     pub fn truncate_message_preview(&self, text: &str) -> String {
-        crate::services::gateway::shared::truncate_preview(text)
+        crate::domain::message::format_preview_body("", text, Some(100))
     }
 
     /// Convert a [`SendError`] into a user-facing error string (also logs the

@@ -14,7 +14,8 @@ pub use content::{
 };
 pub use conversation::{newest_page_reaching, newest_window_reaching, ConversationType, UnreadAnchor};
 pub use entity::{
-    truncate_preview_text, Message, MessageActions, MessageMenu, REMOTE_ACTION_WINDOW_NS,
+    format_preview_body, truncate_preview_text, Message, MessageActions, MessageMenu,
+    REMOTE_ACTION_WINDOW_NS,
 };
 pub use system::SystemMessage;
 pub use thread::{ordered_insert_position, InsertPosition, Thread};
@@ -25,6 +26,29 @@ use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labeled_preview_isolates_hebrew_arabic_and_mixed_bodies() {
+        for body in ["שלום עולם", "مرحبا بالعالم", "uni1 שלום עולם مرحبا Привет"] {
+            assert_eq!(
+                format_preview_body("You: ", body, None),
+                format!("You: \u{2068}{body}\u{2069}")
+            );
+        }
+        assert_eq!(
+            format_preview_body("Alpha: ", "שלום", None),
+            "Alpha: \u{2068}שלום\u{2069}"
+        );
+    }
+
+    #[test]
+    fn preview_truncates_graphemes_before_closing_the_isolate() {
+        assert_eq!(
+            format_preview_body("You: ", "abשָׁלוֹם👩🏽‍💻xyz", Some(6)),
+            "You: \u{2068}abשָׁ...\u{2069}"
+        );
+        assert_eq!(truncate_preview_text("a👩🏽‍💻bcdef", 5), "a👩🏽‍💻...");
+    }
 
     /// Secret chats: nothing is forwarded out; forwards in are text only; no
     /// GIF picker. Every other conversation is unaffected.
@@ -339,16 +363,16 @@ mod tests {
         // Plain text, and the same text from us.
         assert_eq!(
             text(them, "hello").sidebar_preview(Some(&me), None, None),
-            "hello"
+            "\u{2068}hello\u{2069}"
         );
         assert_eq!(
             text(me, "hello").sidebar_preview(Some(&me), None, None),
-            "You: hello"
+            "You: \u{2068}hello\u{2069}"
         );
         // Emoji-only is just text — it must survive, not become "[Message]".
         assert_eq!(
             text(them, "\u{1F389}").sidebar_preview(Some(&me), None, None),
-            "\u{1F389}"
+            "\u{2068}\u{1F389}\u{2069}"
         );
 
         // Attachment with no caption: typed label when resolved, count when not.
@@ -356,22 +380,22 @@ mod tests {
         file.attachments = vec![AttachmentId::new(), AttachmentId::new()];
         assert_eq!(
             file.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo +1"), None),
-            "\u{1F4F7} Photo +1"
+            "\u{2068}\u{1F4F7} Photo +1\u{2069}"
         );
         assert_eq!(
             file.sidebar_preview(Some(&me), None, None),
-            "\u{1F4CE} 2 attachments"
+            "\u{2068}\u{1F4CE} 2 attachments\u{2069}"
         );
         // Ours says so too — a voice note sent by us was a bare "You:".
         let mut voice = text(me, "");
         voice.attachments = vec![AttachmentId::new()];
         assert_eq!(
             voice.sidebar_preview(Some(&me), Some("\u{1F3A4} Voice message"), None),
-            "You: \u{1F3A4} Voice message"
+            "You: \u{2068}\u{1F3A4} Voice message\u{2069}"
         );
         assert_eq!(
             voice.sidebar_preview(Some(&me), None, None),
-            "You: \u{1F4CE} 1 attachment"
+            "You: \u{2068}\u{1F4CE} 1 attachment\u{2069}"
         );
 
         // A caption keeps its attachment's icon.
@@ -379,16 +403,16 @@ mod tests {
         captioned.attachments = vec![AttachmentId::new()];
         assert_eq!(
             captioned.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo"), None),
-            "You: \u{1F4F7} beach"
+            "You: \u{2068}\u{1F4F7} beach\u{2069}"
         );
 
         // Nothing renderable at all still names the row.
-        assert_eq!(text(them, "").sidebar_preview(Some(&me), None, None), "[Message]");
+        assert_eq!(text(them, "").sidebar_preview(Some(&me), None, None), "\u{2068}[Message]\u{2069}");
 
         // A pin marks every kind, and does not eat the body.
         let mut pinned = text(them, "hello");
         pinned.is_pinned = true;
-        assert_eq!(pinned.sidebar_preview(Some(&me), None, None), "\u{1F4CC} hello");
+        assert_eq!(pinned.sidebar_preview(Some(&me), None, None), "\u{1F4CC} \u{2068}hello\u{2069}");
     }
 
     #[test]
@@ -404,18 +428,18 @@ mod tests {
         );
         assert_eq!(
             group.sidebar_preview(Some(&me), None, Some("Alpha Example")),
-            "Alpha: hello"
+            "Alpha: \u{2068}hello\u{2069}"
         );
         assert_eq!(
             group.sidebar_preview(Some(&me), None, Some("@alpha")),
-            "@alpha: hello"
+            "@alpha: \u{2068}hello\u{2069}"
         );
 
         let mut dm = group;
         dm.conversation_type = ConversationType::ServerDm;
         assert_eq!(
             dm.sidebar_preview(Some(&me), None, Some("Alpha Example")),
-            "hello"
+            "\u{2068}hello\u{2069}"
         );
     }
 

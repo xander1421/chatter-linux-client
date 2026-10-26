@@ -577,7 +577,11 @@ impl ChatterClient {
                     let preview = msg
                         .as_text()
                         .filter(|t| !t.is_empty())
-                        .map(|t| plain_sidebar_preview(&format!("You: {}", t)))
+                        .map(|t| {
+                            plain_sidebar_preview(&crate::domain::message::format_preview_body(
+                                "You: ", t, Some(50),
+                            ))
+                        })
                         .unwrap_or_else(|| "Message request sent".to_string());
                     (preview, Some(msg.created_at))
                 }

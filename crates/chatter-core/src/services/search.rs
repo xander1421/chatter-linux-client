@@ -9,6 +9,7 @@
 use crate::services::quick_switcher::QuickSwitcherEntry;
 use chrono::{DateTime, Utc};
 use chrono::{Datelike, TimeZone};
+use unicode_segmentation::UnicodeSegmentation;
 
 impl crate::client::ChatterClient {
     /// Resolve result labels from the same local record as secret-chat rows.
@@ -41,27 +42,28 @@ impl crate::client::ChatterClient {
     /// Keep the first query match inside the compact one-line result preview.
     pub fn search_result_preview(&self, text: &str, query: &str) -> String {
         let flat = self.plain_message_preview(text);
-        let char_count = flat.chars().count();
-        if char_count <= 100 {
-            return flat;
+        let grapheme_count = flat.graphemes(true).count();
+        if grapheme_count <= 100 {
+            return crate::domain::message::format_preview_body("", &flat, None);
         }
         let (_, matched, _, start, _) = preview_fragments(&flat, query);
-        let match_at = flat[..start as usize].chars().count();
+        let match_at = flat[..start as usize].graphemes(true).count();
         let start = if matched.is_empty() || match_at < 70 {
             0
         } else {
             match_at.saturating_sub(30)
         };
-        let end = (start + 99).min(char_count);
-        format!(
+        let end = (start + 99).min(grapheme_count);
+        let body = format!(
             "{}{}{}",
             if start > 0 { "…" } else { "" },
-            flat.chars()
+            flat.graphemes(true)
                 .skip(start)
                 .take(end - start)
                 .collect::<String>(),
-            if end < char_count { "…" } else { "" }
-        )
+            if end < grapheme_count { "…" } else { "" }
+        );
+        crate::domain::message::format_preview_body("", &body, None)
     }
 
     /// Resolve search labels in one directory lookup, preserving the special

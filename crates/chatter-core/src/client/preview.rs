@@ -65,9 +65,7 @@ pub struct ActionPreviewAttachment {
 }
 
 pub fn message_action_preview(text: &str, attachments: &[ActionPreviewAttachment]) -> String {
-    let text_preview = if text.chars().count() > 50 {
-        format!("{}...", text.chars().take(47).collect::<String>())
-    } else { text.to_string() };
+    let text_preview = crate::domain::message::truncate_preview_text(text, 50);
     let image_count = attachments.iter().filter(|a| a.is_image).count();
     let files: Vec<_> = attachments.iter().filter(|a| !a.is_image).collect();
     let mut parts = Vec::new();
@@ -84,9 +82,12 @@ pub fn message_action_preview(text: &str, attachments: &[ActionPreviewAttachment
     } else if files.len() > 1 { parts.push(format!("\u{1F4CE} {} files", files.len())); }
     let attachment_label = parts.join(", ");
     match (text_preview.is_empty(), attachment_label.is_empty()) {
-        (false, false) => format!("{text_preview} \u{2022} {attachment_label}"),
+        (false, false) => format!(
+            "{} \u{2022} {attachment_label}",
+            crate::domain::message::format_preview_body("", &text_preview, None)
+        ),
         (true, false) => attachment_label,
-        (false, true) => text_preview,
+        (false, true) => crate::domain::message::format_preview_body("", &text_preview, None),
         (true, true) => String::new(),
     }
 }

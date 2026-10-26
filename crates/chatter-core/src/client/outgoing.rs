@@ -89,7 +89,9 @@ impl ChatterClient {
         let (preview, at) = match message {
             Some(message) => (self.message_sidebar_preview(message), message.created_at),
             None => (
-                messaging::plain_sidebar_preview(&format!("You: {}", text)),
+                messaging::plain_sidebar_preview(&crate::domain::message::format_preview_body(
+                    "You: ", text, Some(50),
+                )),
                 chrono::Utc::now(),
             ),
         };
