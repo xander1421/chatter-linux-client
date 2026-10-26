@@ -105,6 +105,17 @@ fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
     if w.global::<crate::ModalHostState>()
         .get_modal_stack()
         .iter()
+        .any(|s| s == "create-section")
+        && !stack.iter().any(|s| s == "create-section")
+    {
+        w.global::<crate::ModalHostState>()
+            .set_create_section_conversation_id("".into());
+        w.global::<crate::ModalHostState>()
+            .set_create_section_conversation_kind(crate::ConversationKind::Channel);
+    }
+    if w.global::<crate::ModalHostState>()
+        .get_modal_stack()
+        .iter()
         .any(|s| s == "user-profile")
         && !stack.iter().any(|s| s == "user-profile")
     {

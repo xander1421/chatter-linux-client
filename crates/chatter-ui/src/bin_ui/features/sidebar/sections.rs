@@ -82,16 +82,24 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.global::<crate::ModalHostState>().on_create_section(move |name: SharedString, emoji: SharedString| {
+    window.global::<crate::ModalHostState>().on_create_section(move |name: SharedString, emoji: SharedString, conv_id: SharedString, kind: crate::ConversationKind| {
         let name_str = name.to_string();
         let emoji_str = emoji.to_string();
+        let conv_id_str = conv_id.to_string();
+        let conversation = (!conv_id_str.is_empty())
+            .then(|| crate::bin_ui::converters::conversation_type(kind));
+        let moves_conversation = conversation.is_some();
         let ui_ctx = ui_ctx.clone();
         let weak_clone = weak.clone();
 
         run_ui!(weak, |w| w.global::<crate::ModalHostState>().set_create_section_loading(true));
 
         tokio::spawn(async move {
-            match ui_ctx.create_section(&name_str, &emoji_str) {
+            match ui_ctx.create_section(
+                &name_str,
+                &emoji_str,
+                conversation.map(|kind| (conv_id_str.as_str(), kind)),
+            ) {
                 Ok(section) => {
                     tracing::info!(section_id = %section.id, name = %name_str, "Created custom section");
                     run_ui!(weak_clone, |w| {
@@ -99,6 +107,9 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::bin_ui::features::back::close(&w, "create-section");
                     });
                     refresh_sections_ui(&weak_clone, &ui_ctx);
+                    if moves_conversation {
+                        super::rebuild_chat_list(&weak_clone, &ui_ctx);
+                    }
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create section");

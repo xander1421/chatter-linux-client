@@ -3303,7 +3303,7 @@ fn folder_sort_mode_reaches_core_and_defaults_to_recent() {
 
     // L1 dynamic through core: a new folder is Recent, and the mode persists.
     let section = client
-        .create_section("Work", "\u{1F4C1}")
+        .create_section("Work", "\u{1F4C1}", None)
         .expect("create_section");
     assert_eq!(
         section.sort_mode,
@@ -3567,7 +3567,7 @@ fn a_foldered_dm_still_resolves_to_its_conversation() {
 
     let peer = "22222222-2222-2222-2222-222222222222";
     let section = client
-        .create_section("Work", "\u{1F4C1}")
+        .create_section("Work", "\u{1F4C1}", None)
         .expect("create_section");
     client
         .move_conversation_to_section(
@@ -3621,7 +3621,7 @@ fn folders_hide_identified_conversations_while_anon_mode_is_on() {
 
     let channel = "33333333-3333-3333-3333-333333333333";
     let section = client
-        .create_section("Work", "\u{1F4C1}")
+        .create_section("Work", "\u{1F4C1}", None)
         .expect("create_section");
     client
         .move_conversation_to_section(

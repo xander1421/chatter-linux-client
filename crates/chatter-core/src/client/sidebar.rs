@@ -165,9 +165,10 @@ impl ChatterClient {
         &self,
         name: &str,
         emoji: &str,
+        conversation: Option<(&str, crate::domain::message::ConversationType)>,
     ) -> Result<crate::domain::section::CustomSection, crate::services::section_service::SectionError>
     {
-        self.sections().create_section(name, emoji)
+        self.sections().create_section(name, emoji, conversation)
     }
 
     pub fn delete_section(
