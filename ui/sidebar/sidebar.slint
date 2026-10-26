@@ -16,7 +16,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Typography } from "../theme/typography.slint";
 import { ChatRow, ChatRowData } from "chat_list.slint";
-import { CustomSectionHeader, CustomSectionData } from "custom_section_list.slint";
+import { CustomSectionHeader, CustomSectionData, SidebarRowData } from "custom_section_list.slint";
 import { EmptyState } from "../components/empty_state.slint";
 import { ChatListSkeleton } from "../components/skeleton.slint";
 import { SidebarPane } from "../app_sidebar_pane.slint";
@@ -31,14 +31,8 @@ import { SidebarFooter } from "sidebar_footer.slint";
 import { SidebarHeader } from "sidebar_header.slint";
 import { ActivityBell } from "../activity/activity_bell.slint";
 
-export { ChatRowData, CustomSectionData }
+export { ChatRowData, CustomSectionData, SidebarRowData }
 
-export struct SidebarRowData {
-    key: string,
-    kind: string,
-    chat: ChatRowData,
-    section: CustomSectionData,
-}
 
 // Bare Flickable named ListView so the compiler virtualizes its `for`, as in
 // chat/message_list.slint.

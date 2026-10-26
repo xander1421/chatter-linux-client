@@ -23,6 +23,14 @@ export struct CustomSectionData {
     conversations: [ChatRowData],
 }
 
+// One entry of the flattened sidebar list.
+export struct SidebarRowData {
+    key: string,
+    kind: string,
+    chat: ChatRowData,
+    section: CustomSectionData,
+}
+
 // ── Section header ──────────────────────────────────────────────
 
 export component CustomSectionHeader inherits Rectangle {
