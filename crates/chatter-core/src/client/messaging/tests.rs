@@ -746,7 +746,7 @@ mod section_row_tests {
         // Receiver: the peer edits, then deletes, its last message.
         store(peer, "earlier", sent);
         store(peer, "routing check harmless", sent + 1_000);
-        assert_eq!(preview(), "routing check harmless");
+        assert_eq!(preview(), "\u{2068}routing check harmless\u{2069}");
         let m = client.messages();
         m.apply_dm_edit(
             &peer,
@@ -757,18 +757,18 @@ mod section_row_tests {
         )
         .unwrap()
         .expect("applied");
-        assert_eq!(preview(), "edited from S9");
+        assert_eq!(preview(), "\u{2068}edited from S9\u{2069}");
         m.apply_targeted_dm_delete(&peer, Some(&peer.to_string()), sent + 1_000)
             .unwrap()
             .expect("matched");
-        assert_eq!(preview(), "earlier");
+        assert_eq!(preview(), "\u{2068}earlier\u{2069}");
 
         // Sender: our own edit is persisted the way `send_edit` does it.
         let own = store(me, "routing check harmless", sent + 3_000);
-        assert_eq!(preview(), "You: routing check harmless");
+        assert_eq!(preview(), "You: \u{2068}routing check harmless\u{2069}");
         let edited = crate::domain::message::MessageContent::Text("edited from S9".into());
         m.update_message_body(&own.id, &edited).unwrap();
-        assert_eq!(preview(), "You: edited from S9");
+        assert_eq!(preview(), "You: \u{2068}edited from S9\u{2069}");
     }
 
     /// The invite search: a newer keystroke during the pre-lookup pause

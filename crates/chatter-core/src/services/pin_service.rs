@@ -165,12 +165,7 @@ impl PinService {
         // First try to get text content
         if let Some(text) = message.as_text() {
             if !text.is_empty() {
-                return if text.chars().count() > 80 {
-                    let truncated: String = text.chars().take(77).collect();
-                    format!("{}...", truncated)
-                } else {
-                    text.to_string()
-                };
+                return crate::domain::message::format_preview_body("", text, Some(80));
             }
         }
 

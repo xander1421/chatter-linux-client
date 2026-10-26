@@ -399,7 +399,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == dm.id.to_string())
             .unwrap();
-        assert_eq!(row.last_message, "You: new s25-to-s9");
+        assert_eq!(row.last_message, "You: \u{2068}new s25-to-s9\u{2069}");
     }
 
     /// RC108 O4: deleting a secret chat ends it for both sides. An accepted

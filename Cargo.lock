@@ -2024,6 +2024,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "unicode-segmentation",
  "url",
  "usernames",
  "uuid 1.28.0",

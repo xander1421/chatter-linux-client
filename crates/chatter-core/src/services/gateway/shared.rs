@@ -15,26 +15,14 @@ use crate::proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote
 // Preview text
 // =============================================================================
 
-/// Maximum characters for a quote preview.
+/// Maximum graphemes for a quote preview.
 const QUOTE_PREVIEW_MAX_CHARS: usize = 100;
-/// Characters to show before the ellipsis (3 chars for "...").
-const QUOTE_PREVIEW_TRUNCATE_AT: usize = 97;
-
 /// Truncate text for use as a quote preview.
 ///
-/// If the text exceeds 100 characters, it's truncated to 97 characters
+/// If the text exceeds 100 graphemes, it's truncated to 97 graphemes
 /// with "..." appended. This is the standard Signal-style quote preview.
 pub fn truncate_preview(text: &str) -> String {
-    if text.chars().count() > QUOTE_PREVIEW_MAX_CHARS {
-        format!(
-            "{}...",
-            text.chars()
-                .take(QUOTE_PREVIEW_TRUNCATE_AT)
-                .collect::<String>()
-        )
-    } else {
-        text.to_string()
-    }
+    crate::domain::message::truncate_preview_text(text, QUOTE_PREVIEW_MAX_CHARS)
 }
 
 /// Build the reply-preview string for a message, falling back to an

@@ -15,6 +15,7 @@ name = "chatter_core"
 path = "src/lib.rs"
 
 [dependencies]
+unicode-segmentation = "1"
 # ============================================================================
 # bitchat mesh — every chatter-mesh* crate is optional, enabled only by the
 # `mesh` feature below. A default build links none of them.

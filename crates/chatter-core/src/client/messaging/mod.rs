@@ -103,6 +103,14 @@ mod sidebar_preview_tests {
     use super::plain_sidebar_preview;
 
     #[test]
+    fn flattening_keeps_directional_isolates() {
+        let preview = crate::domain::message::format_preview_body(
+            "You: ", "uni1 שלום עולם مرحبا Привет", None,
+        );
+        assert_eq!(plain_sidebar_preview(&preview), preview);
+    }
+
+    #[test]
     fn markdown_fences_and_lines_become_one_plain_line() {
         assert_eq!(
             plain_sidebar_preview("  You: **hello**\n```\n> _world_  `again`\n```  "),
