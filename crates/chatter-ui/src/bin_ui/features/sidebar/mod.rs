@@ -697,6 +697,7 @@ fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterCli
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
         use crate::bin_ui::converters::ChatRowExt;
+        use slint::Model;
         let active = ui_ctx.active_conversation();
         let rows = rows.into_iter().map(|row| {
             let mut row = row.to_slint();
