@@ -8,6 +8,13 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   when an accessibility service is enabled; JNI snapshots run on the Slint
   event thread, and Android click actions invoke the item's default action.
   `docs/ANDROID-ACCESSIBILITY.md` describes scope and remaining work.
+  The host node returned by `SlintNodeProvider` must explicitly report the
+  laid-out input view's parent and screen bounds, visibility, and enabled state.
+  `AccessibilityNodeInfo.obtain(host)` only supplies the node's source; leaving
+  those fields at their defaults made Android report an invisible 0x0 host and
+  skip every virtual Slint child even while an accessibility service was on.
+  The input view remains full-size, touch-transparent, and non-focusable on the
+  GameActivity path; its IME and insets behavior is unchanged.
 
 - `androidwindowadapter.rs` (game-activity path): IME state handling — see the
   `[patch.crates-io]` comment in the workspace `Cargo.toml`.

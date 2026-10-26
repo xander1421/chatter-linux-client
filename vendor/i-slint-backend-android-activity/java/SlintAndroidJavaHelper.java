@@ -161,6 +161,14 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
             AccessibilityNodeInfo root = AccessibilityNodeInfo.obtain(host);
             root.setClassName(View.class.getName());
             root.setPackageName(host.getContext().getPackageName());
+            if (host.getParent() instanceof View) root.setParent((View) host.getParent());
+            root.setBoundsInParent(new Rect(host.getLeft(), host.getTop(), host.getRight(), host.getBottom()));
+            int[] location = new int[2];
+            host.getLocationOnScreen(location);
+            root.setBoundsInScreen(new Rect(location[0], location[1],
+                    location[0] + host.getWidth(), location[1] + host.getHeight()));
+            root.setVisibleToUser(host.isShown());
+            root.setEnabled(host.isEnabled());
             for (int i = 0; i < tree.length(); i++) {
                 JSONObject child = tree.optJSONObject(i);
                 if (child != null && child.optInt("parent", -2) == -1) {

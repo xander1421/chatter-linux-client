@@ -23,6 +23,12 @@ provider query calls a JNI method; the JNI method asks Slint's event thread
 for a fresh snapshot and waits up to 500 ms. No tree walk occurs in normal
 rendering or when accessibility is off. Java keeps a snapshot for at most
 100 ms so Android's series of per-node queries does not rebuild it each time.
+The provider's host node reports the input view's laid-out bounds in its parent
+and on screen, plus its visibility and enabled state. `AccessibilityNodeInfo.obtain(host)`
+does not fill those fields: the first device dump reported an invisible native
+`View` at `Rect(0,0-0,0)`, so Android skipped the virtual children. The GameActivity
+path keeps the input view non-focusable; this accessibility fix does not change
+the SurfaceView's IME ownership or the input view's insets callbacks.
 
 The snapshot includes a virtual ID, parent ID, role, label, description,
 physical-pixel rectangle, visibility, enabled/checked state, and default
@@ -60,3 +66,5 @@ bounds, and `clickable="true"`. Move TalkBack focus across rows, double-tap
 one, and confirm it opens that conversation. Then change the visible list and
 confirm a subsequent query announces the new row labels. Check that touch
 and IME behavior still work with TalkBack off and on.
+The native host `View` should also have nonempty window-sized bounds and
+`visible="true"`; a 0x0 invisible host means Android will not visit the rows.
