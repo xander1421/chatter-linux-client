@@ -69,7 +69,7 @@ pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> Strin
             return format!("{} {}", emoji, name);
         }
         if att.metadata.mime_type == "image/gif" {
-            return "🎞️ GIF".to_string();
+            return "🎬 GIF".to_string();
         }
         let (emoji, label) = match cat {
             FileCategory::Image => ("📷", "Photo"),

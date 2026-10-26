@@ -473,7 +473,9 @@ impl FileMetadata {
         let icon = crate::ui::file_data::category_icon(category.as_str());
         match SharedCategory::of(self) {
             SharedCategory::Voice => "\u{1F3A4} Voice message".to_string(),
-            SharedCategory::Gif => "\u{1F39E}\u{FE0F} GIF".to_string(),
+            // 🎬 has emoji presentation by default; 🎞 (U+1F39E) is text-default
+            // and shaped from the text font as a box on Android.
+            SharedCategory::Gif => "\u{1F3AC} GIF".to_string(),
             SharedCategory::Audio => format!("{} Audio", icon),
             _ => match category {
                 FileCategory::Image => format!("{} Photo", icon),
@@ -631,7 +633,7 @@ mod preview_label_tests {
         // Camera, not 🖼️: the framed picture rendered as tofu on Android 10
         // (`ui::file_data::category_icon`, ae492dbb).
         assert_eq!(label("IMG_1.HEIC", "image/heic", None), "\u{1F4F7} Photo");
-        assert_eq!(label("a.gif", "image/gif", None), "\u{1F39E}\u{FE0F} GIF");
+        assert_eq!(label("a.gif", "image/gif", None), "\u{1F3AC} GIF");
         assert_eq!(label("clip.mp4", "video/mp4", None), "\u{1F3AC} Video");
         let mut recorded = FileMetadata::new(
             super::GENERIC_VOICE_NOTE_FILENAME.into(),

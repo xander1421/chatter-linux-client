@@ -975,7 +975,7 @@ mod tests {
         let label = restored.metadata.preview_label();
         assert_eq!(
             channel_msg.sidebar_preview(None, Some(&label), None),
-            "\u{1F39E}\u{FE0F} GIF",
+            "\u{1F3AC} GIF",
             "a GIF must preview as GIF on the linked device, not as a bare attachment count"
         );
         assert!(
