@@ -25,10 +25,31 @@ pub(crate) fn snapshot() -> String {
         inner.ensure_tree_instantiated();
         let Some(component) = inner.try_component() else { return "[]".into() };
         let mut items = adapter.accessibility_items.borrow_mut();
+        let root = ItemRc::new_root(component);
+        let mut modal = None;
+        find_topmost_modal(&root, &mut modal);
         let mut nodes = Vec::new();
-        visit(ItemRc::new_root(component), -1, adapter.window.scale_factor(), &mut items, &mut nodes);
+        visit(modal.unwrap_or(root), -1, adapter.window.scale_factor(), &mut items, &mut nodes);
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     })
+}
+
+// Accessible IDs are metadata, not spoken labels. The last visible marker in
+// accessible tree order is the frontmost overlay in the app's overlay stack.
+fn find_topmost_modal(item: &ItemRc, modal: &mut Option<ItemRc>) {
+    if item.is_visible()
+        && item.accessible_string_property(Property::Id).as_deref() == Some("modal-overlay")
+    {
+        *modal = Some(item.clone());
+    }
+    for child in accessible_descendents(item) {
+        find_topmost_modal(&child, modal);
+    }
+}
+
+fn contains_accessible_item(root: &ItemRc, target: &ItemRc) -> bool {
+    root.downgrade() == target.downgrade()
+        || accessible_descendents(root).any(|child| contains_accessible_item(&child, target))
 }
 
 fn visit(
@@ -108,6 +129,17 @@ pub(crate) fn click<'local>(
             let Some(adapter) = window.upgrade() else { return };
             let item = adapter.accessibility_items.borrow().get(id as usize).and_then(|item| item.upgrade());
             if let Some(item) = item {
+                let inner = WindowInner::from_pub(&adapter.window);
+                inner.ensure_tree_instantiated();
+                let Some(component) = inner.try_component() else { return };
+                let root = ItemRc::new_root(component);
+                let mut modal = None;
+                find_topmost_modal(&root, &mut modal);
+                if !item.is_visible()
+                    || modal.as_ref().is_some_and(|modal| !contains_accessible_item(modal, &item))
+                {
+                    return;
+                }
                 if item.supported_accessibility_actions().contains(SupportedAccessibilityAction::Default) {
                     item.accessible_action(&AccessibilityAction::Default);
                 }

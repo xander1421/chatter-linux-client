@@ -15,6 +15,13 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   skip every virtual Slint child even while an accessibility service was on.
   The input view remains full-size, touch-transparent, and non-focusable on the
   GameActivity path; its IME and insets behavior is unchanged.
+  Android snapshots select the last visible `accessible-id: "modal-overlay"`
+  group in accessible tree order and serialize only that subtree. The ID is
+  metadata, not a spoken label. Menu roots and `ModalContainer` set it while
+  logically open; root tab screens opt out so their bottom navigation remains
+  reachable. The Java provider's host node remains the tree root.
+  Click dispatch also checks current modal membership, so a stale cached
+  virtual-view ID cannot activate content behind a newly opened overlay.
 
 - `androidwindowadapter.rs` (game-activity path): IME state handling — see the
   `[patch.crates-io]` comment in the workspace `Cargo.toml`.
