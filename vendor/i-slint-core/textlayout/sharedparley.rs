@@ -1486,7 +1486,7 @@ pub fn link_under_cursor(
                 });
                 clicked
             })
-            .map(|(range, link)| (link.clone(), paragraph.text[range.clone()].to_owned()))
+            .map(|(range, link)| (link.clone(), paragraph.text.get(range.clone()).unwrap_or_default().to_owned()))
     });
 
     // Put paragraphs back into the cache guard for reuse.
