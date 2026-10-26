@@ -338,6 +338,23 @@ pub async fn check_latest(
     Ok(Some(manifest))
 }
 
+/// Remove staged update downloads other than `keep`. Each is a full release
+/// (~290 MB for an Android build) and nothing else removes them once the
+/// update installs or a newer one supersedes it. `updates/versions/` (the
+/// Linux launcher's staged and previous versions) is left alone.
+pub(crate) async fn prune_staged_downloads(data_dir: &Path, keep: Option<&str>) {
+    let Ok(mut entries) = tokio::fs::read_dir(data_dir.join("updates")).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.ends_with(".download") && Some(name) != keep {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+}
+
 /// Download to a private staging file and verify before returning its path.
 /// Only ChatterClient's signature-checked pending manifest may enter here.
 pub(crate) async fn download_verified_with_progress(
@@ -361,10 +378,9 @@ pub(crate) async fn download_verified_with_progress(
     tokio::fs::create_dir_all(&folder)
         .await
         .map_err(|_| "cannot create update staging directory")?;
-    let path = folder.join(format!(
-        "{}-{}.download",
-        manifest.platform, manifest.version_code
-    ));
+    let file_name = format!("{}-{}.download", manifest.platform, manifest.version_code);
+    prune_staged_downloads(data_dir, Some(&file_name)).await;
+    let path = folder.join(&file_name);
     // Keep a partial only when its length is plausible. The final digest is
     // always checked over the entire file before this path is returned.
     let partial = tokio::fs::metadata(&path)

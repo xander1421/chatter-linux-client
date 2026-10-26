@@ -70,6 +70,11 @@ impl ChatterClient {
             )
             .await?;
         *self.pending_update.lock() = found.clone();
+        // Anything staged for the installed or an older release is spent.
+        let keep = found
+            .as_ref()
+            .map(|manifest| format!("{}-{}.download", manifest.platform, manifest.version_code));
+        crate::update::prune_staged_downloads(self.directories().data_dir(), keep.as_deref()).await;
         Ok(found)
     }
 
