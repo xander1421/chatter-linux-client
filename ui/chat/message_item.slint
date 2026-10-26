@@ -78,13 +78,12 @@ export component MessageItem inherits Rectangle {
     in property <bool> has-attachments: false;
     in property <int> attachment-count: 0;
     in property <[MessageAttachmentData]> attachments: [];
-    // The current attachment renderer is a vertical list; only a single photo
-    // can own the bubble edges and carry a stamp without covering another tile.
-    property <bool> photo-message: root.has-attachments && root.attachments.length == 1 && root.attachments[0].is-image;
+    property <bool> album-message: root.has-attachments && root.attachments.length > 0 && root.attachments[0].album-count >= 2;
+    property <bool> photo-message: root.album-message || (root.has-attachments && root.attachments.length == 1 && root.attachments[0].is-image);
     property <bool> photo-only: root.photo-message && root.content == "" && !root.is-reply && !root.is-thread-reply;
-    property <float> photo-aspect: root.photo-message && root.attachments[0].height > 0
+    property <float> photo-aspect: root.photo-message && !root.album-message && root.attachments[0].height > 0
         ? root.attachments[0].width / max(1, root.attachments[0].height) : 1.5;
-    property <length> photo-width: root.photo-message
+    property <length> photo-width: root.album-message ? min(280px, root.width * 0.7 - Spacing.md) : root.photo-message
         ? (root.attachments[0].width > 0 && root.attachments[0].height > 0
             ? max(100px, min(min(280px, root.width * 0.7 - Spacing.md), 380px * root.photo-aspect))
             : 180px) : 0px;

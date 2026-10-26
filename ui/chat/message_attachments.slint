@@ -7,6 +7,8 @@ import { HoldArea } from "../components/hold_area.slint";
 import { MessageAttachmentData } from "types.slint";
 import { MessageFooter } from "message_footer.slint";
 
+struct AlbumRect { x: length, y: length, width: length, height: length }
+
 export component MessageAttachments inherits VerticalLayout {
     in property <[MessageAttachmentData]> attachments;
     in property <string> audio-elapsed;
@@ -43,9 +45,124 @@ export component MessageAttachments inherits VerticalLayout {
     callback audio-seek(string, float);
     callback message-clicked(string);
 
+    property <int> album-count: root.attachments.length > 0 ? root.attachments[0].album-count : 0;
+    pure function album-rect(index: int, count: int, width: length, gap: length) -> AlbumRect {
+        if (count == 2) {
+            let side = (width - gap) / 2;
+            return { x: index * (side + gap), y: 0px, width: side, height: side };
+        }
+        if (count == 3) {
+            let height = width * 0.75;
+            let left = (width - gap) * 0.6;
+            let right = width - gap - left;
+            return index == 0
+                ? { x: 0px, y: 0px, width: left, height: height }
+                : { x: left + gap, y: (index - 1) * ((height - gap) / 2 + gap), width: right, height: (height - gap) / 2 };
+        }
+        let side = (width - gap) / 2;
+        let row = Math.floor(index / 2);
+        let is-last-odd = count > 4 && Math.mod(count, 2) == 1 && index == min(count, 10) - 1;
+        return { x: Math.mod(index, 2) * (side + gap), y: row * (side + gap),
+            width: is-last-odd ? width : side, height: side };
+    }
+
     spacing: root.edge-to-edge ? 0px : Spacing.sm;
 
+    if root.album-count >= 2: album := Rectangle {
+        width: root.media-width;
+        property <AlbumRect> last-tile: root.album-rect(min(root.album-count, 10) - 1, min(root.album-count, 10), self.width, Spacing.xxs);
+        height: self.last-tile.y + self.last-tile.height;
+        background: Colors.bubble-inset;
+        clip: true;
+
+        for attachment in root.attachments: Rectangle {
+            property <bool> in-album: attachment.album-index >= 0 && attachment.album-index < 10;
+            property <AlbumRect> tile: root.album-rect(attachment.album-index, min(root.album-count, 10), album.width, Spacing.xxs);
+            visible: self.in-album;
+            x: self.in-album ? self.tile.x : 0px;
+            y: self.in-album ? self.tile.y : 0px;
+            width: self.in-album ? self.tile.width : 0px;
+            height: self.in-album ? self.tile.height : 0px;
+            background: Colors.surface-hover;
+            clip: true;
+
+            if attachment.has-thumbnail: Image {
+                width: 100%; height: 100%; source: attachment.thumbnail; image-fit: cover;
+            }
+            if !attachment.has-thumbnail: Image {
+                width: 32px; height: 32px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                source: attachment.is-video ? Icons.play : Icons.image;
+                colorize: Colors.text-muted;
+            }
+            if attachment.is-video: Image {
+                width: 28px; height: 28px;
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                source: Icons.play; colorize: Colors.text-primary;
+            }
+            if attachment.is-uploading || attachment.is-downloading || attachment.is-download-failed: Rectangle {
+                width: 100%; height: 100%; background: Colors.overlay;
+                Text {
+                    width: 100%; height: 100%;
+                    text: attachment.is-download-failed ? "Download failed" : Math.round(attachment.progress * 100) + "%";
+                    color: Colors.text-primary; font-size: Typography.sm;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+            }
+            if root.album-count > 10 && attachment.album-index == 9: Rectangle {
+                width: 100%; height: 100%; background: Colors.overlay;
+                Text {
+                    width: 100%; height: 100%; text: "+" + (root.album-count - 10);
+                    color: Colors.text-primary; font-size: Typography.lg;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+            }
+            HoldArea {
+                enabled-for-touch: root.mobile;
+                mouse-cursor: pointer;
+                gesture-down(x, y) => { root.begin-swipe(x, y); }
+                gesture-moved(x, y) => { root.move-swipe(x, y); }
+                gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                clicked => {
+                    if (self.hold-fired || root.swipe-active) { return; }
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
+                held => {
+                    root.request-menu(self.anchor-x, self.anchor-y,
+                        root.bubble-y, root.bubble-y + root.bubble-height,
+                        root.bubble-x, root.bubble-x + root.bubble-width);
+                }
+            }
+        }
+
+        if root.overlay-stamp: Rectangle {
+            width: album-stamp-content.preferred-width + Spacing.sm * 2;
+            height: album-stamp-content.preferred-height + Spacing.xs * 2;
+            x: parent.width - self.width - Spacing.sm;
+            y: parent.height - self.height - Spacing.sm;
+            border-radius: Spacing.radius-full;
+            background: #00000073;
+            album-stamp-content := MessageFooter {
+                x: Spacing.sm; y: Spacing.xs;
+                width: self.preferred-width; height: self.preferred-height;
+                has-reactions: false; overlay-media: true;
+                delivery-status: root.delivery-status; failure-reason: root.failure-reason;
+                is-edited: root.is-edited; is-own: root.is-own;
+                is-pinned: root.is-pinned; mesh-delivery: root.mesh-delivery;
+                message-id: root.message-id; mobile: root.mobile;
+                sender-id: root.sender-id; timestamp: root.timestamp;
+                timestamp-ns: root.timestamp-ns;
+                message-clicked(a0) => { root.message-clicked(a0); }
+            }
+        }
+    }
+
     for attachment in root.attachments: HorizontalLayout {
+        visible: !(root.album-count >= 2 && attachment.album-index >= 0);
+        padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : 0px;
         // Let the media set the bubble's preferred width. The
         // row may grow with a wider caption, where image and
         // video attachments stay centered.
