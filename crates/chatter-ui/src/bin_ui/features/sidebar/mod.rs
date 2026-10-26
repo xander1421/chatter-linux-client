@@ -697,9 +697,19 @@ fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterCli
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
         use crate::bin_ui::converters::ChatRowExt;
-        let rows = rows.into_iter().map(ChatRowExt::to_slint).collect::<Vec<_>>();
-        w.global::<crate::SidebarPane>().set_archived_rows(
-            slint::ModelRc::new(slint::VecModel::from(rows)));
+        let active = ui_ctx.active_conversation();
+        let rows = rows.into_iter().map(|row| {
+            let mut row = row.to_slint();
+            row.is_selected = row_is_active(&active, row.conversation_type, row.conversation_id.as_str());
+            row
+        }).collect::<Vec<_>>();
+        let pane = w.global::<crate::SidebarPane>();
+        let model = pane.get_archived_rows();
+        if let Some(vec) = model.as_any().downcast_ref::<slint::VecModel<crate::ChatRowData>>() {
+            reconcile_chat_rows(vec, rows, false);
+        } else {
+            pane.set_archived_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+        }
         refresh_selection(&w, &ui_ctx);
     });
 }
@@ -741,7 +751,12 @@ pub(crate) fn apply_chat_list(
 ) {
     use crate::bin_ui::converters::ChatRowExt;
     use slint::Model;
-    let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
+    let active = ui_ctx.active_conversation();
+    let rows: Vec<_> = rows.into_iter().map(|r| {
+        let mut row = r.to_slint();
+        row.is_selected = row_is_active(&active, row.conversation_type, row.conversation_id.as_str());
+        row
+    }).collect();
     let model = window.global::<crate::SidebarPane>().get_chat_rows();
     let arrivals;
     if let Some(vec) = model

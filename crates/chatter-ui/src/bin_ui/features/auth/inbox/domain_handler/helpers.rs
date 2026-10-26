@@ -38,6 +38,9 @@ pub(crate) fn update_unread_count(
     for i in 0..rows.row_count() {
         if let Some(mut row) = rows.row_data(i) {
             if row.conversation_id.as_str() == channel_id {
+                if row.unread_count == count as i32 {
+                    return;
+                }
                 row.unread_count = count as i32;
                 rows.set_row_data(i, row);
                 crate::bin_ui::features::sidebar::refresh_flat_rows(window);
@@ -58,9 +61,12 @@ pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
         let total = ui_ctx.unread_conversation_count();
-        crate::run_ui!(weak, |w| w
-            .global::<crate::SidebarPane>()
-            .set_total_unread_count(total as i32));
+        crate::run_ui!(weak, |w| {
+            let pane = w.global::<crate::SidebarPane>();
+            if pane.get_total_unread_count() != total as i32 {
+                pane.set_total_unread_count(total as i32);
+            }
+        });
     });
 }
 

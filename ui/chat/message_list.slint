@@ -28,6 +28,7 @@ component ListView inherits Flickable {
 }
 
 export component MessageList inherits Rectangle {
+    in property <bool> page-active: true;
     // Insets are part of the first/last virtual row, so the runtime includes
     // them in viewport-height and its bottom clamp. Chrome overlays the view.
     in property <length> top-inset: 0px;
@@ -435,7 +436,7 @@ export component MessageList inherits Rectangle {
         // Only the first seek may bootstrap from the global height estimate.
         Timer {
             interval: 16ms;
-            running: root.jump-row >= 0 && !root.jump-measured;
+            running: root.page-active && root.jump-row >= 0 && !root.jump-measured;
             triggered => { list.seek-row(root.jump-row); }
         }
 
@@ -795,7 +796,7 @@ export component MessageList inherits Rectangle {
                 // Defer a frame so new delegates have rendered positions.
                 Timer {
                     interval: 16ms;
-                    running: root.jump-row >= 0 && (!root.jump-measured || idx == root.jump-row);
+                    running: root.page-active && root.jump-row >= 0 && (!root.jump-measured || idx == root.jump-row);
                     triggered => {
                         if (message-bubble.height > 0px) {
                             root.measured-navigation-row(idx, message-row.bubble-position, message-row.height);
@@ -805,7 +806,7 @@ export component MessageList inherits Rectangle {
                 Timer {
                     // Only the tail row while a pill shows; a pill need not clear within a frame.
                     interval: 100ms;
-                    running: idx == root.messages.length - 1 && root.unread-count > 0;
+                    running: root.page-active && idx == root.messages.length - 1 && root.unread-count > 0;
                     triggered => {
                         if (message-bubble.height > 0px) {
                             list.newest-visible(message-row.bubble-position, message-bubble.height);

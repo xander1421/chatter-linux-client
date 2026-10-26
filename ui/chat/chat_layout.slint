@@ -265,6 +265,7 @@ export component ChatLayout inherits Rectangle {
     // Message list callbacks
     in property <bool> selection-mode: false;
     in property <bool> mobile: false;
+    in property <bool> page-active: true;
     // A message menu (context menu or reaction picker) is up.
     in property <bool> menu-open: false;
     callback selection-toggled(string);
@@ -311,6 +312,7 @@ export component ChatLayout inherits Rectangle {
     background: Materials.ambient;
 
     message-list := MessageList {
+        page-active: root.page-active;
         // The drawer shrinks this viewport without shrinking ChatLayout itself.
         // Explicitly pin it to the top: an unpositioned sized child is centred
         // in this Rectangle and otherwise moves down by half the drawer height.
