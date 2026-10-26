@@ -130,7 +130,13 @@ impl AnonDmInitMessage {
             mailbox_pk,
             identity_key,
             delivery_token,
-            sender_display_name: sender_display_name.into(),
+            sender_display_name: {
+                // A profile name may be 257 bytes; the wire field holds 64.
+                // Clamp it rather than fail the whole request.
+                let mut name: String = sender_display_name.into();
+                name.truncate(name.floor_char_boundary(MAX_DISPLAY_NAME_LENGTH));
+                name
+            },
             intro_message: intro_message.into(),
             sender_avatar,
             disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,

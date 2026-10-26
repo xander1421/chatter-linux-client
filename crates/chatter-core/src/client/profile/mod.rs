@@ -31,6 +31,8 @@ pub enum FriendCodeConnectionError {
     ServerCodeInShield,
     #[error("Secret chats aren't available on this device.")]
     SecretChatUnavailable,
+    #[error("That note is too long. Shorten it and try again.")]
+    NoteTooLong,
     #[error("You already have a secret chat with them.")]
     ExistingSecretChat(crate::domain::anon_dm::AnonDmId),
     #[error(transparent)]

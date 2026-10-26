@@ -73,6 +73,9 @@ impl ChatterClient {
             if !self.secret_chats_available() {
                 return Err(FriendCodeConnectionError::SecretChatUnavailable);
             }
+            if message.is_some_and(|m| m.len() > crate::domain::anon_dm_init::MAX_INTRO_LENGTH) {
+                return Err(FriendCodeConnectionError::NoteTooLong);
+            }
             return match self
                 .start_anon_dm_conversation_private(
                     &private,
