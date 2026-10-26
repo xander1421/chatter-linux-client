@@ -73,6 +73,7 @@ export component ThreadPanel inherits Rectangle {
     // it is a pushed PAGE, not a side panel — and a page is left with a back
     // chevron on the leading edge, not an X on the trailing one.
     in property <bool> mobile: false;
+    in property <bool> composer-enter-sends: !root.mobile;
 
     // Composer text (two-way binding)
     in-out property <string> composer-text;
@@ -613,7 +614,7 @@ export component ThreadPanel inherits Rectangle {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
-            enter-sends: !root.mobile;
+            enter-sends: root.composer-enter-sends;
             keyboard-open: root.keyboard-open;
             available-pane-height: root.height;
             composer-scope: "thread";

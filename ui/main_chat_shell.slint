@@ -430,6 +430,7 @@ export component MainChatShell inherits Rectangle {
             // Its width is shared with the chat column so the row stays filled.
             AppThreadPanel {
                 visible: ChatPane.thread-panel-visible;
+                composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
                 x: parent.width - self.width;
                 y: 0;
                 width: chat-panel-area.thread-panel-w;
