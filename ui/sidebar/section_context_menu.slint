@@ -12,6 +12,7 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { CustomSectionData } from "custom_section_list.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
+import { ChatRow, ChatRowData } from "chat_list.slint";
 
 // Reusable menu item — Neo 2.0 (icon + label, neo hover highlight)
 component MenuItem inherits Rectangle {
@@ -293,6 +294,9 @@ export component SectionContextMenu inherits Rectangle {
     in property <bool> show: false;
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    in property <length> target-row-y: 0;
+    in property <ChatRowData> target-row;
+    in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
     in property <length> bottom-inset: 0px;
 
@@ -333,6 +337,10 @@ export component SectionContextMenu inherits Rectangle {
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
     property <bool> confirm-leave: false;
+    property <length> target-row-height: root.collapsed ? 48px : root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
+    property <length> menu-space-below: max(0px, root.height - root.bottom-inset - root.target-row-y - root.target-row-height - Spacing.sm - Spacing.md);
+    property <length> menu-space-above: max(0px, root.target-row-y - Spacing.sm - Spacing.md);
+    property <bool> menu-below: root.menu-space-below >= root.menu-space-above;
     changed show => {
         root.confirm-delete = false;
         root.confirm-leave = false;
@@ -354,6 +362,26 @@ export component SectionContextMenu inherits Rectangle {
         }
     }
 
+    // Keep the pressed conversation readable over the scrim. The menu stays
+    // on whichever side has more room so its card cannot cover this row.
+    Rectangle {
+        x: Spacing.xs;
+        y: root.target-row-y;
+        width: parent.width - 2 * Spacing.xs;
+        height: root.target-row-height;
+        background: Colors.row-selected;
+        border-radius: Spacing.radius-md;
+        border-width: 1px;
+        border-color: Colors.selected-indicator;
+        ChatRow {
+            width: parent.width;
+            data: root.target-row;
+            collapsed: root.collapsed;
+            mobile-mode: root.mobile-mode;
+        }
+        TouchArea { clicked => { root.close(); } }
+    }
+
     // Menu card — Neo 2.0 strong popup surface
     menu-container := GlassSurface {
         enter-distance: 6px;
@@ -363,11 +391,11 @@ export component SectionContextMenu inherits Rectangle {
         elevation: 4;
 
         x: max(Spacing.md, min(root.position-x, parent.width - self.width - Spacing.md));
-        y: max(Spacing.md, min(root.position-y + self.entrance-offset,
-            parent.height - root.bottom-inset - self.height - Spacing.md));
+        y: root.menu-below ? root.target-row-y + root.target-row-height + Spacing.sm + self.entrance-offset
+            : root.target-row-y - self.height - Spacing.sm + self.entrance-offset;
         width: 220px;
         height: max(0px, min(menu-layout.preferred-height + Spacing.sm * 2,
-            parent.height - root.bottom-inset - 2 * Spacing.md));
+            root.menu-below ? root.menu-space-below : root.menu-space-above));
         border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu area
