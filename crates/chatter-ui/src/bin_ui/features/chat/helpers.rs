@@ -47,7 +47,7 @@ pub fn build_own_message_item(
     mention_broadcast: bool,
     timestamp: &str,
     timestamp_ns: u64,
-    slint_attachments: Vec<crate::MessageAttachmentData>,
+    mut slint_attachments: Vec<crate::MessageAttachmentData>,
     is_reply: bool,
     reply_to_sender_name: &str,
     reply_to_preview: &str,
@@ -59,6 +59,8 @@ pub fn build_own_message_item(
     delivery_status: &str,
 ) -> crate::MessageItemData {
     use slint::{ModelRc, VecModel};
+
+    crate::bin_ui::converters::assign_album_positions(&mut slint_attachments);
 
     let (content, rich_content) = crate::bin_ui::converters::body_fields(text, mention_members, mention_broadcast);
     crate::MessageItemData {

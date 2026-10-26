@@ -11,6 +11,17 @@ use crate::{MessageAttachmentData, PendingAttachmentData};
 
 use super::utils::{category_to_icon_and_color, format_file_size, mime_to_category};
 
+/// Give the media subset stable positions without duplicating its thumbnail model.
+pub fn assign_album_positions(attachments: &mut [MessageAttachmentData]) {
+    let (positions, count) = chatter_core::media::album::album_positions(
+        attachments.iter().map(|a| (a.is_image, a.is_video)),
+    );
+    for (attachment, index) in attachments.iter_mut().zip(positions) {
+        attachment.album_count = count;
+        attachment.album_index = index;
+    }
+}
+
 /// Data needed to create attachment UI (can be sent across threads).
 #[derive(Clone, Debug)]
 pub struct AttachmentDisplayData {
@@ -235,6 +246,8 @@ impl AttachmentDisplayData {
             download_url: self.download_url.clone().into(),
             is_image: self.is_image,
             is_video: self.is_video,
+            album_index: -1,
+            album_count: 0,
             width: img_width,
             height: img_height,
             has_thumbnail,

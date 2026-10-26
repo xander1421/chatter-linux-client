@@ -5,6 +5,7 @@
 //! and thumbnail extraction use the platform media service through the UI.
 
 pub mod audio_player;
+pub mod album;
 pub mod audio_recorder;
 pub mod decoder;
 #[cfg(all(

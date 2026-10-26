@@ -29,6 +29,8 @@ export struct MessageAttachmentData {
     download-url: string,   // URL to download full file
     is-image: bool,
     is-video: bool,
+    album-index: int,      // Position among this message's image/video attachments
+    album-count: int,      // Same total on every attachment, including files
     width: int,             // Original width for images/videos
     height: int,            // Original height for images/videos
     thumbnail: image,       // Actual image data for display (loaded from local_path)

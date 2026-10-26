@@ -7,7 +7,7 @@ use chatter_core::domain::message::{Message, MessageContent};
 
 use crate::{MessageItemData, RichTextBlock};
 
-use super::attachment::{AttachmentDisplayData, attachment_to_display_data};
+use super::attachment::{AttachmentDisplayData, assign_album_positions, attachment_to_display_data};
 use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
 use chatter_core::domain::mention::MentionMember;
 use super::utils::{format_count, reaction_counts_to_entries};
@@ -200,11 +200,12 @@ impl MessageDisplayData {
     }
 
     fn to_slint_with_media(&self, current_user_id: &str, media_ready: bool) -> MessageItemData {
-        let slint_attachments: Vec<crate::MessageAttachmentData> = self
+        let mut slint_attachments: Vec<crate::MessageAttachmentData> = self
             .attachments
             .iter()
             .map(|a| a.to_slint_with_media(media_ready))
             .collect();
+        assign_album_positions(&mut slint_attachments);
 
         // Preserve channel event phases; DM records display direction/result.
         let call_type = if self.is_call {
