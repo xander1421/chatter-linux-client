@@ -447,7 +447,7 @@ pub(super) fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     selected_url.as_str(),
                     |url| {
                         w.global::<crate::ChatPane>()
-                            .invoke_open_message_link(url.into())
+                            .invoke_open_message_link(url.clone().into(), url.into())
                     },
                 );
                 return;

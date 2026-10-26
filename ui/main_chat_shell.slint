@@ -374,7 +374,7 @@ export component MainChatShell inherits Rectangle {
                     message-selection-toggled(arg0) => { ChatPane.message-selection-toggled(arg0); }
                     more-clicked(arg0, arg1, arg2, arg3) => { ChatPane.more-clicked(arg0, arg1, arg2, arg3); }
                     nav-push(arg0) => { ModalHostState.nav-push(arg0); }
-                    open-message-link(arg0) => { ChatPane.open-message-link(arg0); }
+                    open-message-link(arg0, arg1) => { ChatPane.open-message-link(arg0, arg1); }
                     paste-image() => { ChatPane.paste-image(); }
                     pinned-dismiss-clicked() => { ChatPane.pinned-dismiss-clicked(); }
                     pinned-go-to-message() => { ChatPane.pinned-go-to-message(); }

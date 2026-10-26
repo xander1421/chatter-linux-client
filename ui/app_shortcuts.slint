@@ -71,7 +71,7 @@ export component AppShortcuts inherits FocusScope {
     // other full pages have no modal scope of their own to catch it.
     public function handle-escape() -> bool {
         if (!self.enabled) { return false; }
-        if (CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0) {
+        if (ChatPane.link-confirm-url != "" || CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0) {
             root.back-pressed();
             return true;
         }

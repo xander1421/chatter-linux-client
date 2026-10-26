@@ -268,7 +268,7 @@ export component ChatLayout inherits Rectangle {
     // A message menu (context menu or reaction picker) is up.
     in property <bool> menu-open: false;
     callback selection-toggled(string);
-    callback open-message-link(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback forward-clicked(string, string);  // (sender_id, timestamp_ns)
@@ -390,7 +390,7 @@ export component ChatLayout inherits Rectangle {
             root.selection-toggled(id);
         }
 
-        open-message-link(url) => { root.open-message-link(url); }
+        open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
         message-clicked(id) => {
             root.message-clicked(id);
         }

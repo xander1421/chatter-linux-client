@@ -196,7 +196,7 @@ export component MessageItem inherits Rectangle {
     out property <length> menu-anchor-left: 0px;
     out property <length> menu-anchor-right: 0px;
     callback selection-toggled(string);
-    callback open-message-link(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback attachment-clicked(string);
     // Synchronous image-viewer origin. The existing attachment callback stays
@@ -812,7 +812,7 @@ export component MessageItem inherits Rectangle {
                             end-swipe(a0) => { root.end-swipe(a0); }
                             cancel-hold() => { root.cancel-hold(); }
                             selection-toggled(a0) => { root.selection-toggled(a0); }
-                            open-message-link(a0) => { root.open-message-link(a0); }
+                            open-message-link(a0, a1) => { root.open-message-link(a0, a1); }
                             message-clicked(a0) => { root.message-clicked(a0); }
                             clear-hold-tier() => { root.hold-tier = 0; }
                         }
@@ -888,7 +888,7 @@ export component MessageItem inherits Rectangle {
                                 end-swipe(a0) => { root.end-swipe(a0); }
                                 cancel-hold() => { root.cancel-hold(); }
                                 selection-toggled(a0) => { root.selection-toggled(a0); }
-                                open-message-link(a0) => { root.open-message-link(a0); }
+                                open-message-link(a0, a1) => { root.open-message-link(a0, a1); }
                                 message-clicked(a0) => { root.message-clicked(a0); }
                                 clear-hold-tier() => { root.hold-tier = 0; }
                             }

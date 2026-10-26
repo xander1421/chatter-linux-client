@@ -69,7 +69,7 @@ export component AppThreadPanel inherits Rectangle {
         emoji-search-changed(query) => { ChatPane.thread-emoji-search-changed(query); }
         emoji-skin-tone-changed(tone) => { ChatPane.thread-emoji-skin-tone-changed(tone); }
         load-more-replies => { ChatPane.load-more-thread-replies(); }
-        open-message-link(url) => { ChatPane.open-message-link(url); }
+        open-message-link(url, display-text) => { ChatPane.open-message-link(url, display-text); }
         message-clicked(id) => { ChatPane.message-clicked(id); }
         menu-open: ChatPane.context-menu-visible || ChatPane.reaction-picker-visible;
         reply-clicked(sender-id, timestamp-ns) => {

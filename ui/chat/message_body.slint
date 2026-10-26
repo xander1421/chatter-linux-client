@@ -23,7 +23,7 @@ export component MessageBody inherits VerticalLayout {
     callback end-swipe(bool);
     callback cancel-hold();
     callback selection-toggled(string);
-    callback open-message-link(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback clear-hold-tier();
 
@@ -73,11 +73,11 @@ export component MessageBody inherits VerticalLayout {
                         root.cancel-hold();
                     }
                 }
-                link-clicked(url) => {
+                link-clicked(url, display-text) => {
                     if (root.swipe-active) { return; }
                     if (root.hold-tier != 0) { return; }
                     if root.selection-mode { root.selection-toggled(root.message-id); }
-                    else { root.open-message-link(url); }
+                    else { root.open-message-link(url, display-text); }
                 }
                 // Text gets these implicitly; StyledText does not.
                 accessible-role: text;

@@ -11,6 +11,7 @@ import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
 import { SelectionChrome } from "chat/selection_bar.slint";
 import { DeleteConfirm } from "chat/delete_confirm.slint";
+import { LinkConfirm } from "chat/link_confirm.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
 import { ImageViewer, EmojiData } from "components/mod.slint";
@@ -361,6 +362,12 @@ export component AppTopOverlays inherits Rectangle {
 
     // A single delete names its message; a multi-select leaves the sender
     // empty and deletes the selection with its confirmed scope.
+    if ChatPane.link-confirm-url != "": LinkConfirm {
+        url: ChatPane.link-confirm-url;
+        cancelled => { ChatPane.link-confirm-url = ""; }
+        confirmed => { ChatPane.confirm-open-message-link(); }
+    }
+
     if ChatPane.delete-confirm-count > 0: DeleteConfirm {
         count: ChatPane.delete-confirm-count;
         is-dm: ChatPane.conversation-kind == ConversationKind.server-dm || ChatPane.conversation-kind == ConversationKind.anon-dm;

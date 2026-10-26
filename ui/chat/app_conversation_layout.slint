@@ -157,7 +157,7 @@ export component AppConversationLayout inherits Rectangle {
     callback message-selection-toggled(string);
     callback more-clicked(string, string, length, length);
     callback nav-push(string);
-    callback open-message-link(string);
+    callback open-message-link(string, string);
     callback paste-image();
     callback pinned-dismiss-clicked();
     callback pinned-go-to-message();
@@ -344,7 +344,7 @@ export component AppConversationLayout inherits Rectangle {
     pinned-show-clicked => { root.pinned-show-clicked(); }
     pinned-thumbnail: root.pinned-thumbnail;
     sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
-    open-message-link(url) => { root.open-message-link(url); }
+    open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
     message-clicked(id) => { root.message-clicked(id); }
     reply-clicked(sender-id, timestamp-ns) => {
         root.reply-clicked(sender-id, timestamp-ns);
