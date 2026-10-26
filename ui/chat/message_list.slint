@@ -486,8 +486,11 @@ export component MessageList inherits Rectangle {
 
             // The virtualizer's total height is an estimate until the tail
             // has settled. A live last bubble gives us its actual position.
+            // The unread boundary can be the tail itself, with its seek still
+            // pending even though that bubble is already in the viewport.
             function newest-visible(y: length, height: length) {
-                if (root.jump-row < 0 && y < self.height - root.bottom-inset
+                if ((root.jump-row < 0 || root.jump-row == root.messages.length - 1)
+                        && y < self.height - root.bottom-inset
                         && y + height > root.top-inset) {
                     root.seen-opening-tail = true;
                     root.unread-count = 0;
