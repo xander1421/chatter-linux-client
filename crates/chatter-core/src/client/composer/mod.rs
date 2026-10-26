@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use prost::Message as _;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::ChatterClient;
 use crate::domain::anon_dm::AnonDmId;
@@ -62,6 +64,86 @@ pub struct ComposerSend {
     pub text: String,
     pub reply: Option<ComposerReply>,
     pub attachments: Vec<PendingAttachment>,
+}
+
+/// Keep encoded text below half the sealed inbox cap. The other half is for
+/// encryption, profile keys, quote metadata, and attachment pointers.
+fn split_composer_text(text: &str) -> Vec<String> {
+    let budget = crate::crypto::signal::sealed_sender::MAX_SEALED_BODY_BYTES / 2;
+    let encoded_len = |body: &str| {
+        crate::services::build_data_message_content(body, vec![], 0).encoded_len()
+    };
+    if encoded_len(text) <= budget {
+        return vec![text.to_owned()];
+    }
+    let mut parts = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        if encoded_len(rest) <= budget {
+            parts.push(rest.to_owned());
+            break;
+        }
+        let boundaries: Vec<usize> = rest.grapheme_indices(true)
+            .map(|(index, grapheme)| index + grapheme.len()).collect();
+        let mut low = 0;
+        let mut high = boundaries.len();
+        while low < high {
+            let middle = (low + high) / 2;
+            if encoded_len(&rest[..boundaries[middle]]) <= budget {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        let limit = boundaries[low.saturating_sub(1)];
+        let candidate = &rest[..limit];
+        let boundary = candidate.rfind('\n').map(|i| i + 1)
+            .or_else(|| candidate.char_indices().rev()
+                .find(|(_, c)| c.is_whitespace()).map(|(i, c)| i + c.len_utf8()))
+            .unwrap_or(limit);
+        parts.push(rest[..boundary].to_owned());
+        rest = &rest[boundary..];
+    }
+    parts
+}
+
+impl ComposerSend {
+    /// Normal messages, in wire order. Attachments and the quote belong to the
+    /// first part; each later part receives its own send identity.
+    pub fn ordered_parts(self) -> Vec<Self> {
+        let texts = split_composer_text(&self.text);
+        if texts.len() == 1 { return vec![self]; }
+        texts.into_iter().enumerate().map(|(index, text)| Self {
+            attempt_id: if index == 0 { self.attempt_id } else { uuid::Uuid::new_v4() },
+            session_revision: self.session_revision,
+            conversation: self.conversation,
+            text,
+            reply: if index == 0 { self.reply.clone() } else { None },
+            attachments: if index == 0 { self.attachments.clone() } else { vec![] },
+        }).collect()
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    #[test]
+    fn long_text_parts_fit_and_preserve_graphemes() {
+        let budget = crate::crypto::signal::sealed_sender::MAX_SEALED_BODY_BYTES / 2;
+        for text in ["a".repeat(60_000), "👩🏽‍💻éक्‍ष".repeat(3_000)] {
+            let parts = split_composer_text(&text);
+            assert!(parts.len() > 1);
+            assert_eq!(parts.concat(), text);
+            assert_eq!(
+                parts.iter().flat_map(|part| part.graphemes(true)).collect::<Vec<_>>(),
+                text.graphemes(true).collect::<Vec<_>>()
+            );
+            for part in parts {
+                assert!(crate::services::build_data_message_content(&part, vec![], 0).encoded_len() <= budget);
+            }
+        }
+    }
 }
 
 // ── Recovery row ────────────────────────────────────────────────────
@@ -434,21 +516,25 @@ impl ChatterClient {
         }
         let channel = send.conversation.channel_id()
             .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
-        let uploaded = super::upload_attachments(
-            &send.attachments,
-            &self.attachments().for_conversation(&send.conversation),
-            Some(self),
-        ).await.map_err(|error| error.to_string())?;
-        if !self.composer_session_is_current(send.session_revision) {
-            return Err("The account session changed. Nothing was sent.".into());
+        let mut result = None;
+        for (index, part) in send.clone().ordered_parts().into_iter().enumerate() {
+            let uploaded = super::upload_attachments(
+                &part.attachments,
+                &self.attachments().for_conversation(&part.conversation),
+                Some(self),
+            ).await.map_err(|error| error.to_string())?;
+            if !self.composer_session_is_current(part.session_revision) {
+                return Err("The account session changed. Nothing was sent.".into());
+            }
+            let ids = uploaded.pointers.iter()
+                .map(|pointer| AttachmentId::from_cdn_key(&pointer.cdn_key))
+                .collect();
+            result = Some(self.send_channel_message_with_quote(
+                None, &channel, &part.text, ids, uploaded.pointers,
+                Some(&root), vec![], false, if index == 0 { quote.as_ref() } else { None },
+            ).await.map_err(|error| error.to_string())?);
         }
-        let ids = uploaded.pointers.iter()
-            .map(|pointer| AttachmentId::from_cdn_key(&pointer.cdn_key))
-            .collect();
-        self.send_channel_message_with_quote(
-            None, &channel, &send.text, ids, uploaded.pointers,
-            Some(&root), vec![], false, quote.as_ref(),
-        ).await.map_err(|error| error.to_string())
+        result.ok_or_else(|| "Add a message or attachment first.".into())
     }
 
     /// Account-local drafts and failed sends never survive sign-out, on disk

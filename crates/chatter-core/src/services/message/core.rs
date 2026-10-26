@@ -27,9 +27,9 @@ impl MessageError {
     /// User-facing label for a send that did not land.
     ///
     /// `None` is a transient failure: the bubble reads "not sent · retry".
-    /// `Some` is the short reason shown after "not sent · ". Resend stays
-    /// available either way (`Message::can_retry_send`). Unknown failures are
-    /// not guessed to be transient.
+    /// `Some` is the short reason shown after "not sent · ". Size refusals
+    /// cannot be retried unchanged. Unknown failures are not guessed to be
+    /// transient.
     pub fn permanent_send_failure_reason(&self) -> Option<&'static str> {
         use crate::error::NetworkError;
         match self {
@@ -41,6 +41,11 @@ impl MessageError {
             Self::Network(NetworkError::PermissionDenied) => Some("Not delivered"),
             Self::ShieldNotReady => Some(SHIELD_WAITING_FOR_TOKENS),
             Self::NotAuthor => Some("Not allowed"),
+            Self::Network(NetworkError::InvalidRequest(reason))
+                if reason.contains("too large") => Some("Message too long"),
+            Self::InvalidContent(reason) if reason.contains("too large") => {
+                Some("Message too long")
+            }
             Self::Network(NetworkError::InvalidRequest(_))
             | Self::InvalidContent(_)
             | Self::InvalidMessage(_) => Some("Message rejected"),
