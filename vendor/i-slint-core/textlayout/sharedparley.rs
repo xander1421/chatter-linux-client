@@ -27,6 +27,7 @@ use skrifa::MetadataProvider as _;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(derive_more::Deref, derive_more::DerefMut)]
 pub struct FontContext {
@@ -476,6 +477,57 @@ fn create_text_paragraphs(
     };
 
     paragraphs
+}
+
+/// Cut a single line in source order. Parley resolves the paragraph base from the first
+/// strong character outside isolates (UAX #9 P2/P3); shaping the completed string also
+/// puts the ellipsis on the logical end of an RTL isolate, rather than at a visual edge.
+fn logically_elided_text(
+    builder: &LayoutWithoutLineBreaksBuilder,
+    font_context: &mut parley::FontContext,
+    text: &str,
+    max_width: f32,
+) -> Option<String> {
+    let mut full = builder.build(font_context, text, None, None, None);
+    full.break_all_lines(None);
+    if full.full_width() <= max_width {
+        return None;
+    }
+
+    let boundaries: Vec<usize> =
+        text.grapheme_indices(true).map(|(i, _)| i).chain([text.len()]).collect();
+    let candidate = |cut: usize| {
+        let prefix = &text[..cut];
+        let mut depth = 0usize;
+        for ch in prefix.chars() {
+            match ch {
+                '\u{2066}' | '\u{2067}' | '\u{2068}' => depth += 1,
+                '\u{2069}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        let mut result = String::from(prefix);
+        result.push('…');
+        result.extend(core::iter::repeat_n('\u{2069}', depth));
+        result
+    };
+
+    // Each probe is shaped, so ligatures and script fallback are measured in the
+    // same font as the rendered result. The final candidate is laid out normally.
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        let probe = candidate(boundaries[mid]);
+        let mut layout = builder.build(font_context, &probe, None, None, None);
+        layout.break_all_lines(None);
+        if layout.full_width() <= max_width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    Some(candidate(boundaries[low]))
 }
 
 /// Note: parley currently uses `WordBreak` while shaping via `analyze_text()`,
@@ -1250,20 +1302,54 @@ pub fn draw_text(
     let mut guard =
         get_or_create_text_paragraphs(cache, item_rc, text, scale_factor, &mut font_ctx);
 
+    let logical_elision = if text.overflow() == TextOverflow::Elide && text.wrap() == TextWrap::NoWrap {
+        let physical_width = (max_width * scale_factor).get();
+        let overflows = guard.paragraphs.as_mut().and_then(|p| p.first_mut()).is_some_and(|p| {
+            p.layout.break_all_lines(None);
+            p.layout.full_width() > physical_width
+        });
+        if overflows {
+            match text.text() {
+                PlainOrStyledText::Plain(value) if !value.contains('\n') => {
+                    logically_elided_text(&layout_builder, &mut font_ctx, &value, physical_width)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let elided_paragraphs = logical_elision.as_ref().map(|elided| {
+        create_text_paragraphs(
+            &layout_builder,
+            &mut font_ctx,
+            PlainOrStyledText::Plain(elided.as_str().into()),
+            None,
+            text.link_color(),
+        )
+    });
+
     let (horizontal_align, vertical_align) = text.alignment();
     let text_overflow = text.overflow();
 
     let layout = layout(
         &layout_builder,
         &mut font_ctx,
-        guard.paragraphs.take().unwrap_or_default(),
+        elided_paragraphs.unwrap_or_else(|| guard.paragraphs.take().unwrap_or_default()),
         scale_factor,
         LayoutOptions {
             horizontal_align,
             vertical_align,
             max_height: Some(max_height),
             max_width: Some(max_width),
-            text_overflow: text.overflow(),
+            text_overflow: if logical_elision.is_some() {
+                TextOverflow::Clip
+            } else {
+                text.overflow()
+            },
         },
     );
 
@@ -1320,7 +1406,9 @@ pub fn draw_text(
 
     // Put paragraphs back into the cache guard for reuse.
     // break_all_lines replaces line data each time, so the state is ready for the next call.
-    guard.paragraphs = Some(layout.paragraphs);
+    if logical_elision.is_none() {
+        guard.paragraphs = Some(layout.paragraphs);
+    }
 }
 
 #[cfg(feature = "std")]
@@ -1811,5 +1899,59 @@ mod tests {
         assert_eq!(paragraphs("a\r\n\nb"), ["a", "", "b"]);
         // A lone CR stays in the paragraph; parley breaks the line there.
         assert_eq!(paragraphs("hello\rworld"), ["hello\rworld"]);
+    }
+
+    #[test]
+    fn elided_rtl_body_keeps_logical_start_after_ltr_label() {
+        let mut font_ctx = parley::FontContext {
+            collection: fontique::Collection::new(fontique::CollectionOptions {
+                system_fonts: false,
+                ..Default::default()
+            }),
+            source_cache: Default::default(),
+        };
+        let data = include_bytes!("../../common/sharedfontique/Inter-VariableFont.ttf");
+        let families = font_ctx.collection.register_fonts(fontique::Blob::new(Arc::new(data)), None);
+        font_ctx.collection.set_generic_families(
+            fontique::GenericFamily::SansSerif,
+            families.iter().map(|(id, _)| *id),
+        );
+        let builder = LayoutWithoutLineBreaksBuilder::new(
+            None,
+            TextWrap::NoWrap,
+            None,
+            ScaleFactor::new(1.0),
+        );
+        let body = "שלום עולם מה שלומך היום חבר יקר שלי";
+        let text = format!("You: \u{2068}{body}\u{2069}");
+        let elided = logically_elided_text(&builder, &mut font_ctx, &text, 180.0)
+            .expect("narrow preview must elide");
+        assert!(elided.starts_with("You: \u{2068}שלום"));
+        assert!(elided.ends_with("…\u{2069}"));
+        assert!(!elided.contains("חבר"));
+
+        let mut layout = builder.build(&mut font_ctx, &elided, None, None, None);
+        layout.break_all_lines(Some(180.0));
+        assert!(!layout.is_rtl());
+        let first_line = layout.lines().next().unwrap();
+        let first_run = first_line.runs().next().unwrap();
+        let first_cluster = first_run.clusters().next().unwrap();
+        assert_eq!(&elided[first_cluster.text_range()], "Y");
+        let body_start = "You: \u{2068}".len();
+        let ellipsis_at = elided.find('…').unwrap();
+        let mut kept_body_clusters = Vec::new();
+        for run in first_line.runs() {
+            for cluster in run.clusters() {
+                let range = cluster.text_range();
+                if range.start >= body_start && range.end <= ellipsis_at && !range.is_empty() {
+                    kept_body_clusters.push((range.start, &elided[range]));
+                }
+            }
+        }
+        kept_body_clusters.sort_by_key(|(start, _)| *start);
+        let kept_body: String = kept_body_clusters.into_iter().map(|(_, cluster)| cluster).collect();
+        assert!(body.starts_with(&kept_body));
+        assert!(kept_body.starts_with("שלום"));
+        assert!(layout.full_width() <= 180.0);
     }
 }

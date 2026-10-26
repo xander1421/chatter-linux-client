@@ -360,7 +360,7 @@ impl Message {
         } else {
             "[Message]".to_string()
         };
-        let max = (!text.is_empty()).then_some(50);
+        let max = (!text.is_empty()).then_some(200);
         if is_own {
             format!("{pin}{}", format_preview_body("You: ", &body, max))
         } else if matches!(
@@ -389,15 +389,9 @@ pub fn format_preview_body(label: &str, body: &str, max: Option<usize>) -> Strin
     format!("{label}\u{2068}{body}\u{2069}")
 }
 
-/// Truncate text for a single-line preview at grapheme boundaries, preserving
-/// combining marks and emoji sequences.
+/// Bound preview work at grapheme boundaries, preserving combining marks and
+/// emoji sequences. The single-line Text item adds the visible ellipsis.
 #[must_use]
 pub fn truncate_preview_text(text: &str, max: usize) -> String {
-    if text.graphemes(true).count() > max {
-        let head_len = max.saturating_sub(3);
-        let truncated: String = text.graphemes(true).take(head_len).collect();
-        format!("{}...", truncated)
-    } else {
-        text.to_string()
-    }
+    text.graphemes(true).take(max).collect()
 }

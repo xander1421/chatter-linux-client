@@ -42,12 +42,12 @@ mod tests {
     }
 
     #[test]
-    fn preview_truncates_graphemes_before_closing_the_isolate() {
+    fn preview_caps_graphemes_before_closing_the_isolate() {
         assert_eq!(
             format_preview_body("You: ", "abשָׁלוֹם👩🏽‍💻xyz", Some(6)),
-            "You: \u{2068}abשָׁ...\u{2069}"
+            "You: \u{2068}abשָׁלוֹם\u{2069}"
         );
-        assert_eq!(truncate_preview_text("a👩🏽‍💻bcdef", 5), "a👩🏽‍💻...");
+        assert_eq!(truncate_preview_text("a👩🏽‍💻bcdef", 5), "a👩🏽‍💻bcd");
     }
 
     /// Secret chats: nothing is forwarded out; forwards in are text only; no

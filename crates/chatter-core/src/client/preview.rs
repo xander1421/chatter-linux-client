@@ -65,7 +65,7 @@ pub struct ActionPreviewAttachment {
 }
 
 pub fn message_action_preview(text: &str, attachments: &[ActionPreviewAttachment]) -> String {
-    let text_preview = crate::domain::message::truncate_preview_text(text, 50);
+    let text_preview = crate::domain::message::truncate_preview_text(text, 200);
     let image_count = attachments.iter().filter(|a| a.is_image).count();
     let files: Vec<_> = attachments.iter().filter(|a| !a.is_image).collect();
     let mut parts = Vec::new();

@@ -19,8 +19,7 @@ use crate::proto::content_v1::{AttachmentPointer, Quote, QuotedAttachment, quote
 const QUOTE_PREVIEW_MAX_CHARS: usize = 100;
 /// Truncate text for use as a quote preview.
 ///
-/// If the text exceeds 100 graphemes, it's truncated to 97 graphemes
-/// with "..." appended. This is the standard Signal-style quote preview.
+/// The wire preview is capped at 100 graphemes; the UI supplies the ellipsis.
 pub fn truncate_preview(text: &str) -> String {
     crate::domain::message::truncate_preview_text(text, QUOTE_PREVIEW_MAX_CHARS)
 }
@@ -276,7 +275,7 @@ mod tests {
         let text = format!("{}é{}", "a".repeat(96), "b".repeat(10));
         assert!(!text.is_char_boundary(97));
         let preview = truncate_preview(&text);
-        assert_eq!(preview, format!("{}é...", "a".repeat(96)));
+        assert_eq!(preview, format!("{}é{}", "a".repeat(96), "b".repeat(3)));
         assert_eq!(truncate_preview("héllo"), "héllo");
     }
 

@@ -1012,7 +1012,7 @@ mod tests {
             Some(SystemMessage::Undelivered { sent_at, preview }) => {
                 assert_eq!(sent_at, 42);
                 assert_eq!(preview.chars().count(), 40);
-                assert!(preview.ends_with("..."));
+                assert_eq!(preview, "x".repeat(40));
             }
             other => panic!("expected Undelivered, got {other:?}"),
         }

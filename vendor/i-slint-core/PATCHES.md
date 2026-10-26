@@ -60,3 +60,11 @@ Android composition (C4, 2026-10-11): `textlayout/sharedparley.rs` paints only
 now supplies the actual anchor/caret relative to preedit; a composing word with
 a collapsed caret keeps ordinary text colors. GameActivity already delivers
 composition as committed text while preserving its native composing region.
+
+Single-line bidi elision (2026-10-26): `textlayout/sharedparley.rs` cuts plain,
+non-wrapping elided text at a grapheme boundary in logical order, appends U+2026
+inside any open isolate, then shapes the result. Parley 0.10 resolves the base
+direction from the first strong character outside isolates (UAX #9 P2/P3).
+This keeps an LTR sender label at the start of a chat row and retains the
+beginning of its RTL body. The existing visual glyph elision still handles
+styled, wrapped and multiline text.
