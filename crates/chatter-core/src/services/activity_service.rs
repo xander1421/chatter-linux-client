@@ -223,8 +223,10 @@ impl ActivityService {
                 let secs = ((now - started) / 1000).max(1);
                 let span = if secs < 120 { format!("{secs} s") } else { format!("{} min", secs / 60) };
                 conn.execute("UPDATE activity_outages SET resolved_at_ms=?2 WHERE owner_id=?1", params![owner_id, now])?;
-                conn.execute("UPDATE activity_items SET kind='server-ok', detail=?3 WHERE owner_id=?1 AND id=?2",
-                    params![owner_id, id, span])?;
+                // A blip of a few seconds stays in the log but must not raise the badge.
+                const BLIP_SECS: i64 = 10;
+                conn.execute("UPDATE activity_items SET kind='server-ok', detail=?3, unread=CASE WHEN ?4 THEN 0 ELSE unread END WHERE owner_id=?1 AND id=?2",
+                    params![owner_id, id, span, secs < BLIP_SECS])?;
             }
         }
         let _ = self.changed.send(());

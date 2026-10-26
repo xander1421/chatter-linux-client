@@ -15,7 +15,7 @@ fn refresh_status(window: &MainWindow, client: &ChatterClient) {
     let global = window.global::<ActivityGlobal>();
     global.set_push_status(status.push.into());
     global.set_last_connected(status.last_connected
-        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+        .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_else(|| "Never".into()).into());
     global.set_server_host(status.server_host.into());
     global.set_tor_bootstrap(status.tor_bootstrap_percent
