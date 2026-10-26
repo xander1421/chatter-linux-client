@@ -5,6 +5,37 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
+component ShortcutRow inherits HorizontalLayout {
+    in property <string> action;
+    in property <string> key;
+    height: 28px;
+    spacing: Spacing.md;
+
+    Text {
+        text: root.action;
+        color: Colors.text-primary;
+        font-size: Typography.sm;
+        horizontal-stretch: 1;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        width: key-text.preferred-width + Spacing.md;
+        height: 24px;
+        border-radius: Spacing.radius-sm;
+        background: Colors.surface-hover;
+
+        key-text := Text {
+            text: root.key;
+            color: Colors.text-secondary;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component KeyboardShortcutsDialog inherits Rectangle {
     in property <bool> shown;
     callback close();
@@ -80,34 +111,22 @@ export component KeyboardShortcutsDialog inherits Rectangle {
                     { key: "Enter / Space", action: "Open sidebar item" },
                     { key: "Ctrl + /", action: "Show this dialog" },
                     { key: "Escape", action: "Close modal or panel" },
-                ]: HorizontalLayout {
-                    height: 28px;
-                    spacing: Spacing.md;
+                ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
 
-                    Text {
-                        text: shortcut.action;
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        horizontal-stretch: 1;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        width: key-text.preferred-width + Spacing.md;
-                        height: 24px;
-                        border-radius: Spacing.radius-sm;
-                        background: Colors.surface-hover;
-
-                        key-text := Text {
-                            text: shortcut.key;
-                            color: Colors.text-secondary;
-                            font-size: Typography.xs;
-                            font-weight: Typography.medium;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
+                // Messages section
+                Text {
+                    text: "Messages";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    font-weight: Typography.semibold;
                 }
+
+                for shortcut in [
+                    { key: "Enter", action: "Send" },
+                    { key: "Shift + Enter", action: "New line" },
+                    { key: "↑ (empty message box)", action: "Edit your last message" },
+                    { key: "Escape", action: "Cancel edit or reply" },
+                ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
 
                 Rectangle { height: Spacing.xs; }
             }
