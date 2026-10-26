@@ -24,7 +24,9 @@ pub(crate) const MAX_INLINE_GIFS: usize = 20;
 pub(crate) const MAX_INLINE_GIF_BYTES: usize = 24 << 20;
 pub(crate) const INLINE_ANIMATION_BYTES: usize = 16 << 20;
 pub(crate) const VIEWER_ANIMATION_BYTES: usize = 32 << 20;
-pub(crate) const INLINE_FRAME_PX: u32 = 320;
+// A GIF bubble is up to ~300 dp wide (~1000 px at 3.5x); 640 px keeps it
+// sharp enough while a 16 MiB loop still holds ~10 frames at 4:3.
+pub(crate) const INLINE_FRAME_PX: u32 = 640;
 pub(crate) const VIEWER_FRAME_PX: u32 = 1280;
 
 /// Resize a composited RGBA frame before it enters any UI animation state.

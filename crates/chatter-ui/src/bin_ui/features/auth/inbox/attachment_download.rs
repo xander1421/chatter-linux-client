@@ -194,12 +194,9 @@ fn handle_gif(
             }
         };
 
-        // Convert to Slint buffers
-        let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = Vec::new();
-        let mut all_delays: Vec<u64> = Vec::new();
-        let mut retained_bytes = 0usize;
-        let mut skipped_delay_ms = 0u64;
-
+        // Thin the loop to the inline budget across its whole duration
+        // (same selector as the other GIF paths), then build Slint buffers.
+        let mut selected = chatter_core::media::gif::DecimatedGif::default();
         for frame in &full_result.frames {
             let delay_ms = frame.delay.as_millis() as u64;
             let (data, width, height) = crate::bin_ui::gif_state::fit_frame(
@@ -207,22 +204,22 @@ fn handle_gif(
                 crate::bin_ui::gif_state::INLINE_FRAME_PX,
                 crate::bin_ui::gif_state::INLINE_FRAME_PX,
             );
-            if all_buffers.len() >= crate::bin_ui::gif_state::MAX_VIEWER_FRAMES
-                || data.is_empty()
-                || data.len() > crate::bin_ui::gif_state::MAX_ANIMATION_BYTES.saturating_sub(retained_bytes)
-            {
-                skipped_delay_ms = skipped_delay_ms.saturating_add(delay_ms);
-                continue;
-            }
-            retained_bytes += data.len();
-            let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &data, width, height,
+            if data.is_empty() { continue; }
+            let bytes = data.len();
+            selected = chatter_core::media::gif::decimate_gif_frame(
+                selected, (data, width, height), delay_ms, bytes,
+                crate::bin_ui::gif_state::MAX_VIEWER_FRAMES,
+                crate::bin_ui::gif_state::INLINE_ANIMATION_BYTES,
             );
-            all_buffers.push(pixel_buffer);
-            all_delays.push(delay_ms);
         }
-        if let Some(last) = all_delays.last_mut() {
-            *last = last.saturating_add(skipped_delay_ms);
+        let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = Vec::new();
+        let mut all_delays: Vec<u64> = Vec::new();
+        for sample in selected.frames {
+            let (data, width, height) = sample.frame;
+            all_buffers.push(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &data, width, height,
+            ));
+            all_delays.push(sample.delay_ms);
         }
 
         tracing::info!(
