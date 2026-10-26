@@ -24,6 +24,7 @@ export component FindTab inherits VerticalLayout {
     callback paste-code();
     callback scan-code();
     callback connect-via-code(string);
+    callback code-edited();
     vertical-stretch: 1;
     if root.active-tab == "find": VerticalLayout {
         vertical-stretch: 1;
@@ -60,6 +61,7 @@ export component FindTab inherits VerticalLayout {
                     placeholder: "Friend code or username link";
                     text <=> root.code-input;
                     caret-end-seq: root.code-caret-end-seq;
+                    edited => { root.code-edited(); }
 
                     accepted(code) => {
                         root.connect-via-code(code);

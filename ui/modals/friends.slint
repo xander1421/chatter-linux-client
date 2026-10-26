@@ -266,6 +266,7 @@ export component FriendsModal inherits Rectangle {
                         paste-code => { root.paste-code(); }
                         scan-code => { root.scan-code(); }
                         connect-via-code(value) => { root.connect-via-code(value); }
+                        code-edited => { root.code-status = ""; }
                     }
                 }
 

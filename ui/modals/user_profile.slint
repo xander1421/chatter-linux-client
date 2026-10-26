@@ -455,9 +455,6 @@ export component UserProfileModal inherits Rectangle {
                                 if !root.scoped-member && !root.is-anonymous: Button { text: "Video call"; variant: "secondary"; clicked => { root.more-open = false; root.start-call(true); } }
                                 if root.can-start-secret-chat && !root.scoped-member: Button { text: "Start secret chat"; variant: "secondary"; clicked => { root.more-open = false; root.start-secret-chat(); } }
                                 if !root.scoped-member: Button { text: "Safety number"; variant: "secondary"; clicked => { root.more-open = false; root.view-safety-number(); root.show-safety-number = true; } }
-                                if !root.scoped-member: Button { text: "Share contact"; variant: "secondary"; clicked => { root.more-open = false; root.share-contact(); } }
-                                if !root.scoped-member: Button { text: "Edit contact"; variant: "secondary"; clicked => { root.more-open = false; root.contact-draft = root.contact-name != "" ? root.contact-name : root.display-name; root.edit-contact-open = true; } }
-                                if !root.scoped-member && !root.is-blocked: Button { text: "Block user"; variant: "destructive"; clicked => { root.more-open = false; root.confirm-block = true; } }
                             }
                         }
                     }
