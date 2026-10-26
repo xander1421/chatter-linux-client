@@ -457,19 +457,6 @@ export component MainChatShell inherits Rectangle {
                 viewer-origin-width <=> root.viewer-origin-width;
             }
 
-            // The sidebar's backdrop cannot cover this sibling pane. Consume
-            // the first outside press here so it dismisses the sidebar menu.
-            if SidebarPane.row-context-menu-open || SidebarPane.section-context-menu-open: TouchArea {
-                width: parent.width;
-                height: parent.height;
-                pointer-event(event) => {
-                    if event.kind == PointerEventKind.down {
-                        SidebarPane.row-context-menu-open = false;
-                        SidebarPane.section-context-menu-open = false;
-                    }
-                }
-            }
-
         } // end chat-panel-area Rectangle
         // Only the leading edge handles the gesture.
         if root.compact-layout && SidebarPane.mobile-show-chat: AppEdgeSwipe {

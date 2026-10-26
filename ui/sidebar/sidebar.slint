@@ -19,7 +19,7 @@ import { ChatRow, ChatRowData } from "chat_list.slint";
 import { CustomSectionHeader, CustomSectionData } from "custom_section_list.slint";
 import { EmptyState } from "../components/empty_state.slint";
 import { ChatListSkeleton } from "../components/skeleton.slint";
-import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
+import { SidebarPane } from "../app_sidebar_pane.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
@@ -183,12 +183,12 @@ export component Sidebar inherits Rectangle {
         if (root.focus-index < 0 || root.focus-index >= root.flat-rows.length) { return; }
         let entry = root.flat-rows[root.focus-index];
         if (entry.kind == "section-header") {
-            root.section-header-ctx-menu-section-id = entry.section.section-id;
-            root.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
-            root.section-header-ctx-menu-x = root.width / 2;
-            root.section-header-ctx-menu-y = root.height / 2;
-            root.ctx-menu-show = false;
-            root.section-header-ctx-menu-show = true;
+            SidebarPane.section-header-ctx-menu-section-id = entry.section.section-id;
+            SidebarPane.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
+            SidebarPane.section-header-ctx-menu-x = root.width / 2;
+            SidebarPane.section-header-ctx-menu-y = root.height / 2;
+            SidebarPane.row-context-menu-open = false;
+            SidebarPane.section-context-menu-open = true;
         }
     }
     callback delete-section-clicked(/* section-id */ string);
@@ -265,29 +265,6 @@ export component Sidebar inherits Rectangle {
     property <brush> rail-slot-bg: Colors.surface-control;
     // Shield, AI, Chats, Mesh (when compiled), expand, Settings, profile.
     property <int> rail-button-count: MeshGlobal.enabled ? 7 : 6;
-
-    // Context menu state
-    in-out property <bool> ctx-menu-show: false;
-    property <length> ctx-menu-x: 0;
-    property <length> ctx-menu-y: 0;
-    property <length> ctx-menu-row-y: 0;
-    property <ChatRowData> ctx-menu-row;
-    property <string> ctx-menu-conv-id: "";
-    property <ConversationKind> ctx-menu-conv-type;
-    property <string> ctx-menu-current-section-id: "";
-    property <bool> ctx-menu-is-pinned: false;
-    property <bool> ctx-menu-is-archived: false;
-    in property <bool> ctx-menu-is-muted: false;
-    // Channel and group rows, as core decided it for the row.
-    property <bool> ctx-menu-can-leave: false;
-    property <bool> ctx-menu-can-delete-channel: false;
-
-    // Section header context menu state
-    in-out property <bool> section-header-ctx-menu-show: false;
-    property <length> section-header-ctx-menu-x: 0;
-    property <length> section-header-ctx-menu-y: 0;
-    property <string> section-header-ctx-menu-section-id: "";
-    property <string> section-header-ctx-menu-sort-mode: "recent";
 
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
@@ -768,20 +745,20 @@ export component Sidebar inherits Rectangle {
                         }
                         pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
                         context-menu-requested(x, y) => {
-                            root.ctx-menu-row = entry.chat;
-                            root.ctx-menu-row-y = chat-row.absolute-position.y - root.absolute-position.y;
-                            root.ctx-menu-conv-id = entry.chat.conversation-id;
-                            root.ctx-menu-conv-type = entry.chat.conversation-type;
-                            root.ctx-menu-is-pinned = entry.chat.is-pinned;
-                            root.ctx-menu-is-archived = entry.kind == "archived-chat";
-                            root.ctx-menu-can-leave = entry.chat.can-leave;
-                            root.ctx-menu-can-delete-channel = entry.chat.can-delete;
-                            root.ctx-menu-x = x;
-                            root.ctx-menu-y = y;
-                            root.ctx-menu-current-section-id = "";
-                            root.section-header-ctx-menu-show = false;
+                            SidebarPane.ctx-menu-row = entry.chat;
+                            SidebarPane.ctx-menu-row-y = chat-row.absolute-position.y - root.absolute-position.y;
+                            SidebarPane.ctx-menu-conv-id = entry.chat.conversation-id;
+                            SidebarPane.ctx-menu-conv-type = entry.chat.conversation-type;
+                            SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            SidebarPane.ctx-menu-is-archived = entry.kind == "archived-chat";
+                            SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
+                            SidebarPane.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            SidebarPane.ctx-menu-x = x;
+                            SidebarPane.ctx-menu-y = y;
+                            SidebarPane.ctx-menu-current-section-id = "";
+                            SidebarPane.section-context-menu-open = false;
                             root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
-                            root.ctx-menu-show = true;
+                            SidebarPane.row-context-menu-open = true;
                         }
                     }
                 }
@@ -798,12 +775,12 @@ export component Sidebar inherits Rectangle {
                     rename-clicked => { root.rename-section-clicked(entry.section.section-id); }
                     delete-clicked => { root.delete-section-clicked(entry.section.section-id); }
                     context-menu-requested(x, y) => {
-                        root.section-header-ctx-menu-section-id = entry.section.section-id;
-                        root.section-header-ctx-menu-x = x;
-                        root.section-header-ctx-menu-y = y;
-                        root.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
-                        root.ctx-menu-show = false;
-                        root.section-header-ctx-menu-show = true;
+                        SidebarPane.section-header-ctx-menu-section-id = entry.section.section-id;
+                        SidebarPane.section-header-ctx-menu-x = x;
+                        SidebarPane.section-header-ctx-menu-y = y;
+                        SidebarPane.section-header-ctx-menu-sort-mode = entry.section.sort-mode;
+                        SidebarPane.row-context-menu-open = false;
+                        SidebarPane.section-context-menu-open = true;
                     }
                 }
                 if entry.kind == "section-chat": Rectangle {
@@ -818,20 +795,20 @@ export component Sidebar inherits Rectangle {
                         clicked => { root.section-conversation-selected(entry.chat.conversation-id, entry.chat.conversation-type); }
                         pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
                         context-menu-requested(x, y) => {
-                            root.ctx-menu-row = entry.chat;
-                            root.ctx-menu-row-y = section-chat-row.absolute-position.y - root.absolute-position.y;
-                            root.ctx-menu-conv-id = entry.chat.conversation-id;
-                            root.ctx-menu-can-leave = entry.chat.can-leave;
-                            root.ctx-menu-can-delete-channel = entry.chat.can-delete;
-                            root.ctx-menu-conv-type = entry.chat.conversation-type;
-                            root.ctx-menu-x = x;
-                            root.ctx-menu-y = y;
-                            root.ctx-menu-current-section-id = entry.section.section-id;
-                            root.ctx-menu-is-pinned = entry.chat.is-pinned;
-                            root.ctx-menu-is-archived = false;
-                            root.section-header-ctx-menu-show = false;
+                            SidebarPane.ctx-menu-row = entry.chat;
+                            SidebarPane.ctx-menu-row-y = section-chat-row.absolute-position.y - root.absolute-position.y;
+                            SidebarPane.ctx-menu-conv-id = entry.chat.conversation-id;
+                            SidebarPane.ctx-menu-can-leave = entry.chat.can-leave;
+                            SidebarPane.ctx-menu-can-delete-channel = entry.chat.can-delete;
+                            SidebarPane.ctx-menu-conv-type = entry.chat.conversation-type;
+                            SidebarPane.ctx-menu-x = x;
+                            SidebarPane.ctx-menu-y = y;
+                            SidebarPane.ctx-menu-current-section-id = entry.section.section-id;
+                            SidebarPane.ctx-menu-is-pinned = entry.chat.is-pinned;
+                            SidebarPane.ctx-menu-is-archived = false;
+                            SidebarPane.section-context-menu-open = false;
                             root.row-context-menu-opened(entry.chat.conversation-id, entry.chat.conversation-type);
-                            root.ctx-menu-show = true;
+                            SidebarPane.row-context-menu-open = true;
                         }
                     }
                 }
@@ -1005,79 +982,4 @@ export component Sidebar inherits Rectangle {
     }
 
 
-    // Section context menu overlay (renders on top of all sidebar content)
-    SectionContextMenu {
-        show: root.ctx-menu-show;
-        position-x: root.ctx-menu-x;
-        position-y: root.ctx-menu-y;
-        target-row-y: root.ctx-menu-row-y;
-        target-row: root.ctx-menu-row;
-        collapsed: root.collapsed;
-        conversation-id: root.ctx-menu-conv-id;
-        conversation-type: root.ctx-menu-conv-type;
-        current-section-id: root.ctx-menu-current-section-id;
-        is-pinned: root.ctx-menu-is-pinned;
-        is-archived: root.ctx-menu-is-archived;
-        is-muted: root.ctx-menu-is-muted;
-        can-leave: root.ctx-menu-can-leave;
-        can-delete-channel: root.ctx-menu-can-delete-channel;
-        mobile-mode: root.touch;
-        bottom-inset: root.bottom-inset;
-        sections: root.custom-sections;
-
-        close => {
-            root.ctx-menu-show = false;
-        }
-        move-to-section(conv-id, conv-type, section-id) => {
-            root.move-to-section(conv-id, conv-type, section-id);
-        }
-        remove-from-section(conv-id) => {
-            root.remove-from-section(conv-id);
-        }
-        create-section-clicked => {
-            root.create-section-clicked();
-        }
-        set-pinned(conv-id, pinned) => {
-            root.set-conversation-pinned(conv-id, pinned);
-        }
-        set-archived(conv-id, archived) => {
-            root.set-conversation-archived(conv-id, archived);
-        }
-        set-muted(conv-id, kind, muted) => {
-            root.set-conversation-muted(conv-id, kind, muted);
-        }
-        delete-chat(conv-id, conv-type) => {
-            root.delete-conversation(conv-id, conv-type);
-        }
-        leave-conversation(conv-id, kind) => {
-            root.leave-conversation(conv-id, kind);
-        }
-    }
-
-    // Section header context menu overlay (right-click on section header)
-    SectionHeaderContextMenu {
-        show: root.section-header-ctx-menu-show;
-        bottom-inset: root.bottom-inset;
-        position-x: root.section-header-ctx-menu-x;
-        position-y: root.section-header-ctx-menu-y;
-        section-id: root.section-header-ctx-menu-section-id;
-        section-sort-mode: root.section-header-ctx-menu-sort-mode;
-        mobile-mode: root.touch;
-
-        close => {
-            root.section-header-ctx-menu-show = false;
-        }
-        remove-section(section-id) => {
-            root.delete-section-clicked(section-id);
-        }
-        rename-section(section-id) => {
-            root.rename-section-clicked(section-id);
-        }
-        move-section(section-id, delta) => {
-            root.move-section(section-id, delta);
-        }
-        set-sort-mode(section-id, mode) => {
-            root.set-section-sort-mode(section-id, mode);
-        }
-    }
 }

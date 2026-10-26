@@ -78,9 +78,6 @@ export component AppSidebarHost inherits Rectangle {
             return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests);
         }
         focus-composer => { root.focus-composer(); }
-        ctx-menu-show <=> SidebarPane.row-context-menu-open;
-        section-header-ctx-menu-show <=> SidebarPane.section-context-menu-open;
-        ctx-menu-is-muted: SidebarPane.row-context-menu-muted;
         user-display-name: SidebarPane.user-display-name;
         user-avatar-source: SidebarPane.user-avatar-source;
         user-initials: SidebarPane.user-initials;
