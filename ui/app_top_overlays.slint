@@ -255,6 +255,7 @@ export component AppTopOverlays inherits Rectangle {
 
         close => {
             ChatPane.mention-autocomplete-visible = false;
+            ChatPane.mention-triggered("");
         }
     }
 

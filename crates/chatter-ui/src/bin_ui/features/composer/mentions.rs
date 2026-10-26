@@ -18,17 +18,17 @@ pub(crate) fn wire_mention_triggered(window: &MainWindow, ui_ctx: Arc<ChatterCli
             let weak = weak_window.clone();
             let ui_ctx = ui_ctx.clone();
 
-            if query_str.is_empty() {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.global::<crate::ChatPane>()
-                            .set_mention_autocomplete_visible(false);
-                    }
-                });
-                return;
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::ChatPane>().set_mention_query(query.clone());
             }
 
-            tracing::debug!("Mention triggered with query: {}", query_str);
+            if query_str.is_empty() {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::ChatPane>()
+                        .set_mention_autocomplete_visible(false);
+                }
+                return;
+            }
 
             // Spawn async task to fetch enriched suggestions from core.
             tokio::spawn(async move {
@@ -36,10 +36,13 @@ pub(crate) fn wire_mention_triggered(window: &MainWindow, ui_ctx: Arc<ChatterCli
                     Some(id) => id,
                     None => return,
                 };
-                let suggestions = ui_ctx.search_mention_suggestions(&channel_id, &query_str).await;
+                let suggestions = ui_ctx.search_mention_suggestions(&channel_id, &query_str[1..]).await;
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
+                        if w.global::<crate::ChatPane>().get_mention_query().as_str() != query_str.as_str() {
+                            return;
+                        }
                         if suggestions.is_empty() {
                             w.global::<crate::ChatPane>()
                                 .set_mention_autocomplete_visible(false);
@@ -89,14 +92,17 @@ pub(crate) fn wire_mention_selected(window: &MainWindow) {
                         .global::<crate::ChatPane>()
                         .get_composer_text()
                         .to_string();
-                    if let Some(at_pos) = current_text.rfind('@') {
+                    let token = super::mention_query(&current_text);
+                    if !token.is_empty() {
+                        let at_pos = current_text.len() - token.len();
                         let new_text = format!("{}{} ", &current_text[..at_pos], display_str);
                         let pane = w.global::<crate::ChatPane>();
                         pane.set_composer_text(new_text.into());
                         pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
                     }
-                    w.global::<crate::ChatPane>()
-                        .set_mention_autocomplete_visible(false);
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_mention_autocomplete_visible(false);
+                    pane.set_mention_query("".into());
                 }
             });
         });

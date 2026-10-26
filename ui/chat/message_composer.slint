@@ -689,6 +689,10 @@ export component MessageComposer inherits GlassSurface {
                             }
                             // Escape backs out of an edit or a reply, like the bar's ×.
                             if (event.text == Key.Escape && self.preedit-text == "") {
+                                if (TextFormat.mention-query(self.text) != "") {
+                                    root.mention-triggered("");
+                                    return accept;
+                                }
                                 if (root.is-editing) {
                                     root.reset-composition();
                                     root.cancel-edit();

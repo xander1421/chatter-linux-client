@@ -99,7 +99,7 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let requested = query.clone();
             let weak = weak.clone(); let client = client.clone();
             tokio::spawn(async move {
-                let suggestions = client.search_mention_suggestions(&thread.channel_id, &query).await;
+                let suggestions = client.search_mention_suggestions(&thread.channel_id, &query.as_str()[1..]).await;
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(w) = weak.upgrade() else { return };
                     if w.global::<crate::ChatPane>().get_thread_root_message_id().as_str() != thread.root_message_id.to_string() { return; }
@@ -125,7 +125,9 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(w) = weak.upgrade() else { return };
             let pane = w.global::<crate::ChatPane>();
             let text = pane.get_thread_composer_text().to_string();
-            if let Some(at) = text.rfind('@') {
+            let token = super::composer::mention_query(&text);
+            if !token.is_empty() {
+                let at = text.len() - token.len();
                 pane.set_thread_composer_text(format!("{}{} ", &text[..at], display).into());
                 pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
             }

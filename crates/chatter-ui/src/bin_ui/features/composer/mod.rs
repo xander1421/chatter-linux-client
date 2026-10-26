@@ -10,6 +10,7 @@ pub(crate) use attachments::read_clipboard_image;
 mod drag_drop;
 mod emoji;
 mod format_text;
+pub(crate) use format_text::mention_query;
 pub mod gif;
 mod mentions;
 mod voice;

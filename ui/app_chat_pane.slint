@@ -190,6 +190,7 @@ export global ChatPane {
     in-out property <length> mention-composer-top: 0px;
     in-out property <length> thread-composer-top: 0px;
     in property <[MentionSuggestion]> mention-suggestions: [];
+    in-out property <string> mention-query: "";
     in-out property <int> mention-selected-index: 0;
     callback mention-suggestion-selected(string, string);  // (id, display_text)
     // ========== Message multi-select ==========

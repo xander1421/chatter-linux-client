@@ -47,15 +47,21 @@ fn replace_selection(text: &str, replacement: &str, start: usize, end: usize) ->
     format!("{}{}{}", &text[..s], replacement, &text[e..])
 }
 
+pub(crate) fn mention_query(text: &str) -> &str {
+    let Some(at) = text.rfind('@') else { return "" };
+    if at > 0 && !text[..at].chars().last().is_some_and(char::is_whitespace) {
+        return "";
+    }
+    let token = &text[at..];
+    if token[1..].chars().any(char::is_whitespace) {
+        ""
+    } else {
+        token
+    }
+}
+
 pub(crate) fn wire_format_text(window: &MainWindow) {
-    window.global::<TextFormat>().on_mention_query(|text| {
-        let query = text.rsplit('@').next().unwrap_or_default();
-        if query.is_empty() || query.chars().any(char::is_whitespace) || !text.contains('@') {
-            "".into()
-        } else {
-            query.into()
-        }
-    });
+    window.global::<TextFormat>().on_mention_query(|text| mention_query(&text).into());
     window
         .global::<TextFormat>()
         .on_replace(|text, replacement, start, end| {
