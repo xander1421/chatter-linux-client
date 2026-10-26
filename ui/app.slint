@@ -566,6 +566,7 @@ export component MainWindow inherits Window {
         focus-on-tab-navigation: false;
 
         key-pressed(event) => {
+            if (shortcuts.handle-command(event)) { return accept; }
             if (event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
                 && (ChatPane.delete-confirm-count > 0 || CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
@@ -596,7 +597,7 @@ export component MainWindow inherits Window {
                 && (ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible)) ? accept : reject;
         }
 
-        AppShortcuts {
+        shortcuts := AppShortcuts {
             current-view: root.current-view;
             active-modal: root.active-modal;
             back-pressed() => { root.back-pressed(); }
