@@ -687,6 +687,18 @@ export component MessageComposer inherits GlassSurface {
                                 root.edit-last-requested();
                                 return accept;
                             }
+                            // Escape backs out of an edit or a reply, like the bar's ×.
+                            if (event.text == Key.Escape && self.preedit-text == "") {
+                                if (root.is-editing) {
+                                    root.reset-composition();
+                                    root.cancel-edit();
+                                    return accept;
+                                }
+                                if (root.is-replying) {
+                                    root.cancel-reply();
+                                    return accept;
+                                }
+                            }
                             // Wide tablet and desktop keyboards send with Enter;
                             // Shift+Enter remains a newline. Phone keyboards keep
                             // Enter for multi-line messages and use the send button.
