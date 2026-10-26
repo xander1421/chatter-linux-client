@@ -43,6 +43,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 /// still polls and validates through the normal privacy-preserving pipeline.
 struct PollHints {
     wake: tokio::sync::Notify,
+    anon_wake: std::sync::atomic::AtomicBool,
     foreground_wake: tokio::sync::Notify,
     visible: std::sync::atomic::AtomicBool,
     leases: parking_lot::Mutex<Vec<(u64, std::time::Instant)>>,
@@ -53,6 +54,7 @@ impl Default for PollHints {
     fn default() -> Self {
         Self {
             wake: tokio::sync::Notify::new(),
+            anon_wake: std::sync::atomic::AtomicBool::new(false),
             foreground_wake: tokio::sync::Notify::new(),
             visible: std::sync::atomic::AtomicBool::new(true),
             leases: parking_lot::Mutex::new(Vec::new()),
@@ -78,6 +80,8 @@ impl PollHints {
             .visible
             .swap(visible, std::sync::atomic::Ordering::AcqRel);
         if visible && !was_visible {
+            self.anon_wake
+                .store(true, std::sync::atomic::Ordering::Release);
             self.foreground_wake.notify_one();
         }
     }
@@ -152,6 +156,37 @@ impl PollHints {
                 }
             }
         }
+    }
+}
+
+/// Space empty secret-mailbox fetches while direct-transport wake subscriptions
+/// can request an immediate cycle. The bounded fallback repairs lost SSE wakes.
+struct AnonPollBackoff {
+    empty_polls: u32,
+    next_due: tokio::time::Instant,
+}
+
+impl AnonPollBackoff {
+    fn new() -> Self {
+        Self {
+            empty_polls: 0,
+            next_due: tokio::time::Instant::now(),
+        }
+    }
+
+    fn interval(empty_polls: u32) -> std::time::Duration {
+        std::time::Duration::from_secs(5u64.saturating_mul(1u64 << empty_polls.min(5)))
+            .min(std::time::Duration::from_secs(120))
+    }
+
+    fn reset(&mut self) {
+        self.empty_polls = 0;
+        self.next_due = tokio::time::Instant::now();
+    }
+
+    fn finished_empty(&mut self) {
+        self.next_due = tokio::time::Instant::now() + Self::interval(self.empty_polls);
+        self.empty_polls = self.empty_polls.saturating_add(1);
     }
 }
 
@@ -686,6 +721,7 @@ impl DeviceInboxProvider {
         let retry_budget = Arc::new(crate::inbox::ack_policy::RetryBudget::new());
 
         let mut anon_polls = tokio::task::JoinSet::new();
+        let mut anon_backoff = AnonPollBackoff::new();
         let mut group_polls = tokio::task::JoinSet::new();
         let mut dm_polls = tokio::task::JoinSet::new();
         let mut poll_cycle: u64 = 0;
@@ -965,11 +1001,28 @@ impl DeviceInboxProvider {
             // Reap completed polls before starting another. JoinSet aborts its tasks
             // when the inbox loop stops, including on a transport switch.
             while let Some(result) = anon_polls.try_join_next() {
-                if let Err(error) = result {
-                    tracing::warn!(%error, "Anonymous DM polling task failed");
+                match result {
+                    Ok(true) => anon_backoff.reset(),
+                    Ok(false) => anon_backoff.finished_empty(),
+                    Err(error) => {
+                        tracing::warn!(%error, "Anonymous DM polling task failed");
+                        anon_backoff.finished_empty();
+                    }
                 }
             }
-            if anon_polls.is_empty() {
+            let direct = grpc_pool.transport_mode()
+                == crate::network::grpc::client_pool::TransportMode::Direct;
+            if !direct
+                || (anon_polls.is_empty()
+                    && poll_hints
+                        .anon_wake
+                        .swap(false, std::sync::atomic::Ordering::AcqRel))
+            {
+                anon_backoff.reset();
+            }
+            if anon_polls.is_empty()
+                && (!direct || tokio::time::Instant::now() >= anon_backoff.next_due)
+            {
                 if let (Some(anon_poller), Some(pairwise)) = (&anon_dm_poller, &pairwise_service) {
                     let anon_poller = anon_poller.clone();
                     let pairwise = pairwise.clone();
@@ -984,6 +1037,7 @@ impl DeviceInboxProvider {
                     let domain_tx = domain_tx.clone();
                     let content_handoff = content_handoff.clone();
                     anon_polls.spawn(async move {
+                        let mut found_messages = false;
                         if let Some(handoff) = &content_handoff {
                             handoff.replay(&message_repo).await;
                         }
@@ -1005,7 +1059,7 @@ impl DeviceInboxProvider {
                             Ok(keys) => keys,
                             Err(error) => {
                                 tracing::warn!(%error, "Secret chat mailbox lookup failed");
-                                return;
+                                return false;
                             }
                         };
                         let mailbox_count = mailbox_keys.len();
@@ -1025,7 +1079,7 @@ impl DeviceInboxProvider {
                             .is_err()
                             {
                                 tracing::warn!("Anonymous DM cover poll exceeded 95-second budget");
-                                return;
+                                return false;
                             }
                         }
 
@@ -1057,6 +1111,7 @@ impl DeviceInboxProvider {
                                     secret_healthy = true;
                                     let results = vec![result];
                                     if results[0].has_messages() {
+                                        found_messages = true;
                                         // Create mpsc channel for events (process_anon_dm_results expects mpsc)
                                         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
                                         // Blocking check closure — uses the DB directly to
@@ -1179,6 +1234,7 @@ impl DeviceInboxProvider {
                                 }
                             }
                         }
+                        found_messages
                     });
                 }
             }
@@ -1211,6 +1267,9 @@ impl DeviceInboxProvider {
 
     /// Wake the normal cycle; ignored for pacing while on Shield transport.
     pub fn wake(&self) {
+        self.poll_hints
+            .anon_wake
+            .store(true, std::sync::atomic::Ordering::Release);
         self.poll_hints.wake.notify_one();
     }
 
@@ -1256,6 +1315,29 @@ impl DeviceInboxProvider {
 mod responsive_poll_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn empty_secret_polls_back_off_with_a_two_minute_fallback() {
+        let expected = [5, 10, 20, 40, 80, 120, 120];
+        for (empty_polls, seconds) in expected.into_iter().enumerate() {
+            assert_eq!(
+                AnonPollBackoff::interval(empty_polls as u32),
+                Duration::from_secs(seconds)
+            );
+        }
+        assert_eq!(AnonPollBackoff::interval(u32::MAX), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn secret_wake_or_received_mail_resets_backoff() {
+        let mut backoff = AnonPollBackoff::new();
+        backoff.finished_empty();
+        backoff.finished_empty();
+        assert_eq!(backoff.empty_polls, 2);
+        backoff.reset();
+        assert_eq!(backoff.empty_polls, 0);
+        assert!(backoff.next_due <= tokio::time::Instant::now());
+    }
 
     #[tokio::test]
     async fn key_wait_wakes_and_restores_normal_cadence_on_drop() {
