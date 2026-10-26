@@ -145,7 +145,8 @@ impl MessageActions {
                 && (one_to_one_dm || (is_own && within_window)),
             delete_for_me: !is_deleted,
             forward: !is_deleted,
-            copy: !is_deleted,
+            // Copy puts the text on the clipboard; a photo-only message has none.
+            copy: !is_deleted && has_body,
             download: has_attachments && !is_deleted,
             info: is_own && on_server,
             select: !is_deleted,
