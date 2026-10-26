@@ -3,7 +3,7 @@
 use crate::bin_ui::converters::initials_from_name;
 
 use chatter_core::ui::sidebar_data::{
-    ChatRowLabel, ChatRowSendData, chat_row_accessible_label, plain_label,
+    ChatRowLabel, ChatRowSendData, chat_row_accessible_label,
 };
 
 use super::utils::avatar_bytes_to_image;
@@ -44,14 +44,12 @@ impl ChatRowExt for ChatRowSendData {
         };
         let accessible_label_text =
             chat_row_accessible_label(&display_name, self.unread_count, &self.last_message);
-        let accessible_description_text = plain_label(&self.last_message);
         crate::ChatRowData {
             conversation_id: self.id.into(),
             conversation_type: super::conversation_kind(&self.kind),
             user_id: self.user_id.into(),
             display_name: display_name.into(),
             accessible_label_text: accessible_label_text.into(),
-            accessible_description_text: accessible_description_text.into(),
             avatar_source,
             has_avatar,
             initials: initials.into(),

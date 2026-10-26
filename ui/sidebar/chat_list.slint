@@ -23,7 +23,6 @@ export struct ChatRowData {
     user-id: string,             // DM rows: the peer
     display-name: string,
     accessible-label-text: string,
-    accessible-description-text: string,
     avatar-source: image,
     has-avatar: bool,
     initials: string,
@@ -52,7 +51,6 @@ export component ChatRow inherits Rectangle {
 
     accessible-role: list-item;
     accessible-label: root.data.accessible-label-text;
-    accessible-description: root.data.accessible-description-text;
     accessible-action-default => { root.activate(); }
 
     callback clicked();
