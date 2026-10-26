@@ -217,7 +217,10 @@ fn wire_context_menu_mute(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let kind = crate::bin_ui::converters::conversation_type(kind);
         let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
         match ctx.mute_conversation(conv, muted) {
-            Ok(()) => w.global::<crate::SidebarPane>().set_row_context_menu_muted(muted),
+            Ok(()) => {
+                w.global::<crate::SidebarPane>().set_row_context_menu_muted(muted);
+                refresh_mute_rows(&w, &ctx);
+            }
             Err(error) => {
                 tracing::error!(%error, "Could not update conversation mute");
                 w.set_toast_message("Couldn't update mute setting".into());
@@ -226,6 +229,13 @@ fn wire_context_menu_mute(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
         }
     });
+}
+
+/// Refresh loose, archived and section rows after a persisted mute change.
+pub(crate) fn refresh_mute_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move { history_changed(&weak, &ui_ctx) });
 }
 
 /// Tell the message list where to open.

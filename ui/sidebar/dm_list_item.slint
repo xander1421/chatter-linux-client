@@ -28,6 +28,7 @@ export component DMListItem inherits Rectangle {
     in property <int> mention-count: 0;
     in property <bool> is-typing: false;
     in property <bool> is-pinned: false;
+    in property <bool> is-muted: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
@@ -214,6 +215,19 @@ export component DMListItem inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
+                if root.is-muted: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.bell-off;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.text-muted;
+                        accessible-role: text;
+                        accessible-label: "Muted";
+                    }
+                }
+
                 // Pin marker — explains why this row sits above the rest.
                 if root.is-pinned: VerticalLayout {
                     alignment: center;
@@ -313,7 +327,7 @@ export component DMListItem inherits Rectangle {
                     width: max(root.badge-size, badge-text.preferred-width + 12px);
                     height: root.badge-size;
                     border-radius: Spacing.radius-full;
-                    background: Colors.action-fill;
+                    background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
                     badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
@@ -384,7 +398,7 @@ export component DMListItem inherits Rectangle {
                 border-radius: Spacing.radius-full;
                 border-width: 2px;
                 border-color: Colors.surface;
-                background: Colors.action-fill;
+                background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
                 collapsed-badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;

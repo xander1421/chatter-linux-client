@@ -35,6 +35,7 @@ export struct ChatRowData {
     mention-count: int,
     is-typing: bool,
     is-pinned: bool,             // local-only pin; core sorts these first
+    is-muted: bool,
     can-leave: bool,             // core: `can_leave_channel`; private groups always
     can-delete: bool,            // channel rows: core's `is_former_channel`
     is-selected: bool,           // Rust-computed selection flag; drives highlight
@@ -170,6 +171,7 @@ export component ChatRow inherits Rectangle {
         initials: root.data.initials;
         presence-status: root.data.presence-status;
         is-pinned: root.data.is-pinned;
+        is-muted: root.data.is-muted;
         last-message: root.data.last-message;
         draft-preview: root.data.draft-preview;
         timestamp: root.data.timestamp;
@@ -200,6 +202,7 @@ export component ChatRow inherits Rectangle {
         avatar-source: root.data.avatar-source;
         has-avatar: root.data.has-avatar;
         is-pinned: root.data.is-pinned;
+        is-muted: root.data.is-muted;
         mobile-mode: root.mobile-mode;
         clicked => { root.activate(); }
         context-menu-requested(x, y) => { root.context-menu-requested(x, y); }
@@ -211,6 +214,7 @@ export component ChatRow inherits Rectangle {
         width: parent.width;
         name: root.data.display-name;
         member-count: root.data.member-count;
+        is-muted: root.data.is-muted;
         avatar-source: root.data.avatar-source;
         unread-count: root.data.unread-count;
         mention-count: root.data.mention-count;

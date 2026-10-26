@@ -31,6 +31,7 @@ export component ChannelListItem inherits Rectangle {
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <bool> is-pinned: false;
+    in property <bool> is-muted: false;
     in property <bool> mobile-mode: false;
 
     // Callbacks
@@ -213,6 +214,19 @@ export component ChannelListItem inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
+                if root.is-muted: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.bell-off;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.text-muted;
+                        accessible-role: text;
+                        accessible-label: "Muted";
+                    }
+                }
+
                 // Pin marker — explains why this row sits above the rest.
                 if root.is-pinned: VerticalLayout {
                     alignment: center;
@@ -313,7 +327,7 @@ export component ChannelListItem inherits Rectangle {
                     width: max(20px, badge-text.preferred-width + 12px);
                     height: 20px;
                     border-radius: Spacing.radius-full;
-                    background: Colors.action-fill;
+                    background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
                     badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
@@ -394,7 +408,7 @@ export component ChannelListItem inherits Rectangle {
                 border-radius: Spacing.radius-full;
                 border-width: 2px;
                 border-color: Colors.surface;
-                background: Colors.action-fill;
+                background: root.is-muted ? Colors.text-muted : Colors.action-fill;
 
                 collapsed-badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;

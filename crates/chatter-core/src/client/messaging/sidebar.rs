@@ -4,6 +4,20 @@ struct SidebarProjection {
     latest: std::collections::HashMap<(String, crate::domain::message::ConversationType), crate::domain::message::Message>,
     unread: std::collections::HashMap<(String, crate::domain::message::ConversationType), u32>,
     mentions: std::collections::HashMap<(String, crate::domain::message::ConversationType), u32>,
+    muted: std::collections::HashSet<String>,
+}
+
+impl SidebarProjection {
+    fn is_muted(&self, kind: &crate::domain::message::ConversationType, id: &str) -> bool {
+        use crate::domain::message::ConversationType;
+        let prefix = match kind {
+            ConversationType::ServerDm => "conv.muted.server_dm.",
+            ConversationType::AnonDm => "conv.muted.anon_dm.",
+            ConversationType::Channel => "conv.muted.channel.",
+            _ => return false,
+        };
+        self.muted.contains(&format!("{prefix}{id}"))
+    }
 }
 
 impl ChatterClient {
@@ -234,6 +248,7 @@ impl ChatterClient {
             mention_count: projection.mentions.get(&(conv.conversation_id.clone(), conv.conversation_type.clone()))
                 .copied().unwrap_or(0),
             is_pinned: conv.is_pinned,
+            is_muted: projection.is_muted(&conv.conversation_type, &conv.conversation_id),
             can_leave: match conv.conversation_type {
                 // As `private_group_row`.
                 CT::AnonGroup => conv
@@ -298,6 +313,7 @@ impl ChatterClient {
             if let Ok(id) = conv.conversation_id.parse::<crate::domain::anon_group::AnonGroupId>() {
                 if let Some(group) = self.get_anon_group(&id) {
                     row.display_name = group.name.clone();
+                    row.is_muted = group.status == crate::domain::anon_group::AnonGroupStatus::Muted;
                     row.member_count = self.get_anon_group_members(&id).len() as u32;
                     let latest = projection.latest.get(&(conv.conversation_id.clone(), CT::AnonGroup));
                     let (preview, at) = self.sidebar_activity(latest);
@@ -356,7 +372,7 @@ impl ChatterClient {
             .unwrap_or_default().into_iter()
             .map(|(key, stats)| (key, stats.unread_count)).collect();
         let mentions = self.sidebar_mention_counts(ids);
-        SidebarProjection { latest, unread, mentions }
+        SidebarProjection { latest, unread, mentions, muted: self.sidebar_muted_settings() }
     }
 
     fn section_projection(&self, ids: &[crate::domain::ids::ChannelId]) -> SidebarProjection {
@@ -364,7 +380,15 @@ impl ChatterClient {
             latest: self.messages().message_repo.sidebar_latest_batch(ids).unwrap_or_default(),
             unread: Default::default(),
             mentions: self.sidebar_mention_counts(ids),
+            muted: self.sidebar_muted_settings(),
         }
+    }
+
+    fn sidebar_muted_settings(&self) -> std::collections::HashSet<String> {
+        self.channels().settings_repo.get_all().unwrap_or_default().into_iter()
+            .filter_map(|(key, value)| {
+                (value.trim() == "true" && key.starts_with("conv.muted.")).then_some(key)
+            }).collect()
     }
 
     fn sidebar_mention_counts(
@@ -435,6 +459,7 @@ impl ChatterClient {
 
             out.push(ChatRowSendData {
                 user_id: peer_id.to_string(),
+                is_muted: projection.is_muted(&ConversationType::ServerDm, &peer_id.to_string()),
                 avatar_bytes,
                 presence_status,
                 last_message,
@@ -534,6 +559,7 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
+                is_muted: projection.is_muted(&ConversationType::AnonDm, &dm.id.to_string()),
                 avatar_bytes: self.anon_dm_avatar(&dm),
                 presence_status: "pending".to_string(),
                 last_message,
@@ -560,6 +586,7 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
+                is_muted: projection.is_muted(&ConversationType::AnonDm, &dm.id.to_string()),
                 avatar_bytes: self.anon_dm_avatar(&dm),
                 presence_status: self.anon_peer_presence().as_str().to_string(),
                 last_message,
@@ -595,6 +622,7 @@ impl ChatterClient {
             };
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
+                is_muted: projection.is_muted(&ConversationType::AnonDm, &dm.id.to_string()),
                 avatar_bytes: self.anon_dm_avatar(&dm),
                 presence_status: "offline".to_string(),
                 last_message,
@@ -712,6 +740,7 @@ impl ChatterClient {
         let last_activity = latest.map_or(channel.created_at, |m| m.created_at);
         ChatRowSendData {
             avatar_bytes: channel.icon.clone().filter(|b| !b.is_empty()),
+            is_muted: projection.is_muted(&crate::domain::message::ConversationType::Channel, &id),
             last_message,
             timestamp_at: Some(last_activity),
             unread_count: channel.unread_count,
@@ -742,6 +771,7 @@ impl ChatterClient {
         let last_activity = latest.map_or(group.created_at, |m| m.created_at);
         ChatRowSendData {
             last_message,
+            is_muted: group.status == crate::domain::anon_group::AnonGroupStatus::Muted,
             timestamp_at: Some(last_activity),
             unread_count: projection.unread.get(&(group.id.to_string(), crate::domain::message::ConversationType::AnonGroup)).copied().unwrap_or(0),
             mention_count: projection.mentions.get(&(group.id.to_string(), crate::domain::message::ConversationType::AnonGroup)).copied().unwrap_or(0),

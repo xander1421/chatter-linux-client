@@ -37,6 +37,8 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 tracing::error!(error = %e, "Failed to persist profile mute");
                 w.global::<crate::ModalHostState>()
                     .set_profile_is_muted(!muted);
+            } else {
+                crate::bin_ui::features::sidebar::refresh_mute_rows(&w, &ui_ctx_mute);
             }
         });
 
