@@ -244,7 +244,10 @@ pub(super) fn handle_presence_changed(
         let dms = w.global::<crate::SidebarPane>().get_chat_rows();
         for i in 0..dms.row_count() {
             if let Some(mut dm) = dms.row_data(i) {
-                if dm.user_id == user_id_str {
+                // The friend DM row only: its conversation id is the peer id.
+                // A secret chat's row also carries the peer's user id, and
+                // mirroring live presence there tied it to the identity.
+                if dm.conversation_id == user_id_str {
                     dm.presence_status = presence_slint.clone();
                     dms.set_row_data(i, dm);
                     crate::bin_ui::features::sidebar::refresh_flat_rows(&w);
@@ -259,7 +262,7 @@ pub(super) fn handle_presence_changed(
         if w.global::<crate::ChatPane>().get_is_dm() {
             for i in 0..dms.row_count() {
                 if let Some(dm) = dms.row_data(i) {
-                    if dm.is_selected && dm.user_id == user_id_str {
+                    if dm.is_selected && dm.conversation_id == user_id_str {
                         w.global::<crate::ChatPane>()
                             .set_header_presence_status(presence_slint.clone());
                         break;
