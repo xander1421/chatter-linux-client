@@ -22,6 +22,7 @@ export component PrivateGroupListItem inherits Rectangle {
     // Core-composed preview of the latest activity: text, "🖼️ Photo",
     // "📎 report.pdf", "📌 …" for a pinned one. Never assembled here.
     in property <string> last-message: "";
+    in property <string> draft-preview: "";
     in property <string> timestamp: "";
     in property <bool> is-typing: false;
     in property <bool> selected: false;
@@ -200,7 +201,13 @@ export component PrivateGroupListItem inherits Rectangle {
                 horizontal-stretch: 1;
                 height: root.preview-size * 1.4;
                 clip: true;
-                preview-text := Text {
+                if root.draft-preview != "": HorizontalLayout {
+                    width: parent.width;
+                    spacing: 3px;
+                    Text { text: "Draft:"; color: Colors.danger; font-size: root.preview-size; }
+                    Text { text: root.draft-preview; color: Colors.text-muted; font-size: root.preview-size; overflow: elide; horizontal-stretch: 1; }
+                }
+                if root.draft-preview == "": Text {
                     width: parent.width;
                     height: parent.height;
                     text: root.last-message;

@@ -323,7 +323,7 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 
 /// Apply queued navigation to the actual current conversation and draft owner.
 /// Intermediate snapshots may have been overtaken; old-account callbacks expire.
-pub fn sync_composer_draft(w: &MainWindow, ctx: &ChatterClient, revision: u64) {
+pub fn sync_composer_draft(w: &MainWindow, ctx: &Arc<ChatterClient>, revision: u64) {
     let latest = ctx.chat_snapshot();
     if latest.attachment_revision != revision {
         return;
@@ -353,7 +353,7 @@ fn mesh_draft_key(w: &MainWindow) -> String {
 }
 
 /// Park the composer under `leaving` and load `entering`'s draft.
-pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str, entering: &str) {
+pub fn switch_composer_draft(w: &MainWindow, ctx: &Arc<ChatterClient>, leaving: &str, entering: &str) {
     w.global::<crate::ChatPane>()
         .set_composer_emoji_picker_visible(false);
     w.global::<crate::ChatPane>()
@@ -378,6 +378,7 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     };
     crate::bin_ui::features::chat::send_message::clear_reply(w);
     let entering_draft = ctx.swap_composer_draft(leaving, leaving_draft, entering);
+    crate::bin_ui::features::sidebar::refresh_draft_rows(w, ctx);
     let pane = w.global::<crate::ChatPane>();
     pane.set_composer_text(entering_draft.text.into());
     pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);

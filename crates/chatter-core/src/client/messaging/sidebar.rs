@@ -188,7 +188,9 @@ impl ChatterClient {
     ) -> crate::ui::sidebar_data::ChatRowSendData {
         let ids = conv.conversation_id.parse().ok().into_iter().collect::<Vec<_>>();
         let projection = self.section_projection(&ids);
-        self.section_row_with_projection(conv, &projection)
+        let mut row = self.section_row_with_projection(conv, &projection);
+        self.decorate_draft_rows(std::slice::from_mut(&mut row));
+        row
     }
 
     /// Shape a full folder snapshot with one message and mention projection
@@ -200,8 +202,12 @@ impl ChatterClient {
         let ids = sections.iter().flat_map(|section| &section.conversations)
             .filter_map(|conv| conv.conversation_id.parse().ok()).collect::<Vec<_>>();
         let projection = self.section_projection(&ids);
-        sections.iter().map(|section| section.conversations.iter()
-            .map(|conv| self.section_row_with_projection(conv, &projection)).collect()).collect()
+        let mut rows: Vec<Vec<_>> = sections.iter().map(|section| section.conversations.iter()
+            .map(|conv| self.section_row_with_projection(conv, &projection)).collect()).collect();
+        for section in &mut rows {
+            self.decorate_draft_rows(section);
+        }
+        rows
     }
 
     fn section_row_with_projection(
@@ -611,8 +617,10 @@ impl ChatterClient {
     /// what lives in one.
     pub fn sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         let archived = self.archived_conversation_ids();
-        self.sidebar_rows_unfiltered().into_iter()
-            .filter(|row| !archived.contains(&row.id)).collect()
+        let mut rows: Vec<_> = self.sidebar_rows_unfiltered().into_iter()
+            .filter(|row| !archived.contains(&row.id)).collect();
+        self.decorate_draft_rows(&mut rows);
+        rows
     }
 
     pub fn archived_sidebar_rows(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
@@ -636,7 +644,31 @@ impl ChatterClient {
             }
         }
         crate::ui::sidebar_data::order_chat_rows(&mut rows);
+        self.decorate_draft_rows(&mut rows);
         rows
+    }
+
+    fn decorate_draft_rows(&self, rows: &mut [crate::ui::sidebar_data::ChatRowSendData]) {
+        let (drafts, _) = self.composer_drafts_for_session();
+        let owner = self.composer_owner.lock().clone();
+        let chat = self.chat_state().get();
+        for row in rows {
+            if row.id == owner {
+                continue;
+            }
+            let text = drafts.get(&row.id).map_or("", |draft| draft.text.trim());
+            let has_attachment = row.id.parse::<crate::domain::ids::ChannelId>().ok()
+                .is_some_and(|id| chat.attachment_trays.get(&Some(id))
+                    .is_some_and(|tray| !tray.is_empty()));
+            if text.is_empty() && !has_attachment {
+                continue;
+            }
+            let body = if text.is_empty() { "📎".to_string() } else {
+                super::plain_sidebar_preview(&crate::domain::message::format_preview_body("", text, Some(100)))
+            };
+            row.draft_preview = body.clone();
+            row.last_message = format!("Draft: {body}");
+        }
     }
 
     fn sidebar_rows_unfiltered(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {

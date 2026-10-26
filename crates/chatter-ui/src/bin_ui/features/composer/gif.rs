@@ -183,7 +183,7 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 /// conversation, the caption, the reply and whatever is staged go with it,
 /// and leave the composer as Send leaves it. `None` (told to the user, nothing
 /// consumed) where it cannot be sent.
-pub fn begin_gif_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Option<ComposerSend> {
+pub fn begin_gif_send(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> Option<ComposerSend> {
     match crate::bin_ui::features::chat::send_message::take_composer_send(w, ui_ctx) {
         Ok(send) => Some(send),
         Err(message) => {

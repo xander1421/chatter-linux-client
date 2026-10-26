@@ -72,6 +72,8 @@ pub struct ChatRowSendData {
     pub avatar_bytes: Option<Vec<u8>>,
     pub presence_status: String,
     pub last_message: String,
+    /// Body of a parked draft preview; empty when the message preview is shown.
+    pub draft_preview: String,
     /// Activity time shown at the right of the row, before local formatting.
     pub timestamp_at: Option<chrono::DateTime<chrono::Utc>>,
     pub unread_count: u32,
@@ -110,6 +112,7 @@ impl ChatRowSendData {
             avatar_bytes: None,
             presence_status: String::new(),
             last_message: String::new(),
+            draft_preview: String::new(),
             timestamp_at: None,
             unread_count: 0,
             mention_count: 0,
