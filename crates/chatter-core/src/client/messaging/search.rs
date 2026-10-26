@@ -243,8 +243,10 @@ impl ChatterClient {
         };
 
         // Cap the per-member profile fetch to the first 20 members and short-
-        // circuit once we have enough matches. UI cap is 8 total.
-        for member in members.into_iter().take(20) {
+        // circuit once we have enough matches. UI cap is 8 total. You never
+        // mention yourself, so you are not offered.
+        let me = self.session_current_user_id();
+        for member in members.into_iter().filter(|m| Some(&m.user_id) != me.as_ref()).take(20) {
             if out.len() >= 8 {
                 break;
             }
@@ -264,13 +266,11 @@ impl ChatterClient {
             } else {
                 profile.display_name.clone()
             };
-            let user_id_str = member.user_id.to_string();
-            let name_lower = display_name.to_lowercase();
-            if name_lower.contains(&query_lower)
-                || user_id_str.to_lowercase().contains(&query_lower)
-            {
+            // Names only: matching the hex user id made "@a" or "@4" list
+            // nearly every member.
+            if display_name.to_lowercase().contains(&query_lower) {
                 out.push(MentionSuggestionInfo {
-                    id: user_id_str,
+                    id: member.user_id.to_string(),
                     name: display_name,
                     kind: MentionSuggestionKind::User,
                     avatar_bytes: profile.avatar_bytes,
