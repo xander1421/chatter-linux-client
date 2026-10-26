@@ -23,10 +23,15 @@ component MenuItem inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> mobile-mode: false;
     in property <bool> initial-focus: false;
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
     // The icon set has no up/down chevron; the right-facing one is rotated.
     in property <angle> icon-rotation: 0deg;
     callback clicked();
     callback escape();
+    callback navigate(int, int);
+    callback focused(int, length, length);
 
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     background: touch.has-hover ? Colors.surface-hover : transparent;
@@ -40,11 +45,19 @@ component MenuItem inherits Rectangle {
     changed initial-focus => {
         if root.initial-focus { menu-keys.focus(); }
     }
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { menu-keys.focus(); }
+    }
 
     menu-keys := FocusScope {
         width: 0px;
         height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
         key-pressed(event) => {
+            if event.text == Key.UpArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
+            if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
             if event.text == Key.Escape {
                 root.escape();
                 return accept;
@@ -127,6 +140,18 @@ export component SectionHeaderContextMenu inherits Rectangle {
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-sort-mode(/* section-id */ string, /* mode */ string);
     callback close();
+    private property <int> focus-index: 0;
+    function move-focus(from: int, direction: int) {
+        root.focus-index = direction == -2 ? 0 : direction == 2 ? 6
+            : max(0, min(6, from + direction));
+    }
+    function keep-visible(top: length, item-height: length) {
+        if (top + header-scroll.viewport-y < 0px) { header-scroll.viewport-y = -top; }
+        else if (top + item-height + header-scroll.viewport-y > header-scroll.height) {
+            header-scroll.viewport-y = header-scroll.height - top - item-height;
+        }
+    }
+    changed show => { if root.show { root.focus-index = 0; } }
 
     visible: root.show;
     width: 100%;
@@ -163,7 +188,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
         // Block backdrop clicks on menu area
         TouchArea { }
 
-        Flickable {
+        header-scroll := Flickable {
             width: 100%;
             height: 100%;
             immediate-child-press: true;
@@ -175,6 +200,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 spacing: Spacing.xxs;
 
             MenuItem {
+                nav-index: 0;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: -90deg;
@@ -188,6 +218,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: 90deg;
@@ -220,6 +255,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 2;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.clock;
                 label: "Recent";
@@ -232,6 +272,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 3;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.message-circle;
                 label: "Unread first";
@@ -244,6 +289,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 4;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.menu;
                 label: "Name (A–Z)";
@@ -263,6 +313,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
             // Rename is only otherwise reachable through a hover button, which
             // does not exist on touch.
             MenuItem {
+                nav-index: 5;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.edit;
                 label: "Rename section";
@@ -274,6 +329,11 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 6;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.trash;
                 label: "Remove section";
@@ -339,6 +399,26 @@ export component SectionContextMenu inherits Rectangle {
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
     property <bool> confirm-leave: false;
+    private property <int> focus-index: 0;
+    private property <bool> has-mute: root.conversation-type == ConversationKind.server-dm
+        || root.conversation-type == ConversationKind.anon-dm
+        || root.conversation-type == ConversationKind.anon-group;
+    private property <int> section-start: 2 + (root.has-mute ? 1 : 0);
+    private property <int> new-index: root.section-start + root.sections.length;
+    private property <int> remove-index: root.new-index + 1;
+    private property <int> delete-index: root.remove-index + (root.current-section-id != "" ? 1 : 0);
+    private property <int> leave-index: root.delete-index + (root.can-delete ? (root.confirm-delete ? 2 : 1) : 0);
+    private property <int> focus-count: root.leave-index + (root.can-leave ? (root.confirm-leave ? 2 : 1) : 0);
+    function move-focus(from: int, direction: int) {
+        root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
+            : max(0, min(root.focus-count - 1, from + direction));
+    }
+    function keep-visible(top: length, item-height: length) {
+        if (top + menu-scroll.viewport-y < 0px) { menu-scroll.viewport-y = -top; }
+        else if (top + item-height + menu-scroll.viewport-y > menu-scroll.height) {
+            menu-scroll.viewport-y = menu-scroll.height - top - item-height;
+        }
+    }
     property <length> target-row-height: root.collapsed ? 48px : root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
     property <length> menu-space-below: max(0px, root.height - root.bottom-inset - root.target-row-y - root.target-row-height - Spacing.sm - Spacing.md);
     property <length> menu-space-above: max(0px, root.target-row-y - Spacing.sm - Spacing.md);
@@ -346,6 +426,7 @@ export component SectionContextMenu inherits Rectangle {
     changed show => {
         root.confirm-delete = false;
         root.confirm-leave = false;
+        root.focus-index = 0;
     }
 
     visible: root.show;
@@ -403,7 +484,7 @@ export component SectionContextMenu inherits Rectangle {
         // Block backdrop clicks on menu area
         TouchArea { }
 
-        Flickable {
+        menu-scroll := Flickable {
             width: 100%;
             height: 100%;
             immediate-child-press: true;
@@ -416,6 +497,11 @@ export component SectionContextMenu inherits Rectangle {
 
             // Pin / Unpin — local-only, never synced to the server.
             MenuItem {
+                nav-index: 0;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.pin;
                 label: root.is-pinned ? "Unpin" : "Pin to top";
@@ -428,6 +514,11 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                nav-index: 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.folder;
                 label: root.is-archived ? "Unarchive" : "Archive";
@@ -441,6 +532,11 @@ export component SectionContextMenu inherits Rectangle {
             if root.conversation-type == ConversationKind.server-dm
                 || root.conversation-type == ConversationKind.anon-dm
                 || root.conversation-type == ConversationKind.anon-group: MenuItem {
+                nav-index: 2;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: root.is-muted ? Icons.bell-off : Icons.bell;
                 label: root.is-muted ? "Unmute" : "Mute";
@@ -473,7 +569,12 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             // Section items
-            for section in root.sections: MenuItem {
+            for section[index] in root.sections: MenuItem {
+                nav-index: root.section-start + index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 emoji: section.icon-emoji;
                 icon: Icons.folder;
@@ -495,6 +596,11 @@ export component SectionContextMenu inherits Rectangle {
 
             // New section
             MenuItem {
+                nav-index: root.new-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.plus;
                 label: "New section…";
@@ -507,6 +613,11 @@ export component SectionContextMenu inherits Rectangle {
 
             // Remove from section (only if already in one)
             if root.current-section-id != "": MenuItem {
+                nav-index: root.remove-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
                 // Not destructive: the chat goes back to the main list.
@@ -524,6 +635,11 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-delete && !root.confirm-delete: MenuItem {
+                nav-index: root.delete-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.trash;
                 label: "Delete chat";
@@ -533,6 +649,12 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-delete && root.confirm-delete: MenuItem {
+                initial-focus: root.show && !root.mobile-mode;
+                nav-index: root.delete-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.trash;
                 // Short enough for the phone menu's width: "Delete all
@@ -549,6 +671,11 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-delete && root.confirm-delete: MenuItem {
+                nav-index: root.delete-index + 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
                 label: "Cancel";
@@ -566,6 +693,11 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-leave && !root.confirm-leave: MenuItem {
+                nav-index: root.leave-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
                 label: root.is-group ? "Leave group" : "Leave channel";
@@ -589,6 +721,12 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-leave && root.confirm-leave: MenuItem {
+                initial-focus: root.show && !root.mobile-mode;
+                nav-index: root.leave-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
                 label: "Leave";
@@ -601,6 +739,11 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-leave && root.confirm-leave: MenuItem {
+                nav-index: root.leave-index + 1;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: Icons.x;
                 label: "Cancel";

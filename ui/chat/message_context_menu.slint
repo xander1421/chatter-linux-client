@@ -48,7 +48,13 @@ component QuickReaction inherits Rectangle {
     in property <int> stagger-index: 0;
     // The emoji's spoken name; the glyph alone is not a name.
     in property <string> name;
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
+    in property <bool> initial-focus: false;
     callback clicked();
+    callback navigate(int, int);
+    callback focused(int, length, length);
 
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
@@ -64,10 +70,20 @@ component QuickReaction inherits Rectangle {
     accessible-label: "React with " + root.name;
     accessible-action-default => { root.clicked(); }
 
+    changed initial-focus => { if root.initial-focus { keys.focus(); } }
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
+    }
+
     keys := FocusScope {
         width: 0px;
         height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
         key-pressed(event) => {
+            if event.text == Key.UpArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
+            if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
             if event.text == Key.Space || event.text == Key.Return {
                 root.clicked();
                 return accept;
@@ -120,7 +136,13 @@ component MenuItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> destructive: false;
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
+    in property <bool> initial-focus: false;
     callback clicked();
+    callback navigate(int, int);
+    callback focused(int, length, length);
 
     height: Spacing.touch-target-min;
     background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
@@ -135,10 +157,20 @@ component MenuItem inherits Rectangle {
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
 
+    changed initial-focus => { if root.initial-focus { keys.focus(); } }
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
+    }
+
     keys := FocusScope {
         width: 0px;
         height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
         key-pressed(event) => {
+            if event.text == Key.UpArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 1); return accept; }
+            if event.text == Key.Home { root.navigate(root.nav-index, -2); return accept; }
+            if event.text == Key.End { root.navigate(root.nav-index, 2); return accept; }
             if event.text == Key.Space || event.text == Key.Return {
                 root.clicked();
                 return accept;
@@ -184,7 +216,7 @@ export component MessageContextMenu inherits Rectangle {
     // Keep the common actions on one short page, even with the IME open.
     // Secondary actions retain the capped scrollable page below.
     private property <bool> more-actions: false;
-    changed show => { root.more-actions = false; }
+    changed show => { root.more-actions = false; root.focus-index = 0; }
     in property <length> position-x: 0;
     in property <length> position-y: 0;
     // Window-local vertical bounds of the pressed bubble. Zero/zero keeps
@@ -236,6 +268,34 @@ export component MessageContextMenu inherits Rectangle {
         || (MessageMenuActions.reply && root.can-thread) || MessageMenuActions.select
         || MessageMenuActions.pin || MessageMenuActions.download
         || MessageMenuActions.delete-for-everyone || MessageMenuActions.delete-for-me;
+    private property <int> focus-index: 0;
+    private property <int> primary-start: MessageMenuActions.react ? QuickReactions.emojis.length : 0;
+    private property <int> resend-index: root.primary-start;
+    private property <int> reply-index: root.resend-index + (MessageMenuActions.resend ? 1 : 0);
+    private property <int> edit-index: root.reply-index + (MessageMenuActions.reply ? 1 : 0);
+    private property <int> copy-index: root.edit-index + (MessageMenuActions.edit ? 1 : 0);
+    private property <int> forward-index: root.copy-index + (MessageMenuActions.copy ? 1 : 0);
+    private property <int> more-index: root.forward-index + (MessageMenuActions.forward ? 1 : 0);
+    private property <int> reactions-index: 1;
+    private property <int> info-index: root.reactions-index + (MessageMenuActions.react ? 1 : 0);
+    private property <int> thread-index: root.info-index + (MessageMenuActions.info ? 1 : 0);
+    private property <int> select-index: root.thread-index + (MessageMenuActions.reply && root.can-thread ? 1 : 0);
+    private property <int> pin-index: root.select-index + (MessageMenuActions.select ? 1 : 0);
+    private property <int> download-index: root.pin-index + (MessageMenuActions.pin ? 1 : 0);
+    private property <int> delete-index: root.download-index + (MessageMenuActions.download ? 1 : 0);
+    private property <int> focus-count: root.more-actions
+        ? root.delete-index + (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone ? 1 : 0)
+        : root.more-index + (root.more-page ? 1 : 0);
+    function move-focus(from: int, direction: int) {
+        root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
+            : max(0, min(root.focus-count - 1, from + direction));
+    }
+    function keep-visible(top: length, item-height: length) {
+        if (top + menu-scroll.viewport-y < 0px) { menu-scroll.viewport-y = -top; }
+        else if (top + item-height + menu-scroll.viewport-y > menu-scroll.height) {
+            menu-scroll.viewport-y = menu-scroll.height - top - item-height;
+        }
+    }
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
     callback retry-clicked(string);
@@ -445,9 +505,15 @@ export component MessageContextMenu inherits Rectangle {
                 spacing: Spacing.xxs;
 
                 if root.more-actions: MenuItem {
+                    nav-index: 0;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.chevron-left;
                     label: "Back";
-                    clicked => { root.more-actions = false; menu-scroll.viewport-y = 0px; }
+                    clicked => { root.more-actions = false; root.focus-index = 0; menu-scroll.viewport-y = 0px; }
                 }
 
                 // Quick-reaction row. This is the whole point of opening on hold:
@@ -462,6 +528,12 @@ export component MessageContextMenu inherits Rectangle {
                     padding-bottom: Spacing.xs;
 
                     for emoji[index] in QuickReactions.emojis: QuickReaction {
+                        nav-index: index;
+                        focused-index: root.focus-index;
+                        keyboard-active: root.show && !root.preview-mobile;
+                        initial-focus: root.show && !root.preview-mobile && index == 0;
+                        focused(item-index, top, item-height) => { root.focus-index = item-index; }
+                        navigate(from, direction) => { root.move-focus(from, direction); }
                         emoji: emoji;
                         short-name: ["Like", "Love", "Haha", "Wow", "Sad", "Thanks"][index];
                         shown: root.show;
@@ -475,6 +547,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.resend && !root.more-actions: MenuItem {
+                    nav-index: root.resend-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.resend-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.rotate-ccw;
                     label: "Resend";
                     clicked => {
@@ -484,6 +562,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.react && root.more-actions: MenuItem {
+                    nav-index: root.reactions-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.reactions-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.smile;
                     label: "More reactions";
                     clicked => {
@@ -493,6 +577,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.info && root.more-actions: MenuItem {
+                    nav-index: root.info-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.info-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.clock;
                     label: "Info";
                     clicked => {
@@ -502,6 +592,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.reply && !root.more-actions: MenuItem {
+                    nav-index: root.reply-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.reply-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.reply;
                     label: "Reply";
                     clicked => {
@@ -511,6 +607,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.reply && root.can-thread && root.more-actions: MenuItem {
+                    nav-index: root.thread-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.thread-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.message-circle;
                     label: "Reply in thread";
                     clicked => {
@@ -522,6 +624,12 @@ export component MessageContextMenu inherits Rectangle {
                 // The discoverable route into multi-select, for anyone who never
                 // finds the longer hold.
                 if MessageMenuActions.select && root.more-actions: MenuItem {
+                    nav-index: root.select-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.select-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.check;
                     label: "Select";
                     clicked => {
@@ -531,6 +639,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.edit && !root.more-actions: MenuItem {
+                    nav-index: root.edit-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.edit-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.edit;
                     label: "Edit";
                     clicked => {
@@ -540,6 +654,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.pin && root.more-actions: MenuItem {
+                    nav-index: root.pin-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.pin-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.pin;
                     label: MessageMenuActions.pinned ? "Unpin" : "Pin";
                     clicked => {
@@ -549,6 +669,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.copy && !root.more-actions: MenuItem {
+                    nav-index: root.copy-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.copy-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.copy;
                     label: "Copy";
                     clicked => {
@@ -558,6 +684,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.forward && !root.more-actions: MenuItem {
+                    nav-index: root.forward-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.forward-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.send;
                     label: "Forward";
                     clicked => {
@@ -567,6 +699,12 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if MessageMenuActions.download && root.more-actions: MenuItem {
+                    nav-index: root.download-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.download-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.download;
                     label: "Download";
                     clicked => {
@@ -576,12 +714,24 @@ export component MessageContextMenu inherits Rectangle {
                 }
 
                 if root.more-page && !root.more-actions: MenuItem {
+                    nav-index: root.more-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.more-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.more-horizontal;
                     label: "More";
-                    clicked => { root.more-actions = true; menu-scroll.viewport-y = 0px; }
+                    clicked => { root.more-actions = true; root.focus-index = 0; menu-scroll.viewport-y = 0px; }
                 }
 
                 if (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone) && root.more-actions: MenuItem {
+                    nav-index: root.delete-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.delete-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
                     icon: Icons.trash;
                     label: "Delete";
                     destructive: true;
