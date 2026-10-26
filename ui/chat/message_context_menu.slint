@@ -270,14 +270,14 @@ export component MessageContextMenu inherits Rectangle {
     background: transparent;
 
     // One uninterrupted wash also covers messages that scroll under the
-    // floating header. Repaint the pressed row over it at its original size.
+    // floating header. On touch, repaint the pressed row at its original size.
     Rectangle {
         width: 100%;
         height: 100%;
         background: Materials.scrim;
     }
 
-    if root.bubble-in-view && root.preview-message.message-id != "": Rectangle {
+    if root.preview-mobile && root.bubble-in-view && root.preview-message.message-id != "": Rectangle {
         y: root.content-top;
         width: 100%;
         height: max(0px, root.height - self.y);
@@ -367,14 +367,9 @@ export component MessageContextMenu inherits Rectangle {
 
     // Menu container - positioned at the anchor (press point / click point).
     //
-    // Anchoring rules, in order:
-    //   * prefer just below the anchor, so the popup does not sit under the
-    //     finger that opened it;
-    //   * if that would overflow the bottom inset, flip to just above it;
-    //   * clamp into [content-top, content-bottom]
-    //     regardless, so it never renders under the status bar, the
-    //     conversation header, or the gesture strip;
-    //   * a menu taller than that band is capped to it and its body scrolls.
+    // Touch keeps the card clear of the raised bubble. Desktop places the
+    // full card by the pointer, flipping above it near the window bottom.
+    // Both paths clamp to the usable vertical band and scroll if needed.
     menu-container := GlassSurface {
         enter-distance: self.flip-up ? -20px : 20px;
         enter-duration: Materials.motion-standard;
@@ -393,6 +388,7 @@ export component MessageContextMenu inherits Rectangle {
         property <length> menu-h: menu-layout.preferred-height;
         property <length> top-limit: max(0px, root.content-top) + Spacing.sm;
         property <length> bottom-limit: min(parent.height, root.content-bottom) - Spacing.sm;
+        property <length> desktop-height: max(0px, min(self.menu-h, self.bottom-limit - self.top-limit));
         property <bool> has-bubble-anchor: root.has-bubble-anchor;
         property <length> room-below: max(0px, self.bottom-limit - root.anchor-bottom - Spacing.sm);
         property <length> room-above: max(0px, root.anchor-top - Spacing.sm - self.top-limit);
@@ -401,24 +397,32 @@ export component MessageContextMenu inherits Rectangle {
         // bubble's lower fragment; the existing Flickable scrolls its body.
         property <bool> cramped-bubble: self.has-bubble-anchor
             && max(self.room-above, self.room-below) < 2 * Spacing.touch-target-min;
-        property <bool> flip-up: self.has-bubble-anchor
-            ? (self.cramped-bubble || (self.room-below < self.menu-h && self.room-above > self.room-below))
-            : root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
+        property <bool> flip-up: !root.preview-mobile
+            ? root.position-y + Spacing.sm + self.desktop-height > self.bottom-limit
+            : self.has-bubble-anchor
+                ? (self.cramped-bubble || (self.room-below < self.menu-h && self.room-above > self.room-below))
+                : root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
 
         x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
-        y: max(self.top-limit, min(
-            (self.cramped-bubble ? self.top-limit : max(self.top-limit,
-                min(self.flip-up
-                    ? (self.has-bubble-anchor ? root.anchor-top : root.position-y) - Spacing.sm - self.height
-                    : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
-                    self.bottom-limit - self.height))) + self.entrance-offset,
-            self.bottom-limit - self.height));
+        y: !root.preview-mobile
+            ? max(self.top-limit, min(
+                (self.flip-up ? root.position-y - Spacing.sm - self.height
+                    : root.position-y + Spacing.sm) + self.entrance-offset,
+                self.bottom-limit - self.height))
+            : max(self.top-limit, min(
+                (self.cramped-bubble ? self.top-limit : max(self.top-limit,
+                    min(self.flip-up
+                        ? (self.has-bubble-anchor ? root.anchor-top : root.position-y) - Spacing.sm - self.height
+                        : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
+                        self.bottom-limit - self.height))) + self.entrance-offset,
+                self.bottom-limit - self.height));
         width: min(304px, parent.width - 2 * Spacing.md);
-        height: max(0px, min(self.menu-h, self.cramped-bubble
-            ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
-            : self.has-bubble-anchor
-                ? (self.flip-up ? self.room-above : self.room-below)
-                : self.bottom-limit - self.top-limit));
+        height: !root.preview-mobile ? self.desktop-height
+            : max(0px, min(self.menu-h, self.cramped-bubble
+                ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
+                : self.has-bubble-anchor
+                    ? (self.flip-up ? self.room-above : self.room-below)
+                    : self.bottom-limit - self.top-limit));
         border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu
