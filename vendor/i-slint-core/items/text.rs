@@ -243,14 +243,14 @@ pub struct StyledTextItem {
     pub default_font_family: Property<SharedString>,
     pub horizontal_alignment: Property<TextHorizontalAlignment>,
     pub vertical_alignment: Property<TextVerticalAlignment>,
-    pub link_clicked: Callback<StringArg>,
+    pub link_clicked: Callback<(SharedString, SharedString)>,
     pub link_color: Property<Color>,
     // Chatter: observe the link-owned pointer stream without duplicating taps.
     pub pointer_event: Callback<PointerEventArg>,
     pub mouse_x: Property<LogicalLength>,
     pub mouse_y: Property<LogicalLength>,
     // Chatter: an explicit short tap, not a hold/drag or unmatched release.
-    link_press: RefCell<Option<(String, LogicalPoint, u64, i32)>>,
+    link_press: RefCell<Option<((String, String), LogicalPoint, u64, i32)>>,
     pub cached_rendering_data: CachedRenderingData,
 }
 
@@ -359,7 +359,7 @@ impl Item for StyledTextItem {
                 if finger == *touch_finger_id && link == pressed_link
                     && delta.square_length() <= 64.0
                     && crate::animations::Instant::now().0.saturating_sub(tick) < 500 {
-                    Self::FIELD_OFFSETS.link_clicked().apply_pin(self).call(&(link.into(),));
+                    Self::FIELD_OFFSETS.link_clicked().apply_pin(self).call(&(link.0.into(), link.1.into()));
                 }
                 InputEventResult::EventAccepted
             }

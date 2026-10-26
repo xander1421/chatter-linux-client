@@ -172,6 +172,10 @@ pub fn reset_to_chats(w: &MainWindow) {
 ///
 /// Split out from the callback so tests can drive it directly.
 pub fn handle_back(window: &MainWindow) -> bool {
+    if window.global::<crate::ChatPane>().get_link_confirm_url() != "" {
+        window.global::<crate::ChatPane>().set_link_confirm_url("".into());
+        return true;
+    }
     // The ring covers everything, so Back belonged to it — and fell through
     // it, popping the chat underneath while the call rang on (FX3).
     if window

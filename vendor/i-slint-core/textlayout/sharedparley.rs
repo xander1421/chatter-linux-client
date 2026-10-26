@@ -447,7 +447,7 @@ fn create_text_paragraphs(
             let layout =
                 layout_builder.build(font_context, text, selection, formatting, Some(link_color));
 
-            TextParagraph { range, y: PhysicalLength::default(), layout, links }
+            TextParagraph { range, y: PhysicalLength::default(), layout, links, text: text.into() }
         };
 
     let mut paragraphs = Vec::with_capacity(1);
@@ -689,6 +689,7 @@ struct TextParagraph {
     y: PhysicalLength,
     layout: parley::Layout<Brush>,
     links: std::vec::Vec<(Range<usize>, std::string::String)>,
+    text: std::string::String,
 }
 
 impl TextParagraph {
@@ -1427,7 +1428,7 @@ pub fn link_under_cursor(
     size: LogicalSize,
     cursor: PhysicalPoint,
     cache: Option<&TextLayoutCache>,
-) -> Option<std::string::String> {
+) -> Option<(std::string::String, std::string::String)> {
     let layout_builder = LayoutWithoutLineBreaksBuilder::new(
         Some(text.font_request(item_rc)),
         text.wrap(),
@@ -1485,7 +1486,7 @@ pub fn link_under_cursor(
                 });
                 clicked
             })
-            .map(|(_, link)| link.clone())
+            .map(|(range, link)| (link.clone(), paragraph.text[range.clone()].to_owned()))
     });
 
     // Put paragraphs back into the cache guard for reuse.

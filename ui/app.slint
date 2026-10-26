@@ -567,11 +567,11 @@ export component MainWindow inherits Window {
 
         key-pressed(event) => {
             if (shortcuts.handle-command(event)) { return accept; }
-            if (event.text == Key.Back || (event.text == Key.Escape
+            if (event.text == Key.Back || (event.text == Key.Escape && ChatPane.link-confirm-url != "") || (event.text == Key.Escape
                 && root.active-modal == "none"
                 && (ChatPane.delete-confirm-count > 0 || CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
                     || SidebarPane.active-tab == "contacts" || SidebarPane.active-tab == "calls"))) {
-                if (event.text == Key.Escape && (CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0)) {
+                if (event.text == Key.Escape && (ChatPane.link-confirm-url != "" || CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0)) {
                     self.calls-menu-escape-consumed = true;
                 }
                 root.back-pressed();

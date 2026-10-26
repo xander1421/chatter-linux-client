@@ -108,7 +108,7 @@ export component ThreadPanel inherits Rectangle {
     callback emoji-search-changed(string);
     callback emoji-skin-tone-changed(int);
     callback load-more-replies;
-    callback open-message-link(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
@@ -592,7 +592,7 @@ export component ThreadPanel inherits Rectangle {
                             root.more-clicked(sender-id, timestamp-ns, x, y);
                         }
 
-                        open-message-link(url) => { root.open-message-link(url); }
+                        open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
                         message-clicked(id) => {
                             root.message-clicked(id);
                         }

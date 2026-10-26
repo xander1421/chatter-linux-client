@@ -12,6 +12,7 @@ pub mod call;
 pub mod channel;
 pub mod ephemeral;
 pub mod ids;
+pub mod link;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
 pub mod mention;

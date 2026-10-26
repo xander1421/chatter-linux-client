@@ -351,7 +351,7 @@ export component MessageList inherits Rectangle {
     in property <bool> mobile: false;
     in property <bool> can-forward: false;
     callback selection-toggled(string);
-    callback open-message-link(string);
+    callback open-message-link(string, string);
     callback message-clicked(string);
     callback sender-profile-requested(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
@@ -885,7 +885,7 @@ export component MessageList inherits Rectangle {
                         root.selection-toggled(id);
                     }
 
-                    open-message-link(url) => { root.open-message-link(url); }
+                    open-message-link(url, display-text) => { root.open-message-link(url, display-text); }
                     message-clicked(id) => {
                         root.message-clicked(id);
                     }
