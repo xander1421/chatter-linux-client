@@ -580,6 +580,7 @@ export component MainWindow inherits Window {
                 // default Back (finish the Activity) from also running.
                 return accept;
             }
+            if (event.text == Key.Escape && shortcuts.handle-escape()) { return accept; }
             return reject;
         }
 

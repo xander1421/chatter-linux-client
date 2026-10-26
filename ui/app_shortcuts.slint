@@ -62,27 +62,33 @@ export component AppShortcuts inherits FocusScope {
 
     key-pressed(event) => {
         if (root.handle-command(event)) { return accept; }
-        // Escape: close the top modal, else leave a non-Chats tab
-        if (event.text == Key.Escape) {
-            if (CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0) {
-                root.back-pressed();
-                return accept;
-            }
-            if (root.active-modal != "none") {
-                root.back-pressed();
-                return accept;
-            }
-            if (SearchPane.unified-search-open || ChatPane.thread-panel-visible
-                || ChatPane.context-menu-visible || ChatPane.reaction-picker-visible
-                || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
-                || ChatPane.pdf-preview-visible || ChatPane.code-preview-visible
-                || ChatPane.video-player-visible || ChatPane.image-viewer-visible
-                || ChatPane.selection-mode
-                || SidebarPane.active-tab != "chats") {
-                root.back-pressed();
-                return accept;
-            }
-        }
+        if (event.text == Key.Escape && root.handle-escape()) { return accept; }
         reject
+    }
+
+    // Escape: close the top modal or overlay, else leave a non-Chats tab.
+    // Also called from the back scope (see handle-command): Settings and
+    // other full pages have no modal scope of their own to catch it.
+    public function handle-escape() -> bool {
+        if (!self.enabled) { return false; }
+        if (CallView.calls-more-menu-visible || CallView.call-history-selecting || ChatPane.delete-confirm-count > 0) {
+            root.back-pressed();
+            return true;
+        }
+        if (root.active-modal != "none") {
+            root.back-pressed();
+            return true;
+        }
+        if (SearchPane.unified-search-open || ChatPane.thread-panel-visible
+            || ChatPane.context-menu-visible || ChatPane.reaction-picker-visible
+            || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
+            || ChatPane.pdf-preview-visible || ChatPane.code-preview-visible
+            || ChatPane.video-player-visible || ChatPane.image-viewer-visible
+            || ChatPane.selection-mode
+            || SidebarPane.active-tab != "chats") {
+            root.back-pressed();
+            return true;
+        }
+        false
     }
 }
