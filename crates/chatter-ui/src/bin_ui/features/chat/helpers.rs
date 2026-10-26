@@ -61,6 +61,8 @@ pub fn build_own_message_item(
     use slint::{ModelRc, VecModel};
 
     crate::bin_ui::converters::assign_album_positions(&mut slint_attachments);
+    let standalone_attachment_indices =
+        crate::bin_ui::converters::standalone_attachment_indices(&slint_attachments);
 
     let (content, rich_content) = crate::bin_ui::converters::body_fields(text, mention_members, mention_broadcast);
     crate::MessageItemData {
@@ -77,6 +79,7 @@ pub fn build_own_message_item(
         has_attachments: !slint_attachments.is_empty(),
         attachment_count: slint_attachments.len() as i32,
         attachments: ModelRc::new(VecModel::from(slint_attachments)),
+        standalone_attachment_indices,
         is_reply,
         // Optimistic echo identifies its reply by (sender, timestamp), not a
         // parent MessageId; the id stays empty (tap-to-jump suppressed) until the

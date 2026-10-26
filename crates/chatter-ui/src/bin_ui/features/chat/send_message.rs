@@ -1016,17 +1016,15 @@ async fn deliver_inner(
                 if index < 4 {
                     att.derive_video_thumbnail(&client);
                 }
-                att.decode_thumbnail();
             }
+            crate::bin_ui::converters::decode_inline_thumbnails(&mut attachment_display);
             attachment_display
         })
         .await
         .unwrap_or_default();
     }
     #[cfg(not(target_os = "android"))]
-    for att in &mut attachment_display {
-        att.decode_thumbnail();
-    }
+    crate::bin_ui::converters::decode_inline_thumbnails(&mut attachment_display);
 
     let ui_ctx_for_gifs = ui_ctx.clone();
     let sent_text = text.clone();

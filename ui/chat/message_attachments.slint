@@ -11,6 +11,7 @@ struct AlbumRect { x: length, y: length, width: length, height: length }
 
 export component MessageAttachments inherits VerticalLayout {
     in property <[MessageAttachmentData]> attachments;
+    in property <[int]> standalone-attachment-indices;
     in property <string> audio-elapsed;
     in property <float> audio-progress;
     in property <length> bubble-height;
@@ -160,8 +161,8 @@ export component MessageAttachments inherits VerticalLayout {
         }
     }
 
-    for attachment in root.attachments: HorizontalLayout {
-        visible: !(root.album-count >= 2 && attachment.album-index >= 0);
+    for index in root.standalone-attachment-indices: HorizontalLayout {
+        property <MessageAttachmentData> attachment: root.attachments[index];
         padding: root.edge-to-edge && root.album-count >= 2 ? Spacing.sm : 0px;
         // Let the media set the bubble's preferred width. The
         // row may grow with a wider caption, where image and

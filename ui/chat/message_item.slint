@@ -78,6 +78,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> has-attachments: false;
     in property <int> attachment-count: 0;
     in property <[MessageAttachmentData]> attachments: [];
+    in property <[int]> standalone-attachment-indices: [];
     property <bool> album-message: root.has-attachments && root.attachments.length > 0 && root.attachments[0].album-count >= 2;
     property <bool> photo-message: root.album-message || (root.has-attachments && root.attachments.length == 1 && root.attachments[0].is-image);
     property <bool> photo-only: root.photo-message && root.content == "" && !root.is-reply && !root.is-thread-reply;
@@ -820,6 +821,7 @@ export component MessageItem inherits Rectangle {
                         if root.has-attachments: MessageAttachments {
                             width: root.photo-message ? root.photo-width : self.preferred-width;
                             attachments: root.attachments;
+                            standalone-attachment-indices: root.standalone-attachment-indices;
                             edge-to-edge: root.photo-message;
                             media-width: root.photo-width;
                             overlay-stamp: root.photo-only;
