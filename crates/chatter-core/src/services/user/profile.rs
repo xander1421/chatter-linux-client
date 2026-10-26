@@ -169,6 +169,9 @@ impl UserService {
 
         // SECURITY: Encrypt display_name with profile_key if being updated
         let encrypted_display_name = if let Some(ref name) = display_name {
+            if name.len() > crate::crypto::profile_crypto::MAX_NAME_LENGTH {
+                return Err(UserError::InvalidInput("that name is too long".into()));
+            }
             let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
             let encrypted =
                 crate::crypto::profile_crypto::encrypt_display_name(&profile_key, name)?;

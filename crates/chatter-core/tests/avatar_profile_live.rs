@@ -244,7 +244,7 @@ async fn proof(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, aid: UserId, bid:
         )
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("encrypted wire budget"));
+    assert!(error.to_string().contains("picture is too large"));
     assert_eq!(a.auth_snapshot().current_user_id, Some(aid));
     assert_eq!(a.auth_snapshot().session_revision, revision);
     assert_eq!(a.my_avatar().as_deref(), Some(avatar.as_slice()));

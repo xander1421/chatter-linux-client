@@ -431,7 +431,7 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
                             .then(|| chatter_core::domain::user::StatusMessage::new(bio)),
                     )
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.user_message());
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     finish_save(&w, Owner::read(&client), request, result)
                 });

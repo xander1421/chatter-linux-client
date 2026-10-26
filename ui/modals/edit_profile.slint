@@ -157,23 +157,24 @@ export component EditProfileModal inherits Rectangle {
                             }
                         }
                     }
+                }
+            }
 
-                    Rectangle {
-                        height: root.error-message != "" ? error-label.preferred-height : 0px;
-                        opacity: root.error-message != "" ? 1 : 0;
-                        clip: true;
-                        animate height { duration: Materials.motion-standard; easing: root.error-message != "" ? Materials.spring : Materials.glide; }
-                        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
-                        error-label := Text {
-                            width: parent.width;
-                            text: root.error-message;
-                            color: Colors.error;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                    }
-
+            // Outside the scroll so a failed save shows next to its button.
+            Rectangle {
+                height: root.error-message != "" ? error-label.preferred-height : 0px;
+                opacity: root.error-message != "" ? 1 : 0;
+                clip: true;
+                animate height { duration: Materials.motion-standard; easing: root.error-message != "" ? Materials.spring : Materials.glide; }
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                error-label := Text {
+                    x: Spacing.md;
+                    width: parent.width - Spacing.md * 2;
+                    text: root.error-message;
+                    color: Colors.error;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
             }
 
