@@ -79,6 +79,11 @@ export component AppShortcuts inherits FocusScope {
             root.back-pressed();
             return true;
         }
+        if (SidebarPane.row-context-menu-open || SidebarPane.section-context-menu-open) {
+            SidebarPane.row-context-menu-open = false;
+            SidebarPane.section-context-menu-open = false;
+            return true;
+        }
         if (SearchPane.unified-search-open || ChatPane.thread-panel-visible
             || ChatPane.context-menu-visible || ChatPane.reaction-picker-visible
             || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible

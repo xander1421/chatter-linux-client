@@ -36,6 +36,9 @@ export global SidebarPane {
     in-out property <string> user-presence-mode: "auto";
     in-out property <bool> sidebar-collapsed: false;
     in-out property <bool> sidebar-hidden: false;
+    in-out property <bool> row-context-menu-open: false;
+    in-out property <bool> section-context-menu-open: false;
+    in-out property <bool> row-context-menu-muted: false;
     // The current top-level destination: "chats", "mesh", "calls", "contacts" or
     // "profile" (the account menu). Separate from `modal-stack` below — a
     // screen pushed over a tab (someone's profile, Settings, Sessions) never
@@ -71,6 +74,8 @@ export global SidebarPane {
     callback remove-from-section(/* conversation-id */ string);
     callback set-conversation-pinned(/* conversation-id */ string, /* pinned */ bool);
     callback set-conversation-archived(/* conversation-id */ string, /* archived */ bool);
+    callback row-context-menu-opened(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback set-conversation-muted(/* conversation-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback archive-view-changed();
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);

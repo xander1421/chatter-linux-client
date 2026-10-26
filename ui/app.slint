@@ -509,6 +509,10 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        if root.active-modal != "none" {
+            SidebarPane.row-context-menu-open = false;
+            SidebarPane.section-context-menu-open = false;
+        }
         root.refresh-screen-protection();
         ModalHostState.modal-generation += 1;
         ModalHostState.sessions-generation += 1;
@@ -526,6 +530,16 @@ export component MainWindow inherits Window {
         // which otherwise stays up over the modal (F78). On close it is also
         // what takes focus out of the dialog that is still fading out.
         back-scope.focus();
+    }
+    private property <bool> other-menu-open: SearchPane.unified-search-open
+        || ChatPane.context-menu-visible || ChatPane.reaction-picker-visible
+        || ChatPane.composer-emoji-picker-visible || ChatPane.composer-gif-picker-visible
+        || CallView.calls-more-menu-visible;
+    changed other-menu-open => {
+        if root.other-menu-open {
+            SidebarPane.row-context-menu-open = false;
+            SidebarPane.section-context-menu-open = false;
+        }
     }
     // Modals scroll their card clear of the keyboard only while it is up
     // (modal_container.slint, §112i), and only the Window can see it.

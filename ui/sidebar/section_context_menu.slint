@@ -25,6 +25,7 @@ component MenuItem inherits Rectangle {
     // The icon set has no up/down chevron; the right-facing one is rotated.
     in property <angle> icon-rotation: 0deg;
     callback clicked();
+    callback escape();
 
     height: root.mobile-mode ? Spacing.touch-target-min : Spacing.button-height;
     background: touch.has-hover ? Colors.surface-hover : transparent;
@@ -43,6 +44,10 @@ component MenuItem inherits Rectangle {
         width: 0px;
         height: 0px;
         key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.escape();
+                return accept;
+            }
             if event.text == Key.Space || event.text == Key.Return {
                 root.clicked();
                 return accept;
@@ -129,11 +134,13 @@ export component SectionHeaderContextMenu inherits Rectangle {
     // choice over the list rather than a stray card on top of it.
     background: Materials.scrim;
 
-    // Backdrop — click anywhere outside to close
+    // Backdrop — dismiss on press, including a touch that later drags away.
     TouchArea {
         width: 100%;
         height: 100%;
-        clicked => { root.close(); }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.close(); }
+        }
     }
 
     // Menu card
@@ -167,6 +174,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
                 spacing: Spacing.xxs;
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: -90deg;
                 label: "Move up";
@@ -179,6 +187,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.chevron-right;
                 icon-rotation: 90deg;
                 label: "Move down";
@@ -210,6 +219,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.clock;
                 label: "Recent";
                 mobile-mode: root.mobile-mode;
@@ -221,6 +231,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.message-circle;
                 label: "Unread first";
                 mobile-mode: root.mobile-mode;
@@ -232,6 +243,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.menu;
                 label: "Name (A–Z)";
                 mobile-mode: root.mobile-mode;
@@ -250,6 +262,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             // Rename is only otherwise reachable through a hover button, which
             // does not exist on touch.
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.edit;
                 label: "Rename section";
                 mobile-mode: root.mobile-mode;
@@ -260,6 +273,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.trash;
                 label: "Remove section";
                 destructive: true;
@@ -288,6 +302,7 @@ export component SectionContextMenu inherits Rectangle {
     in property <string> current-section-id: "";   // non-empty => already in a section
     in property <bool> is-pinned: false;
     in property <bool> is-archived: false;
+    in property <bool> is-muted: false;
     // Channel rows: core's `can_leave_channel` (a member, not the owner).
     // Private-group rows: always (any member may leave).
     in property <bool> can-leave: false;
@@ -302,6 +317,7 @@ export component SectionContextMenu inherits Rectangle {
     callback remove-from-section(/* conv-id */ string);
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback set-archived(/* conv-id */ string, /* archived */ bool);
+    callback set-muted(/* conv-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback create-section-clicked();
     // DM rows, and channels we are no longer in: deletes the chat on this
     // device (core `delete_conversation`).
@@ -329,11 +345,13 @@ export component SectionContextMenu inherits Rectangle {
     // choice over the list rather than a stray card on top of it.
     background: Materials.scrim;
 
-    // Backdrop — click anywhere outside to close
+    // Backdrop — dismiss on press, including a touch that later drags away.
     TouchArea {
         width: 100%;
         height: 100%;
-        clicked => { root.close(); }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.close(); }
+        }
     }
 
     // Menu card — Neo 2.0 strong popup surface
@@ -368,9 +386,11 @@ export component SectionContextMenu inherits Rectangle {
 
             // Pin / Unpin — local-only, never synced to the server.
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.pin;
                 label: root.is-pinned ? "Unpin" : "Pin to top";
                 mobile-mode: root.mobile-mode;
+                initial-focus: root.show && !root.mobile-mode;
                 clicked => {
                     root.set-pinned(root.conversation-id, !root.is-pinned);
                     root.close();
@@ -378,11 +398,25 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.folder;
                 label: root.is-archived ? "Unarchive" : "Archive";
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.set-archived(root.conversation-id, !root.is-archived);
+                    root.close();
+                }
+            }
+
+            if root.conversation-type == ConversationKind.server-dm
+                || root.conversation-type == ConversationKind.anon-dm
+                || root.conversation-type == ConversationKind.anon-group: MenuItem {
+                escape => { root.close(); }
+                icon: root.is-muted ? Icons.bell-off : Icons.bell;
+                label: root.is-muted ? "Unmute" : "Mute";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.set-muted(root.conversation-id, root.conversation-type, !root.is-muted);
                     root.close();
                 }
             }
@@ -410,6 +444,7 @@ export component SectionContextMenu inherits Rectangle {
 
             // Section items
             for section in root.sections: MenuItem {
+                escape => { root.close(); }
                 emoji: section.icon-emoji;
                 icon: Icons.folder;
                 label: section.name;
@@ -430,6 +465,7 @@ export component SectionContextMenu inherits Rectangle {
 
             // New section
             MenuItem {
+                escape => { root.close(); }
                 icon: Icons.plus;
                 label: "New section…";
                 mobile-mode: root.mobile-mode;
@@ -441,6 +477,7 @@ export component SectionContextMenu inherits Rectangle {
 
             // Remove from section (only if already in one)
             if root.current-section-id != "": MenuItem {
+                escape => { root.close(); }
                 icon: Icons.x;
                 // Not destructive: the chat goes back to the main list.
                 label: "Remove from section";
@@ -457,6 +494,7 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-delete && !root.confirm-delete: MenuItem {
+                escape => { root.close(); }
                 icon: Icons.trash;
                 label: "Delete chat";
                 destructive: true;
@@ -465,6 +503,7 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-delete && root.confirm-delete: MenuItem {
+                escape => { root.close(); }
                 icon: Icons.trash;
                 // Short enough for the phone menu's width: "Delete all
                 // messages here?" was clipped to "Delete all messages ...".
@@ -480,6 +519,7 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-delete && root.confirm-delete: MenuItem {
+                escape => { root.close(); }
                 icon: Icons.x;
                 label: "Cancel";
                 mobile-mode: root.mobile-mode;
@@ -496,6 +536,7 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-leave && !root.confirm-leave: MenuItem {
+                escape => { root.close(); }
                 icon: Icons.x;
                 label: root.is-group ? "Leave group" : "Leave channel";
                 destructive: true;
@@ -518,6 +559,7 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-leave && root.confirm-leave: MenuItem {
+                escape => { root.close(); }
                 icon: Icons.x;
                 label: "Leave";
                 destructive: true;
@@ -529,6 +571,7 @@ export component SectionContextMenu inherits Rectangle {
             }
 
             if root.can-leave && root.confirm-leave: MenuItem {
+                escape => { root.close(); }
                 icon: Icons.x;
                 label: "Cancel";
                 mobile-mode: root.mobile-mode;
