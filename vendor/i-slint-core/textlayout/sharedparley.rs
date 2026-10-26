@@ -1486,7 +1486,9 @@ pub fn link_under_cursor(
                 });
                 clicked
             })
-            .map(|(range, link)| (link.clone(), paragraph.text.get(range.clone()).unwrap_or_default().to_owned()))
+            .map(|(range, link)| {
+                (link.clone(), std::string::String::from(paragraph.text.get(range.clone()).unwrap_or_default()))
+            })
     });
 
     // Put paragraphs back into the cache guard for reuse.
