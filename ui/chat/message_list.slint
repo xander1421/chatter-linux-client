@@ -800,7 +800,8 @@ export component MessageList inherits Rectangle {
                     }
                 }
                 Timer {
-                    interval: 16ms;
+                    // Only the tail row while a pill shows; a pill need not clear within a frame.
+                    interval: 100ms;
                     running: idx == root.messages.length - 1 && root.unread-count > 0;
                     triggered => {
                         if (message-bubble.height > 0px) {
