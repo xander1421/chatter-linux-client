@@ -40,6 +40,22 @@ export global SidebarPane {
     in-out property <bool> row-context-menu-open: false;
     in-out property <bool> section-context-menu-open: false;
     in-out property <bool> row-context-menu-muted: false;
+    // Window-level sidebar menu anchors and selected row.
+    in-out property <length> ctx-menu-x: 0px;
+    in-out property <length> ctx-menu-y: 0px;
+    in-out property <length> ctx-menu-row-y: 0px;
+    in-out property <ChatRowData> ctx-menu-row;
+    in-out property <string> ctx-menu-conv-id: "";
+    in-out property <ConversationKind> ctx-menu-conv-type;
+    in-out property <string> ctx-menu-current-section-id: "";
+    in-out property <bool> ctx-menu-is-pinned: false;
+    in-out property <bool> ctx-menu-is-archived: false;
+    in-out property <bool> ctx-menu-can-leave: false;
+    in-out property <bool> ctx-menu-can-delete-channel: false;
+    in-out property <length> section-header-ctx-menu-x: 0px;
+    in-out property <length> section-header-ctx-menu-y: 0px;
+    in-out property <string> section-header-ctx-menu-section-id: "";
+    in-out property <string> section-header-ctx-menu-sort-mode: "recent";
     // The current top-level destination: "chats", "mesh", "calls", "contacts" or
     // "profile" (the account menu). Separate from `modal-stack` below — a
     // screen pushed over a tab (someone's profile, Settings, Sessions) never

@@ -18,6 +18,7 @@ import { ImageViewer, EmojiData } from "components/mod.slint";
 import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
 import { VideoPlayer } from "components/mod.slint";
 import { IncomingCallModal, DevicePicker, IncomingCallData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
+import { SectionContextMenu, SectionHeaderContextMenu } from "sidebar/section_context_menu.slint";
 
 // Call, media and message-action surfaces above the modal stack.
 export component AppTopOverlays inherits Rectangle {
@@ -43,6 +44,9 @@ export component AppTopOverlays inherits Rectangle {
     in property <string> presented-modal;
     in-out property <int> reply-focus-serial;
     in property <length> safe-area-top;
+    in property <bool> sidebar-menu-collapsed;
+    in property <length> sidebar-menu-width;
+    in property <length> sidebar-menu-bottom-inset;
     in property <length> viewer-origin-height;
     in property <length> viewer-origin-width;
     in property <length> viewer-origin-x;
@@ -396,5 +400,62 @@ export component AppTopOverlays inherits Rectangle {
                 ChatPane.selection-delete-clicked();
             }
         }
+    }
+
+    // Sidebar menu anchors come from window positions; this overlay starts
+    // below the safe area. The selected row is measured from the sidebar top.
+    SectionContextMenu {
+        show: SidebarPane.row-context-menu-open;
+        position-x: SidebarPane.ctx-menu-x;
+        position-y: SidebarPane.ctx-menu-y - root.safe-area-top;
+        target-row-x: 0px;
+        target-row-y: SidebarPane.ctx-menu-row-y;
+        target-row-width: root.sidebar-menu-width;
+        target-row: SidebarPane.ctx-menu-row;
+        collapsed: root.sidebar-menu-collapsed;
+        mobile-mode: root.is-mobile-platform;
+        bottom-inset: root.sidebar-menu-bottom-inset;
+        conversation-id: SidebarPane.ctx-menu-conv-id;
+        conversation-type: SidebarPane.ctx-menu-conv-type;
+        current-section-id: SidebarPane.ctx-menu-current-section-id;
+        is-pinned: SidebarPane.ctx-menu-is-pinned;
+        is-archived: SidebarPane.ctx-menu-is-archived;
+        is-muted: SidebarPane.row-context-menu-muted;
+        can-leave: SidebarPane.ctx-menu-can-leave;
+        can-delete-channel: SidebarPane.ctx-menu-can-delete-channel;
+        sections: SidebarPane.custom-sections;
+
+        close => { SidebarPane.row-context-menu-open = false; }
+        move-to-section(conv-id, conv-type, section-id) => {
+            SidebarPane.move-to-section(conv-id, conv-type, section-id);
+        }
+        remove-from-section(conv-id) => { SidebarPane.remove-from-section(conv-id); }
+        create-section-clicked => { ModalHostState.start-create-section(); }
+        set-pinned(conv-id, pinned) => { SidebarPane.set-conversation-pinned(conv-id, pinned); }
+        set-archived(conv-id, archived) => { SidebarPane.set-conversation-archived(conv-id, archived); }
+        set-muted(conv-id, kind, muted) => { SidebarPane.set-conversation-muted(conv-id, kind, muted); }
+        delete-chat(conv-id, conv-type) => { SidebarPane.delete-conversation(conv-id, conv-type); }
+        leave-conversation(conv-id, kind) => { SidebarPane.leave-conversation(conv-id, kind); }
+    }
+
+    SectionHeaderContextMenu {
+        show: SidebarPane.section-context-menu-open;
+        position-x: SidebarPane.section-header-ctx-menu-x;
+        position-y: SidebarPane.section-header-ctx-menu-y - root.safe-area-top;
+        section-id: SidebarPane.section-header-ctx-menu-section-id;
+        section-sort-mode: SidebarPane.section-header-ctx-menu-sort-mode;
+        mobile-mode: root.is-mobile-platform;
+        bottom-inset: root.sidebar-menu-bottom-inset;
+
+        close => { SidebarPane.section-context-menu-open = false; }
+        remove-section(section-id) => { SidebarPane.delete-section-clicked(section-id); }
+        rename-section(section-id) => {
+            ModalHostState.create-section-rename-mode = true;
+            ModalHostState.create-section-id = section-id;
+            SidebarPane.rename-section-clicked(section-id);
+            ModalHostState.nav-push("create-section");
+        }
+        move-section(section-id, delta) => { SidebarPane.move-section(section-id, delta); }
+        set-sort-mode(section-id, mode) => { SidebarPane.set-section-sort-mode(section-id, mode); }
     }
 }

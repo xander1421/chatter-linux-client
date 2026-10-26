@@ -295,6 +295,8 @@ export component SectionContextMenu inherits Rectangle {
     in property <length> position-x: 0;
     in property <length> position-y: 0;
     in property <length> target-row-y: 0;
+    in property <length> target-row-x: 0;
+    in property <length> target-row-width: 0;
     in property <ChatRowData> target-row;
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
@@ -365,9 +367,9 @@ export component SectionContextMenu inherits Rectangle {
     // Keep the pressed conversation readable over the scrim. The menu stays
     // on whichever side has more room so its card cannot cover this row.
     Rectangle {
-        x: Spacing.xs;
+        x: root.target-row-x + Spacing.xs;
         y: root.target-row-y;
-        width: parent.width - 2 * Spacing.xs;
+        width: root.target-row-width - 2 * Spacing.xs;
         height: root.target-row-height;
         background: Colors.row-selected;
         border-radius: Spacing.radius-md;
