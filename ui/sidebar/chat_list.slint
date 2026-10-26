@@ -26,6 +26,7 @@ export struct ChatRowData {
     has-avatar: bool,
     initials: string,
     last-message: string,
+    draft-preview: string,
     timestamp: string,
     presence-status: string,     // DM rows
     private-channel: bool,       // channel rows: invite-only (lock glyph)
@@ -170,6 +171,7 @@ export component ChatRow inherits Rectangle {
         presence-status: root.data.presence-status;
         is-pinned: root.data.is-pinned;
         last-message: root.data.last-message;
+        draft-preview: root.data.draft-preview;
         timestamp: root.data.timestamp;
         unread-count: root.data.unread-count;
         mention-count: root.data.mention-count;
@@ -190,6 +192,7 @@ export component ChatRow inherits Rectangle {
         unread-count: root.data.unread-count;
         mention-count: root.data.mention-count;
         last-message: root.data.last-message;
+        draft-preview: root.data.draft-preview;
         timestamp: root.data.timestamp;
         is-typing: root.data.is-typing;
         selected: root.data.is-selected;
@@ -212,6 +215,7 @@ export component ChatRow inherits Rectangle {
         unread-count: root.data.unread-count;
         mention-count: root.data.mention-count;
         last-message: root.data.last-message;
+        draft-preview: root.data.draft-preview;
         timestamp: root.data.timestamp;
         is-typing: root.data.is-typing;
         selected: root.data.is-selected;

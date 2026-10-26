@@ -560,6 +560,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             crate::bin_ui::features::composer::render_attachments(&w, &[]);
             crate::bin_ui::features::composer::autosave_composer_draft(&w, &ui_ctx_jarvis);
+            crate::bin_ui::features::sidebar::refresh_draft_rows(&w, &ui_ctx_jarvis);
 
             // Clear outgoing typing state (Signal: clearTypingTimers on message send)
             clear_outgoing_typing(&ui_ctx_jarvis);
@@ -688,7 +689,7 @@ pub fn composer_is_empty(w: &MainWindow) -> bool {
 
 /// Freeze the composer into a send (core decides whether it may go) and
 /// clear what it took. `Err` is what to tell the user; nothing was consumed.
-pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<ComposerSend, String> {
+pub fn take_composer_send(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> Result<ComposerSend, String> {
     if w.global::<crate::ChatPane>().get_composer_is_editing() {
         return Err("Finish editing first.".into());
     }
@@ -709,6 +710,7 @@ pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<Comp
     // The accepted send took the draft: its persisted copy goes with it now,
     // not after the autosave delay, so a restart cannot resurrect sent text.
     crate::bin_ui::features::composer::autosave_composer_draft(w, ui_ctx);
+    crate::bin_ui::features::sidebar::refresh_draft_rows(w, ui_ctx);
     Ok(send)
 }
 

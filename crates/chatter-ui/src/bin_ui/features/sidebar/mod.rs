@@ -609,6 +609,17 @@ pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<Cha
     });
 }
 
+/// Rebuild local row previews after a composer draft is parked or restored.
+pub(crate) fn refresh_draft_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        rebuild_chat_list(&weak, &ui_ctx);
+        sections::refresh_sections_ui(&weak, &ui_ctx);
+        rebuild_archived_list(&weak, &ui_ctx);
+    });
+}
+
 fn rebuild_archived_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let rows = ui_ctx.archived_sidebar_rows();
     let ui_ctx = ui_ctx.clone();

@@ -49,6 +49,7 @@ impl ChatRowExt for ChatRowSendData {
             has_avatar,
             initials: initials.into(),
             last_message: self.last_message.into(),
+            draft_preview: self.draft_preview.into(),
             timestamp: self
                 .timestamp_at
                 .map(super::sidebar_time)
