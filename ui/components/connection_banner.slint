@@ -217,7 +217,7 @@ export component ConnectionBanner inherits Rectangle {
                           : "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…")) :
                       connection-state == "failed" ? (root.tight ? "Server unreachable" : "Server unreachable — check your network") :
                       root.tight ? "No server — messages will send later"
-                                 : "Server unreachable — messages to it will be sent when it comes back";
+                                 : "Server unreachable — messages will send later";
                 color: root.banner-color;
                 font-size: Typography.xs;
                 font-weight: Typography.medium;
