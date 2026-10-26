@@ -25,6 +25,25 @@ pub enum LinkDeviceError {
     Invalid(String),
 }
 
+impl LinkDeviceError {
+    /// Text for the link dialog; the Display form is for logs.
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::NotLoggedIn => "You're signed out.",
+            Self::ReauthFailed => "Wrong password or PIN.",
+            Self::InvalidLinkUrl(_) => {
+                "That isn't a device link. Copy the whole link from the new device."
+            }
+            Self::SessionEnded(_) => "This link expired. Generate a new QR on the new device.",
+            Self::Network(_) => "Couldn't reach the server. Try again.",
+            Self::Crypto(_) | Self::Storage(_) | Self::Invalid(_) => {
+                "Couldn't link the device. Try again."
+            }
+        }
+        .to_string()
+    }
+}
+
 /// PIN gate outcomes contain categories only, never submitted or stored secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PinVerification {

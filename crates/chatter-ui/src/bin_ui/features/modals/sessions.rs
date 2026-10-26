@@ -100,17 +100,17 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
                     .revoke_session(id)
                     .await
                     .map(|()| None)
-                    .map_err(|e| e.to_string()),
+                    .map_err(|e| e.user_message()),
                 Action::RevokeAll => client
                     .revoke_all_other_sessions()
                     .await
                     .map(|outcome| Some(outcome.summary()))
-                    .map_err(|e| e.to_string()),
+                    .map_err(|e| e.user_message()),
                 Action::Cancel(uuid) => client
                     .cancel_pending_link(&uuid)
                     .await
                     .map(|()| None)
-                    .map_err(|e| e.to_string()),
+                    .map_err(|e| e.user_message()),
             }
         })
         .await;

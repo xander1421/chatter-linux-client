@@ -21,7 +21,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::prelude::SecretString;
-use chatter_core::services::link_device_service::{LinkDeviceError, PendingDeviceLink};
+use chatter_core::services::link_device_service::PendingDeviceLink;
 
 use crate::MainWindow;
 
@@ -154,7 +154,7 @@ fn wire_paste(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pending
                     // Only show error once user has typed something substantial.
                     if s.len() > 16 {
                         w.global::<crate::AuthFlow>()
-                            .set_link_approve_error(format!("{e}").into());
+                            .set_link_approve_error(e.user_message().into());
                     } else {
                         w.global::<crate::AuthFlow>()
                             .set_link_approve_error("".into());
@@ -222,24 +222,11 @@ fn wire_submit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, pending: Pendin
                             w.set_toast_variant("success".into());
                             w.set_toast_visible(true);
                         }
-                        Err(LinkDeviceError::ReauthFailed) => {
-                            w.global::<crate::AuthFlow>()
-                                .set_link_approve_status("".into());
-                            w.global::<crate::AuthFlow>()
-                                .set_link_approve_error("Wrong password or PIN.".into());
-                        }
-                        Err(LinkDeviceError::SessionEnded(_)) => {
-                            w.global::<crate::AuthFlow>()
-                                .set_link_approve_status("".into());
-                            w.global::<crate::AuthFlow>().set_link_approve_error(
-                                "This link expired. Generate a new QR on the new device.".into(),
-                            );
-                        }
                         Err(e) => {
                             w.global::<crate::AuthFlow>()
                                 .set_link_approve_status("".into());
                             w.global::<crate::AuthFlow>()
-                                .set_link_approve_error(format!("{e}").into());
+                                .set_link_approve_error(e.user_message().into());
                         }
                     }
                 });

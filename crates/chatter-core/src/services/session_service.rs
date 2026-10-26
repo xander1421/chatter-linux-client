@@ -77,6 +77,19 @@ pub enum SessionError {
     Device(#[from] crate::services::device_service::DeviceError),
 }
 
+impl SessionError {
+    /// Text for the devices dialog; the Display form is for logs.
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::NotLoggedIn => "You're signed out.".to_string(),
+            Self::SessionChanged => "The device list changed. Reopen it and try again.".to_string(),
+            Self::PartialRevocation { .. } => self.to_string(),
+            Self::Network(_) => "Couldn't reach the server. Try again.".to_string(),
+            Self::Storage(_) | Self::Device(_) => "Something went wrong. Try again.".to_string(),
+        }
+    }
+}
+
 fn devices(n: usize) -> String {
     if n == 1 {
         "1 device".to_string()
