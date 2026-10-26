@@ -221,16 +221,16 @@ impl ChatterClient {
             out.push(MentionSuggestionInfo {
                 id: "here".into(),
                 name: "here".into(),
-                kind: MentionSuggestionKind::Broadcast,
-                has_avatar: false,
+                kind: MentionSuggestionKind::Here,
+                avatar_bytes: None,
             });
         }
         if "all".starts_with(&query_lower) || "everyone".starts_with(&query_lower) {
             out.push(MentionSuggestionInfo {
                 id: "all".into(),
                 name: "all".into(),
-                kind: MentionSuggestionKind::Broadcast,
-                has_avatar: false,
+                kind: MentionSuggestionKind::All,
+                avatar_bytes: None,
             });
         }
 
@@ -273,7 +273,7 @@ impl ChatterClient {
                     id: user_id_str,
                     name: display_name,
                     kind: MentionSuggestionKind::User,
-                    has_avatar: false,
+                    avatar_bytes: profile.avatar_bytes,
                 });
             }
         }

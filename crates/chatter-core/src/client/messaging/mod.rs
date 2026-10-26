@@ -269,22 +269,26 @@ pub struct MentionSuggestionInfo {
     /// Bare name; the composer adds the `@` prefix.
     pub name: String,
     pub kind: MentionSuggestionKind,
-    pub has_avatar: bool,
+    /// Decrypted profile image, when available for this member.
+    pub avatar_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MentionSuggestionKind {
     /// Real user in the channel.
     User,
-    /// Broadcast mention (`@here`, `@all`, `@everyone`).
-    Broadcast,
+    /// Online members broadcast.
+    Here,
+    /// All members broadcast.
+    All,
 }
 
 impl MentionSuggestionKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::User => "user",
-            Self::Broadcast => "broadcast",
+            Self::Here => "here",
+            Self::All => "all",
         }
     }
 }

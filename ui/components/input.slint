@@ -5,6 +5,7 @@ import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component Input inherits Rectangle {
     in property <string> placeholder: "";
@@ -75,9 +76,9 @@ export component Input inherits Rectangle {
                 width: parent.width + 4px;
                 height: parent.height + 4px;
                 border-radius: parent.border-radius + 2px;
-                border-width: root.focused && !root.disabled ? 2px : 0px;
+                border-width: root.focused && !root.disabled && Appearance.keyboard-focus-visible ? 2px : 0px;
                 border-color: root.error ? Colors.error : Colors.focus-ring;
-                drop-shadow-blur: root.focused && !root.disabled ? 8px : 0px;
+                drop-shadow-blur: root.focused && !root.disabled && Appearance.keyboard-focus-visible ? 8px : 0px;
                 drop-shadow-color: root.error ? Colors.error.with-alpha(0.24) : Colors.primary.with-alpha(0.24);
                 animate border-width { duration: Materials.motion-standard; easing: Materials.spring; }
                 animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }

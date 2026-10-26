@@ -30,25 +30,29 @@ pub(crate) fn wire_mention_triggered(window: &MainWindow, ui_ctx: Arc<ChatterCli
 
             tracing::debug!("Mention triggered with query: {}", query_str);
 
-            // Spawn async task to fetch channel members
+            // Spawn async task to fetch enriched suggestions from core.
             tokio::spawn(async move {
-                // Fetch raw suggestion data (Send-safe)
-                let raw_suggestions = fetch_mention_suggestions_raw(&query_str, &ui_ctx).await;
+                let channel_id = match ui_ctx.chat_snapshot().active_channel_id {
+                    Some(id) => id,
+                    None => return,
+                };
+                let suggestions = ui_ctx.search_mention_suggestions(&channel_id, &query_str).await;
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        if raw_suggestions.is_empty() {
+                        if suggestions.is_empty() {
                             w.global::<crate::ChatPane>()
                                 .set_mention_autocomplete_visible(false);
                         } else {
-                            let suggestions: Vec<MentionSuggestion> = raw_suggestions
+                            let suggestions: Vec<MentionSuggestion> = suggestions
                                 .into_iter()
-                                .map(|(id, name, mention_type, has_avatar)| MentionSuggestion {
-                                    id: id.into(),
-                                    name: name.into(),
-                                    mention_type: mention_type.into(),
-                                    avatar: slint::Image::default(),
-                                    has_avatar,
+                                .map(|suggestion| MentionSuggestion {
+                                    id: suggestion.id.into(),
+                                    name: suggestion.name.into(),
+                                    mention_type: suggestion.kind.as_str().into(),
+                                    avatar: suggestion.avatar_bytes.as_deref()
+                                        .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                                        .unwrap_or_default(),
                                 })
                                 .collect();
 
@@ -98,22 +102,3 @@ pub(crate) fn wire_mention_selected(window: &MainWindow) {
         });
 }
 
-type RawMentionSuggestion = (String, String, String, bool);
-
-async fn fetch_mention_suggestions_raw(
-    query: &str,
-    ui_ctx: &ChatterClient,
-) -> Vec<RawMentionSuggestion> {
-    let channel_id = match ui_ctx.chat_snapshot().active_channel_id {
-        Some(id) => id,
-        None => return Vec::new(),
-    };
-    // Core does the @here/@all injection, per-member filtering, profile batching
-    // and cap. UI just shapes the result into its Slint-side tuples.
-    ui_ctx
-        .search_mention_suggestions(&channel_id, query)
-        .await
-        .into_iter()
-        .map(|s| (s.id, s.name, s.kind.as_str().to_string(), s.has_avatar))
-        .collect()
-}

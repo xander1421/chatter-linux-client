@@ -7,6 +7,7 @@
 import { Palette } from "std-widgets.slint";
 
 export global Appearance {
+    in-out property <bool> keyboard-focus-visible: false;
     // Settings › Appearance › Reduce animations. Written from Rust with what
     // core persisted; the settings page writes it back and fires
     // `reduce-motion-changed`. Every `animate` reads a Materials duration or
