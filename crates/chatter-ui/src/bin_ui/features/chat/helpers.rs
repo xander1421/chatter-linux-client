@@ -308,15 +308,32 @@ pub(crate) fn remove_messages_where(
     gone: impl Fn(&crate::MessageItemData) -> bool,
 ) {
     let mut removed_ids = Vec::new();
+    let pane = window.global::<crate::ChatPane>();
+    let mut unread_index = pane.get_unread_index();
+    let mut unread_count = pane.get_unread_count();
     edit_messages(window, |model| {
         for i in (0..model.row_count()).rev() {
             if let Some(row) = model.row_data(i).filter(|m| gone(m)) {
+                // The pill counts remote rows below the unread boundary, or
+                // the live tail when no opening boundary remains. Remove a
+                // deleted/expired bubble from that count in the same UI turn.
+                if unread_count > 0 && !row.is_own
+                    && (i as i32 >= unread_index && unread_index >= 0
+                        || unread_index < 0 && i >= model.row_count().saturating_sub(unread_count as usize))
+                {
+                    unread_count -= 1;
+                }
+                if unread_index >= 0 && (i as i32) < unread_index {
+                    unread_index -= 1;
+                }
                 removed_ids.push(row.message_id);
                 model.remove(i);
             }
         }
     });
     if !removed_ids.is_empty() {
+        pane.set_unread_index(if unread_count == 0 { -1 } else { unread_index });
+        pane.set_unread_count(unread_count);
         window
             .global::<crate::SelectionChrome>()
             .invoke_messages_removed(slint::ModelRc::new(slint::VecModel::from(removed_ids)));

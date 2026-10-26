@@ -484,6 +484,19 @@ export component MessageList inherits Rectangle {
                 }
             }
 
+            // The virtualizer's total height is an estimate until the tail
+            // has settled. A live last bubble gives us its actual position.
+            function newest-visible(y: length, height: length) {
+                if (root.jump-row < 0 && y < self.height - root.bottom-inset
+                        && y + height > root.top-inset) {
+                    root.seen-opening-tail = true;
+                    root.unread-count = 0;
+                    if (root.opening-on-unread) {
+                        root.is-at-bottom = true;
+                    }
+                }
+            }
+
             // Where the viewport came to rest.
             function read-position() {
                 // Keyboard reveal and row remeasurement can update viewport-y
@@ -783,6 +796,15 @@ export component MessageList inherits Rectangle {
                     triggered => {
                         if (message-bubble.height > 0px) {
                             root.measured-navigation-row(idx, message-row.bubble-position, message-row.height);
+                        }
+                    }
+                }
+                Timer {
+                    interval: 16ms;
+                    running: idx == root.messages.length - 1 && root.unread-count > 0;
+                    triggered => {
+                        if (message-bubble.height > 0px) {
+                            list.newest-visible(message-row.bubble-position, message-bubble.height);
                         }
                     }
                 }
