@@ -61,6 +61,11 @@ export component MessageList inherits Rectangle {
     // A virtualized row seek can briefly report a bottom-sized viewport before
     // the unread row is measured. Keep the opening anchor until user input.
     private property <bool> opening-on-unread: false;
+    // The unread divider was left behind by a user scroll into older history.
+    // Keep this across virtual row recycling; its rendered position, rather
+    // than the list's average-height estimate, decides where the pill goes.
+    private property <bool> unread-above: false;
+    private property <length> unread-row-y: 0px;
     // The opening unread tail was already visible. A later keyboard resize
     // must not turn those same loaded rows into a "new messages" pill.
     private property <bool> seen-opening-tail: false;
@@ -153,6 +158,8 @@ export component MessageList inherits Rectangle {
             root.observed-last-message-id = "";
             root.ready-for-arrivals = false;
             root.opening-on-unread = false;
+            root.unread-above = false;
+            root.unread-row-y = 0px;
             root.seen-opening-tail = false;
             arrival-ready.running = false;
             root.arrival-start-index = -1;
@@ -327,6 +334,7 @@ export component MessageList inherits Rectangle {
 
     // Row `i` at the top edge. Leaves the end, so nothing may pull back to it.
     function go-to-row(i: int) {
+        if (i == root.unread-index) { root.unread-above = false; }
         root.end-pending = false;
         root.following-tail = false;
         root.at-end = false;
@@ -529,11 +537,6 @@ export component MessageList inherits Rectangle {
                 return Math.floor((self.height - self.viewport-y) * root.messages.length / self.viewport-height);
             }
 
-            // Row `i` starts below the bottom edge.
-            pure function is-below(i: int) -> bool {
-                return i * self.viewport-height / root.messages.length > self.height - root.bottom-inset - self.viewport-y;
-            }
-
             function seek-end() {
                 root.list-geometry(self.height / 1px, self.viewport-height / 1px, true);
                 self.viewport-y = Math.min(0px, self.height - self.viewport-height);
@@ -549,6 +552,9 @@ export component MessageList inherits Rectangle {
             // pursued, the user has taken over.
             flicked => {
                 root.opening-on-unread = false;
+                if (root.unread-index >= 0) {
+                    root.unread-above = root.unread-row-y > root.top-inset + 1px;
+                }
                 root.seen-opening-tail = false;
                 root.following-tail = false;
                 root.scrolling = true;
@@ -787,6 +793,16 @@ export component MessageList inherits Rectangle {
             }
 
             for item[idx] in root.messages: message-row := VerticalLayout {
+                property <length> unread-position:
+                    message-row.absolute-position.y - list.absolute-position.y;
+                changed unread-position => {
+                    if (idx == root.unread-index) {
+                        root.unread-row-y = self.unread-position;
+                        if (root.scrolling && !root.opening-on-unread && root.jump-row < 0) {
+                            root.unread-above = self.unread-position > root.top-inset + 1px;
+                        }
+                    }
+                }
                 // absolute-position follows the actual render geometry, including
                 // the virtualizer's anchor and all row separators/padding.
                 property <length> bubble-position:
@@ -979,7 +995,7 @@ export component MessageList inherits Rectangle {
             y: root.height - root.bottom-inset - 60px;
             clicked => {
                 root.opening-on-unread = false;
-                if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
+                if (root.unread-index >= 0 && root.unread-above) {
                     // Scrolled up past the unread boundary: that is
                     // where reading resumes.
                     root.go-to-row(root.unread-index);
