@@ -1,6 +1,46 @@
 use super::*;
 
 impl ChatterClient {
+    /// Return the adjacent visible conversation in the same slot order used by
+    /// the sidebar. A missing selection starts at the corresponding edge.
+    pub fn adjacent_sidebar_conversation(
+        &self,
+        forward: bool,
+        archive_open: bool,
+    ) -> Option<crate::state::ActiveConversation> {
+        use crate::ui::sidebar_data::{sidebar_slots, SidebarSlot};
+
+        let rows = if archive_open { self.archived_sidebar_rows() } else { self.sidebar_rows() };
+        let sections = if archive_open {
+            Vec::new()
+        } else {
+            self.list_sections_with_conversations().unwrap_or_default()
+        };
+        let shape: Vec<_> = sections.iter()
+            .map(|section| (section.is_expanded, section.conversations.len()))
+            .collect();
+        let ordered: Vec<_> = sidebar_slots(rows.len(), &shape).into_iter().filter_map(|slot| {
+            match slot {
+                SidebarSlot::Chat(index) => rows.get(index)
+                    .map(|row| (&row.id, &row.kind)),
+                SidebarSlot::SectionChat(section, index) => sections.get(section)
+                    .and_then(|section| section.conversations.get(index))
+                    .map(|row| (&row.conversation_id, &row.conversation_type)),
+                _ => None,
+            }
+        }).filter_map(|(id, kind)| self.resolve_row_conversation(id, kind)).collect();
+        let current = self.active_conversation();
+        let index = ordered.iter().position(|&row| row == current);
+        let next = match (index, forward) {
+            (Some(i), true) => (i + 1) % ordered.len(),
+            (Some(0), false) => ordered.len().checked_sub(1)?,
+            (Some(i), false) => i - 1,
+            (None, true) => 0,
+            (None, false) => ordered.len().checked_sub(1)?,
+        };
+        ordered.get(next).copied()
+    }
+
     const ARCHIVE_PREFIX: &'static str = "conv.archived.";
 
     /// Archive is a personal, device-local sidebar preference for every chat

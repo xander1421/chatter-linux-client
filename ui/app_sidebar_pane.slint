@@ -36,6 +36,7 @@ export global SidebarPane {
     in-out property <string> user-presence-mode: "auto";
     in-out property <bool> sidebar-collapsed: false;
     in-out property <bool> sidebar-hidden: false;
+    in-out property <int> sidebar-focus-index: 0;
     in-out property <bool> row-context-menu-open: false;
     in-out property <bool> section-context-menu-open: false;
     in-out property <bool> row-context-menu-muted: false;
@@ -61,6 +62,8 @@ export global SidebarPane {
     callback dm-selected(string);
     callback private-group-selected(string);
     callback saved-messages-clicked();
+    callback navigate-chat(int /* 1 next, -1 previous */);
+    callback sidebar-focus-target(int /* current */, int /* move */, bool /* mobile */, bool /* shield */, bool /* requests */) -> int;
     callback settings-clicked();
     callback profile-clicked();
     callback change-user-status(string /* status */);

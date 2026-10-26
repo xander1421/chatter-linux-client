@@ -72,6 +72,10 @@ export component AppSidebarHost inherits Rectangle {
         chat-rows-loading: AuthFlow.is-signed-in && SidebarPane.chat-rows-loading;
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;
+        focus-index <=> SidebarPane.sidebar-focus-index;
+        focus-target(current, move-by, mobile, shield, requests) => {
+            return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests);
+        }
         ctx-menu-show <=> SidebarPane.row-context-menu-open;
         section-header-ctx-menu-show <=> SidebarPane.section-context-menu-open;
         ctx-menu-is-muted: SidebarPane.row-context-menu-muted;

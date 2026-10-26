@@ -45,9 +45,12 @@ export component ChatRow inherits Rectangle {
     in property <ChatRowData> data;
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
+    in property <bool> keyboard-highlight: false;
 
-    accessible-role: button;
-    accessible-label: root.data.display-name;
+    accessible-role: list-item;
+    accessible-label: root.data.display-name
+        + (root.data.unread-count > 0 ? ", " + root.data.unread-count + " unread" : "")
+        + (root.data.last-message != "" ? ", last message " + root.data.last-message : "");
     accessible-description: root.data.last-message;
     accessible-action-default => { root.activate(); }
 
@@ -57,6 +60,8 @@ export component ChatRow inherits Rectangle {
 
     height: root.collapsed ? 48px : root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
     background: transparent;
+    border-width: root.keyboard-highlight ? 2px : 0px;
+    border-color: Colors.focus-ring;
     clip: true;
     property <length> swipe-start-x: 0px;
     property <length> swipe-start-y: 0px;
