@@ -18,6 +18,7 @@ use crate::{
     renderer::RendererSealed,
     textlayout::{TextHorizontalAlignment, TextOverflow, TextVerticalAlignment, TextWrap},
 };
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 use core::pin::Pin;
