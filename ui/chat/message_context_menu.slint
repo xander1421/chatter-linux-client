@@ -392,7 +392,10 @@ export component MessageContextMenu inherits Rectangle {
         property <length> menu-h: menu-layout.preferred-height;
         property <length> top-limit: max(0px, root.content-top) + Spacing.sm;
         property <length> bottom-limit: min(parent.height, root.content-bottom) - Spacing.sm;
-        property <bool> has-bubble-anchor: root.has-bubble-anchor;
+        // Phones keep the menu clear of the raised bubble preview. A desktop
+        // menu opens at the pointer like any context menu and may cover the
+        // message; avoiding it there left room for only two rows.
+        property <bool> has-bubble-anchor: root.has-bubble-anchor && root.preview-mobile;
         property <length> room-below: max(0px, self.bottom-limit - root.anchor-bottom - Spacing.sm);
         property <length> room-above: max(0px, root.anchor-top - Spacing.sm - self.top-limit);
         // A bubble that fills the viewport leaves no room on either side.
