@@ -74,10 +74,13 @@
                 android:resource="@xml/viewer_media_paths" />
         </provider>
 
-        <!-- GameActivity host. Native entry resolved from android.app.lib_name. -->
+        <!-- GameActivity host. Native entry resolved from android.app.lib_name.
+             singleTask: the native app is one per process, and a start that did not
+             come from the top stacked a second MainActivity over it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Chatter">
