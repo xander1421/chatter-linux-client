@@ -508,6 +508,12 @@ fn logically_elided_text(
             }
         }
         let mut result = String::from(prefix);
+        // A grapheme cut can land immediately before the body's FSI. Keep its
+        // opener so the ellipsis still belongs to the body at that width.
+        if text[cut..].starts_with('\u{2068}') {
+            result.push('\u{2068}');
+            depth += 1;
+        }
         result.push('…');
         result.extend(core::iter::repeat_n('\u{2069}', depth));
         result
@@ -1931,13 +1937,60 @@ mod tests {
         assert!(elided.ends_with("…\u{2069}"));
         assert!(!elided.contains("חבר"));
 
-        let mut layout = builder.build(&mut font_ctx, &elided, None, None, None);
-        layout.break_all_lines(Some(180.0));
-        assert!(!layout.is_rtl());
-        let first_line = layout.lines().next().unwrap();
-        let first_run = first_line.runs().next().unwrap();
-        let first_cluster = first_run.clusters().next().unwrap();
-        assert_eq!(&elided[first_cluster.text_range()], "Y");
+        let isolate_only = "You: \u{2068}…\u{2069}";
+        let mut isolate_only_layout = builder.build(&mut font_ctx, isolate_only, None, None, None);
+        isolate_only_layout.break_all_lines(None);
+        let minimal_width = isolate_only_layout.full_width();
+        assert_eq!(
+            logically_elided_text(&builder, &mut font_ctx, &text, minimal_width).as_deref(),
+            Some(isolate_only)
+        );
+
+        // Match draw_text's elided path: shape fresh paragraphs, lay them out at
+        // the row width with no wrapping and left alignment, then inspect the
+        // same visual runs that the renderer draws.
+        let paragraphs = create_text_paragraphs(
+            &builder,
+            &mut font_ctx,
+            PlainOrStyledText::Plain(elided.as_str().into()),
+            None,
+            Color::default(),
+        );
+        let laid_out = layout(
+            &builder,
+            &mut font_ctx,
+            paragraphs,
+            ScaleFactor::new(1.0),
+            LayoutOptions {
+                max_width: Some(LogicalLength::new(180.0)),
+                horizontal_align: TextHorizontalAlignment::Left,
+                text_overflow: TextOverflow::Clip,
+                ..Default::default()
+            },
+        );
+        let paragraph = &laid_out.paragraphs[0].layout;
+        assert!(!paragraph.is_rtl());
+        let first_line = paragraph.lines().next().unwrap();
+        let mut x = first_line.metrics().offset + first_line.metrics().inline_min_coord;
+        let mut visible_clusters = Vec::new();
+        for run in first_line.runs() {
+            for cluster in run.visual_clusters() {
+                let value = &elided[cluster.text_range()];
+                if value.chars().any(|ch| {
+                    !ch.is_whitespace()
+                        && !matches!(ch, '\u{2066}' | '\u{2067}' | '\u{2068}' | '\u{2069}')
+                }) {
+                    visible_clusters.push((x, value));
+                }
+                x += cluster.advance();
+            }
+        }
+        let (leftmost_x, leftmost) = visible_clusters
+            .iter()
+            .min_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap())
+            .unwrap();
+        assert_eq!(*leftmost, "Y");
+        assert!(*leftmost_x >= 0.0);
         let body_start = "You: \u{2068}".len();
         let ellipsis_at = elided.find('…').unwrap();
         let mut kept_body_clusters = Vec::new();
@@ -1953,6 +2006,6 @@ mod tests {
         let kept_body: String = kept_body_clusters.into_iter().map(|(_, cluster)| cluster).collect();
         assert!(body.starts_with(&kept_body));
         assert!(kept_body.starts_with("שלום"));
-        assert!(layout.full_width() <= 180.0);
+        assert!(paragraph.full_width() <= 180.0);
     }
 }
