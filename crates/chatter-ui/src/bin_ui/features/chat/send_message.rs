@@ -292,28 +292,6 @@ fn report_send_failure(
     });
 }
 
-/// A plain toast about a send still in flight (not an error: nothing failed).
-fn notice(
-    weak: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-    session_revision: u64,
-    message: &str,
-) {
-    let weak = weak.clone();
-    let ui_ctx = ui_ctx.clone();
-    let message = message.to_string();
-    let _ = slint::invoke_from_event_loop(move || {
-        if !ui_ctx.composer_session_is_current(session_revision) {
-            return;
-        }
-        if let Some(w) = weak.upgrade() {
-            w.set_toast_message(message.into());
-            w.set_toast_variant("info".into());
-            w.set_toast_visible(true);
-        }
-    });
-}
-
 /// Show `ChatterClient::channel_send_notice` in place of the composer for
 /// `channel_id`: the stored answer at once, then the server's.
 pub fn refresh_send_notice(
@@ -862,37 +840,13 @@ async fn deliver_inner(
     let quote = quote_intent(reply.as_ref());
     if reply.is_some() && quote.is_none() { return false; }
 
-    // Scale timeout for attachments: base 10s + 30s per attachment.
-    let send_timeout = if matches!(conversation, ActiveConversation::Channel(_)) {
-        std::time::Duration::from_secs(35 + 30 * pending_attachments.len() as u64)
-    } else if pending_attachments.is_empty() {
-        crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT
-    } else {
-        std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
-    };
-
     tracing::info!(
         ?conversation,
         text_len = text.len(),
         "[UI_SEND] entering send_message_ui"
     );
     let send_client = ui_ctx.clone();
-    let notice_weak = weak.clone();
-    let notice_client = ui_ctx.clone();
-    let sending = chatter_core::client::await_send_with_notice(
-        send_client.send_composer_message(&send_for_delivery, quote),
-        send_timeout,
-        move || {
-            // The pending row keeps showing "sending"; this says why it is
-            // taking so long, once.
-            notice(
-                &notice_weak,
-                &notice_client,
-                session_revision,
-                "Delivery is taking longer. Waiting for the original attempt; do not resend.",
-            )
-        },
-    );
+    let sending = send_client.send_composer_message(&send_for_delivery, quote);
     tokio::pin!(sending);
     let tor_send = ui_ctx.anon_mode_enabled()
         || matches!(
@@ -975,7 +929,6 @@ async fn deliver_inner(
                         }
                     });
                 }
-                notice(&weak, &ui_ctx, session_revision, &e.to_string());
                 ui_ctx.release_staged_files(&pending_attachments);
                 return true;
             }

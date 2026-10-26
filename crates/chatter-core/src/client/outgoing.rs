@@ -416,10 +416,10 @@ impl ChatterClient {
                     .message
                     .as_ref()
                     .and_then(|m| m.failure_reason.clone())
-                    .unwrap_or_else(|| "Message was not submitted. Tap to retry.".to_owned()),
+                    .unwrap_or_else(|| "Message not sent. Tap to retry.".to_owned()),
             )
         } else {
-            unresolved.then(|| SendError::DeliveryUnconfirmed.to_string())
+            None
         };
 
         let real_message_id = result.message_id_string();
@@ -436,7 +436,7 @@ impl ChatterClient {
             )
         } else if result.bootstrap_initiated {
             (queued_bubble_id(real_message_id, result.sent_at), "sending")
-        } else if failure_notice.is_some()
+        } else if unresolved
             || result
                 .message
                 .as_ref()

@@ -393,8 +393,10 @@
     #[tokio::test]
     async fn blocked_peer_presence_is_hidden() {
         use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile};
+        use crate::network::connection::ConnectionState;
         use crate::storage::repositories::settings_repo::keys;
         let (client, _dir) = test_client();
+        client.offline_state().set_connection_state(ConnectionState::Connected);
         let (me, peer, friend) = (UserId::new(), UserId::new(), UserId::new());
         let repos = client.messages();
         repos
