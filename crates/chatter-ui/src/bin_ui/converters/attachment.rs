@@ -22,6 +22,32 @@ pub fn assign_album_positions(attachments: &mut [MessageAttachmentData]) {
     }
 }
 
+/// Indices of attachments that need their own row outside the album grid.
+pub fn standalone_attachment_indices(attachments: &[MessageAttachmentData]) -> ModelRc<i32> {
+    let indices = chatter_core::media::album::standalone_indices(
+        &attachments.iter().map(|a| a.album_index).collect::<Vec<_>>(),
+        attachments.first().map_or(0, |a| a.album_count),
+    );
+    ModelRc::new(VecModel::from(indices))
+}
+
+/// Decode only media that the inline bubble actually paints.
+pub fn decode_inline_thumbnails(attachments: &mut [AttachmentDisplayData]) {
+    let media_count = attachments
+        .iter()
+        .filter(|a| a.is_image || a.is_video)
+        .count();
+    let mut media_index = 0;
+    for attachment in attachments {
+        if attachment.is_image || attachment.is_video {
+            if media_count < 2 || media_index < 10 {
+                attachment.decode_thumbnail();
+            }
+            media_index += 1;
+        }
+    }
+}
+
 /// Data needed to create attachment UI (can be sent across threads).
 #[derive(Clone, Debug)]
 pub struct AttachmentDisplayData {

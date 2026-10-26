@@ -7,7 +7,10 @@ use chatter_core::domain::message::{Message, MessageContent};
 
 use crate::{MessageItemData, RichTextBlock};
 
-use super::attachment::{AttachmentDisplayData, assign_album_positions, attachment_to_display_data};
+use super::attachment::{
+    AttachmentDisplayData, assign_album_positions, attachment_to_display_data,
+    decode_inline_thumbnails, standalone_attachment_indices,
+};
 use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
 use chatter_core::domain::mention::MentionMember;
 use super::utils::{format_count, reaction_counts_to_entries};
@@ -161,9 +164,7 @@ pub struct MessageDisplayData {
 impl MessageDisplayData {
     /// Pre-decode all thumbnails (attachments, avatar, reply bubble) before invoke_from_event_loop.
     pub fn decode_attachment_thumbnails(&mut self) {
-        for att in &mut self.attachments {
-            att.decode_thumbnail();
-        }
+        decode_inline_thumbnails(&mut self.attachments);
 
         if self.sender_avatar_decoded.is_none() {
             if let Some(bytes) = &self.sender_avatar_bytes {
@@ -206,6 +207,7 @@ impl MessageDisplayData {
             .map(|a| a.to_slint_with_media(media_ready))
             .collect();
         assign_album_positions(&mut slint_attachments);
+        let standalone_attachment_indices = standalone_attachment_indices(&slint_attachments);
 
         // Preserve channel event phases; DM records display direction/result.
         let call_type = if self.is_call {
@@ -299,6 +301,7 @@ impl MessageDisplayData {
             has_attachments: !slint_attachments.is_empty() || self.has_attachments,
             attachment_count: (slint_attachments.len() as i32).max(self.attachment_count),
             attachments: ModelRc::new(VecModel::from(slint_attachments)),
+            standalone_attachment_indices,
             has_reactions: self.has_reactions,
             reaction_summary: chatter_core::domain::message::ReactionCount::summary_string(
                 &self.reaction_counts,

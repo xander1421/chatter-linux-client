@@ -165,7 +165,12 @@ pub(crate) fn refresh_visible_media(
             continue;
         };
         for attachment in row.attachments.iter() {
-            if (attachment.is_image || attachment.is_video) && !attachment.has_thumbnail {
+            // The grid paints at most ten media tiles. Hidden overflow remains
+            // available to the viewer but needs no inline thumbnail texture.
+            if (attachment.is_image || attachment.is_video)
+                && (attachment.album_count < 2 || attachment.album_index < 10)
+                && !attachment.has_thumbnail
+            {
                 let id = attachment.id.to_string();
                 let inserted = PENDING_VISIBLE_THUMBNAILS
                     .with(|pending| pending.borrow_mut().insert(id.clone()));

@@ -15,6 +15,17 @@ pub fn album_positions(attachments: impl IntoIterator<Item = (bool, bool)>) -> (
     (positions, count)
 }
 
+/// Positions in the original attachment list that need a row below the grid.
+pub fn standalone_indices(positions: &[i32], media_count: i32) -> Vec<i32> {
+    positions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, position)| {
+            (media_count < 2 || *position < 0).then_some(index as i32)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::album_positions;
