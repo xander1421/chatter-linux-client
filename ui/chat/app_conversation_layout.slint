@@ -190,6 +190,7 @@ export component AppConversationLayout inherits Rectangle {
     chat-layout := ChatLayout {
         width: 100%;
         height: 100%;
+    page-active: !root.compact-layout || root.mobile-show-chat;
     hide-header: root.selection-mode;
     // No back button: the conversation list is always on
     // screen beside this, so there is nothing to go back to —
