@@ -271,6 +271,7 @@ lto = "thin"
 # See vendor/i-slint-backend-android-activity/PATCHES.md.
 [patch.crates-io]
 fontique = { path = "vendor/fontique" }
+parley = { path = "vendor/parley" }
 ndk-context = { path = "vendor/ndk-context" }
 # Keep Quinn receive streams accessible during pending HTTP/3 reads.
 # See vendor/h3-quinn/PATCHES.md.
