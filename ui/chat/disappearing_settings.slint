@@ -59,21 +59,39 @@ export component DisappearingSettings inherits VerticalLayout {
     spacing: Spacing.sm;
     Text { text: "Message lifetime"; color: Colors.text-primary; font-size: Typography.sm; }
     Text { text: "Each new message disappears after the selected time once its expiry clock starts."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+    // A tap applies at once, as in Signal and Telegram; Off turns it off.
     for opt in DisappearingGlobal.options: TimerOption {
         label: opt.label;
         selected: root.selected-ttl == opt.seconds;
-        clicked => { root.selected-ttl = opt.seconds; }
+        clicked => {
+            if opt.seconds != root.selected-ttl {
+                root.selected-ttl = opt.seconds;
+                DisappearingGlobal.set-dm-window(root.peer-id, opt.seconds, root.minutes);
+            }
+        }
     }
-    Text { text: "How long to enable"; color: Colors.text-primary; font-size: Typography.sm; }
-    Text { text: "Current: " + DisappearingGlobal.dm-activation-label + ". The window applies to new messages only."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
-    Button { text: "5 minutes"; variant: root.minutes == "5" ? "primary" : "secondary"; clicked => { root.minutes = "5"; } }
-    Input { placeholder: "Custom duration in minutes"; text <=> root.minutes; }
-    Button {
-        // Off and staying off has nothing to apply; with a timer on, the
-        // window above can still change, so Save stays available.
-        text: root.selected-ttl == 0 ? "Turn off" : root.current-ttl == 0 ? "Enable disappearing messages" : "Save";
-        variant: "primary";
-        disabled: root.selected-ttl == 0 && root.current-ttl == 0;
-        clicked => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
+    // The window only means something while a timer is on.
+    if root.selected-ttl != 0: VerticalLayout {
+        spacing: Spacing.sm;
+        Text { text: "How long to enable"; color: Colors.text-primary; font-size: Typography.sm; }
+        Text { text: "Current: " + DisappearingGlobal.dm-activation-label + ". The window applies to new messages only."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+        Button {
+            text: "5 minutes";
+            variant: root.minutes == "5" ? "primary" : "secondary";
+            clicked => {
+                root.minutes = "5";
+                DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes);
+            }
+        }
+        Input {
+            placeholder: "Custom duration in minutes";
+            text <=> root.minutes;
+            accepted => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
+        }
+        Button {
+            text: "Set duration";
+            variant: "secondary";
+            clicked => { DisappearingGlobal.set-dm-window(root.peer-id, root.selected-ttl, root.minutes); }
+        }
     }
 }
