@@ -785,26 +785,48 @@ pub async fn deliver(
     send: ComposerSend,
     send_started: std::time::Instant,
 ) -> bool {
-    let frozen = send.clone();
-    let sent = deliver_inner(weak.clone(), ui_ctx.clone(), send, send_started).await;
-    if !sent {
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                remove_pending_bubble(&w, &frozen);
-            }
-        });
+    let mut parts = send.ordered_parts().into_iter();
+    let mut first = true;
+    while let Some(part) = parts.next() {
+        let frozen = part.clone();
+        match deliver_inner(weak.clone(), ui_ctx.clone(), part, send_started).await {
+        PartOutcome::Sent => { first = false; continue; }
+        PartOutcome::Retained => return true,
+        PartOutcome::Unsent => {
+            let remaining = if first {
+                None // The original caller restores the whole unsent draft.
+            } else {
+                let mut unsent = frozen.clone();
+                unsent.text.extend(parts.map(|part| part.text));
+                Some(unsent)
+            };
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    remove_pending_bubble(&w, &frozen);
+                    if let Some(unsent) = remaining {
+                        recover_failed_send(&w, &ui_ctx, unsent);
+                    }
+                }
+            });
+            return !first;
+        }
+        }
     }
-    sent
+    true
 }
+
+enum PartOutcome { Sent, Retained, Unsent }
 
 async fn deliver_inner(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
     send: ComposerSend,
     send_started: std::time::Instant,
-) -> bool {
+) -> PartOutcome {
     if !ui_ctx.composer_session_is_current(send.session_revision) {
-        return false;
+        return PartOutcome::Unsent;
     }
     let send_for_delivery = send.clone();
     let ComposerSend {
@@ -816,7 +838,7 @@ async fn deliver_inner(
         attachments: pending_attachments,
     } = send;
     if !ui_ctx.has_auth_identity() {
-        return false;
+        return PartOutcome::Unsent;
     }
     let auth = ui_ctx.auth_snapshot();
     let current_user_id = auth
@@ -840,7 +862,7 @@ async fn deliver_inner(
         .map(|r| (r.sender_name.clone(), r.preview.clone()))
         .unwrap_or_default();
     let quote = quote_intent(reply.as_ref());
-    if reply.is_some() && quote.is_none() { return false; }
+    if reply.is_some() && quote.is_none() { return PartOutcome::Unsent; }
 
     tracing::info!(
         ?conversation,
@@ -876,10 +898,10 @@ async fn deliver_inner(
         sending.await
     };
     if !ui_ctx.composer_session_is_current(session_revision) {
-        return false;
+        return PartOutcome::Unsent;
     }
     let ui_result = match outcome {
-        None => return false,
+        None => return PartOutcome::Unsent,
         Some(Ok(r)) => {
             tracing::info!(msg_id = %r.message_id_effective, sent_at = r.sent_at, "[UI_SEND] send_message_ui returned Ok");
             // Core stored the message with its uploads: the sheltered copies
@@ -911,7 +933,7 @@ async fn deliver_inner(
                         w.set_toast_visible(true);
                     }
                 });
-                return true;
+                return PartOutcome::Retained;
             }
             if matches!(
                 &e,
@@ -932,7 +954,7 @@ async fn deliver_inner(
                     });
                 }
                 ui_ctx.release_staged_files(&pending_attachments);
-                return true;
+                return PartOutcome::Retained;
             }
 
             // `format_send_error` exists to produce exactly this string
@@ -953,7 +975,7 @@ async fn deliver_inner(
                     refresh_send_notice(&weak, &ui_ctx, channel_id);
                 }
             }
-            return false;
+            return PartOutcome::Unsent;
         }
     };
 
@@ -996,6 +1018,7 @@ async fn deliver_inner(
     let sent_at = ui_result.sent_at;
     let failure_notice = ui_result.failure_notice.clone();
     let failure_reason = ui_result.failure_reason.clone().unwrap_or_default();
+    let stored_failure = delivery_status == "failed";
 
     tracing::info!(msg_id = %msg_id, "[UI_SEND] scheduling invoke_from_event_loop for append");
     let _ = slint::invoke_from_event_loop(move || {
@@ -1115,7 +1138,7 @@ async fn deliver_inner(
             w.global::<crate::Haptics>().invoke_error();
         }
     });
-    true
+    if stored_failure { PartOutcome::Retained } else { PartOutcome::Sent }
 }
 
 /// Handle Jarvis slash commands (/ask, /summarize, /knowledge, /remember).

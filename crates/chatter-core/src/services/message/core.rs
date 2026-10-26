@@ -41,6 +41,11 @@ impl MessageError {
             Self::Network(NetworkError::PermissionDenied) => Some("Not delivered"),
             Self::ShieldNotReady => Some(SHIELD_WAITING_FOR_TOKENS),
             Self::NotAuthor => Some("Not allowed"),
+            Self::Network(NetworkError::InvalidRequest(reason))
+                if reason.contains("too large") => Some("Message too long"),
+            Self::InvalidContent(reason) if reason.contains("too large") => {
+                Some("Message too long")
+            }
             Self::Network(NetworkError::InvalidRequest(_))
             | Self::InvalidContent(_)
             | Self::InvalidMessage(_) => Some("Message rejected"),

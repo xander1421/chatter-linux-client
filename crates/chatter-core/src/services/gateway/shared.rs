@@ -225,6 +225,11 @@ pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> S
     // Return user-facing message (don't expose internal error details)
     match error {
         SendError::BeforeSubmission(original) => handle_send_error(original, context),
+        SendError::Message(crate::services::message::MessageError::InvalidContent(reason))
+            if reason.contains("too large") => "Message too long".to_string(),
+        SendError::Message(crate::services::message::MessageError::Network(
+            crate::error::NetworkError::InvalidRequest(reason),
+        )) if reason.contains("too large") => "Message too long".to_string(),
         SendError::NotLoggedIn
         | SendError::Message(crate::services::message::MessageError::NotLoggedIn)
         | SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotLoggedIn)

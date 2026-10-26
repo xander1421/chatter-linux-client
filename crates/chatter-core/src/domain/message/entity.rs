@@ -214,6 +214,7 @@ impl Message {
     #[must_use]
     pub fn can_retry_send(&self) -> bool {
         self.delivery_status == "failed" && !self.is_deleted
+            && self.failure_reason.as_deref() != Some("Message too long")
     }
 
     /// Menu actions for this message. `is_own` is the caller's authorship check
@@ -221,7 +222,7 @@ impl Message {
     /// nanoseconds since the Unix epoch.
     #[must_use]
     pub fn actions(&self, is_own: bool, now_ns: u64) -> MessageActions {
-        MessageActions::decide(
+        let mut actions = MessageActions::decide(
             is_own,
             self.is_deleted,
             &self.delivery_status,
@@ -230,7 +231,9 @@ impl Message {
             self.as_text(),
             self.has_attachments(),
             self.conversation_type.is_one_to_one_dm(),
-        )
+        );
+        actions.resend &= self.can_retry_send();
+        actions
     }
 
     /// Check if this message is the root of a thread.
