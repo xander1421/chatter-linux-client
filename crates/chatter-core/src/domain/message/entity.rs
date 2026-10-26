@@ -210,7 +210,8 @@ impl Message {
         }
     }
 
-    /// A failed outgoing bubble can be sent again. The failure label is not a lock.
+    /// A failed outgoing bubble can be sent again unless its body exceeds the
+    /// transport limit permanently.
     #[must_use]
     pub fn can_retry_send(&self) -> bool {
         self.delivery_status == "failed" && !self.is_deleted

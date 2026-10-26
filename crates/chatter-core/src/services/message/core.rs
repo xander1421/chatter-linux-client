@@ -27,9 +27,9 @@ impl MessageError {
     /// User-facing label for a send that did not land.
     ///
     /// `None` is a transient failure: the bubble reads "not sent · retry".
-    /// `Some` is the short reason shown after "not sent · ". Resend stays
-    /// available either way (`Message::can_retry_send`). Unknown failures are
-    /// not guessed to be transient.
+    /// `Some` is the short reason shown after "not sent · ". Size refusals
+    /// cannot be retried unchanged. Unknown failures are not guessed to be
+    /// transient.
     pub fn permanent_send_failure_reason(&self) -> Option<&'static str> {
         use crate::error::NetworkError;
         match self {
