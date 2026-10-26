@@ -70,6 +70,8 @@ component QuickReaction inherits Rectangle {
     accessible-label: "React with " + root.name;
     accessible-action-default => { root.clicked(); }
 
+    // Items are created with the menu already shown, so `changed` alone never fires.
+    init => { if root.initial-focus { keys.focus(); } }
     changed initial-focus => { if root.initial-focus { keys.focus(); } }
     changed focused-index => {
         if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
@@ -157,6 +159,8 @@ component MenuItem inherits Rectangle {
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
 
+    // Items are created with the menu already shown, so `changed` alone never fires.
+    init => { if root.initial-focus { keys.focus(); } }
     changed initial-focus => { if root.initial-focus { keys.focus(); } }
     changed focused-index => {
         if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
