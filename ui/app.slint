@@ -580,7 +580,7 @@ export component MainWindow inherits Window {
         focus-on-tab-navigation: false;
 
         capture-key-pressed(event) => {
-            if (event.text == Key.Tab || event.text == Key.UpArrow || event.text == Key.DownArrow
+            if (event.text == Key.Tab || event.text == Key.Backtab || event.text == Key.UpArrow || event.text == Key.DownArrow
                 || event.text == Key.LeftArrow || event.text == Key.RightArrow) {
                 Appearance.keyboard-focus-visible = true;
             }

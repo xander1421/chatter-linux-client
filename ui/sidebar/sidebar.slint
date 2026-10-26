@@ -140,6 +140,7 @@ export component Sidebar inherits Rectangle {
     callback create-clicked();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
+    callback focus-composer();
     callback focus-target(int, int, bool, bool, bool) -> int;
     function focus-step(move-by: int) {
         root.focus-index = root.focus-target(root.focus-index, move-by,
@@ -334,28 +335,6 @@ export component Sidebar inherits Rectangle {
     // from the pre-resize width drew a half-width first frame at launch.
     animate width { duration: root.mobile-mode ? 0ms : Materials.menu-duration; easing: ease-out; }
 
-    sidebar-keys := FocusScope {
-        width: 0px; height: 0px;
-        enabled: !root.touch && root.active-tab == "chats" && !root.hidden;
-        changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
-        accessible-role: list;
-        accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
-            ? (root.flat-rows[root.focus-index].kind == "chat" || root.flat-rows[root.focus-index].kind == "section-chat" || root.flat-rows[root.focus-index].kind == "archived-chat"
-                ? root.flat-rows[root.focus-index].chat.display-name : root.flat-rows[root.focus-index].kind)
-            : "Conversations";
-        key-pressed(event) => {
-            if (event.text == Key.UpArrow) { root.focus-step(-1); return accept; }
-            if (event.text == Key.DownArrow) { root.focus-step(1); return accept; }
-            if (event.text == Key.Home) { root.focus-step(-2); return accept; }
-            if (event.text == Key.End) { root.focus-step(2); return accept; }
-            if (event.text == Key.Return || event.text == Key.Space) { root.open-focused(); return accept; }
-            if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
-                root.open-focused-menu(); return accept;
-            }
-            return reject;
-        }
-    }
-
     in property <length> bottom-inset: 0px;
     property <bool> update-banner-visible: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error";
     property <length> update-banner-height: Spacing.button-height + Spacing.md;
@@ -383,7 +362,7 @@ export component Sidebar inherits Rectangle {
             immediate-child-press: true;
 
             for entry[idx] in root.flat-rows: VerticalLayout {
-                property <bool> roving-highlight: sidebar-keys.has-focus && root.focus-index == idx;
+                property <bool> roving-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
                 changed roving-highlight => {
                     if (self.roving-highlight) {
                         let top = self.absolute-position.y - central-scroll.absolute-position.y;
@@ -777,7 +756,7 @@ export component Sidebar inherits Rectangle {
                         data: entry.chat;
                         collapsed: root.collapsed;
                         mobile-mode: root.touch;
-                        keyboard-highlight: sidebar-keys.has-focus && root.focus-index == idx;
+                        keyboard-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
                         clicked => {
                             if entry.chat.conversation-type == ConversationKind.channel || entry.chat.conversation-type == ConversationKind.saved-messages {
                                 root.channel-selected(entry.chat.conversation-id);
@@ -835,7 +814,7 @@ export component Sidebar inherits Rectangle {
                         data: entry.chat;
                         collapsed: root.collapsed;
                         mobile-mode: root.touch;
-                        keyboard-highlight: sidebar-keys.has-focus && root.focus-index == idx;
+                        keyboard-highlight: sidebar-keys.has-focus && Appearance.keyboard-focus-visible && root.focus-index == idx;
                         clicked => { root.section-conversation-selected(entry.chat.conversation-id, entry.chat.conversation-type); }
                         pin-requested(pinned) => { root.set-conversation-pinned(entry.chat.conversation-id, pinned); }
                         context-menu-requested(x, y) => {
@@ -892,6 +871,36 @@ export component Sidebar inherits Rectangle {
             search-clicked => { root.search-clicked(); }
             create-clicked => { root.create-clicked(); }
             anon-mode-clicked => { root.anon-mode-clicked(); }
+        }
+
+        // Keep the list after the header and before the footer in Slint's
+        // source-order tab chain. Give it nonzero geometry for Slint's
+        // visibility check during Tab navigation; it only owns keys.
+        sidebar-keys := FocusScope {
+            x: 0px;
+            y: root.top-row-height;
+            width: 1px;
+            height: 1px;
+            focus-on-click: false;
+            enabled: !root.touch && root.active-tab == "chats" && !root.hidden;
+            changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
+            accessible-role: list;
+            accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
+                ? (root.flat-rows[root.focus-index].kind == "chat" || root.flat-rows[root.focus-index].kind == "section-chat" || root.flat-rows[root.focus-index].kind == "archived-chat"
+                    ? root.flat-rows[root.focus-index].chat.display-name : root.flat-rows[root.focus-index].kind)
+                : "Conversations";
+            key-pressed(event) => {
+                if (event.text == Key.UpArrow) { root.focus-step(-1); return accept; }
+                if (event.text == Key.DownArrow) { root.focus-step(1); return accept; }
+                if (event.text == Key.Home) { root.focus-step(-2); return accept; }
+                if (event.text == Key.End) { root.focus-step(2); return accept; }
+                if (event.text == Key.Return || event.text == Key.Space) { root.open-focused(); return accept; }
+                if (event.text == Key.Escape) { root.focus-composer(); return accept; }
+                if (event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift)) {
+                    root.open-focused-menu(); return accept;
+                }
+                return reject;
+            }
         }
 
         // Pinned like SidebarHeader; without x/y a child of this Rectangle is centred.

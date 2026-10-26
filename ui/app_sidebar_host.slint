@@ -26,6 +26,7 @@ export component AppSidebarHost inherits Rectangle {
     in-out property <bool> sidebar-user-collapsed;
     in property <length> window-width;
     callback toggle-anon-mode();
+    callback focus-composer();
 
         background: transparent;
     Sidebar {
@@ -76,6 +77,7 @@ export component AppSidebarHost inherits Rectangle {
         focus-target(current, move-by, mobile, shield, requests) => {
             return SidebarPane.sidebar-focus-target(current, move-by, mobile, shield, requests);
         }
+        focus-composer => { root.focus-composer(); }
         ctx-menu-show <=> SidebarPane.row-context-menu-open;
         section-header-ctx-menu-show <=> SidebarPane.section-context-menu-open;
         ctx-menu-is-muted: SidebarPane.row-context-menu-muted;
