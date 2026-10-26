@@ -805,6 +805,14 @@ export component MainWindow inherits Window {
             presented-modal: modal-transitions.presented-modal;
             reply-focus-serial <=> root.reply-focus-serial;
             safe-area-top: root.safe-area-top;
+            sidebar-menu-collapsed: !root.compact-layout && root.sidebar-is-rail;
+            sidebar-menu-width: root.compact-layout ? root.width
+                : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
+                : Spacing.sidebar-width;
+            sidebar-menu-bottom-inset: root.bottom-nav-visible
+                ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
+                    + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px)
+                : 0px;
             viewer-origin-height: root.viewer-origin-height;
             viewer-origin-width: root.viewer-origin-width;
             viewer-origin-x: root.viewer-origin-x;
