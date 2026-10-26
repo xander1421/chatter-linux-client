@@ -265,7 +265,8 @@ export component AppTopOverlays inherits Rectangle {
 
     MessageContextMenu {
         show: ChatPane.context-menu-visible;
-        content-bottom: max(0px, root.popup-bottom-limit);
+        // Desktop menus may cover the composer; touch menus stay above it.
+        content-bottom: root.is-mobile-platform ? max(0px, root.popup-bottom-limit) : root.height;
         sender-id: ChatPane.context-menu-sender-id;
         timestamp-ns: ChatPane.context-menu-timestamp-ns;
         message-id: ChatPane.context-menu-message-id;
