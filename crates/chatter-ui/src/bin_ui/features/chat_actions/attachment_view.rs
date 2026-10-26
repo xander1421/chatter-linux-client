@@ -993,7 +993,7 @@ fn play_video_from_buffer(
                             .set_image_viewer_visible(false);
                         w.global::<crate::ChatPane>().set_video_player_visible(true);
                         start_video_progress_timer(&w);
-                        tracing::info!("Started video from memory: {}", filename_for_video);
+                        tracing::info!("Started video from memory");
                     }
                 });
             }
@@ -1046,7 +1046,7 @@ fn play_video_from_range(
                             .set_image_viewer_visible(false);
                         w.global::<crate::ChatPane>().set_video_player_visible(true);
                         start_video_progress_timer(&w);
-                        tracing::info!("Started streaming video: {}", filename_for_video);
+                        tracing::info!("Started streaming video");
                     }
                 });
             }
@@ -1157,14 +1157,14 @@ async fn save_file_from_buffer(
     if let Some(destination) = destination {
         match super::media_viewer::save_export(&destination, &data) {
             Ok(destination) => {
-                tracing::info!("Exported attachment to {}", destination.display());
+                tracing::info!("Exported attachment");
                 let opener = ExternalOpener;
-                if let Err(e) = opener.reveal_in_folder(&destination) {
-                    tracing::warn!("Could not show exported file: {}", e);
+                if opener.reveal_in_folder(&destination).is_err() {
+                    tracing::warn!("Could not show exported file");
                 }
             }
-            Err(e) => {
-                tracing::error!("Failed to save attachment: {}", e);
+            Err(_) => {
+                tracing::error!("Failed to save attachment");
             }
         }
     } else {

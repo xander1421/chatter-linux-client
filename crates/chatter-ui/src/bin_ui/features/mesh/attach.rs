@@ -87,7 +87,7 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
                 // Same reasoning as a failed text send: over the radio there is
                 // no server to blame and no retry queue to hide it in, so a
                 // refusal has to be said out loud.
-                tracing::warn!(%error, path = %path.display(), "mesh: file not sent");
+                tracing::warn!(%error, "mesh: file not sent");
                 let notice = format!("Not sent: {error}");
                 run_ui!(weak, |w| w
                     .global::<MeshGlobal>()

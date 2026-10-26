@@ -253,7 +253,7 @@ impl AttachmentDisplayData {
             // audio and generic files never have one, so suppress the noise.
             // Expected while a received attachment has not been downloaded and
             // its sidecar preview is still unavailable. Keep this out of INFO.
-            tracing::debug!("No thumbnail source available for {}", self.filename);
+            tracing::debug!("No thumbnail source available");
             (false, Image::default(), self.width, self.height)
         } else {
             (false, Image::default(), self.width, self.height)

@@ -69,13 +69,13 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
                 if let Some(destination) = FilePicker::save_file(config).await {
                     match super::media_viewer::save_export(&destination, &data) {
                         Ok(destination) => {
-                            tracing::info!("Exported PDF to {}", destination.display());
+                            tracing::info!("Exported PDF");
                             let opener = ExternalOpener;
-                            if let Err(e) = opener.reveal_in_folder(&destination) {
-                                tracing::warn!("Could not show exported file: {}", e);
+                            if opener.reveal_in_folder(&destination).is_err() {
+                                tracing::warn!("Could not show exported file");
                             }
                         }
-                        Err(e) => tracing::error!("Failed to save PDF file: {}", e),
+                        Err(_) => tracing::error!("Failed to save PDF file"),
                     }
                 }
             });

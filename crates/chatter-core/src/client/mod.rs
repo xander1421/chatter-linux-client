@@ -715,7 +715,7 @@ async fn upload_attachments(
                 // was the only content in the message, swallowing the error here
                 // would leave `pointers` empty and the send would instead fail
                 // with the misleading "message must have text or attachments".
-                tracing::error!(path = %att.path.display(), error = %e, "Failed to upload attachment");
+                tracing::error!(error = %e, "Failed to upload attachment");
                 return Err(e);
             }
         }
