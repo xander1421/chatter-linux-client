@@ -22,6 +22,8 @@ export struct ChatRowData {
     conversation-type: ConversationKind,
     user-id: string,             // DM rows: the peer
     display-name: string,
+    accessible-label-text: string,
+    accessible-description-text: string,
     avatar-source: image,
     has-avatar: bool,
     initials: string,
@@ -49,10 +51,8 @@ export component ChatRow inherits Rectangle {
     in property <bool> keyboard-highlight: false;
 
     accessible-role: list-item;
-    accessible-label: root.data.display-name
-        + (root.data.unread-count > 0 ? ", " + root.data.unread-count + " unread" : "")
-        + (root.data.last-message != "" ? ", last message " + root.data.last-message : "");
-    accessible-description: root.data.last-message;
+    accessible-label: root.data.accessible-label-text;
+    accessible-description: root.data.accessible-description-text;
     accessible-action-default => { root.activate(); }
 
     callback clicked();

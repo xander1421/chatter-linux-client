@@ -93,6 +93,7 @@ export component MainChatShell inherits Rectangle {
         if !CallView.active-call-fullscreen: AppSidebarHost {
             width: parent.width;
             height: parent.height;
+            chat-push-progress: root.chat-push-progress;
             bottom-nav-visible: root.bottom-nav-visible;
             compact-layout: root.compact-layout;
             is-mobile-platform: root.is-mobile-platform;

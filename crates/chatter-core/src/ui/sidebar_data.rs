@@ -65,6 +65,37 @@ pub enum ChatRowLabel {
     OutgoingSecretRequest,
 }
 
+/// Remove directional formatting controls from screen-reader text while
+/// leaving the displayed preview's bidi isolation intact.
+#[must_use]
+pub fn plain_label(text: &str) -> String {
+    text.chars()
+        .filter(|c| {
+            !matches!(
+                *c,
+                '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn chat_row_accessible_label(
+    display_name: &str,
+    unread_count: u32,
+    last_message: &str,
+) -> String {
+    let mut label = plain_label(display_name);
+    if unread_count > 0 {
+        label.push_str(&format!(", {unread_count} unread"));
+    }
+    if !last_message.is_empty() {
+        label.push_str(", last message ");
+        label.push_str(&plain_label(last_message));
+    }
+    label
+}
+
 // ============================================================================
 // Chat list row
 // ============================================================================
