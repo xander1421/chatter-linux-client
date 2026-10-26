@@ -324,6 +324,8 @@ export component MessageContextMenu inherits Rectangle {
     // Keep every descendant of chat chrome below this modal scrim.
     z: 10;
     visible: root.show || self.opacity > 0;
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     opacity: root.show ? 1 : 0;
     animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
 

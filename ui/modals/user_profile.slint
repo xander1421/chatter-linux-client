@@ -206,6 +206,7 @@ export component UserProfileModal inherits Rectangle {
 
     ModalContainer {
         show: root.show-modal;
+        accessibility-modal: !root.root-screen;
         modal-width: 440px;
         // Same conservative viewport carve-out `Modal` applies: safe-area
         // insets are not plumbed into modals, so leave room for the Android

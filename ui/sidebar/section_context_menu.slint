@@ -154,6 +154,8 @@ export component SectionHeaderContextMenu inherits Rectangle {
     changed show => { if root.show { root.focus-index = 0; } }
 
     visible: root.show;
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     width: 100%;
     height: 100%;
     // Dimmed like the message context menu, so the menu reads as a modal
@@ -430,6 +432,8 @@ export component SectionContextMenu inherits Rectangle {
     }
 
     visible: root.show;
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     width: 100%;
     height: 100%;
     // Dimmed like the message context menu, so the menu reads as a modal
