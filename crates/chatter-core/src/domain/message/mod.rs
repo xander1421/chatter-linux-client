@@ -468,7 +468,9 @@ mod tests {
         failed_voice.failure_reason = Some("Not delivered".into());
         assert!(failed_voice.can_retry_send());
         let actions = failed_voice.actions(true, NOW);
-        assert!(actions.resend && actions.forward && actions.copy && actions.download);
+        assert!(actions.resend && actions.forward && actions.download);
+        // No text body: nothing for Copy to put on the clipboard.
+        assert!(!actions.copy);
         assert!(actions.delete_for_me && actions.select);
         assert!(!actions.react && !actions.reply && !actions.edit && !actions.pin);
         assert!(!actions.delete_for_everyone && !actions.info);
