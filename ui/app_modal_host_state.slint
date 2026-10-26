@@ -94,6 +94,8 @@ export global ModalHostState {
     in-out property <string> create-section-emoji: "📁";
     in-out property <string> create-section-id: "";  // set for rename
     in-out property <bool> create-section-loading: false;
+    in-out property <string> create-section-conversation-id: "";
+    in-out property <ConversationKind> create-section-conversation-kind;
     // Create-channel modal: which tab to open on (0 = Create, 1 = Join)
     in-out property <int> create-channel-initial-tab: 0;
     // Join channel modal properties
@@ -253,7 +255,8 @@ export global ModalHostState {
     callback toggle-invite-friend-selection(int);
     callback toggle-invite-friend-role(int);  // toggle role for invite modal
     // Create/rename section modal properties
-    callback create-section(/* name */ string, /* emoji */ string);
+    callback create-section(/* name */ string, /* emoji */ string,
+        /* conversation-id */ string, /* conversation-kind */ ConversationKind);
     callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string);
     // Join channel
     callback search-channels(string);
@@ -348,7 +351,14 @@ export global ModalHostState {
         root.create-section-name = "";
         root.create-section-emoji = "📁";
         root.create-section-id = "";
+        root.create-section-conversation-id = "";
+        root.create-section-conversation-kind = ConversationKind.channel;
         root.nav-push("create-section");
+    }
+    public function start-create-section-for-conversation(conversation-id: string, kind: ConversationKind) {
+        root.start-create-section();
+        root.create-section-conversation-id = conversation-id;
+        root.create-section-conversation-kind = kind;
     }
 
 }

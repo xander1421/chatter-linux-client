@@ -430,7 +430,9 @@ export component AppTopOverlays inherits Rectangle {
             SidebarPane.move-to-section(conv-id, conv-type, section-id);
         }
         remove-from-section(conv-id) => { SidebarPane.remove-from-section(conv-id); }
-        create-section-clicked => { ModalHostState.start-create-section(); }
+        create-section-clicked(conv-id, conv-type) => {
+            ModalHostState.start-create-section-for-conversation(conv-id, conv-type);
+        }
         set-pinned(conv-id, pinned) => { SidebarPane.set-conversation-pinned(conv-id, pinned); }
         set-archived(conv-id, archived) => { SidebarPane.set-conversation-archived(conv-id, archived); }
         set-muted(conv-id, kind, muted) => { SidebarPane.set-conversation-muted(conv-id, kind, muted); }

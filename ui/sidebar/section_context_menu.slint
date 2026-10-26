@@ -324,7 +324,7 @@ export component SectionContextMenu inherits Rectangle {
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback set-archived(/* conv-id */ string, /* archived */ bool);
     callback set-muted(/* conv-id */ string, /* kind */ ConversationKind, /* muted */ bool);
-    callback create-section-clicked();
+    callback create-section-clicked(/* conv-id */ string, /* conv-type */ ConversationKind);
     // DM rows, and channels we are no longer in: deletes the chat on this
     // device (core `delete_conversation`).
     callback delete-chat(/* conv-id */ string, /* conv-type */ ConversationKind);
@@ -500,7 +500,7 @@ export component SectionContextMenu inherits Rectangle {
                 label: "New section…";
                 mobile-mode: root.mobile-mode;
                 clicked => {
-                    root.create-section-clicked();
+                    root.create-section-clicked(root.conversation-id, root.conversation-type);
                     root.close();
                 }
             }

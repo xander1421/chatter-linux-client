@@ -391,7 +391,9 @@ export component AppSecondaryModals inherits Rectangle {
             ModalHostState.nav-close("create-section");
         }
         create-section(name, emoji) => {
-            ModalHostState.create-section(name, emoji);
+            ModalHostState.create-section(name, emoji,
+                ModalHostState.create-section-conversation-id,
+                ModalHostState.create-section-conversation-kind);
         }
         rename-section(id, name, emoji) => {
             ModalHostState.rename-section(id, name, emoji);

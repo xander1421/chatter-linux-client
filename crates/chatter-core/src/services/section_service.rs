@@ -48,9 +48,24 @@ impl SectionService {
         }
     }
 
-    /// Create a new custom section.
-    pub fn create_section(&self, name: &str, icon: &str) -> Result<CustomSection, SectionError> {
+    /// Create a custom section, optionally filing the conversation that opened the flow.
+    pub fn create_section(
+        &self,
+        name: &str,
+        icon: &str,
+        conversation: Option<(&str, ConversationType)>,
+    ) -> Result<CustomSection, SectionError> {
         let section = self.section_repo.create_section(name, icon)?;
+        if let Some((conversation_id, conversation_type)) = conversation {
+            if let Err(error) = self.move_conversation_to_section(
+                conversation_id,
+                conversation_type,
+                &section.id,
+            ) {
+                self.section_repo.delete_section(&section.id)?;
+                return Err(error);
+            }
+        }
         Ok(CustomSection {
             id: section.id,
             name: section.name,
