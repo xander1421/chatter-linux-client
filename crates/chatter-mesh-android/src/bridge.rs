@@ -300,8 +300,9 @@ fn with_bridge<T>(
         .map_err(to_error)?;
     bridge
         .vm
-        .attach_current_thread_for_scope(|env| {
-            // The managed attachment provides a scoped local frame on every call.
+        .attach_current_thread(|env| {
+            // Stays attached until the thread exits: a scoped attach made ART create
+            // a new Thread object on every mesh call. Each call still gets a local frame.
             let instance = bridge.instance(env)?;
             body(env, bridge, &instance)
         })

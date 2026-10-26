@@ -30,7 +30,7 @@ pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> 
     }
     // SAFETY: ndk-context supplies the process VM; null is rejected above.
     let vm = unsafe { JavaVM::from_raw(raw_vm.cast()) };
-    vm.attach_current_thread_for_scope(|env| Ok::<_, jni::errors::Error>(body(env)))
+    vm.attach_current_thread(|env| Ok::<_, jni::errors::Error>(body(env)))
         .map_err(|e| e.to_string())?
 }
 
