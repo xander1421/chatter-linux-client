@@ -579,6 +579,14 @@ export component MainWindow inherits Window {
         focus-on-click: false;
         focus-on-tab-navigation: false;
 
+        capture-key-pressed(event) => {
+            if (event.text == Key.Tab || event.text == Key.UpArrow || event.text == Key.DownArrow
+                || event.text == Key.LeftArrow || event.text == Key.RightArrow) {
+                Appearance.keyboard-focus-visible = true;
+            }
+            return reject;
+        }
+
         key-pressed(event) => {
             if (shortcuts.handle-command(event)) { return accept; }
             if (event.text == Key.Back || (event.text == Key.Escape && ChatPane.link-confirm-url != "") || (event.text == Key.Escape
@@ -625,6 +633,18 @@ export component MainWindow inherits Window {
         // down instead of shrink it. Per Slint mobile layout guidance
         // (https://docs.slint.dev/latest/docs/slint/guide/platforms/mobile/general/):
         // one rectangle, all insets.
+        TouchArea {
+            width: root.width;
+            height: root.height;
+            // Parent hit testing observes pointer movement before child controls handle it.
+            changed mouse-x => { Appearance.keyboard-focus-visible = false; }
+            changed mouse-y => { Appearance.keyboard-focus-visible = false; }
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    Appearance.keyboard-focus-visible = false;
+                }
+            }
+
         Rectangle {
             width: root.width;
             height: root.height - root.safe-area-top - root.safe-area-bottom;
@@ -811,6 +831,7 @@ export component MainWindow inherits Window {
             secret-chat-starts-pending: root.secret-chat-starts-pending;
         }
 
+        }
         }
     }
 

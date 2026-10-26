@@ -6,6 +6,8 @@ import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { Avatar } from "avatar.slint";
 
 // Mention suggestion data struct
 export struct MentionSuggestion {
@@ -13,7 +15,6 @@ export struct MentionSuggestion {
     name: string,
     mention-type: string,  // "user", "channel", "here", "all"
     avatar: image,         // Loaded from Rust (empty for non-users)
-    has-avatar: bool,      // Whether avatar image is available
 }
 
 export component MentionAutocomplete inherits GlassSurface {
@@ -108,31 +109,19 @@ export component MentionAutocomplete inherits GlassSurface {
                         spacing: Spacing.sm;
 
                         // Avatar or icon based on type
-                        Rectangle {
+                        if suggestion.mention-type == "user": Avatar {
+                            size: 28px;
+                            y: (parent.height - self.height) / 2;
+                            source: suggestion.avatar;
+                            name: suggestion.name;
+                        }
+
+                        if suggestion.mention-type != "user": Rectangle {
                             width: 28px;
                             height: 28px;
                             y: (parent.height - self.height) / 2;
-                            border-radius: suggestion.mention-type == "user" ? Spacing.radius-full : Spacing.radius-sm;
-                            background: suggestion.mention-type == "user" ? Colors.tint-strong : Colors.background;
-
-                            // User avatar (if available) or fallback
-                            if suggestion.mention-type == "user" && suggestion.has-avatar: Image {
-                                width: parent.width;
-                                height: parent.height;
-                                source: suggestion.avatar;
-                                image-fit: cover;
-                            }
-
-                            // User fallback icon (first letter)
-                            if suggestion.mention-type == "user" && !suggestion.has-avatar: Text {
-                                text: "@";
-                                color: Colors.primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.semibold;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
+                            border-radius: Spacing.radius-sm;
+                            background: Colors.surface-control;
                             // Channel icon
                             if suggestion.mention-type == "channel": Text {
                                 text: "#";
@@ -143,14 +132,13 @@ export component MentionAutocomplete inherits GlassSurface {
                                 vertical-alignment: center;
                             }
 
-                            // Here/All icon
-                            if suggestion.mention-type == "here" || suggestion.mention-type == "all": Text {
-                                text: "@";
-                                color: Colors.warning;
-                                font-size: Typography.base;
-                                font-weight: Typography.semibold;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            if suggestion.mention-type == "here" || suggestion.mention-type == "all": Image {
+                                x: 5px;
+                                y: 5px;
+                                width: 18px;
+                                height: 18px;
+                                source: Icons.users;
+                                colorize: Colors.text-secondary;
                             }
                         }
 
@@ -162,7 +150,7 @@ export component MentionAutocomplete inherits GlassSurface {
 
                             // Display name with prefix
                             Text {
-                                text: suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
+                                text: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
                                 color: index == root.selected-index ? Colors.text-primary : Colors.text-secondary;
                                 font-size: Typography.sm;
                                 font-weight: index == root.selected-index ? Typography.medium : Typography.normal;

@@ -92,7 +92,8 @@ export global Colors {
     out property <color> border: Appearance.dark ? #243242 : #d2dae3;
     // The ring is drawn inside Button. Use the opposite ink tone so it is
     // visible over every fill, including the teal primary and red danger.
-    out property <color> focus-ring: Appearance.dark ? #eef3f8 : #101a25;
+    out property <color> focus-ring: Appearance.keyboard-focus-visible
+        ? (Appearance.dark ? #eef3f8 : #101a25) : transparent;
     // Text/icon danger step on the raised section (5.04:1 in dark mode).
     // Filled destructive controls continue to use `error`/`error-hover`.
     out property <color> danger: Appearance.dark ? #ff6666 : error;

@@ -107,7 +107,9 @@ fn wire_thread_composer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let rows: Vec<_> = suggestions.into_iter().map(|suggestion| MentionSuggestion {
                         id: suggestion.id.into(), name: suggestion.name.into(),
                         mention_type: suggestion.kind.as_str().into(),
-                        avatar: slint::Image::default(), has_avatar: suggestion.has_avatar,
+                        avatar: suggestion.avatar_bytes.as_deref()
+                            .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                            .unwrap_or_default(),
                     }).collect();
                     let pane = w.global::<crate::ChatPane>();
                     pane.set_thread_mention_visible(!rows.is_empty());
