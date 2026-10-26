@@ -10,6 +10,7 @@
 #![cfg_attr(slint_nightly_test, warn(non_exhaustive_omitted_patterns))]
 
 mod androidwindowadapter;
+mod accessibility;
 mod javahelper;
 mod inset_dispatch;
 mod text_input_offsets;

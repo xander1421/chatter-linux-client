@@ -32,6 +32,7 @@ raw-window-handle = { version = "0.6" }
 android-activity-05 = { package = "android-activity", version = "0.5", optional = true }
 android-activity-06 = { package = "android-activity", version = "0.6", optional = true }
 jni = { version = "0.22" }
+serde_json = "1"
 
 # We only depends on the NDK directly to enable raw-window-handle 0.6 which we need for the skia renderer
 ndk-08 = { package = "ndk", version = "0.8.0", optional = true, features = ["rwh_06"] }

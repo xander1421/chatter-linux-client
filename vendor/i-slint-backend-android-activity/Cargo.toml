@@ -93,6 +93,9 @@ default-features = false
 [target.'cfg(target_os = "android")'.dependencies.jni]
 version = "0.22"
 
+[target.'cfg(target_os = "android")'.dependencies.serde_json]
+version = "1"
+
 [target.'cfg(target_os = "android")'.dependencies.ndk-08]
 version = "0.8.0"
 features = ["rwh_06"]

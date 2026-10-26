@@ -38,6 +38,14 @@ import android.widget.ImageView;
 import android.widget.PopupWindow;
 import android.view.inputmethod.BaseInputConnection;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
+import android.view.accessibility.AccessibilityEvent;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 class InputHandle extends ImageView {
     private PopupWindow mPopupWindow;
@@ -121,7 +129,147 @@ class InputHandle extends ImageView {
     }
 }
 
+// The input host overlays the SurfaceView and supplies its virtual Slint children.
+// Queries happen only while Android's accessibility manager is active.
+class SlintNodeProvider extends AccessibilityNodeProvider {
+    private final View host;
+    private JSONArray nodes;
+    private long snapshotAt;
+    private int accessibilityFocus = View.NO_ID;
+
+    SlintNodeProvider(View host) {
+        this.host = host;
+    }
+
+    private JSONArray nodes() {
+        long now = SystemClock.uptimeMillis();
+        if (nodes == null || now - snapshotAt > 100) {
+            try {
+                nodes = new JSONArray(SlintAndroidJavaHelper.accessibilityTree());
+            } catch (Exception ignored) {
+                nodes = new JSONArray();
+            }
+            snapshotAt = now;
+        }
+        return nodes;
+    }
+
+    @Override
+    public AccessibilityNodeInfo createAccessibilityNodeInfo(int id) {
+        JSONArray tree = nodes();
+        if (id == View.NO_ID) {
+            AccessibilityNodeInfo root = AccessibilityNodeInfo.obtain(host);
+            root.setClassName(View.class.getName());
+            root.setPackageName(host.getContext().getPackageName());
+            for (int i = 0; i < tree.length(); i++) {
+                JSONObject child = tree.optJSONObject(i);
+                if (child != null && child.optInt("parent", -2) == -1) {
+                    root.addChild(host, child.optInt("id"));
+                }
+            }
+            return root;
+        }
+        JSONObject node = null;
+        for (int i = 0; i < tree.length(); i++) {
+            JSONObject candidate = tree.optJSONObject(i);
+            if (candidate != null && candidate.optInt("id", -1) == id) {
+                node = candidate;
+                break;
+            }
+        }
+        if (node == null) return null;
+
+        AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(host, id);
+        info.setPackageName(host.getContext().getPackageName());
+        String role = node.optString("role");
+        info.setClassName("Button".equals(role) ? "android.widget.Button" :
+                "TextInput".equals(role) ? "android.widget.EditText" : "android.view.View");
+        int parent = node.optInt("parent", -1);
+        if (parent < 0) info.setParent(host);
+        else info.setParent(host, parent);
+        for (int i = 0; i < tree.length(); i++) {
+            JSONObject child = tree.optJSONObject(i);
+            if (child != null && child.optInt("parent", -2) == id) {
+                info.addChild(host, child.optInt("id"));
+            }
+        }
+        String label = node.isNull("label") ? "" : node.optString("label", "");
+        String description = node.isNull("description") ? "" : node.optString("description", "");
+        if ("Text".equals(role)) info.setText(label);
+        else if (!label.isEmpty()) info.setContentDescription(label);
+        if (!description.isEmpty()) info.setContentDescription(
+                label.isEmpty() ? description : label + ", " + description);
+        Rect bounds = new Rect(node.optInt("left"), node.optInt("top"),
+                node.optInt("right"), node.optInt("bottom"));
+        Rect parentBounds = new Rect(bounds);
+        if (parent >= 0) {
+            for (int i = 0; i < tree.length(); i++) {
+                JSONObject candidate = tree.optJSONObject(i);
+                if (candidate != null && candidate.optInt("id", -1) == parent) {
+                    parentBounds.offset(-candidate.optInt("left"), -candidate.optInt("top"));
+                    break;
+                }
+            }
+        }
+        info.setBoundsInParent(parentBounds);
+        int[] location = new int[2];
+        host.getLocationOnScreen(location);
+        bounds.offset(location[0], location[1]);
+        info.setBoundsInScreen(bounds);
+        info.setVisibleToUser(node.optBoolean("visible", true));
+        info.setEnabled(node.optBoolean("enabled", true));
+        info.setCheckable(node.optBoolean("checkable"));
+        info.setChecked(node.optBoolean("checked"));
+        boolean clickable = node.optBoolean("clickable");
+        info.setFocusable(clickable || !label.isEmpty());
+        info.setAccessibilityFocused(id == accessibilityFocus);
+        info.addAction(id == accessibilityFocus
+                ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+                : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
+        info.setClickable(clickable);
+        if (clickable) info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+        return info;
+    }
+
+    @Override
+    public boolean performAction(int id, int action, Bundle arguments) {
+        if (id < 0) return false;
+        if (action == AccessibilityNodeInfo.ACTION_CLICK) {
+            SlintAndroidJavaHelper.accessibilityClick(id);
+            nodes = null;
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {
+            accessibilityFocus = id;
+            sendFocusEvent(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {
+            if (accessibilityFocus != id) return false;
+            accessibilityFocus = View.NO_ID;
+            sendFocusEvent(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public AccessibilityNodeInfo findFocus(int focus) {
+        return focus == AccessibilityNodeInfo.FOCUS_ACCESSIBILITY && accessibilityFocus != View.NO_ID
+                ? createAccessibilityNodeInfo(accessibilityFocus) : null;
+    }
+
+    private void sendFocusEvent(int id, int type) {
+        if (host.getParent() == null) return;
+        AccessibilityEvent event = AccessibilityEvent.obtain(type);
+        event.setSource(host, id);
+        event.setPackageName(host.getContext().getPackageName());
+        host.getParent().requestSendAccessibilityEvent(host, event);
+    }
+}
+
 class SlintInputView extends View {
+    private final AccessibilityNodeProvider mAccessibilityProvider = new SlintNodeProvider(this);
     private String mText = "";
     private int mCursorPosition = 0;
     private int mAnchorPosition = 0;
@@ -131,6 +279,12 @@ class SlintInputView extends View {
     private int mInBatch = 0;
     private boolean mPending = false;
     private SlintEditable mEditable;
+
+    @Override
+    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+        AccessibilityManager manager = (AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+        return manager != null && manager.isEnabled() ? mAccessibilityProvider : null;
+    }
 
     public class SlintEditable extends SpannableStringBuilder {
         public SlintEditable() {
@@ -458,6 +612,7 @@ public class SlintAndroidJavaHelper {
                         FrameLayout.LayoutParams.MATCH_PARENT);
                 mActivity.addContentView(mInputView, params);
                 mInputView.setVisibility(View.VISIBLE);
+                mInputView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     View root = mActivity.getWindow().getDecorView().getRootView();
                     mInsetsRecovery = new InsetsRecovery(new InsetsRecovery.Host() {
@@ -615,6 +770,10 @@ public class SlintAndroidJavaHelper {
 
     static public native void updateText(String text, int cursorPosition, int anchorPosition, int preeditStart,
             int preeditOffset);
+
+    static public native String accessibilityTree();
+
+    static public native void accessibilityClick(int id);
 
     static public native void setNightMode(int nightMode);
 

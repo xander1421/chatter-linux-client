@@ -45,6 +45,11 @@ export component ChatRow inherits Rectangle {
     in property <bool> collapsed: false;
     in property <bool> mobile-mode: false;
 
+    accessible-role: button;
+    accessible-label: root.data.display-name;
+    accessible-description: root.data.last-message;
+    accessible-action-default => { root.activate(); }
+
     callback clicked();
     callback pin-requested(bool);
     callback context-menu-requested(/* x */ length, /* y */ length);

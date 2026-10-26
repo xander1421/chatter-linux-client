@@ -168,6 +168,14 @@ bind_java_type! {
             ) -> (),
             fn = callback_update_text,
         },
+        pub static fn accessibility_tree {
+            sig = () -> JString,
+            fn = crate::accessibility::query,
+        },
+        pub static fn accessibility_click {
+            sig = (id: jint) -> (),
+            fn = crate::accessibility::click,
+        },
     },
 }
 

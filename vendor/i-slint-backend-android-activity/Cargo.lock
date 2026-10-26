@@ -948,6 +948,7 @@ dependencies = [
  "ndk 0.8.0",
  "ndk 0.9.0",
  "raw-window-handle",
+ "serde_json",
 ]
 
 [[package]]

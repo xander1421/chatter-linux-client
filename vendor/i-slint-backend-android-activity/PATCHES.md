@@ -2,6 +2,13 @@
 
 Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
 
+- `accessibility.rs`, `androidwindowadapter.rs`, `javahelper.rs`, and
+  `java/SlintAndroidJavaHelper.java`: a first Android virtual-view bridge for
+  Slint's accessible tree. The native input host provides nodes on demand
+  when an accessibility service is enabled; JNI snapshots run on the Slint
+  event thread, and Android click actions invoke the item's default action.
+  `docs/ANDROID-ACCESSIBILITY.md` describes scope and remaining work.
+
 - `androidwindowadapter.rs` (game-activity path): IME state handling — see the
   `[patch.crates-io]` comment in the workspace `Cargo.toml`.
 - `text_input_offsets.rs` / `androidwindowadapter.rs`: convert GameTextInput's
