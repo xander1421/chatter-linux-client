@@ -1159,8 +1159,8 @@ async fn save_file_from_buffer(
             Ok(destination) => {
                 tracing::info!("Exported attachment to {}", destination.display());
                 let opener = ExternalOpener;
-                if let Err(e) = opener.open_file(&destination) {
-                    tracing::warn!("Could not open exported file: {}", e);
+                if let Err(e) = opener.reveal_in_folder(&destination) {
+                    tracing::warn!("Could not show exported file: {}", e);
                 }
             }
             Err(e) => {

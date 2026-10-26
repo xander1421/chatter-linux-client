@@ -27,9 +27,6 @@ use crate::error::SystemError;
 /// // Open a URL in the default browser
 /// opener.open_url("https://example.com")?;
 ///
-/// // Open a file with its default handler
-/// opener.open_file(Path::new("/home/user/document.pdf"))?;
-///
 /// // Open a folder in the file manager
 /// opener.open_folder(Path::new("/home/user/Documents"))?;
 /// # Ok::<(), chatter_core::error::SystemError>(())
@@ -71,38 +68,6 @@ impl ExternalOpener {
         }
 
         open::that(url).map_err(|e| SystemError::OpenUrl(e.to_string()))
-    }
-
-    /// Opens a file with its default application.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The path to the file to open
-    ///
-    /// # Errors
-    ///
-    /// Returns `SystemError::OpenFile` if the file does not exist or cannot be opened.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use chatter_core::system::ExternalOpener;
-    /// use std::path::Path;
-    ///
-    /// let opener = ExternalOpener;
-    /// opener.open_file(Path::new("/home/user/image.png"))?;
-    /// # Ok::<(), chatter_core::error::SystemError>(())
-    /// ```
-    pub fn open_file(&self, path: &Path) -> Result<(), SystemError> {
-        // Validate path exists
-        if !path.exists() {
-            return Err(SystemError::OpenFile(format!(
-                "File does not exist: {}",
-                path.display()
-            )));
-        }
-
-        open::that(path).map_err(|e| SystemError::OpenFile(e.to_string()))
     }
 
     /// Opens a folder in the default file manager.
@@ -230,19 +195,6 @@ mod tests {
         for url in &test_urls {
             let has_valid_scheme = valid_schemes.iter().any(|scheme| url.starts_with(scheme));
             assert!(has_valid_scheme, "URL {} should have a valid scheme", url);
-        }
-    }
-
-    #[test]
-    fn test_nonexistent_file() {
-        let opener = ExternalOpener;
-        let result = opener.open_file(Path::new("/nonexistent/file.txt"));
-        assert!(result.is_err());
-        match result {
-            Err(SystemError::OpenFile(msg)) => {
-                assert!(msg.contains("does not exist"));
-            }
-            _ => panic!("Expected OpenFile error"),
         }
     }
 

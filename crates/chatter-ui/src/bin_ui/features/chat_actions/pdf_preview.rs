@@ -71,8 +71,8 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
                         Ok(destination) => {
                             tracing::info!("Exported PDF to {}", destination.display());
                             let opener = ExternalOpener;
-                            if let Err(e) = opener.open_file(&destination) {
-                                tracing::warn!("Could not open exported file: {}", e);
+                            if let Err(e) = opener.reveal_in_folder(&destination) {
+                                tracing::warn!("Could not show exported file: {}", e);
                             }
                         }
                         Err(e) => tracing::error!("Failed to save PDF file: {}", e),
