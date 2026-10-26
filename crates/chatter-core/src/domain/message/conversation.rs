@@ -176,9 +176,15 @@ impl UnreadAnchor {
     ///
     /// Row 0 is a legitimate answer — a conversation whose entire loaded page
     /// is unread opens at the top with the divider above the first row.
+    ///
+    /// The index counts displayed rows: timer-change notices are stored but
+    /// never shown (`disappearing::is_timer_notice`), and counting them put
+    /// the divider one row past each notice — past the end of the model when
+    /// the first unread was the last row, so the open never settled.
     #[must_use]
     pub fn divider_index(&self, page: &[Message]) -> Option<usize> {
         page.iter()
+            .filter(|m| !crate::services::disappearing::is_timer_notice(m))
             .position(|m| self.unread_sent_at.binary_search(&m.sent_at).is_ok())
     }
 
@@ -289,5 +295,19 @@ mod window_tests {
         assert!(max_fetch <= 200);
         assert_eq!(window.first().map(|m| m.sent_at), Some(100));
         assert!(window.len() <= 200);
+    }
+
+    #[test]
+    fn divider_index_counts_displayed_rows_only() {
+        let channel = ChannelId::new();
+        let text = |sent_at| Message::new_text(channel, ConversationType::ServerDm,
+            Some(UserId::new()), "row".into(), sent_at);
+        let mut notice = text(2);
+        notice.content = crate::domain::message::MessageContent::System(
+            crate::domain::message::SystemMessage::DisappearingTimerChanged { seconds: 30 });
+        // Displayed rows: 1, 3, 4 — the unread 4 is displayed row 2, not raw 3.
+        let page = vec![text(1), notice, text(3), text(4)];
+        let anchor = UnreadAnchor { unread_count: 1, unread_sent_at: vec![4] };
+        assert_eq!(anchor.divider_index(&page), Some(2));
     }
 }
