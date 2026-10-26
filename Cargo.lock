@@ -10028,8 +10028,6 @@ checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
 [[package]]
 name = "parley"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b1cfcf399c774719fb1fa51bc6b91e86bdf003b03202a0902f1827ba6750746"
 dependencies = [
  "fontique",
  "harfrust",
