@@ -448,7 +448,7 @@ export component ChatLayout inherits Rectangle {
         spacing: root.mobile ? Spacing.xs : Spacing.none;
         Timer {
             interval: 20s;
-            running: root.conversation-kind == ConversationKind.channel && root.header-can-call;
+            running: root.visible && root.conversation-kind == ConversationKind.channel && root.header-can-call;
             triggered => { root.refresh-channel-call(); }
         }
         // Header at top (fixed 56px). Hidden during active calls — the call

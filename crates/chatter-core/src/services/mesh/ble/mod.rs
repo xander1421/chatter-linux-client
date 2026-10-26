@@ -90,6 +90,8 @@ use crate::storage::{
 
 /// How often the loop wakes to run the parts that nothing else can schedule.
 const TICK: Duration = Duration::from_millis(500);
+/// Discovery and maintenance can wait longer when there is no live link or work.
+const QUIET_TICK: Duration = Duration::from_secs(2);
 const DM_HANDSHAKE_RETRY_MS: u64 = 5_000;
 
 /// How long between frames on one link — the transmit rate, in one number.
@@ -496,20 +498,38 @@ impl BleRuntime {
 
         loop {
             let backlogged = !self.state.with(|state| state.writes.is_empty());
+            let quiet = !self.dial_in_flight && self.state.with(|state| {
+                state.links.links().next().is_none()
+                    && state.pending_dms.is_empty()
+                    && state.writes.is_empty()
+            });
             tokio::select! {
                 event = radio.next_event() => match event {
-                    Some(event) => self.on_link_event(event).await,
+                    Some(event) => {
+                        self.on_link_event(event).await;
+                        if quiet && self.state.with(|state| state.links.links().next().is_some()) {
+                            ticker.reset_after(TICK);
+                        }
+                    }
                     // The radio has shut down for good.
                     None => break,
                 },
                 command = commands.recv() => match command {
                     Some(BleCommand::Stop) | None => break,
-                    Some(command) => self.on_command(command).await,
+                    Some(command) => {
+                        self.on_command(command).await;
+                        if quiet { ticker.reset_after(TICK); }
+                    }
                 },
-                Some(outcome) = dials.recv() => self.finish_dial(outcome),
-                _ = ticker.tick() => self.on_tick().await,
-                // Only armed while something is queued, so a quiet mesh still
-                // wakes twice a second and no faster.
+                Some(outcome) = dials.recv() => {
+                    self.finish_dial(outcome);
+                    if quiet { ticker.reset_after(TICK); }
+                },
+                _ = ticker.tick() => {
+                    self.on_tick().await;
+                    ticker.reset_after(if quiet { QUIET_TICK } else { TICK });
+                },
+                // Only armed while something is queued.
                 _ = tokio::time::sleep(WRITE_PACING_DELAY), if backlogged => {
                     self.flush_buffered_writes().await;
                 }

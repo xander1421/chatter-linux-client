@@ -78,13 +78,16 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client_for_status = client.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             interval.tick().await;
+            if !client_for_status.is_app_visible() { continue; }
             let weak = weak.clone();
             let client = client_for_status.clone();
             if slint::invoke_from_event_loop(move || {
-                if let Some(window) = weak.upgrade() { refresh_status(&window, &client); }
+                if let Some(window) = weak.upgrade() {
+                    if window.get_active_modal() == "activity" { refresh_status(&window, &client); }
+                }
             }).is_err() { break; }
         }
     });
@@ -190,6 +193,9 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client_for_opened = client.clone();
     window.global::<ActivityGlobal>().on_opened(move || {
-        if let Some(window) = weak.upgrade() { refresh(&window, &client_for_opened); }
+        if let Some(window) = weak.upgrade() {
+            refresh(&window, &client_for_opened);
+            refresh_status(&window, &client_for_opened);
+        }
     });
 }
