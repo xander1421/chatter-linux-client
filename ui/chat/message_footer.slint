@@ -206,18 +206,26 @@ export component MessageFooter inherits HorizontalLayout {
 
             // "not sent" retries except when the body exceeded the transport
             // limit; resending that unchanged body would fail again.
-            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed": Text {
-                text: root.failure-reason == "Message too long" ? "not sent \u{b7} Message too long" : root.failure-reason == "" ? "not sent \u{b7} Retry" : "not sent \u{b7} " + root.failure-reason + " \u{b7} Retry";
+            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason == "Message too long": Text {
+                text: "not sent \u{b7} Message too long";
                 color: root.overlay-media ? #ffffff : Colors.error;
                 font-size: Typography.xs;
                 font-italic: true;
-                accessible-role: root.failure-reason == "Message too long" ? text : button;
-                accessible-label: root.failure-reason == "Message too long" ? "Not sent, message too long" : "Not sent, tap to retry";
-                accessible-action-default => { if root.failure-reason != "Message too long" { root.message-clicked(root.message-id); } }
+                accessible-role: text;
+                accessible-label: "Not sent, message too long";
+            }
+            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed" && root.failure-reason != "Message too long": Text {
+                text: root.failure-reason == "" ? "not sent \u{b7} Retry" : "not sent \u{b7} " + root.failure-reason + " \u{b7} Retry";
+                color: root.overlay-media ? #ffffff : Colors.error;
+                font-size: Typography.xs;
+                font-italic: true;
+                accessible-role: button;
+                accessible-label: "Not sent, tap to retry";
+                accessible-action-default => { root.message-clicked(root.message-id); }
 
                 TouchArea {
-                    mouse-cursor: root.failure-reason == "Message too long" ? default : pointer;
-                    clicked => { if root.failure-reason != "Message too long" { root.message-clicked(root.message-id); } }
+                    mouse-cursor: pointer;
+                    clicked => { root.message-clicked(root.message-id); }
                 }
             }
 
