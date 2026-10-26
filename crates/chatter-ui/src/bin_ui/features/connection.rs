@@ -128,6 +128,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_for_task = ui_ctx.clone();
 
     tokio::spawn(async move {
+        let mut previous_state = state;
         loop {
             let state = match rx.recv().await {
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
@@ -135,6 +136,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             };
+            let connection_changed = state != previous_state;
+            previous_state = state;
             let (label, unreachable, attempt) = presentation(&ui_ctx_for_task, state);
             let state_string = label.to_owned();
             // Re-read rather than cache: the mesh can start, or fail, after this
@@ -142,17 +145,31 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // it is made.
             let account_free = ui_ctx_for_task.has_account_free_surfaces();
             let signed_in = ui_ctx_for_task.is_logged_in();
-            let weak = weak.clone();
+            let active_conversation = ui_ctx_for_task.active_conversation();
+            let active_presence = ui_ctx_for_task.active_dm_presence();
+            let weak_for_ui = weak.clone();
+            let ui_ctx_for_ui = ui_ctx_for_task.clone();
 
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
+                if let Some(w) = weak_for_ui.upgrade() {
                     w.set_connection_status(state_string.into());
                     w.set_server_unreachable(unreachable);
                     w.set_connection_reconnect_attempt(attempt);
                     w.set_account_free_surfaces(account_free);
                     w.global::<crate::AuthFlow>().set_is_signed_in(signed_in);
+                    if let Some(presence) = active_presence
+                        && ui_ctx_for_ui.active_conversation() == active_conversation
+                    {
+                        w.global::<crate::ChatPane>()
+                            .set_header_presence_status(presence.as_str().into());
+                    }
                 }
             });
+            // The sidebar owns retained rows, so recompute them from core's
+            // presence policy when reachability changes in either direction.
+            if connection_changed {
+                crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx_for_task);
+            }
         }
     });
 }

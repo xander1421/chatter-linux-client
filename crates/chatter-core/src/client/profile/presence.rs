@@ -16,18 +16,38 @@ impl ChatterClient {
     }
 
     /// `reported` (a stored or live presence) as it may be shown. A blocked
-    /// user's presence is hidden — always offline — as Signal shows none for
-    /// people you blocked; unblocking shows it again.
+    /// user's presence is hidden. A disconnected client also hides the last
+    /// reported online state until it can receive fresh presence again.
     pub fn peer_display_presence(
         &self,
         id: &crate::domain::ids::UserId,
         reported: crate::domain::user::PresenceStatus,
     ) -> crate::domain::user::PresenceStatus {
-        if self.is_profile_user_blocked(id) {
+        if !self.offline_snapshot().is_online || self.is_profile_user_blocked(id) {
             crate::domain::user::PresenceStatus::Offline
         } else {
             reported
         }
     }
 
+    /// Anonymous chats have no live peer presence feed. Show their active
+    /// indicator only while this device can reach the server.
+    pub fn anon_peer_presence(&self) -> crate::domain::user::PresenceStatus {
+        if self.offline_snapshot().is_online {
+            crate::domain::user::PresenceStatus::Online
+        } else {
+            crate::domain::user::PresenceStatus::Offline
+        }
+    }
+
+    /// Presence for the currently open DM, from the same core policy as its row.
+    pub fn active_dm_presence(&self) -> Option<crate::domain::user::PresenceStatus> {
+        match self.active_conversation() {
+            crate::state::ActiveConversation::ServerDm { peer_id } => {
+                Some(self.peer_presence(&peer_id))
+            }
+            crate::state::ActiveConversation::AnonDm(_) => Some(self.anon_peer_presence()),
+            _ => None,
+        }
+    }
 }

@@ -420,7 +420,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     );
                     w.global::<crate::ChatPane>().set_is_dm(true);
                     apply_anon_dm_header(&w, &ui_ctx, &anon_dm_id);
-                    w.global::<crate::ChatPane>().set_header_presence_status("online".into());
+                    w.global::<crate::ChatPane>().set_header_presence_status(
+                        ui_ctx.anon_peer_presence().as_str().into(),
+                    );
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;

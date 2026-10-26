@@ -261,7 +261,7 @@ impl ChatterClient {
                     row.user_id = dm.peer_id.to_string();
                     row.avatar_bytes = self.anon_dm_avatar(&dm);
                     row.presence_status = if dm.status == crate::domain::anon_dm::AnonDmStatus::Active {
-                        "online"
+                        self.anon_peer_presence().as_str()
                     } else if dm.initiated_by_us {
                         "offline"
                     } else {
@@ -555,7 +555,7 @@ impl ChatterClient {
             out.push(ChatRowSendData {
                 user_id: dm.peer_id.to_string(),
                 avatar_bytes: self.anon_dm_avatar(&dm),
-                presence_status: "online".to_string(),
+                presence_status: self.anon_peer_presence().as_str().to_string(),
                 last_message,
                 timestamp_at,
                 unread_count: dm.unread_count,

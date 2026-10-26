@@ -192,7 +192,7 @@ impl ChatterClient {
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
                     username: String::new(),
                     avatar_bytes: self.anon_dm_avatar(&dm),
-                    presence_status: "online".to_string(),
+                    presence_status: self.anon_peer_presence().as_str().to_string(),
                     custom_status: String::new(),
                     is_anon: true,
                 });

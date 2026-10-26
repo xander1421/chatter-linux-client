@@ -145,9 +145,7 @@ pub enum SendError {
     /// Construct only at a boundary proven to precede message submission.
     #[error(transparent)]
     BeforeSubmission(Box<SendError>),
-    #[error(
-        "Delivery is unconfirmed. The original attempt is retained; secret posts retry the original ciphertext."
-    )]
+    #[error("Delivery is unconfirmed.")]
     DeliveryUnconfirmed,
     #[error("An earlier message has unconfirmed delivery. This new draft has not been sent.")]
     SendInProgress,
