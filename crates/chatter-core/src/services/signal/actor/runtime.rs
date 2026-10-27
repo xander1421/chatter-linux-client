@@ -18,7 +18,9 @@ impl SignalActorHandle {
                                 .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))
                                 .map(|identity| {
                                     let bytes = identity.public_key().serialize();
-                                    bytes.chunks(4)
+                                    // Skip the constant 0x05 key-type byte: 32 bytes
+                                    // group evenly instead of leaving a lone byte.
+                                    bytes[1..].chunks(4)
                                         .map(|chunk| chunk.iter().map(|b| format!("{:02X}", b)).collect::<String>())
                                         .collect::<Vec<_>>()
                                         .join(" ")
