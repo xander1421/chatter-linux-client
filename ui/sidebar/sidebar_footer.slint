@@ -84,7 +84,7 @@ export component SidebarFooter inherits GlassSurface {
                     HorizontalLayout {
                         spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
-                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
                                 presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                             }
                         }
@@ -340,7 +340,7 @@ export component SidebarFooter inherits GlassSurface {
                     }
                     TouchArea { clicked => { root.profile-clicked(); } }
                     HorizontalLayout { alignment: center;
-                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; alt-name: root.user-display-name; show-presence: true;
                             presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                         }
                     }

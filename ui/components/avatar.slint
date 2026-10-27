@@ -18,6 +18,8 @@ export component Avatar inherits Rectangle {
     // `fallback-text`, which is rendered verbatim.
     in property <string> name: "";
     in property <string> fallback-text: "";
+    // Spoken name when `fallback-text` carries initials (not read aloud).
+    in property <string> alt-name: "";
     in property <length> size: Spacing.avatar-md;
     in property <bool> show-presence: false;
     in property <color> presence-color: Colors.offline;
@@ -28,6 +30,7 @@ export component Avatar inherits Rectangle {
 
     accessible-role: image;
     accessible-label: root.name != "" ? "Avatar for " + root.name
+        : root.alt-name != "" ? "Avatar for " + root.alt-name
         : root.fallback-text != "" && root.fallback-text != "?" ? "Avatar for " + root.fallback-text : "Avatar";
 
     width: size;

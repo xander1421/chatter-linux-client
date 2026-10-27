@@ -116,6 +116,7 @@ export component FriendsTab inherits VerticalLayout {
                             // renders this INSIDE the circle, so a
                             // display name clipped to "xande".
                             fallback-text: friend.initials;
+                            alt-name: friend.display-name;
                             show-presence: !friend.is-anon;
                             presence-color: friend.presence-status == "online" ? Colors.online
                             : friend.presence-status == "away" ? Colors.away

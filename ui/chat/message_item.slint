@@ -521,6 +521,7 @@ export component MessageItem inherits Rectangle {
                 anonymous: root.is-anonymous;
                 source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
+                alt-name: root.sender-name;
                 TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
