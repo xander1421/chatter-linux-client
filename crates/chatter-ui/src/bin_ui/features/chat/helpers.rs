@@ -245,7 +245,7 @@ fn refresh_reaction_snapshot(
             return;
         }
     };
-    edit_messages(window, |model| {
+    let apply = |model: &dyn Model<Data = crate::MessageItemData>| {
         for i in 0..model.row_count() {
             let Some(mut m) = model.row_data(i) else {
                 continue;
@@ -265,7 +265,10 @@ fn refresh_reaction_snapshot(
             ));
             model.set_row_data(i, m);
         }
-    });
+    };
+    edit_messages(window, |model| apply(model));
+    // The open thread panel keeps its own model; its replies react too.
+    apply(&window.global::<crate::ChatPane>().get_thread_replies());
 }
 
 /// Remove a message from the UI model by sender_id + timestamp_ns.
