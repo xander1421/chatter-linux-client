@@ -195,6 +195,11 @@ export component Sidebar inherits Rectangle {
     callback row-context-menu-opened(/* conversation-id */ string, /* kind */ ConversationKind);
     callback set-conversation-muted(/* conversation-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback archive-view-changed(bool);
+    // Unarchiving the last chat leaves nothing to show: go back to the list.
+    private property <int> archived-count: root.archived-rows.length;
+    changed archived-count => {
+        if root.archive-open && root.archived-count == 0 { root.archive-view-changed(false); }
+    }
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback move-section(/* section-id */ string, /* delta */ int);
