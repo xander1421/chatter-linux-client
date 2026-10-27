@@ -4,6 +4,8 @@ import { Materials } from "../theme/materials.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { SearchPane } from "../app_search_pane.slint";
+import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 
 component ShortcutRow inherits HorizontalLayout {
     in property <string> action;
@@ -100,11 +102,16 @@ export component KeyboardShortcutsDialog inherits Rectangle {
                     font-weight: Typography.semibold;
                 }
 
+                // The combo Appearance › Search shortcut leaves bound.
+                ShortcutRow {
+                    action: "Search";
+                    key: SearchPane.search-shortcut-pref == "k" ? "Ctrl + K"
+                        : SearchPane.search-shortcut-pref == "f" ? "Ctrl + F" : "Ctrl + K / Ctrl + F";
+                }
+                if JarvisGlobal.enabled: ShortcutRow { action: "Open AI chat"; key: "Ctrl + J"; }
                 for shortcut in [
-                    { key: "Ctrl + K / Ctrl + F", action: "Search" },
                     { key: "Ctrl + Shift + F", action: "Search in chat" },
                     { key: "Ctrl + ,", action: "Open settings" },
-                    { key: "Ctrl + J", action: "Open AI chat" },
                     { key: "Alt + ↓ / Ctrl + Tab", action: "Next chat" },
                     { key: "Alt + ↑ / Ctrl + Shift + Tab", action: "Previous chat" },
                     { key: "Ctrl + 0", action: "Saved messages" },
