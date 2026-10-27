@@ -1141,6 +1141,11 @@ async fn deliver_inner(
                 &reply_media,
                 &delivery_status,
             );
+            // The sender's copy is armed when it is stored: give the new
+            // bubble its timer glyph now rather than on the next load.
+            msg_item.disappearing = ui_ctx
+                .disappearing_message_ids(std::slice::from_ref(&msg_id))
+                .contains(msg_id.as_str());
             {
                 use slint::Model;
                 tracing::info!(
