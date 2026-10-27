@@ -39,6 +39,26 @@ export component ProfileInfoCard inherits HorizontalLayout {
             padding: Spacing.md;
             spacing: Spacing.md;
 
+            // Bio
+            if root.bio != "": VerticalLayout {
+                spacing: Spacing.xxs;
+
+                Text {
+                    text: root.bio;
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    wrap: word-wrap;
+                    max-height: Typography.base * 6;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: "About";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+            }
+
             // Username, with the QR behind a glyph on the row
             // rather than a permanently-open 150px image.
             // No row when the handle is unknown here — for a
@@ -187,26 +207,6 @@ export component ProfileInfoCard inherits HorizontalLayout {
                 view-safety-number => { root.view-safety-number(); }
                 toggle-verified => { root.toggle-verified(); }
             }
-
-            // Bio
-            if root.bio != "": VerticalLayout {
-                spacing: Spacing.xxs;
-
-                Text {
-                    text: root.bio;
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    wrap: word-wrap;
-                    max-height: Typography.base * 6;
-                    overflow: elide;
-                }
-
-                Text {
-                    text: "About";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                }
-            }
         }
-        }
+    }
 }
