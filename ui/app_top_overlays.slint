@@ -307,7 +307,7 @@ export component AppTopOverlays inherits Rectangle {
         preview-audio-elapsed: ChatPane.audio-elapsed;
         retry-clicked(id) => { ChatPane.message-clicked(id); }
         info-clicked(id) => { MessageInfo.open(id); }
-        can-thread: ChatPane.conversation-kind == ConversationKind.channel;
+        can-thread: ChatPane.conversation-kind == ConversationKind.channel && !root.context-menu-preview-from-thread;
 
         close => {
             ChatPane.context-menu-visible = false;
