@@ -29,7 +29,8 @@ pub(crate) fn snapshot() -> String {
         let mut modal = None;
         find_topmost_modal(&root, &mut modal);
         let mut nodes = Vec::new();
-        visit(modal.unwrap_or(root), -1, adapter.window.scale_factor(), &mut items, &mut nodes);
+        let mut hint = 0;
+        visit(modal.unwrap_or(root), -1, adapter.window.scale_factor(), &mut items, &mut hint, &mut nodes);
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     })
 }
@@ -57,10 +58,18 @@ fn visit(
     parent: i32,
     scale: f32,
     items: &mut Vec<i_slint_core::item_tree::ItemWeak>,
+    hint: &mut usize,
     nodes: &mut Vec<Value>,
 ) {
     let weak = item.downgrade();
-    let id = if let Some(id) = items.iter().position(|entry| *entry == weak) {
+    // `items` only grows (ids must stay stable for clicks), and a tree walks
+    // in the same order each snapshot: search on from the previous hit, so a
+    // long session's list is not rescanned from the start for every node.
+    let start = (*hint).min(items.len());
+    let found = items[start..].iter().position(|entry| *entry == weak).map(|i| start + i)
+        .or_else(|| items[..start].iter().position(|entry| *entry == weak));
+    let id = if let Some(id) = found {
+        *hint = id + 1;
         id as i32
     } else {
         let id = items.len() as i32;
@@ -99,7 +108,7 @@ fn visit(
         "visible": item.is_visible() && right > left && bottom > top,
     }));
     for child in accessible_descendents(&item) {
-        visit(child, id, scale, items, nodes);
+        visit(child, id, scale, items, hint, nodes);
     }
 }
 

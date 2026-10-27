@@ -22,6 +22,9 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   reachable. The Java provider's host node remains the tree root.
   Click dispatch also checks current modal membership, so a stale cached
   virtual-view ID cannot activate content behind a newly opened overlay.
+  `accessibility.rs` finds each item's stable id by searching on from the
+  previous hit (tree order repeats between snapshots) instead of from the
+  start of the ever-growing id list.
   The provider caches a snapshot for 100 ms from when it is READY, so the
   per-node calls of one query share it even when a snapshot takes longer.
   A node with zero width or height is reported not visible to the user:
