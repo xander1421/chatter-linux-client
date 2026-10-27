@@ -43,6 +43,12 @@ export component AppTopOverlays inherits Rectangle {
     in property <bool> is-mobile-platform;
     in property <string> presented-modal;
     in-out property <int> reply-focus-serial;
+    // A closing dialog takes keyboard focus with it, leaving shortcuts and
+    // typing dead until a click. Hand it back to the composer on desktop
+    // (on a phone that would raise the keyboard).
+    function refocus-composer() {
+        if !root.is-mobile-platform { root.reply-focus-serial += 1; }
+    }
     in property <length> safe-area-top;
     in property <bool> sidebar-menu-collapsed;
     in property <length> sidebar-menu-width;
@@ -370,8 +376,8 @@ export component AppTopOverlays inherits Rectangle {
     // empty and deletes the selection with its confirmed scope.
     if ChatPane.link-confirm-url != "": LinkConfirm {
         url: ChatPane.link-confirm-url;
-        cancelled => { ChatPane.link-confirm-url = ""; }
-        confirmed => { ChatPane.confirm-open-message-link(); }
+        cancelled => { ChatPane.link-confirm-url = ""; root.refocus-composer(); }
+        confirmed => { ChatPane.confirm-open-message-link(); root.refocus-composer(); }
     }
 
     if ChatPane.delete-confirm-count > 0: DeleteConfirm {
@@ -385,9 +391,10 @@ export component AppTopOverlays inherits Rectangle {
             ChatPane.delete-confirm-everyone = everyone;
             ChatPane.delete-choosing = false;
         }
-        cancelled => { ChatPane.delete-confirm-count = 0; }
+        cancelled => { ChatPane.delete-confirm-count = 0; root.refocus-composer(); }
         confirmed => {
             ChatPane.delete-confirm-count = 0;
+            root.refocus-composer();
             if ChatPane.delete-confirm-everyone {
                 if ChatPane.delete-confirm-sender == "" {
                     SelectionChrome.delete-everyone();
