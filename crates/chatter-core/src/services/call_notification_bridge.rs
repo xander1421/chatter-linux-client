@@ -120,17 +120,7 @@ async fn run_bridge(
                     }
                     None => std::future::pending::<()>().await,
                 }
-            } => {
-                // Keep ownership until native cancellation succeeds. A
-                // transient sink failure cannot be converted to an abort.
-                while !posted.is_empty() {
-                    posted.retain(|call| notifications.cancel_incoming_call(call).is_err());
-                    if !posted.is_empty() {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                }
-                break;
-            }
+            } => break,
             result = changes.changed() => {
                 if result.is_err() { break; }
                 changes.borrow_and_update();
@@ -140,6 +130,14 @@ async fn run_bridge(
             result = rx.recv() => {
                 if !recover_event(result, &state, &notifications, &mut posted) { break; }
             }
+        }
+    }
+    // Every exit path owns its posts until native dismissal succeeds. The
+    // event stream can close before the session teardown asks us to stop.
+    while !posted.is_empty() {
+        posted.retain(|call| notifications.cancel_incoming_call(call).is_err());
+        if !posted.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 }
@@ -399,6 +397,58 @@ mod tests {
         assert_eq!(
             *log.0.lock(),
             ["show startup-spawned", "cancel startup-spawned"]
+        );
+        worker.shutdown();
+    }
+
+    #[tokio::test]
+    async fn closed_worker_drains_the_ring_it_posted() {
+        let worker = worker();
+        present(&worker, "closing").await;
+        let log = Arc::new(Log::default());
+        let bridge = spawn_session_call_notification_bridge(
+            worker.clone(),
+            Arc::new(NotificationService::new(log.clone())),
+        );
+        wait_for(&log, "show closing").await;
+        worker.shutdown();
+        drop(worker);
+        assert!(bridge.wait_drained().await);
+        assert_eq!(*log.0.lock(), ["show closing", "cancel closing"]);
+    }
+
+    #[tokio::test]
+    async fn group_join_and_withdrawal_cancel_their_exact_notifications() {
+        let worker = worker();
+        let log = Arc::new(Log::default());
+        let bridge = spawn_session_call_notification_bridge(
+            worker.clone(),
+            Arc::new(NotificationService::new(log.clone())),
+        );
+        present(&worker, "joined").await;
+        wait_for(&log, "show joined").await;
+        worker.orch_mark_connected(
+            CallHandle::from("joined"),
+            OrchestratedCallKind::GroupChannel,
+            UserId::new(),
+            false,
+        );
+        worker.incoming_presentation_snapshot().await.unwrap();
+        wait_for(&log, "cancel joined").await;
+        present(&worker, "withdrawn").await;
+        wait_for(&log, "show withdrawn").await;
+        worker
+            .orch_withdraw_incoming_reliably(
+                CallHandle::from("withdrawn"),
+                CallEndReason::RemoteHangup,
+            )
+            .await
+            .unwrap();
+        wait_for(&log, "cancel withdrawn").await;
+        assert!(bridge.stop().await);
+        assert_eq!(
+            *log.0.lock(),
+            ["show joined", "cancel joined", "show withdrawn", "cancel withdrawn"]
         );
         worker.shutdown();
     }

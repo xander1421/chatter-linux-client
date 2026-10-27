@@ -241,6 +241,7 @@ class MainActivity : GameActivity() {
         // FindClass for the bundled livekit.org.webrtc classes resolves via the
         // app classloader. Doing this from Rust's native thread fails.
         nativeInitWebrtc()
+        dispatchCallNotification(intent)
     }
 
     override fun onDestroy() {
@@ -425,14 +426,18 @@ class MainActivity : GameActivity() {
      * The incoming-call notification's Accept button is an activity PendingIntent
      * (a broadcast receiver can't reliably foreground on Android 14+). When it
      * fires while we're already running, onNewIntent delivers it here; route the
-     * accept into Rust, which runs the in-app accept flow. Cold-start (process
-     * was killed) lands in onCreate before the native window exists — there the
-     * full-screen intent just shows the ring screen for an in-app accept.
+     * accept into Rust, which runs the in-app accept flow. Activity recreation
+     * lands in onCreate before the native window exists, so Rust queues the
+     * authenticated action until that window is registered.
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         dispatchMessageNotification(intent)
+        dispatchCallNotification(intent)
+    }
+
+    private fun dispatchCallNotification(intent: Intent) {
         // Public launcher intents are untrusted. The action is routing only;
         // the native boundary authenticates and consumes the random capability
         // before notification cancellation or any call/UI effects.
