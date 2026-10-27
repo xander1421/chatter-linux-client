@@ -326,6 +326,7 @@ export component AppSecondaryModals inherits Rectangle {
     if root.is-presented("pinned-messages"): PinnedMessagesModal {
         show-modal: root.active-modal == "pinned-messages";
         items: ChatPane.pinned-items;
+        touch: root.is-mobile-platform;
         close => { ModalHostState.nav-close("pinned-messages"); }
         selected(message-id) => { ChatPane.pinned-item-selected(message-id); }
     }

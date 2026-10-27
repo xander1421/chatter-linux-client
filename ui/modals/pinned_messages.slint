@@ -17,6 +17,7 @@ export struct PinnedItem {
 export component PinnedMessagesModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <[PinnedItem]> items: [];
+    in property <bool> touch: false;
     callback close();
     callback selected(string);
     Modal {
@@ -51,7 +52,7 @@ export component PinnedMessagesModal inherits Rectangle {
                     }
                     Text {
                         width: 100%;
-                        text: "Long-press a message and choose Pin";
+                        text: (root.touch ? "Long-press" : "Right-click") + " a message and choose Pin";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-alignment: center;
