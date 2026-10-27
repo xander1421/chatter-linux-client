@@ -122,6 +122,8 @@ export component NotificationsSettings inherits VerticalLayout {
                 background: detail-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
                 accessible-action-default => {
                     root.notification-detail = opt.key;
                     root.notification-detail-changed(opt.key);

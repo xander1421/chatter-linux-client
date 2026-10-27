@@ -85,6 +85,8 @@ export component PrivacySettings inherits VerticalLayout {
                 background: visibility-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
                 accessible-action-default => {
                     if !root.profile-visibility-busy { root.profile-visibility-selected(opt.key); }
                 }
@@ -268,6 +270,8 @@ export component PrivacySettings inherits VerticalLayout {
                 background: username-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
                 accessible-action-default => {
                     if !selected {
                         root.username-discoverable = opt.discoverable;
