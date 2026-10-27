@@ -35,6 +35,7 @@ export component MessageAttachments inherits VerticalLayout {
     in property <string> failure-reason;
     in property <bool> is-own;
     in property <bool> is-edited;
+    in property <bool> disappearing;
     in property <bool> is-pinned;
     in property <bool> mesh-delivery;
     callback begin-swipe(length, length);
@@ -159,7 +160,7 @@ export component MessageAttachments inherits VerticalLayout {
                 width: self.preferred-width; height: self.preferred-height;
                 has-reactions: false; overlay-media: true;
                 delivery-status: root.delivery-status; failure-reason: root.failure-reason;
-                is-edited: root.is-edited; is-own: root.is-own;
+                is-edited: root.is-edited; is-own: root.is-own; disappearing: root.disappearing;
                 is-pinned: root.is-pinned; mesh-delivery: root.mesh-delivery;
                 message-id: root.message-id; mobile: root.mobile;
                 sender-id: root.sender-id; timestamp: root.timestamp;
@@ -326,6 +327,7 @@ export component MessageAttachments inherits VerticalLayout {
                     delivery-status: root.delivery-status;
                     failure-reason: root.failure-reason;
                     is-edited: root.is-edited;
+                    disappearing: root.disappearing;
                     is-own: root.is-own;
                     is-pinned: root.is-pinned;
                     mesh-delivery: root.mesh-delivery;

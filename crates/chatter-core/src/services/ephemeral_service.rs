@@ -42,6 +42,11 @@ pub struct EphemeralService {
 }
 
 impl EphemeralService {
+    /// Which of the given message ids will disappear (Signal's timer glyph).
+    pub fn disappearing_among(&self, ids: &[String]) -> std::collections::HashSet<String> {
+        self.ephemeral_repo.disappearing_among(ids).unwrap_or_default()
+    }
+
     /// Create a new EphemeralService with dependencies.
     pub fn new(
         settings_repo: Arc<SettingsRepository>,

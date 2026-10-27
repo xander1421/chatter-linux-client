@@ -382,7 +382,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 tracing::info!(kind = "secret_dm", stage = "page_loaded", rows = messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
             read_handle.send_read_receipts_for_page(&messages);
 
-                let display_messages = messages_to_display_batch_deferred(
+                let mut display_messages = messages_to_display_batch_deferred(
                     &messages,
                     |ms| ui_ctx.message_sender_display_names(ms),
                     |m| ui_ctx.message_sender_avatar(m),
@@ -392,6 +392,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     |m| ui_ctx.reply_parent_media(m),
                     |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
                 );
+                crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
 
                 let initial_count = display_messages.len();
                 tracing::info!(kind = "secret_dm", stage = "display_built", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
@@ -494,7 +495,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let status_str = ui_ctx.peer_presence(&peer_id).as_str();
 
-            let display_messages = messages_to_display_batch_deferred(
+            let mut display_messages = messages_to_display_batch_deferred(
                 &messages,
                 |ms| ui_ctx.message_sender_display_names(ms),
                 |m| ui_ctx.message_sender_avatar(m),
@@ -504,6 +505,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |m| ui_ctx.reply_parent_media(m),
                 |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
             );
+            crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
             tracing::info!(kind = "dm", stage = "display_built", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
             if !owner.is_current() { return; }

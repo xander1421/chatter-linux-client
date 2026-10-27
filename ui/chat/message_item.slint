@@ -47,6 +47,7 @@ export component MessageItem inherits Rectangle {
     // Flags
     in property <bool> is-own: false;
     in property <bool> is-edited: false;
+    in property <bool> disappearing: false;
     in property <bool> is-deleted: false;
     in property <bool> is-system: false;
     in property <bool> is-ai: false;
@@ -850,6 +851,7 @@ export component MessageItem inherits Rectangle {
                             failure-reason: root.failure-reason;
                             is-own: root.is-own;
                             is-edited: root.is-edited;
+                            disappearing: root.disappearing;
                             is-pinned: root.is-pinned;
                             mesh-delivery: root.mesh-delivery;
                             audio-elapsed: root.audio-elapsed;
@@ -922,6 +924,7 @@ export component MessageItem inherits Rectangle {
                             failure-reason: root.failure-reason;
                             has-reactions: root.has-reactions;
                             is-edited: root.is-edited;
+                            disappearing: root.disappearing;
                             is-own: root.is-own;
                             is-pinned: root.is-pinned;
                             mesh-delivery: root.mesh-delivery;

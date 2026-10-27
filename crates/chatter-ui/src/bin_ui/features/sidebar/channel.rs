@@ -411,6 +411,7 @@ pub(crate) async fn load_channel_into_ui_owned(
         |m| ui_ctx.reply_parent_media(m),
         |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
     );
+    crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
     crate::bin_ui::converters::apply_reply_counts(
         &mut display_messages,
         &ui_ctx.thread_reply_counts(&channel_id, &conv_type),

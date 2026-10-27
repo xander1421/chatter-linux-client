@@ -98,6 +98,8 @@ pub struct MessageDisplayData {
     /// Local day chip for this message.
     pub day_label: String,
     pub is_edited: bool,
+    /// A disappearing message (core's ephemeral store), for the footer glyph.
+    pub disappearing: bool,
     pub is_deleted: bool,
     pub is_system: bool,
     pub is_ai: bool,
@@ -295,6 +297,7 @@ impl MessageDisplayData {
             timestamp_ns: self.timestamp_ns.clone().into(),
             is_own,
             is_edited: self.is_edited,
+            disappearing: self.disappearing,
             is_deleted: self.is_deleted,
             is_system: self.is_system,
             is_ai: self.is_ai,
@@ -356,6 +359,15 @@ impl MessageDisplayData {
 ///
 /// If `resolved_attachments` is provided, attachment details will be included.
 /// If `reply_count` is provided, it will be used; otherwise defaults to 0.
+/// Flag the rows core will make disappear, in one store query per page.
+pub fn mark_disappearing(client: &chatter_core::client::ChatterClient, rows: &mut [MessageDisplayData]) {
+    let ids: Vec<String> = rows.iter().map(|r| r.message_id.clone()).collect();
+    let disappearing = client.disappearing_message_ids(&ids);
+    for row in rows {
+        row.disappearing = disappearing.contains(&row.message_id);
+    }
+}
+
 pub fn message_to_display_data(
     msg: &Message,
     sender_name: &str,
@@ -448,6 +460,7 @@ pub fn message_to_display_data_with_replies(
         timestamp_ns: msg.sent_at.to_string(),
         day_label: crate::bin_ui::converters::day_label(msg.created_at),
         is_edited: msg.is_edited,
+        disappearing: false, // Marked per page by `mark_disappearing`.
         is_deleted: msg.is_deleted,
         is_system,
         is_ai: msg.targets_ai_bot,

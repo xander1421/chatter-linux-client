@@ -71,6 +71,8 @@ export struct MessageItemData {
     timestamp-ns: string,  // Nanosecond timestamp as string for event matching (reactions, edits, pins)
     is-own: bool,
     is-edited: bool,
+    // Will disappear (a timer was on when it was sent): Signal's timer glyph.
+    disappearing: bool,
     is-deleted: bool,
     is-system: bool,
     is-ai: bool,

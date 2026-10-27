@@ -76,6 +76,7 @@ pub(super) fn handle_message_received(
         sender_avatar.map(std::sync::Arc::<[u8]>::from),
     );
     display_data.mention_members = ui_ctx.mention_members(&message.conversation_type, &message.conversation_id);
+    crate::bin_ui::converters::mark_disappearing(&ui_ctx, std::slice::from_mut(&mut display_data));
 
     // Reply metadata — mirror the reload batch so a LIVE-received reply shows the
     // quote thumbnail/player immediately instead of a text label until reload.

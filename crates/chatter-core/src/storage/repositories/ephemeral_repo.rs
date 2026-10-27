@@ -136,6 +136,27 @@ impl EphemeralRepository {
     /// List all expired messages (countdown_started=1 AND expires_at < now).
     ///
     /// Returns message IDs that should be deleted.
+    /// Which of `ids` are disappearing messages (armed or awaiting their read).
+    pub fn disappearing_among(&self, ids: &[String]) -> Result<std::collections::HashSet<String>, StorageError> {
+        let mut found = std::collections::HashSet::new();
+        if ids.is_empty() {
+            return Ok(found);
+        }
+        let conn = self.db.read_connection()?;
+        // SQLite's default parameter limit is well above a message page.
+        for chunk in ids.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT message_id FROM ephemeral_messages WHERE message_id IN ({marks})"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| row.get::<_, String>(0))?;
+            for id in rows {
+                found.insert(id?);
+            }
+        }
+        Ok(found)
+    }
+
     pub fn list_expired(&self) -> Result<Vec<MessageId>, StorageError> {
         let conn = self.db.read_connection()?;
         let now = Utc::now().to_rfc3339();

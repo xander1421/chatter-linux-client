@@ -12,6 +12,7 @@ export component MessageFooter inherits HorizontalLayout {
     in property <string> failure-reason;
     in property <bool> has-reactions;
     in property <bool> is-edited;
+    in property <bool> disappearing;
     in property <bool> is-own;
     in property <bool> is-pinned;
     in property <bool> mesh-delivery;
@@ -115,6 +116,15 @@ export component MessageFooter inherits HorizontalLayout {
                 width: 12px;
                 height: 12px;
                 colorize: root.overlay-media ? #ffffff : Colors.primary;
+            }
+
+            if root.disappearing: Image {
+                source: Icons.clock;
+                width: 11px;
+                height: 11px;
+                colorize: root.overlay-media ? #ffffff : Colors.text-muted;
+                accessible-role: text;
+                accessible-label: "Disappearing message";
             }
 
             // "edited" before the time on both sides (Signal's order).

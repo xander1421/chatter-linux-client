@@ -821,6 +821,11 @@ impl ChatterClient {
             .await
     }
 
+    /// Which of these message ids will disappear (the footer's timer glyph).
+    pub fn disappearing_message_ids(&self, ids: &[String]) -> std::collections::HashSet<String> {
+        self.services.ephemeral_service.disappearing_among(ids)
+    }
+
     pub fn disappearing_state(
         self: &Arc<Self>,
         conv: ActiveConversation,
