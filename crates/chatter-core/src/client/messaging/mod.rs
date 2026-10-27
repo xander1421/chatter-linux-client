@@ -36,7 +36,7 @@ pub(crate) fn plain_sidebar_preview(input: &str) -> String {
             i += 1;
             continue;
         }
-        if matches!(marker, '*' | '_' | '`') {
+        if matches!(marker, '*' | '_' | '`' | '~') {
             let start = i;
             while i < chars.len() && chars[i] == marker {
                 i += 1;
@@ -44,7 +44,9 @@ pub(crate) fn plain_sidebar_preview(input: &str) -> String {
             let width = i - start;
             let standalone = (start == 0 || chars[start - 1].is_whitespace())
                 && (i == chars.len() || chars[i].is_whitespace());
-            if standalone && ((marker == '`' && width >= 3) || (marker != '`' && width >= 2)) {
+            if standalone
+                && ((marker == '`' && width >= 3) || (matches!(marker, '*' | '_') && width >= 2))
+            {
                 for index in start..i {
                     remove[index] = true;
                 }
@@ -55,7 +57,9 @@ pub(crate) fn plain_sidebar_preview(input: &str) -> String {
                     && chars[start - 1] != '/'
                     && chars[start - 1] != '\\');
             let content_follows = i < chars.len() && !chars[i].is_whitespace();
-            if left_boundary && content_follows {
+            // Strikethrough is only ever `~~`, as the bubble renders it; a
+            // lone `~` ("~5 min") is text.
+            if left_boundary && content_follows && (marker != '~' || width == 2) {
                 let mut end = i + 1;
                 while end + width <= chars.len() {
                     if chars[end..end + width].iter().all(|c| *c == marker)
@@ -115,6 +119,14 @@ mod sidebar_preview_tests {
         assert_eq!(
             plain_sidebar_preview("  You: **hello**\n```\n> _world_  `again`\n```  "),
             "You: hello world again"
+        );
+    }
+
+    #[test]
+    fn strikethrough_pairs_strip_but_lone_tildes_stay() {
+        assert_eq!(
+            plain_sidebar_preview("You: ~~gone~~ in ~5 min"),
+            "You: gone in ~5 min"
         );
     }
 
