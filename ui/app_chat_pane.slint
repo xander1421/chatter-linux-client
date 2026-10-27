@@ -69,6 +69,9 @@ export global ChatPane {
     in property <string> composer-notice: "";
     in property <bool> is-blocked: false;
     callback unblock-clicked();
+    // A public channel we left: the read-only footer offers Join.
+    in property <bool> can-rejoin: false;
+    callback rejoin-clicked();
     // A channel we are no longer in (core's `is_former_channel`): read-only.
     in property <bool> conversation-read-only: false;
     in-out property <bool> header-can-call: false;

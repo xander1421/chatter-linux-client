@@ -339,6 +339,7 @@ fn set_send_notice(
         return;
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
+    let can_rejoin = ui_ctx.can_rejoin_channel(&channel_id);
     let blocked = ui_ctx.blocked_dm_peer(ui_ctx.active_conversation()).is_some();
     let notice = if blocked { "You blocked this person.".to_string() } else { notice };
     // A role change (`ChannelMemberUpdated`) lands here too, so the header's
@@ -358,6 +359,7 @@ fn set_send_notice(
             w.global::<crate::ChatPane>()
                 .set_composer_notice(notice.into());
             w.global::<crate::ChatPane>().set_is_blocked(blocked);
+            w.global::<crate::ChatPane>().set_can_rejoin(can_rejoin);
             w.global::<crate::ChatPane>()
                 .set_secret_request_actions(answer);
             w.global::<crate::ChatPane>()
@@ -435,6 +437,27 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.global::<crate::ModalHostState>().set_profile_is_blocked(false);
                 }
             });
+        });
+    });
+    let rejoin_ctx = ui_ctx.clone();
+    let rejoin_weak = window.as_weak();
+    window.global::<crate::ChatPane>().on_rejoin_clicked(move || {
+        let Some(channel) = rejoin_ctx.chat_snapshot().active_channel_id else { return };
+        let ctx = rejoin_ctx.clone();
+        let weak = rejoin_weak.clone();
+        tokio::spawn(async move {
+            if let Err(error) = ctx.join_channel(&channel, None).await {
+                tracing::warn!(%error, "rejoin from chat failed");
+                let message = error.user_message();
+                crate::run_ui!(weak, |w| {
+                    w.set_toast_message(message.into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                });
+                return;
+            }
+            refresh_send_notice(&weak, &ctx, channel);
+            crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ctx);
         });
     });
     let chat_state = ui_ctx.clone();

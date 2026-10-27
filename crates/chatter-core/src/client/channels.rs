@@ -366,6 +366,17 @@ impl ChatterClient {
     /// "Delete chat" (a live channel is left, not deleted — a membership
     /// outlives a local delete, the next sync brings it back) and it is no
     /// forward destination.
+    /// Whether a channel we are no longer in may be joined again from its
+    /// chat: a public channel that still exists (Telegram's "Join" bar). The
+    /// server still decides — a ban refuses the join.
+    pub fn can_rejoin_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        self.is_former_channel(channel_id)
+            && self.former_channel_state(channel_id) == Some(false)
+            && self.get_channel_local(channel_id).is_some_and(|c| {
+                c.channel_type == crate::domain::channel::ChannelType::Public
+            })
+    }
+
     pub fn is_former_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
         let Some(me) = self.session_current_user_id() else {
             return false;

@@ -191,6 +191,8 @@ export component ChatLayout inherits Rectangle {
     in property <string> composer-notice: "";
     in property <bool> is-blocked: false;
     callback unblock-clicked();
+    in property <bool> can-rejoin: false;
+    callback rejoin-clicked();
     in property <bool> conversation-read-only: false;
     in property <bool> header-can-call: false;
     in property <string> active-channel-call-id: "";
@@ -621,7 +623,7 @@ export component ChatLayout inherits Rectangle {
                         text: root.composer-notice;
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
-                        horizontal-alignment: root.is-blocked ? left : center;
+                        horizontal-alignment: root.is-blocked || root.can-rejoin ? left : center;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                         wrap: word-wrap;
@@ -630,6 +632,11 @@ export component ChatLayout inherits Rectangle {
                         text: "Unblock";
                         variant: "secondary";
                         clicked => { root.unblock-clicked(); }
+                    }
+                    if root.can-rejoin: Button {
+                        text: "Join";
+                        variant: "primary";
+                        clicked => { root.rejoin-clicked(); }
                     }
                 }
 
