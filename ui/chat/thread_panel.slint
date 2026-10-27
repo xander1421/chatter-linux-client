@@ -31,9 +31,13 @@ export component ThreadPanel inherits Rectangle {
     property <float> panel-progress: 0;
     animate panel-progress { duration: Materials.motion-standard; easing: Materials.glide; }
     init => { if (Appearance.reduce-motion && root.visible) { root.panel-progress = 1; } }
+    // Desktop: Reply in thread goes straight to typing, as Slack/Discord.
+    // Touch keeps the keyboard down until the field is tapped.
+    in property <bool> touch: false;
     changed visible => {
         root.entered = false;
         root.panel-progress = Appearance.reduce-motion && root.visible ? 1 : 0;
+        if root.visible && !root.touch { composer.focus-reply-input(); }
     }
     // The app keeps this panel mounted while hidden. A visibility binding can
     // settle after initialization, so clear a premature entrance before the

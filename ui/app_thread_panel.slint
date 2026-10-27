@@ -19,6 +19,7 @@ export component AppThreadPanel inherits Rectangle {
     in property <bool> is-small-screen;
     // Same rule as the main composer (app_conversation_layout.slint).
     in property <bool> composer-enter-sends: true;
+    in property <bool> touch;
     in property <bool> keyboard-open;
     in-out property <int> reply-focus-serial;
     in-out property <length> viewer-origin-width;
@@ -31,6 +32,7 @@ export component AppThreadPanel inherits Rectangle {
         // dismisses with a back chevron rather than an X.
         mobile: root.is-small-screen;
         composer-enter-sends: root.composer-enter-sends;
+        touch: root.touch;
         root-message-id: ChatPane.thread-root-message-id;
         root-sender-name: ChatPane.thread-root-sender-name;
         root-content-preview: ChatPane.thread-root-content-preview;

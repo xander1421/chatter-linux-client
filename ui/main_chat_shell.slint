@@ -439,6 +439,7 @@ export component MainChatShell inherits Rectangle {
             AppThreadPanel {
                 visible: ChatPane.thread-panel-visible;
                 composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
+                touch: root.is-mobile-platform;
                 x: parent.width - self.width;
                 y: 0;
                 width: chat-panel-area.thread-panel-w;
