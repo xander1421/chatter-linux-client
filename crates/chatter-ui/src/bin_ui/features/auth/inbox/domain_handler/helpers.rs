@@ -137,43 +137,46 @@ pub(super) fn handle_pin_ui_update(
             (!unpin, String::new())
         };
         let message_id_str = message_id.to_string();
-        let messages = w.global::<crate::ChatPane>().get_messages();
+        let pane = w.global::<crate::ChatPane>();
 
-        // Find the bubble, update is_pinned, generate preview
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                let hit = if saved {
-                    msg.message_id.as_str() == message_id_str.as_str()
-                } else {
-                    msg.timestamp_ns.as_str() == target_ts_str.as_str()
-                };
-                if hit {
-                    if !saved {
-                        preview = super::super::utils::generate_preview_from_ui_message(&msg);
-                    }
-
-                    let mut updated_msg = msg.clone();
-                    updated_msg.is_pinned = new_pinned;
-                    if let Some(model) = messages
-                        .as_any()
-                        .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
-                    {
-                        model.set_row_data(i, updated_msg);
-                    }
-
-                    // Update pinned-bar substate with the real message_id from the UI model
-                    if let Ok(msg_id) = msg
-                        .message_id
-                        .to_string()
-                        .parse::<chatter_core::domain::ids::MessageId>()
-                    {
-                        if new_pinned {
-                            chat_state.add_pinned_message(msg_id);
-                        } else {
-                            chat_state.remove_pinned_message(&msg_id);
+        // Find the bubble, update is_pinned, generate preview. The open
+        // thread panel keeps its own model; a pinned reply lives there.
+        'found: for messages in [pane.get_messages(), pane.get_thread_replies()] {
+            for i in 0..messages.row_count() {
+                if let Some(msg) = messages.row_data(i) {
+                    let hit = if saved {
+                        msg.message_id.as_str() == message_id_str.as_str()
+                    } else {
+                        msg.timestamp_ns.as_str() == target_ts_str.as_str()
+                    };
+                    if hit {
+                        if !saved {
+                            preview = super::super::utils::generate_preview_from_ui_message(&msg);
                         }
+
+                        let mut updated_msg = msg.clone();
+                        updated_msg.is_pinned = new_pinned;
+                        if let Some(model) = messages
+                            .as_any()
+                            .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+                        {
+                            model.set_row_data(i, updated_msg);
+                        }
+
+                        // Update pinned-bar substate with the real message_id from the UI model
+                        if let Ok(msg_id) = msg
+                            .message_id
+                            .to_string()
+                            .parse::<chatter_core::domain::ids::MessageId>()
+                        {
+                            if new_pinned {
+                                chat_state.add_pinned_message(msg_id);
+                            } else {
+                                chat_state.remove_pinned_message(&msg_id);
+                            }
+                        }
+                        break 'found;
                     }
-                    break;
                 }
             }
         }

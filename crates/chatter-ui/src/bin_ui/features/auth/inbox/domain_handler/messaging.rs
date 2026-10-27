@@ -402,29 +402,32 @@ fn end_bootstrap_placeholder(w: &MainWindow) {
 /// Set the status of our own bubbles sent at `timestamps` (`timestamp_ns`) in
 /// the open message list. Core has already stored the same status.
 pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
-    let messages = w.global::<crate::ChatPane>().get_messages();
-    let Some(model) = messages
-        .as_any()
-        .downcast_ref::<VecModel<MessageItemData>>()
-    else {
-        return;
-    };
-    for i in 0..model.row_count() {
-        let Some(mut msg) = model.row_data(i) else {
+    let pane = w.global::<crate::ChatPane>();
+    // The open thread panel keeps its own model; its replies have a status too.
+    for messages in [pane.get_messages(), pane.get_thread_replies()] {
+        let Some(model) = messages
+            .as_any()
+            .downcast_ref::<VecModel<MessageItemData>>()
+        else {
             continue;
         };
-        if msg.is_own
-            && msg
-                .timestamp_ns
-                .parse::<u64>()
-                .is_ok_and(|ts| timestamps.contains(&ts))
-        {
-            msg.delivery_status = chatter_core::services::message::advance_delivery_status(
-                msg.delivery_status.as_str(),
-                status,
-            )
-            .into();
-            model.set_row_data(i, msg);
+        for i in 0..model.row_count() {
+            let Some(mut msg) = model.row_data(i) else {
+                continue;
+            };
+            if msg.is_own
+                && msg
+                    .timestamp_ns
+                    .parse::<u64>()
+                    .is_ok_and(|ts| timestamps.contains(&ts))
+            {
+                msg.delivery_status = chatter_core::services::message::advance_delivery_status(
+                    msg.delivery_status.as_str(),
+                    status,
+                )
+                .into();
+                model.set_row_data(i, msg);
+            }
         }
     }
 }
