@@ -321,6 +321,28 @@ fn parse_inline(text: &str) -> Vec<MarkdownSpan> {
             }
         }
 
+        // _ italic _ — only at word edges, so snake_case stays text
+        // (CommonMark's intraword rule; Signal and Telegram read _x_ too).
+        if chars[i] == '_' && (i == 0 || !chars[i - 1].is_alphanumeric()) {
+            if let Some(end) = find_closing_single(&chars, i + 1, '_') {
+                let edges_ok = end > i + 1
+                    && !chars[i + 1].is_whitespace()
+                    && !chars[end - 1].is_whitespace()
+                    && (end + 1 >= len || !chars[end + 1].is_alphanumeric());
+                if edges_ok {
+                    flush_normal(&mut current, &mut spans);
+                    let inner: String = chars[i + 1..end].iter().collect();
+                    spans.push(MarkdownSpan {
+                        text: inner,
+                        italic: true,
+                        ..Default::default()
+                    });
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+
         // ` inline code `
         if chars[i] == '`' {
             if let Some(end) = find_closing_single(&chars, i + 1, '`') {
@@ -423,10 +445,19 @@ mod tests {
     }
 
     #[test]
+    fn snake_case_is_not_italic() {
+        assert_eq!(
+            one_paragraph("call some_fn_name now"),
+            ("call some_fn_name now".into(), vec![])
+        );
+    }
+
+    #[test]
     fn each_marker_maps_to_its_style() {
         for (input, style) in [
             ("**hello world**", Style::Strong),
             ("*hello world*", Style::Emphasis),
+            ("_hello world_", Style::Emphasis),
             ("~~hello world~~", Style::Strikethrough),
             ("`hello world`", Style::Code),
         ] {
