@@ -546,6 +546,7 @@ impl ChatterClient {
         url: &str,
     ) -> Result<Channel, ChannelError> {
         let channel = self.channels().join_via_link(url).await?;
+        self.services.channel_event_service.record_own_join(&channel.id);
         self.resubscribe_channel_messages();
         if let Err(e) = self
             .messages()

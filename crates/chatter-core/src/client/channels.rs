@@ -230,6 +230,7 @@ impl ChatterClient {
         password: Option<&str>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let channel = self.channels().join_channel(channel_id, password).await?;
+        self.services.channel_event_service.record_own_join(channel_id);
         self.resubscribe_channel_messages();
 
         // Pull SKDMs from existing members so we can decrypt their next

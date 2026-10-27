@@ -427,6 +427,22 @@ impl ChannelEventService {
         }
     }
 
+    /// File "You joined the channel" after our own join succeeded. This device
+    /// subscribes to the channel only after joining, so it misses the server's
+    /// broadcast, and the first roster sync backfills without announcing.
+    /// Keyed on the server's `joined_at`, as a roster-found join is.
+    pub fn record_own_join(&self, channel_id: &ChannelId) {
+        let membership = self
+            .settings_repo
+            .current_user_id()
+            .ok()
+            .and_then(|me| self.channel_repo.get_membership(channel_id, &me).ok().flatten());
+        match membership {
+            Some(membership) => self.publish_member_joined(&membership, membership_ts(&membership)),
+            None => tracing::warn!(%channel_id, "No own membership; join notice not filed"),
+        }
+    }
+
     /// File "You left the channel" after our own leave succeeded. The server
     /// only broadcasts the departure to the members who remain, so this
     /// device never hears it on the event stream.
