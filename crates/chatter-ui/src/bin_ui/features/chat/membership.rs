@@ -149,7 +149,7 @@ fn run_action<F>(
                     }
                     g.set_access_status(done.into());
                 }
-                Err(e) => g.set_access_status(format!("Failed: {e}").into()),
+                Err(e) => g.set_access_status(e.user_message().into()),
             }
             apply_access(&w, &view);
             if on_screen {

@@ -117,7 +117,10 @@ fn finish_icon_request(
                     Err(error) => w
                         .global::<crate::ModalHostState>()
                         .set_channel_settings_error(
-                            format!("Couldn't open channel icon: {error}").into(),
+                            {
+                    tracing::warn!(%error, "channel icon could not be opened");
+                    "Couldn't open that image. Try another one.".into()
+                },
                         ),
                 }
             }
@@ -130,7 +133,10 @@ fn finish_icon_request(
             }
             Err(error) => w
                 .global::<crate::ModalHostState>()
-                .set_channel_settings_error(format!("Couldn't open channel icon: {error}").into()),
+                .set_channel_settings_error({
+                    tracing::warn!(%error, "channel icon could not be opened");
+                    "Couldn't open that image. Try another one.".into()
+                }),
         }
     });
 }

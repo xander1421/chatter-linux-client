@@ -244,7 +244,7 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Err(e) => {
                         tracing::warn!(error = %e, "profile visibility change failed");
                         w.global::<crate::SettingsPane>()
-                            .set_settings_profile_visibility_error(e.to_string().into());
+                            .set_settings_profile_visibility_error(e.user_message().into());
                     }
                 }
             });
@@ -285,7 +285,7 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.global::<crate::SettingsPane>()
-                                    .set_settings_profile_visibility_error(e.to_string().into());
+                                    .set_settings_profile_visibility_error(e.user_message().into());
                             }
                         });
                     }

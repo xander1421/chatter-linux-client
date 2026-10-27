@@ -97,7 +97,7 @@ pub(super) fn wire_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                             Err(e) => w
                                 .global::<crate::SettingsPane>()
-                                .set_settings_backup_retry_error(e.to_string().into()),
+                                .set_settings_backup_retry_error(e.user_message().into()),
                         }
                     }
                 });

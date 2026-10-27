@@ -390,6 +390,20 @@ impl From<ClientError> for StartupError {
 }
 
 impl ClientError {
+    /// Text for a settings or dialog error line; the Display form is for logs.
+    /// Validation and recovery messages are already written for people.
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Validation(_) | Self::IdentityRecoveryRequired(_) | Self::CallEnded => {
+                self.to_string()
+            }
+            Self::Connection(_) | Self::NotConnected => {
+                "Couldn't reach the server. Try again.".to_string()
+            }
+            _ => "Something went wrong. Try again.".to_string(),
+        }
+    }
+
     /// Whether a message-history backup requires a newer app to restore.
     pub fn is_unsupported_backup(&self) -> bool {
         matches!(
