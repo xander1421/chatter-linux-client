@@ -44,7 +44,11 @@ export global Spacing {
     // Component sizes
     out property <length> avatar-sm: 32px;
     out property <length> avatar-md: 40px;
-    out property <length> sidebar-width: 240px;
+    // A wide window (a tablet, a maximised desktop) gives the chat list the
+    // ~320px Signal and Telegram use; at 240px a tablet elided "Ops 263d".
+    // app.slint sets `wide-window` from the window width.
+    in-out property <bool> wide-window: false;
+    out property <length> sidebar-width: root.wide-window ? 320px : 240px;
     out property <length> sidebar-width-collapsed: 60px;
     // Touch icon rail: a 44px slot with 12px gutters either side. The 60px
     // desktop rail leaves a 44px slot only 8px of breathing room, which reads
