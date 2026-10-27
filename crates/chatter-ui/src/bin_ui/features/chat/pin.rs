@@ -92,9 +92,11 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let (is_currently_pinned, preview_text, msg_id_str) = weak_window
                 .upgrade()
                 .map(|w| {
-                    let model = w.global::<crate::ChatPane>().get_messages();
-                    for i in 0..model.row_count() {
-                        if let Some(m) = model.row_data(i) {
+                    // The thread panel's rows are pinnable too and live in
+                    // their own model.
+                    let pane = w.global::<crate::ChatPane>();
+                    for model in [pane.get_messages(), pane.get_thread_replies()] {
+                        for m in model.iter() {
                             if m.sender_id.as_str() == sender_id_str.as_str()
                                 && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
                             {
@@ -223,6 +225,15 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                         }
                     });
+                    let thread_rows = w.global::<crate::ChatPane>().get_thread_replies();
+                    for i in 0..thread_rows.row_count() {
+                        if let Some(mut m) = thread_rows.row_data(i)
+                            && m.message_id.as_str() == msg_id_str.as_str()
+                        {
+                            m.is_pinned = new_pinned_state;
+                            thread_rows.set_row_data(i, m);
+                        }
+                    }
                     w.global::<crate::ChatPane>()
                         .set_has_pinned_messages(pinned_count > 0);
                     if new_pinned_state {
