@@ -952,7 +952,7 @@ export component MessageItem inherits Rectangle {
 
                 // Action buttons — float above top corner of bubble on opposed side.
                 // Do not allocate hidden controls for every row (or any mobile row).
-                if root.is-hovered: MessageActions {
+                if root.is-hovered && !root.selection-mode: MessageActions {
                     can-thread: root.can-thread;
                     is-call: root.is-call;
                     is-deleted: root.is-deleted;
