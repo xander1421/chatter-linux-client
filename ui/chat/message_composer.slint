@@ -616,8 +616,6 @@ export component MessageComposer inherits GlassSurface {
                 border-color: Colors.primary;
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;
-                accessible-role: AccessibleRole.text-input;
-                accessible-label: "Message input";
 
                 // Placeholder text (shown when empty, fades on focus).
                 //
@@ -654,6 +652,9 @@ export component MessageComposer inherits GlassSurface {
                     changed height => { root.reveal-cursor(); }
                     changed viewport-height => { root.reveal-cursor(); }
                     text-input := TextInput {
+                        // The field itself is the accessible node: TalkBack reads
+                        // what was typed (Android bridge maps value → text).
+                        accessible-label: "Message input";
                         x: 0px;
                         // Centred while the row is at its floor, top-anchored once the
                         // text grows past it — otherwise the first line would sit

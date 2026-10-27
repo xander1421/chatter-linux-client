@@ -206,7 +206,18 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
         }
         String label = node.isNull("label") ? "" : node.optString("label", "");
         String description = node.isNull("description") ? "" : node.optString("description", "");
+        String value = node.isNull("value") ? "" : node.optString("value", "");
         if ("Text".equals(role)) info.setText(label);
+        else if ("TextInput".equals(role)) {
+            // An edit field reads its contents; its name (or placeholder) is
+            // the hint, as a native EditText. Without this TalkBack could not
+            // read back what had been typed.
+            String hint = !label.isEmpty() ? label
+                    : node.isNull("placeholder") ? "" : node.optString("placeholder", "");
+            info.setText(value);
+            if (android.os.Build.VERSION.SDK_INT >= 26) info.setHintText(hint);
+            if (value.isEmpty() && !hint.isEmpty()) info.setContentDescription(hint);
+        }
         else if (!label.isEmpty()) info.setContentDescription(label);
         if (!description.isEmpty()) info.setContentDescription(
                 label.isEmpty() ? description : label + ", " + description);

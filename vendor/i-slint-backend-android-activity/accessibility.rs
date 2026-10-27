@@ -99,6 +99,8 @@ fn visit(
         },
         "label": property(Property::Label),
         "description": property(Property::Description),
+        "value": property(Property::Value),
+        "placeholder": property(Property::PlaceholderText),
         "left": left, "top": top, "right": right, "bottom": bottom,
         "clickable": clickable,
         "enabled": property(Property::Enabled).as_deref() != Some("false"),

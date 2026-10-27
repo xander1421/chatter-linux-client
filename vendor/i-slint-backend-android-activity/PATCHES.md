@@ -25,6 +25,8 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   `accessibility.rs` finds each item's stable id by searching on from the
   previous hit (tree order repeats between snapshots) instead of from the
   start of the ever-growing id list.
+  Text inputs carry their `value` (as the node text) and their label or
+  placeholder (as the hint), like a native EditText.
   The provider caches a snapshot for 100 ms from when it is READY, so the
   per-node calls of one query share it even when a snapshot takes longer.
   A node with zero width or height is reported not visible to the user:
