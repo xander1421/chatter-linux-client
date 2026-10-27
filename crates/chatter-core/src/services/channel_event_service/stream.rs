@@ -70,9 +70,20 @@ impl ChannelEventService {
         loop {
             match heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT).await {
                 Next::Item(Ok(event)) => {
+                    // Read the old name before the update is merged locally.
+                    let rename = self.rename_in(&event);
                     if let Some(event_data) = event.event {
                         self.handle_stream_event(event_data, &event.channel_id)
                             .await;
+                    }
+                    if let Some((channel_id, actor, old_name, new_name)) = rename {
+                        self.record_channel_renamed(
+                            &channel_id,
+                            actor,
+                            old_name,
+                            new_name,
+                            event.timestamp,
+                        );
                     }
                 }
                 Next::Item(Err(e)) => {
@@ -114,6 +125,23 @@ impl ChannelEventService {
                 }
             }
         });
+    }
+
+    /// A `ChannelUpdated` that changes the name this device holds, with who
+    /// changed it. A second delivery of the same event finds the name already
+    /// merged and yields nothing.
+    fn rename_in(
+        &self,
+        event: &crate::proto::chat_v1::ChannelEvent,
+    ) -> Option<(ChannelId, UserId, String, String)> {
+        let Some(channel_event::Event::ChannelUpdated(updated)) = &event.event else {
+            return None;
+        };
+        let channel_id = ChannelId::from(event.channel_id.parse::<uuid::Uuid>().ok()?);
+        let actor = UserId::from(event.actor_id.parse::<uuid::Uuid>().ok()?);
+        let old_name = self.channel_repo.get(&channel_id).ok()??.name;
+        (!old_name.is_empty() && old_name != updated.name)
+            .then(|| (channel_id, actor, old_name, updated.name.clone()))
     }
 
     /// Emit `ChannelInviteReceived` for every pending invite not yet announced.

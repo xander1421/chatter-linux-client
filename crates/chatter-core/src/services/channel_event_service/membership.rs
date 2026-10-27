@@ -297,6 +297,38 @@ impl ChannelEventService {
         }
     }
 
+    /// File "X renamed the channel from A to B", once however many paths
+    /// deliver the rename: the renamer's RPC reply and the stream fan-out
+    /// race, and carry different timestamps, so the id is keyed on the
+    /// rename itself. `event_ts` 0 (this device's own rename) files it now.
+    // keyed without time: renaming A→B again later files no second notice.
+    pub fn record_channel_renamed(
+        &self,
+        channel_id: &ChannelId,
+        actor: UserId,
+        old_name: String,
+        new_name: String,
+        event_ts: u64,
+    ) {
+        let key = format!("channel_rename_notice:{channel_id}:{actor}:{old_name}\0{new_name}");
+        let id = MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), key.as_bytes()));
+        let content = SystemMessage::ChannelRenamed { old_name, new_name };
+        let message = self.create_system_message(id, channel_id, content, Some(actor), event_ts);
+        match self.message_repo.insert_or_ignore(&message) {
+            Ok(true) => {
+                if let Err(e) = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::MessageReceived { message })
+                {
+                    tracing::warn!("Failed to publish rename notice: {}", e);
+                }
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to file rename notice"),
+        }
+    }
+
     /// Handle a member leaving/being removed from a channel.
     ///
     /// Creates a system message and removes membership from local storage.
