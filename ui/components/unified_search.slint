@@ -952,6 +952,18 @@ export component UnifiedSearch inherits Rectangle {
                         horizontal-alignment: center;
                     }
 
+                    // A content tab with nothing shared yet says so, instead of
+                    // showing an empty list under the recent searches.
+                    if root.query == "" && !root.searching && root.messages.length == 0
+                        && (root.category == "media" || root.category == "files" || root.category == "links" || root.category == "voice"): Text {
+                        text: root.category == "media" ? "No photos or videos yet"
+                            : root.category == "files" ? "No files yet"
+                            : root.category == "links" ? "No links yet" : "No voice messages yet";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+
                     if root.total-count == 0 && root.query != "" && !root.searching && !root.query-is-handle: Text {
                         text: "No matches on this device";
                         color: Colors.text-muted;
