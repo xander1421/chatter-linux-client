@@ -140,6 +140,9 @@ export component PinnedBar inherits GlassSurface {
             border-radius: Spacing.radius-sm;
 
             bar-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: "Go to pinned message";
+                accessible-action-default => { root.go-to-message(); }
                 mouse-cursor: pointer;
                 clicked => {
                     root.go-to-message();
