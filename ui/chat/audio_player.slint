@@ -50,6 +50,11 @@ export component AudioPlayer inherits HorizontalLayout {
         width: root.button-size;
         height: root.button-size;
         border-radius: root.button-size / 2;
+        // TalkBack had no node for it: a voice message could not be played.
+        accessible-role: button;
+        accessible-label: root.is-download-failed ? "Retry download"
+            : (root.is-this-playing && root.is-media-playing) ? "Pause voice message" : "Play voice message";
+        accessible-action-default => { root.play-clicked(root.attachment-id); }
         background: play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
         opacity: play-touch.pressed ? 0.82 : 1.0;
         animate opacity { duration: Materials.motion-quick; easing: Materials.spring; }
