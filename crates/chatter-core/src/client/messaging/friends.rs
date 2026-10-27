@@ -115,7 +115,8 @@ impl ChatterClient {
                 && (needle.is_empty() || d.name.to_lowercase().contains(&needle))
                 && ActiveConversation::from_routing_key(&d.kind, &d.id).is_some()
         });
-        out.sort_by_key(|d| d.name.to_lowercase());
+        // Saved messages first, as Signal's Note to Self and Telegram's Saved.
+        out.sort_by_key(|d| (d.kind != CT::SavedMessages, d.name.to_lowercase()));
         out
     }
 
