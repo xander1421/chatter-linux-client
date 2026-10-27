@@ -20,8 +20,13 @@ pub(super) fn handle_message_received(
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
+    let is_call_end = matches!(
+        &message.content,
+        chatter_core::domain::message::MessageContent::Call(call)
+            if call.call_type == chatter_core::domain::message::CallMessageType::Ended
+    );
     let message = if message.conversation_type
-        == chatter_core::domain::message::ConversationType::SavedMessages
+        == chatter_core::domain::message::ConversationType::SavedMessages || is_call_end
     {
         let Some(stored) = ui_ctx.get_message_local(&message.id).filter(|stored| {
             stored.conversation_type == message.conversation_type
@@ -255,10 +260,11 @@ pub(super) fn handle_message_received(
                 &new_sender,
             ) {
                 chatter_core::domain::message::InsertPosition::Duplicate => {
-                    // A Saved snapshot may hydrate its quote after creation.
-                    // Replace only that row, keeping the model, viewport anchor
-                    // and selection; ordinary receive dedup still skips.
-                    if conv_type == chatter_core::domain::message::ConversationType::SavedMessages {
+                    // Saved snapshots and ended calls replace their existing row.
+                    // Keep the model, viewport anchor and selection.
+                    if conv_type == chatter_core::domain::message::ConversationType::SavedMessages
+                        || is_call_end
+                    {
                         if let Some(row) = current_model.iter().position(|m| {
                             m.message_id == new_msg.message_id
                                 && m.sender_id == new_msg.sender_id

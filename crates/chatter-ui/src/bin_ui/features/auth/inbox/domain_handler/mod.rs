@@ -657,7 +657,7 @@ pub async fn handle_domain_event(
 
         // A note-to-self sent from a sibling device. Core stored it; show it
         // like any received message (inserted only if Saved Messages is open).
-        DomainEvent::SavedMessageSynced { message } => {
+        DomainEvent::MessageSnapshotChanged { message } => {
             messaging::handle_message_received(window, ui_ctx, message);
         }
 

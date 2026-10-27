@@ -222,7 +222,7 @@ impl EventHandlers {
             event @ DomainEvent::MessageUnpinned { .. } => self.handle_messages_event(event),
             event @ DomainEvent::AttachmentReady { .. } => self.handle_messages_event(event),
             event @ DomainEvent::DeleteForMeSync { .. } => self.handle_messages_event(event),
-            event @ DomainEvent::SavedMessageSynced { .. } => self.handle_messages_event(event),
+            event @ DomainEvent::MessageSnapshotChanged { .. } => self.handle_messages_event(event),
             event @ DomainEvent::DmBootstrapCompleted { .. } => self.handle_messages_event(event),
             event @ DomainEvent::MessageSendFailed { .. } => self.handle_messages_event(event),
             // Chat-list presentation only; no state store holds it.

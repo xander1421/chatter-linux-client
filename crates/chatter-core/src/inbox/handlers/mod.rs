@@ -208,8 +208,8 @@ pub enum DomainEvent {
         conversation_ids: Vec<ChannelId>,
         from_other_device: bool,
     },
-    /// Saved message synced from another device (Note to Self).
-    SavedMessageSynced {
+    /// A stored message snapshot to insert or replace in live views.
+    MessageSnapshotChanged {
         message: crate::domain::message::Message,
     },
 
@@ -680,7 +680,7 @@ impl DomainEvent {
             DomainEvent::DeleteForMeSync {
                 conversation_id, ..
             } => Some(*conversation_id),
-            DomainEvent::SavedMessageSynced { message } => Some(message.conversation_id),
+            DomainEvent::MessageSnapshotChanged { message } => Some(message.conversation_id),
             DomainEvent::ConversationsRead { .. } => None,
             DomainEvent::DeviceLinked { .. } => None,
             DomainEvent::CallHangupReceived { .. } => None,
