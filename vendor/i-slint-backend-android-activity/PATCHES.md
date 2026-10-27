@@ -22,6 +22,8 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   reachable. The Java provider's host node remains the tree root.
   Click dispatch also checks current modal membership, so a stale cached
   virtual-view ID cannot activate content behind a newly opened overlay.
+  The provider caches a snapshot for 100 ms from when it is READY, so the
+  per-node calls of one query share it even when a snapshot takes longer.
   A node with zero width or height is reported not visible to the user:
   banners that collapse by animating height to 0 stay `is_visible()` in Slint
   and were otherwise read out by TalkBack while hidden.

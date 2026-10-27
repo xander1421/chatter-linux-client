@@ -141,15 +141,18 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
         this.host = host;
     }
 
+    // One query fans out into a node per child (Android prefetches dozens).
+    // The cache window starts when the snapshot is ready: timed from its start,
+    // a snapshot slower than the window (S9, Android 10) was retaken for every
+    // node, the root query outlived uiautomator's timeout and TalkBack got none.
     private JSONArray nodes() {
-        long now = SystemClock.uptimeMillis();
-        if (nodes == null || now - snapshotAt > 100) {
+        if (nodes == null || SystemClock.uptimeMillis() - snapshotAt > 100) {
             try {
                 nodes = new JSONArray(SlintAndroidJavaHelper.accessibilityTree());
             } catch (Exception ignored) {
                 nodes = new JSONArray();
             }
-            snapshotAt = now;
+            snapshotAt = SystemClock.uptimeMillis();
         }
         return nodes;
     }
