@@ -140,20 +140,23 @@ export component CustomSectionHeader inherits Rectangle {
                 }
 
                 // Aggregate unread badge (hidden when the desktop action buttons show)
-                if root.unread-count > 0 && (root.mobile-mode || !header-hover.has-hover): Rectangle {
-                    width: max(self.height, header-badge-text.preferred-width + 8px);
-                    height: Spacing.badge-md;
-                    border-radius: self.height / 2;
-                    background: Colors.action-fill;
-                    header-badge-text := Text {
-                        text: root.unread-count > 99 ? "99+" : root.unread-count;
-                        color: Colors.on-action;
-                        font-size: Typography.xxs;
-                        font-weight: 600;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                if root.unread-count > 0 && (root.mobile-mode || !header-hover.has-hover): VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: max(self.height, header-badge-text.preferred-width + 8px);
+                        height: Spacing.badge-md;
+                        border-radius: self.height / 2;
+                        background: Colors.action-fill;
+                        header-badge-text := Text {
+                            text: root.unread-count > 99 ? "99+" : root.unread-count;
+                            color: Colors.on-action;
+                            font-size: Typography.xxs;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
                     }
                 }
             }
