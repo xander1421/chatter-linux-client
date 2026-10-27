@@ -331,17 +331,6 @@ impl ChannelEventService {
                 };
                 let message = (!invite.message.is_empty()).then(|| invite.message.clone());
                 self.announced_invites.lock().insert(channel_id);
-                // The live event carries no channel name; the pending-invite
-                // listing does, and the Activity entry should say which channel.
-                let channel_name = match self.grpc_pool.channel_client().list_pending_invites().await {
-                    Ok(resp) => resp
-                        .invites
-                        .into_iter()
-                        .find(|inv| inv.channel_id == invite.channel_id)
-                        .map(|inv| inv.channel_name)
-                        .unwrap_or_default(),
-                    Err(_) => String::new(),
-                };
                 let _ = self
                     .event_bus
                     .domain_sender()
@@ -350,7 +339,7 @@ impl ChannelEventService {
                         inviter_id: UserId::from(inviter_uuid),
                         message,
                         expires_at: invite.expires_at,
-                        channel_name,
+                        channel_name: invite.channel_name.clone(),
                     });
                 tracing::info!("Channel invitation received: channel={}", channel_id);
             }
