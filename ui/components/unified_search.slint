@@ -646,7 +646,12 @@ export component UnifiedSearch inherits Rectangle {
                     Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year" : "Range"; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 for kind in ["from", "in"]: Rectangle {
-                    width: kind == "from" ? 126px : 112px;
+                    // A set filter grows to show its name (up to a cap) beside the ×.
+                    property <bool> chip-set: (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "");
+                    property <length> base-width: kind == "from" ? 126px : 112px;
+                    width: self.chip-set
+                        ? max(self.base-width, min(200px, picker-chip-label.preferred-width + Spacing.touch-target-min + Spacing.sm))
+                        : self.base-width;
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                     background: chip-touch.pressed ? Materials.pressed : ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.row-selected : Materials.ultra-thin;
                     border-width: Spacing.stroke; border-color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.border;
