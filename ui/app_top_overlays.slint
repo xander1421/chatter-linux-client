@@ -443,6 +443,7 @@ export component AppTopOverlays inherits Rectangle {
         set-pinned(conv-id, pinned) => { SidebarPane.set-conversation-pinned(conv-id, pinned); }
         set-archived(conv-id, archived) => { SidebarPane.set-conversation-archived(conv-id, archived); }
         set-muted(conv-id, kind, muted) => { SidebarPane.set-conversation-muted(conv-id, kind, muted); }
+        mark-read(conv-id, kind) => { SidebarPane.mark-conversation-read(conv-id, kind); }
         delete-chat(conv-id, conv-type) => { SidebarPane.delete-conversation(conv-id, conv-type); }
         leave-conversation(conv-id, kind) => { SidebarPane.leave-conversation(conv-id, kind); }
     }

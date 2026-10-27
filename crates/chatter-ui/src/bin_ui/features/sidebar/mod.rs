@@ -195,6 +195,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
     wire_context_menu_mute(window, ui_ctx);
+    wire_context_menu_mark_read(window, ui_ctx);
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
     dm::wire_delete_conversation(window, ui_ctx);
@@ -259,6 +260,24 @@ fn wire_context_menu_mute(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_toast_visible(true);
             }
         }
+    });
+}
+
+/// Row menu "Mark as read": clears the chat's unread without opening it.
+fn wire_context_menu_mark_read(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+    window.global::<crate::SidebarPane>().on_mark_conversation_read(move |row_id, kind| {
+        let kind = crate::bin_ui::converters::conversation_type(kind);
+        let Some(conv) = ctx.resolve_row_conversation(row_id.as_str(), &kind) else { return };
+        let ctx = ctx.clone();
+        let weak = weak.clone();
+        tokio::spawn(async move {
+            if let Err(error) = ctx.conversation(conv).mark_as_read().await {
+                tracing::warn!(%error, "Could not mark conversation read");
+            }
+            history_changed(&weak, &ctx);
+        });
     });
 }
 

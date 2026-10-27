@@ -386,6 +386,7 @@ export component SectionContextMenu inherits Rectangle {
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback set-archived(/* conv-id */ string, /* archived */ bool);
     callback set-muted(/* conv-id */ string, /* kind */ ConversationKind, /* muted */ bool);
+    callback mark-read(/* conv-id */ string, /* kind */ ConversationKind);
     callback create-section-clicked(/* conv-id */ string, /* conv-type */ ConversationKind);
     // DM rows, and channels we are no longer in: deletes the chat on this
     // device (core `delete_conversation`).
@@ -404,8 +405,11 @@ export component SectionContextMenu inherits Rectangle {
     private property <int> focus-index: 0;
     private property <bool> has-mute: root.conversation-type == ConversationKind.server-dm
         || root.conversation-type == ConversationKind.anon-dm
-        || root.conversation-type == ConversationKind.anon-group;
-    private property <int> section-start: 2 + (root.has-mute ? 1 : 0);
+        || root.conversation-type == ConversationKind.anon-group
+        || root.conversation-type == ConversationKind.channel;
+    private property <bool> has-unread: root.target-row.unread-count > 0;
+    private property <int> read-index: 2 + (root.has-mute ? 1 : 0);
+    private property <int> section-start: root.read-index + (root.has-unread ? 1 : 0);
     private property <int> new-index: root.section-start + root.sections.length;
     private property <int> remove-index: root.new-index + 1;
     private property <int> delete-index: root.remove-index + (root.current-section-id != "" ? 1 : 0);
@@ -533,9 +537,7 @@ export component SectionContextMenu inherits Rectangle {
                 }
             }
 
-            if root.conversation-type == ConversationKind.server-dm
-                || root.conversation-type == ConversationKind.anon-dm
-                || root.conversation-type == ConversationKind.anon-group: MenuItem {
+            if root.has-mute: MenuItem {
                 nav-index: 2;
                 focused-index: root.focus-index;
                 keyboard-active: root.show && !root.mobile-mode;
@@ -547,6 +549,22 @@ export component SectionContextMenu inherits Rectangle {
                 mobile-mode: root.mobile-mode;
                 clicked => {
                     root.set-muted(root.conversation-id, root.conversation-type, !root.is-muted);
+                    root.close();
+                }
+            }
+
+            if root.has-unread: MenuItem {
+                nav-index: root.read-index;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.check;
+                label: "Mark as read";
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.mark-read(root.conversation-id, root.conversation-type);
                     root.close();
                 }
             }
