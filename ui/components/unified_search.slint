@@ -1143,8 +1143,10 @@ export component UnifiedSearch inherits Rectangle {
             transform-scale-x: 94% + picker-layer.reveal * 6%;
             transform-scale-y: 94% + picker-layer.reveal * 6%;
             VerticalLayout {
+                // The list is capped at its rows: spare height goes below it,
+                // not above the field.
+                alignment: start;
                 padding: Spacing.lg; spacing: Spacing.sm;
-                // Fixed rows: the list below takes the spare height, not the title.
                 Text { vertical-stretch: 0; text: root.picker-mode == "from" ? "From a person" : "In a chat"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
                 Rectangle {
                     vertical-stretch: 0;
