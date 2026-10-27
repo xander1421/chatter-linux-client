@@ -821,6 +821,9 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
         window
             .global::<AvatarText>()
             .on_initials(|name| crate::bin_ui::converters::initials_from_name(&name).into());
+        window
+            .global::<EmojiText>()
+            .on_jumbo_count(|text| chatter_core::util::emoji::jumbo_count(&text) as i32);
     }
 
     mirror_anon_mode_build(&window);
