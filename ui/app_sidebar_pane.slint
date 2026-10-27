@@ -97,6 +97,7 @@ export global SidebarPane {
     callback row-context-menu-opened(/* conversation-id */ string, /* kind */ ConversationKind);
     callback set-conversation-muted(/* conversation-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback mark-conversation-read(/* conversation-id */ string, /* kind */ ConversationKind);
+    callback mark-conversation-unread(/* conversation-id */ string, /* kind */ ConversationKind);
     callback archive-view-changed();
     callback delete-conversation(/* conversation-id */ string, /* kind */ ConversationKind);
     callback leave-conversation(/* conversation-id */ string, /* kind */ ConversationKind);

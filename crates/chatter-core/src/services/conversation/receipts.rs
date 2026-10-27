@@ -286,6 +286,30 @@ impl ConversationHandle {
             .mark_conversation_read(&conversation_id, &conversation_type)?)
     }
 
+    /// Row menu "Mark as unread" (Telegram, Signal): the newest message from
+    /// someone else is unread again, so the row shows a badge until opened.
+    /// Local only; nothing un-sends a read receipt.
+    pub fn mark_as_unread(&self) -> Result<(), ConversationError> {
+        let (Some(conversation_id), Some(conversation_type)) = (
+            self.conversation.channel_id(),
+            self.client.conversation_type_of(&self.conversation),
+        ) else {
+            return Err(ConversationError::NoConversation);
+        };
+        let me = self.client.session_current_user_id();
+        let messages = self.client.messages();
+        let page = messages.get_messages_local(&conversation_id, &conversation_type, None, 50)?;
+        let newest_incoming = page.iter().find(|m| {
+            m.sender_id.is_some()
+                && m.sender_id != me
+                && !matches!(m.content, crate::domain::message::MessageContent::System(_))
+        });
+        if let Some(message) = newest_incoming {
+            messages.message_repo.mark_unread(&message.id)?;
+        }
+        Ok(())
+    }
+
     /// Where a read receipt for this conversation goes, if one goes at all:
     /// nothing while off screen, and anon groups have no receipt (per-user read
     /// state would defeat the sender anonymity the group is for).

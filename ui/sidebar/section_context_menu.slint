@@ -387,6 +387,7 @@ export component SectionContextMenu inherits Rectangle {
     callback set-archived(/* conv-id */ string, /* archived */ bool);
     callback set-muted(/* conv-id */ string, /* kind */ ConversationKind, /* muted */ bool);
     callback mark-read(/* conv-id */ string, /* kind */ ConversationKind);
+    callback mark-unread(/* conv-id */ string, /* kind */ ConversationKind);
     callback create-section-clicked(/* conv-id */ string, /* conv-type */ ConversationKind);
     // DM rows, and channels we are no longer in: deletes the chat on this
     // device (core `delete_conversation`).
@@ -409,7 +410,7 @@ export component SectionContextMenu inherits Rectangle {
         || root.conversation-type == ConversationKind.channel;
     private property <bool> has-unread: root.target-row.unread-count > 0;
     private property <int> read-index: 2 + (root.has-mute ? 1 : 0);
-    private property <int> section-start: root.read-index + (root.has-unread ? 1 : 0);
+    private property <int> section-start: root.read-index + 1;
     private property <int> new-index: root.section-start + root.sections.length;
     private property <int> remove-index: root.new-index + 1;
     private property <int> delete-index: root.remove-index + (root.current-section-id != "" ? 1 : 0);
@@ -553,18 +554,23 @@ export component SectionContextMenu inherits Rectangle {
                 }
             }
 
-            if root.has-unread: MenuItem {
+            // Read ↔ unread, as Telegram's row menu.
+            MenuItem {
                 nav-index: root.read-index;
                 focused-index: root.focus-index;
                 keyboard-active: root.show && !root.mobile-mode;
                 focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
-                icon: Icons.check;
-                label: "Mark as read";
+                icon: root.has-unread ? Icons.check : Icons.message-circle;
+                label: root.has-unread ? "Mark as read" : "Mark as unread";
                 mobile-mode: root.mobile-mode;
                 clicked => {
-                    root.mark-read(root.conversation-id, root.conversation-type);
+                    if root.has-unread {
+                        root.mark-read(root.conversation-id, root.conversation-type);
+                    } else {
+                        root.mark-unread(root.conversation-id, root.conversation-type);
+                    }
                     root.close();
                 }
             }
