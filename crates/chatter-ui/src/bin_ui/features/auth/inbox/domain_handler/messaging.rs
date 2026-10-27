@@ -441,29 +441,32 @@ pub(super) fn handle_delivery_status_update(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
-        let messages = w.global::<crate::ChatPane>().get_messages();
+        let pane = w.global::<crate::ChatPane>();
         let timestamp_strs: Vec<String> =
             message_timestamps.iter().map(|ts| ts.to_string()).collect();
 
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.is_own
-                    && timestamp_strs
-                        .iter()
-                        .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
-                {
-                    let mut updated = msg.clone();
-                    updated.delivery_status =
-                        chatter_core::services::message::advance_delivery_status(
-                            msg.delivery_status.as_str(),
-                            new_status,
-                        )
-                        .into();
-                    if let Some(model) = messages
-                        .as_any()
-                        .downcast_ref::<VecModel<MessageItemData>>()
+        // The open thread panel keeps its own model; ticks there must move too.
+        for messages in [pane.get_messages(), pane.get_thread_replies()] {
+            for i in 0..messages.row_count() {
+                if let Some(msg) = messages.row_data(i) {
+                    if msg.is_own
+                        && timestamp_strs
+                            .iter()
+                            .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
                     {
-                        model.set_row_data(i, updated);
+                        let mut updated = msg.clone();
+                        updated.delivery_status =
+                            chatter_core::services::message::advance_delivery_status(
+                                msg.delivery_status.as_str(),
+                                new_status,
+                            )
+                            .into();
+                        if let Some(model) = messages
+                            .as_any()
+                            .downcast_ref::<VecModel<MessageItemData>>()
+                        {
+                            model.set_row_data(i, updated);
+                        }
                     }
                 }
             }
@@ -734,25 +737,28 @@ pub(super) fn handle_persisted_delivery_status(
                 info.set_details(details.into());
             }
         }
-        let messages = w.global::<crate::ChatPane>().get_messages();
-        let Some(model) = messages
-            .as_any()
-            .downcast_ref::<VecModel<MessageItemData>>()
-        else {
-            return;
-        };
-        for i in 0..model.row_count() {
-            let Some(mut message) = model.row_data(i) else {
+        let pane = w.global::<crate::ChatPane>();
+        // The open thread panel keeps its own model; ticks there must move too.
+        for messages in [pane.get_messages(), pane.get_thread_replies()] {
+            let Some(model) = messages
+                .as_any()
+                .downcast_ref::<VecModel<MessageItemData>>()
+            else {
                 continue;
             };
-            if message.message_id.as_str() == message_id {
-                message.delivery_status = chatter_core::services::message::advance_delivery_status(
-                    message.delivery_status.as_str(),
-                    &status,
-                )
-                .into();
-                message.failure_reason = failure_reason.clone().into();
-                model.set_row_data(i, message);
+            for i in 0..model.row_count() {
+                let Some(mut message) = model.row_data(i) else {
+                    continue;
+                };
+                if message.message_id.as_str() == message_id {
+                    message.delivery_status = chatter_core::services::message::advance_delivery_status(
+                        message.delivery_status.as_str(),
+                        &status,
+                    )
+                    .into();
+                    message.failure_reason = failure_reason.clone().into();
+                    model.set_row_data(i, message);
+                }
             }
         }
     });

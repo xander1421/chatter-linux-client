@@ -112,24 +112,27 @@ pub fn handle_receipt(
             "delivered"
         };
 
-        let messages = window.global::<crate::ChatPane>().get_messages();
+        let pane = window.global::<crate::ChatPane>();
         let timestamp_strs: Vec<String> =
             message_timestamps.iter().map(|ts| ts.to_string()).collect();
 
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if timestamp_strs
-                    .iter()
-                    .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
-                {
-                    let mut updated_msg = msg.clone();
-                    updated_msg.delivery_status = new_status.into();
-
-                    if let Some(model) = messages
-                        .as_any()
-                        .downcast_ref::<VecModel<MessageItemData>>()
+        // The open thread panel keeps its own model; ticks there must move too.
+        for messages in [pane.get_messages(), pane.get_thread_replies()] {
+            for i in 0..messages.row_count() {
+                if let Some(msg) = messages.row_data(i) {
+                    if timestamp_strs
+                        .iter()
+                        .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
                     {
-                        model.set_row_data(i, updated_msg);
+                        let mut updated_msg = msg.clone();
+                        updated_msg.delivery_status = new_status.into();
+
+                        if let Some(model) = messages
+                            .as_any()
+                            .downcast_ref::<VecModel<MessageItemData>>()
+                        {
+                            model.set_row_data(i, updated_msg);
+                        }
                     }
                 }
             }
