@@ -1142,11 +1142,20 @@ export component UnifiedSearch inherits Rectangle {
             transform-scale-y: 94% + picker-layer.reveal * 6%;
             VerticalLayout {
                 padding: Spacing.lg; spacing: Spacing.sm;
-                Text { text: root.picker-mode == "from" ? "From a person" : "In a chat"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                // Fixed rows: the list below takes the spare height, not the title.
+                Text { vertical-stretch: 0; text: root.picker-mode == "from" ? "From a person" : "In a chat"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
                 Rectangle {
+                    vertical-stretch: 0;
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                     background: Colors.inset;
-                    TextInput { text <=> root.picker-query; x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm;
+                    accessible-role: text-input;
+                    accessible-label: root.picker-mode == "from" ? "Search people" : "Search chats";
+                    if root.picker-query == "" && picker-input.preedit-text == "": Text {
+                        x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%;
+                        text: root.picker-mode == "from" ? "Search people" : "Search chats";
+                        color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center;
+                    }
+                    picker-input := TextInput { text <=> root.picker-query; x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center;
                         edited => { root.picker-request(root.picker-mode, root.picker-query); }
                     }
                 }
