@@ -36,7 +36,13 @@ export component AppSidebarHost inherits Rectangle {
         // paint its rows after the chat fully covers it. Show it
         // immediately when an edge swipe starts, before progress
         // has moved off 1 in the first gesture frame.
-        visible: !root.compact-layout || root.chat-push-progress < 1 || SidebarPane.chat-edge-swiping;
+        // A phone's Profile / Calls / Contacts tab screens cover the list
+        // opaquely; unpainted, its rows also leave the accessibility tree
+        // (TalkBack read hidden chats under Profile).
+        visible: !root.compact-layout
+            || ((root.chat-push-progress < 1 || SidebarPane.chat-edge-swiping)
+                && SidebarPane.active-tab != "profile" && SidebarPane.active-tab != "calls"
+                && SidebarPane.active-tab != "contacts");
         y: 0px;
         bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
             + (CallView.active-call-visible ? root.return-to-call-height + Spacing.sm : 0px) : 0px;
