@@ -245,8 +245,17 @@ impl FilePicker {
             dialog = dialog.set_title(title);
         }
 
+        // Callers pass a suggested file (`downloads/photo.jpg`), not only a
+        // folder: split it so the name is prefilled and the folder opened.
         if let Some(path) = &config.default_path {
-            dialog = dialog.set_directory(path);
+            match (path.is_dir(), path.parent(), path.file_name()) {
+                (false, Some(dir), Some(name)) => {
+                    dialog = dialog
+                        .set_directory(dir)
+                        .set_file_name(name.to_string_lossy());
+                }
+                _ => dialog = dialog.set_directory(path),
+            }
         }
 
         for filter in &config.filters {

@@ -93,7 +93,16 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let Some(path) = FilePicker::save_file(
                         FilePickerConfig::new()
                             .with_title("Export message backup")
-                            .with_filter(FileFilter::new("Chatter backup", vec!["chbk"])),
+                            .with_filter(FileFilter::new("Chatter backup", vec!["chbk"]))
+                            .with_default_path(
+                                dirs::document_dir()
+                                    .or_else(dirs::home_dir)
+                                    .unwrap_or_default()
+                                    .join(format!(
+                                        "chatter-backup-{}.chbk",
+                                        chrono::Local::now().format("%Y-%m-%d")
+                                    )),
+                            ),
                     )
                     .await
                     else {
