@@ -53,7 +53,7 @@ export component MessageBody inherits VerticalLayout {
             if !block.is-code-block: StyledText {
                 width: root.media-caption ? root.text-max-width : min(self.preferred-width, root.text-max-width);
                 text: block.text;
-                link-color: Colors.primary;
+                link-color: root.is-own ? Colors.text-primary : Colors.primary;
                 pointer-event(event) => {
                     if (event.kind == PointerEventKind.down) {
                         root.begin-message-press(
