@@ -587,6 +587,7 @@ pub fn apply_thread_reply_badges(
                 found = true;
                 row.unread_count = badges.row as i32;
                 row.mention_count = mention_count as i32;
+                crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
                 vec.set_row_data(i, row);
                 refresh_flat_rows(window);
             }
@@ -648,6 +649,7 @@ fn update_sidebar_row(
     if let Some(n) = mentions {
         row.mention_count = n;
     }
+    crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
     let slot = chatter_core::ui::sidebar_data::chat_row_top_slot(
         row.is_pinned,
         (0..vec.row_count())

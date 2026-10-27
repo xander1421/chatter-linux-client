@@ -42,6 +42,7 @@ pub(crate) fn update_unread_count(
                     return;
                 }
                 row.unread_count = count as i32;
+                crate::bin_ui::converters::channel::refresh_row_accessible_label(&mut row);
                 rows.set_row_data(i, row);
                 crate::bin_ui::features::sidebar::refresh_flat_rows(window);
                 recompute_total_unread(window, ui_ctx);

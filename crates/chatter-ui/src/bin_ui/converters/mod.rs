@@ -6,7 +6,7 @@
 //! so we provide Send-safe intermediate types for use across thread boundaries.
 
 mod attachment;
-mod channel;
+pub(crate) mod channel;
 mod kind;
 pub(crate) mod markdown;
 mod message;

@@ -206,3 +206,14 @@ pub fn banned_member_to_slint(
             .unwrap_or_default(),
     }
 }
+
+/// Recompute a row's spoken label after its preview or unread count changed
+/// in place, so TalkBack/Orca do not read the state from when it was built.
+pub(crate) fn refresh_row_accessible_label(row: &mut crate::ChatRowData) {
+    row.accessible_label_text = chat_row_accessible_label(
+        &row.display_name,
+        row.unread_count.max(0) as u32,
+        &row.last_message,
+    )
+    .into();
+}
