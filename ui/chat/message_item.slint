@@ -567,6 +567,9 @@ export component MessageItem inherits Rectangle {
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
                     accessible-label: root.is-own ? "Your message: " + root.spoken-content : root.sender-name + " says: " + root.spoken-content;
+                    // Selecting messages: say which ones are picked.
+                    accessible-checkable: root.selection-mode;
+                    accessible-checked: root.selected;
 
                     // One rounded surface avoids a square backing at the corners.
                     background: transparent;
