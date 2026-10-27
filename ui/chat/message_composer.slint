@@ -717,6 +717,13 @@ export component MessageComposer inherits GlassSurface {
                                 }
                                 return accept;
                             }
+                            // Telegram Desktop's formatting keys, as the toolbar does.
+                            if (event.modifiers.control || event.modifiers.meta) {
+                                if (!event.modifiers.shift && (event.text == "b" || event.text == "B")) { root.apply-format("bold"); return accept; }
+                                if (!event.modifiers.shift && (event.text == "i" || event.text == "I")) { root.apply-format("italic"); return accept; }
+                                if (event.modifiers.shift && (event.text == "x" || event.text == "X")) { root.apply-format("strikethrough"); return accept; }
+                                if (event.modifiers.shift && (event.text == "m" || event.text == "M")) { root.apply-format("code"); return accept; }
+                            }
                             if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
                                 // Attach clipboard image if present; TextInput still
                                 // handles text paste (we don't consume the event).

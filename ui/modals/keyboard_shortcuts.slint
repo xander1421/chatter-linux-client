@@ -132,6 +132,8 @@ export component KeyboardShortcutsDialog inherits Rectangle {
                 for shortcut in [
                     { key: "Enter", action: "Send" },
                     { key: "Shift + Enter", action: "New line" },
+                    { key: "Ctrl + B / Ctrl + I", action: "Bold / italic" },
+                    { key: "Ctrl + Shift + X / M", action: "Strikethrough / code" },
                     { key: "↑ (empty message box)", action: "Edit your last message" },
                     { key: "Escape", action: "Cancel edit or reply" },
                 ]: ShortcutRow { action: shortcut.action; key: shortcut.key; }
