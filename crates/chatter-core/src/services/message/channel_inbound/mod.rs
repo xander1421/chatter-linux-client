@@ -66,6 +66,49 @@ pub struct ChannelInbound {
 }
 
 impl ChannelInbound {
+    /// Shared blocked-sender decision for live, catch-up, resync and key retry.
+    /// Persist the decision because later catch-up can replay this same row after
+    /// the sender has been unblocked.
+    pub(crate) fn drop_blocked_sender(
+        messages: &MessageService,
+        proto_msg: &chat_v1::Message,
+        channel_id: ChannelId,
+    ) -> Result<bool, crate::error::StorageError> {
+        if proto_msg.channel_id.parse::<ChannelId>().ok() != Some(channel_id) {
+            return Ok(false);
+        }
+        let (Ok(sender), Ok(id)) = (
+            proto_msg.author_id.parse::<UserId>(),
+            proto_msg.id.parse::<crate::domain::ids::MessageId>(),
+        ) else {
+            return Ok(false);
+        };
+        let me = messages
+            .settings_repo
+            .current_user_id()
+            .map_err(|error| crate::error::StorageError::InvalidData(error.to_string()))?;
+        if sender == me {
+            return Ok(false);
+        }
+        let anon = crate::storage::repositories::anon_dm_repo::AnonDmRepository::new(
+            messages.database.clone(),
+        );
+        let blocked = messages.user_repo.is_blocked(&me, &sender)?
+            || anon.is_user_blocked(&sender)?
+            || anon
+                .get_conversation(&crate::domain::anon_dm::AnonDmId::from_uuid(sender.0))?
+                .is_some_and(|dm| dm.status == crate::domain::anon_dm::AnonDmStatus::Blocked);
+        if !blocked {
+            return Ok(false);
+        }
+        // Existing history predates the block. Do not tombstone a retained row
+        // (or an unrelated row whose id a malformed envelope reused).
+        if messages.message_repo.get(&id)?.is_none() {
+            messages.message_repo.tombstone_ignored(&id)?;
+        }
+        Ok(true)
+    }
+
     pub fn new(
         messages: Arc<MessageService>,
         attachments: Arc<AttachmentService>,

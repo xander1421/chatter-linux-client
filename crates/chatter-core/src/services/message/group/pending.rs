@@ -224,6 +224,20 @@ impl MessageService {
         );
 
         for proto_msg in pending {
+            match super::super::channel_inbound::ChannelInbound::drop_blocked_sender(
+                self, &proto_msg, channel_id,
+            ) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%channel_id, %sender_id, %error,
+                        "Failed to record blocked deferred channel message");
+                    self.defer_pending_group_decrypt(
+                        channel_id, sender_id, device_id, proto_msg,
+                    );
+                    continue;
+                }
+            }
             let Some(chat_v1::message::content::Type::Encrypted(enc)) =
                 proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
             else {

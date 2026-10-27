@@ -87,6 +87,14 @@ impl ChannelInbound {
         {
             return Err(Ingested::Dropped);
         }
+        match Self::drop_blocked_sender(&self.messages, proto_msg, channel_id) {
+            Ok(true) => return Err(Ingested::Dropped),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(%channel_id, %error, "Failed to record blocked channel message");
+                return Err(Ingested::RetryableFailure);
+            }
+        }
         let current_user = self.messages.settings_repo.current_user_id().ok();
         let is_own_user = sender_id.is_some() && sender_id == current_user;
         // THIS device's send: already on screen from the optimistic send, and

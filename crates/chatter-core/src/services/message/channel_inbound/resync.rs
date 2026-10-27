@@ -58,6 +58,9 @@ impl ChannelInbound {
                 "resync channel mismatch".into(),
             ));
         }
+        if Self::drop_blocked_sender(&self.messages, proto_msg, channel_id)? {
+            return Ok(());
+        }
         let content = proto_msg
             .content
             .as_ref()

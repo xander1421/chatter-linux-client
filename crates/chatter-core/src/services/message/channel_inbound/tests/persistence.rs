@@ -1,5 +1,69 @@
 use super::*;
 
+#[tokio::test]
+async fn blocked_channel_message_stays_absent_after_unblock_and_catch_up() {
+    static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+    MOCK_KEYRING.call_once(|| {
+        keyring::set_default_store(crate::system::keyring::test_credential_store());
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let client = ChatterClient::builder()
+        .server_url("https://localhost:1")
+        .data_dir(dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let me = UserId::new();
+    let sender = UserId::new();
+    let messages = client.messages().clone();
+    messages.settings_repo.set_string(
+        crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+        &me.to_string(),
+    ).unwrap();
+    let users = &messages.user_repo;
+    users.ensure_user_exists(&me).unwrap();
+    users.ensure_user_exists(&sender).unwrap();
+    let mut friendship = crate::domain::user::Friendship {
+        requester_id: me,
+        addressee_id: sender,
+        status: crate::domain::user::FriendshipStatus::Blocked,
+        created_at: chrono::Utc::now(),
+    };
+    users.insert_friendship(&friendship).unwrap();
+
+    let inbound = ChannelInbound::new(
+        client.messages().clone(),
+        client.attachments().clone(),
+        client.users().clone(),
+    );
+    let channel = ChannelId::new();
+    let id = crate::domain::ids::MessageId::new();
+    let mut row = chat_v1::Message {
+        id: id.to_string(),
+        channel_id: channel.to_string(),
+        author_id: sender.to_string(),
+        timestamp: 1_000,
+        content: Some(chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Text("blocked".into())),
+        }),
+        ..Default::default()
+    };
+    let mut events = client.subscribe_events();
+    assert_eq!(inbound.ingest(&row, channel, true).await, Ingested::Dropped);
+    assert!(client.messages().message_repo.is_tombstoned(&id).unwrap());
+    assert!(client.messages().get_message_local(&id).unwrap().is_none());
+
+    friendship.status = crate::domain::user::FriendshipStatus::Accepted;
+    users.update_friendship(&friendship).unwrap();
+    assert_eq!(inbound.ingest(&row, channel, false).await, Ingested::Dropped);
+    inbound.ingest_resynced(&row, channel).await.unwrap();
+    assert!(client.messages().get_message_local(&id).unwrap().is_none());
+    assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+
+    row.id = crate::domain::ids::MessageId::new().to_string();
+    assert_eq!(inbound.ingest(&row, channel, true).await, Ingested::Stored);
+    assert!(matches!(events.try_recv(), Ok(DomainEvent::MessageReceived { .. })));
+}
+
 /// The catch-up sync re-fetches every message newer than its last run,
 /// including ones that already arrived live and were read. Re-ingesting
 /// one must not flip it back to unread.
