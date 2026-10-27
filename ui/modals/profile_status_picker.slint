@@ -31,8 +31,12 @@ export component ProfileStatusPicker inherits VerticalLayout {
             border-width: root.status-mode == opt.mode ? Spacing.stroke : 0px;
             border-color: Colors.primary;
             background: status-touch.has-hover ? Colors.surface-hover : transparent;
-            accessible-role: button;
-            accessible-label: "status-" + opt.mode;
+            // A choice of one: a radio that says which status it sets.
+            accessible-role: radio-button;
+            accessible-label: opt.mode == "dnd" ? "Do not disturb" : opt.label;
+            accessible-checkable: true;
+            accessible-checked: root.status-mode == opt.mode;
+            accessible-action-default => { root.change-status(opt.mode); }
             status-touch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.change-status(opt.mode); }
