@@ -15,7 +15,6 @@ export component PrivacySettings inherits VerticalLayout {
     in property <string> profile-visibility-pending;
     in-out property <string> profile-visibility-pin;
     in-out property <bool> read-receipts-enabled;
-    in-out property <string> search-shortcut;
     in-out property <bool> shield-switch;
     in-out property <bool> typing-indicators-enabled;
     in-out property <bool> username-discoverable;
@@ -23,7 +22,6 @@ export component PrivacySettings inherits VerticalLayout {
     callback profile-visibility-confirmed(string, string);
     callback profile-visibility-selected(string);
     callback read-receipts-changed(bool);
-    callback search-shortcut-changed(string);
     callback shield-toggled();
     callback typing-indicators-changed(bool);
     callback username-discoverable-changed(bool);
@@ -395,82 +393,6 @@ export component PrivacySettings inherits VerticalLayout {
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 wrap: word-wrap;
-            }
-        }
-    }
-
-    // Search shortcut setting (3-way segmented selector).
-    // Keyboard shortcuts mean nothing on a phone.
-    if !root.mobile-platform: Rectangle {
-        background: Colors.surface-section;
-        border-radius: Spacing.radius-lg;
-        drop-shadow-blur: Elevation.card-blur;
-        drop-shadow-offset-y: Elevation.card-offset;
-        drop-shadow-color: Elevation.card-shadow;
-        border-width: Elevation.rim-width;
-        border-color: Elevation.card-rim;
-
-        HorizontalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.md;
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: Spacing.sm;
-
-                Text {
-                    text: "Search shortcut";
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
-                }
-
-                Text {
-                    text: "Which keys open search";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    wrap: word-wrap;
-                }
-            }
-
-            HorizontalLayout {
-                spacing: Spacing.xs;
-                vertical-stretch: 0;
-                alignment: center;
-
-                for opt[idx] in [
-                    { key: "k", label: "Ctrl+K" },
-                    { key: "f", label: "Ctrl+F" },
-                    { key: "both", label: "Both" },
-                ]: Rectangle {
-                    property <bool> selected: root.search-shortcut == opt.key;
-                    height: Spacing.button-height;
-                    min-width: 56px;
-                    border-radius: Spacing.radius-md;
-                    background: selected ? Colors.action-fill : Colors.surface-hover;
-                    border-width: 0px;
-
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-                        Text {
-                            text: opt.label;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            color: selected ? Colors.on-action : Colors.text-secondary;
-                            font-size: Typography.xs;
-                            font-weight: selected ? Typography.semibold : Typography.medium;
-                        }
-                    }
-
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.search-shortcut = opt.key;
-                            root.search-shortcut-changed(opt.key);
-                        }
-                    }
-                }
             }
         }
     }

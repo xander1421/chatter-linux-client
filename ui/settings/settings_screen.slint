@@ -455,7 +455,6 @@ export component SettingsScreen inherits Rectangle {
                             profile-visibility-pending : root.profile-visibility-pending;
                             profile-visibility-pin <=> root.profile-visibility-pin;
                             read-receipts-enabled <=> root.read-receipts-enabled;
-                            search-shortcut <=> root.search-shortcut;
                             shield-switch <=> root.shield-switch;
                             typing-indicators-enabled <=> root.typing-indicators-enabled;
                             username-discoverable <=> root.username-discoverable;
@@ -463,7 +462,6 @@ export component SettingsScreen inherits Rectangle {
                             profile-visibility-confirmed(arg0, arg1) => { root.profile-visibility-confirmed(arg0, arg1); }
                             profile-visibility-selected(arg0) => { root.profile-visibility-selected(arg0); }
                             read-receipts-changed(arg0) => { root.read-receipts-changed(arg0); }
-                            search-shortcut-changed(arg0) => { root.search-shortcut-changed(arg0); }
                             shield-toggled() => { root.shield-toggled(); }
                             typing-indicators-changed(arg0) => { root.typing-indicators-changed(arg0); }
                             username-discoverable-changed(arg0) => { root.username-discoverable-changed(arg0); }
@@ -523,6 +521,9 @@ export component SettingsScreen inherits Rectangle {
 
                         // Appearance section
                         if active-section == "appearance": AppearanceSettings {
+                            mobile-platform : root.mobile-platform;
+                            search-shortcut <=> root.search-shortcut;
+                            search-shortcut-changed(arg0) => { root.search-shortcut-changed(arg0); }
                         }
                         if active-section == "about": AboutSettings {
                             mobile-platform : root.mobile-platform;

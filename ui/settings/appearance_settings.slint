@@ -6,6 +6,9 @@ import { ToggleRow } from "../components/toggle_row.slint";
 import { Appearance } from "../theme/appearance.slint";
 
 export component AppearanceSettings inherits VerticalLayout {
+    in property <bool> mobile-platform;
+    in-out property <string> search-shortcut;
+    callback search-shortcut-changed(string);
 
 
     spacing: Spacing.lg;
@@ -412,6 +415,82 @@ export component AppearanceSettings inherits VerticalLayout {
                     clicked => {
                         Appearance.density = opt.key;
                         Appearance.density-changed(opt.key);
+                    }
+                }
+            }
+        }
+    }
+
+    // Search shortcut setting (3-way segmented selector).
+    // Keyboard shortcuts mean nothing on a phone.
+    if !root.mobile-platform: Rectangle {
+        background: Colors.surface-section;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: Elevation.card-blur;
+        drop-shadow-offset-y: Elevation.card-offset;
+        drop-shadow-color: Elevation.card-shadow;
+        border-width: Elevation.rim-width;
+        border-color: Elevation.card-rim;
+
+        HorizontalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.md;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "Search shortcut";
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
+
+                Text {
+                    text: "Which keys open search";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.xs;
+                vertical-stretch: 0;
+                alignment: center;
+
+                for opt[idx] in [
+                    { key: "k", label: "Ctrl+K" },
+                    { key: "f", label: "Ctrl+F" },
+                    { key: "both", label: "Both" },
+                ]: Rectangle {
+                    property <bool> selected: root.search-shortcut == opt.key;
+                    height: Spacing.button-height;
+                    min-width: 56px;
+                    border-radius: Spacing.radius-md;
+                    background: selected ? Colors.action-fill : Colors.surface-hover;
+                    border-width: 0px;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        Text {
+                            text: opt.label;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            color: selected ? Colors.on-action : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: selected ? Typography.semibold : Typography.medium;
+                        }
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.search-shortcut = opt.key;
+                            root.search-shortcut-changed(opt.key);
+                        }
                     }
                 }
             }
