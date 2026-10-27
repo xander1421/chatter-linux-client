@@ -180,8 +180,19 @@ pub fn show_for_profile(
     peer_id: &UserId,
     is_friend: bool,
 ) {
-    let request = PROFILE_REQUEST.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     w.global::<DisappearingGlobal>().set_dm_can_set(false);
+    load_for_profile(w, ui_ctx, peer_id, is_friend);
+}
+
+/// `show_for_profile` without hiding the row first: a refresh of the open
+/// profile must not rebuild the open timer sheet (it would scroll to the top).
+fn load_for_profile(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    peer_id: &UserId,
+    is_friend: bool,
+) {
+    let request = PROFILE_REQUEST.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let peer = *peer_id;
     let ctx = ui_ctx.clone();
     let weak = w.as_weak();
@@ -251,7 +262,7 @@ fn refresh_all(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .parse::<UserId>()
     {
         if w.global::<DisappearingGlobal>().get_dm_can_set() {
-            show_for_profile(w, ui_ctx, &peer, true);
+            load_for_profile(w, ui_ctx, &peer, true);
         }
     }
 }
@@ -366,7 +377,7 @@ fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             .get_profile_user_id().parse::<UserId>()
                         {
                             if w.global::<DisappearingGlobal>().get_dm_can_set() {
-                                show_for_profile(&w, &ctx, &peer, true);
+                                load_for_profile(&w, &ctx, &peer, true);
                             }
                         }
                     }
