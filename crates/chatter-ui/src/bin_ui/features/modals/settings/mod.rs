@@ -17,6 +17,9 @@ use chatter_core::client::{ChatterClient, ClientError, ImportSummary};
 use crate::MainWindow;
 
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    window
+        .global::<crate::ModalHostState>()
+        .set_third_party_notices(include_str!("../../../../../../../assets/licenses/THIRD_PARTY_NOTICES.txt").into());
     if let Some((height, width)) = ui_ctx.composer_keyboard_geometry() {
         window.set_remembered_keyboard_height_px(height);
         window.set_remembered_keyboard_width_px(width);
