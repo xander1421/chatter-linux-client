@@ -95,7 +95,8 @@ fn visit(
         "enabled": property(Property::Enabled).as_deref() != Some("false"),
         "checkable": property(Property::Checkable).as_deref() == Some("true"),
         "checked": property(Property::Checked).as_deref() == Some("true"),
-        "visible": item.is_visible(),
+        // A banner collapsed to zero height is still `is_visible()`.
+        "visible": item.is_visible() && right > left && bottom > top,
     }));
     for child in accessible_descendents(&item) {
         visit(child, id, scale, items, nodes);
