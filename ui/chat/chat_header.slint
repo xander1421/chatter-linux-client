@@ -382,6 +382,8 @@ export component ChatHeader inherits GlassSurface {
             // Topic text
             if root.topic != "" && !root.mobile && root.typing-indicator == "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
                 width: 100%;
+                // Squeezed by the title it read "Op…"; show it only with room.
+                visible: self.width >= 120px;
                 text: root.topic;
                 color: Colors.text-muted;
                 font-size: Typography.sm;
