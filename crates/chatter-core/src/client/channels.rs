@@ -427,8 +427,9 @@ impl ChatterClient {
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> String {
-        if !self.is_moderated_channel(channel_id) {
-            // A secret chat's notice is local state; nothing to refresh.
+        // A secret chat's notice is local state, and a channel we left has no
+        // roster we may read (the server refuses it): nothing to refresh.
+        if !self.is_moderated_channel(channel_id) || self.is_former_channel(channel_id) {
             return self.channel_send_notice(channel_id);
         }
         if let Err(e) = self.channels().get_all_channel_members(channel_id).await {

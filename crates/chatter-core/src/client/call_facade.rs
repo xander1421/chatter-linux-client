@@ -20,6 +20,13 @@ impl ChatterClient {
         &self,
         channel_id: &str,
     ) -> Result<Option<(String, bool, i32)>, crate::error::NetworkError> {
+        // A channel we left: the server refuses the lookup (not a member).
+        if channel_id
+            .parse::<crate::domain::ids::ChannelId>()
+            .is_ok_and(|id| self.is_former_channel(&id))
+        {
+            return Ok(None);
+        }
         let call = self
             .services
             .grpc_pool
