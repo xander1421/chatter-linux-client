@@ -76,6 +76,8 @@ export component ChannelIdentityFields inherits HorizontalLayout {
         name-input := Input {
             placeholder: root.is-private-group ? "Group name" : "Channel name";
             text <=> root.channel-name;
+            // Created with the Create tab: the name is the first thing to type.
+            init => { self.focus(); }
             error: root.error-message != "" && root.channel-name == "";
             error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
             accepted => {
