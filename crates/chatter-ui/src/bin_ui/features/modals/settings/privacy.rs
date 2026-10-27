@@ -28,7 +28,7 @@ pub(super) fn wire_preferences(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         w.global::<crate::SettingsPane>()
                             .get_settings_read_receipts(),
                     );
-                    privacy_save_error(&w, "read receipts", &error.to_string());
+                    privacy_save_error(&w, "read receipts", &error);
                 }
             } else {
                 saved_read.set(enabled);
@@ -60,7 +60,7 @@ pub(super) fn wire_preferences(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         w.global::<crate::SettingsPane>()
                             .get_settings_typing_indicators(),
                     );
-                    privacy_save_error(&w, "typing indicators", &error.to_string());
+                    privacy_save_error(&w, "typing indicators", &error);
                 }
             } else {
                 saved_typing.set(enabled);
@@ -324,8 +324,9 @@ fn wire_profile_visibility(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 }
 
-fn privacy_save_error(w: &MainWindow, setting: &str, error: &str) {
-    w.set_toast_message(format!("Couldn't save {setting}. {error}").into());
+fn privacy_save_error(w: &MainWindow, setting: &str, error: &dyn std::fmt::Display) {
+    tracing::warn!(%error, setting, "privacy setting not saved");
+    w.set_toast_message(format!("Couldn't save {setting}. Try again.").into());
     w.set_toast_variant("error".into());
     w.set_toast_visible(true);
 }
