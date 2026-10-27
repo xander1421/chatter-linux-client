@@ -170,7 +170,7 @@ impl InboxEventProcessor {
         match outcome {
             SavedSyncOutcome::Created(message) => {
                 self.event_bus
-                    .emit_domain(DomainEvent::SavedMessageSynced { message });
+                    .emit_domain(DomainEvent::MessageSnapshotChanged { message });
             }
             SavedSyncOutcome::Updated {
                 message,
@@ -179,7 +179,7 @@ impl InboxEventProcessor {
                 quote_hydrated,
             } => {
                 if quote_hydrated {
-                    self.event_bus.emit_domain(DomainEvent::SavedMessageSynced {
+                    self.event_bus.emit_domain(DomainEvent::MessageSnapshotChanged {
                         message: message.clone(),
                     });
                 }

@@ -4,9 +4,8 @@
 //! orchestrator events (`call_history_recorder`). A channel call has members
 //! who never join, so the caller posts STARTED and the last participant to
 //! leave posts ENDED, end-to-end encrypted over the per-device sealed control
-//! fan-out (`content_v1::CallEvent`). Every device files one row per phase:
-//! its id is derived from (channel, call, phase), so a repeat, a resend or our
-//! own local copy files nothing twice.
+//! fan-out (`content_v1::CallEvent`). Every device files one row per call:
+//! ENDED updates STARTED when present, or files a row if STARTED was missed.
 
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{CallMessage, CallMessageType, Message, MessageContent};
@@ -40,11 +39,10 @@ fn row_id(channel: &ChannelId, call: uuid::Uuid, phase: ChannelCallPhase) -> Mes
 }
 
 impl MessageService {
-    /// File the Call row for `phase` of a channel call, at most once, and
+    /// File or update the Call row for `phase` of a channel call, at most once, and
     /// show it. `sender` is who reported it: us, or a member of `channel` —
     /// anyone else's event is dropped (fail closed: no roster row, no row).
-    /// An ENDED row keeps the caller from the STARTED row when we have it, so
-    /// both read the same direction.
+    /// An ENDED update keeps the STARTED row's caller and position.
     pub fn file_channel_call_event(
         &self,
         channel: &ChannelId,
@@ -64,17 +62,35 @@ impl MessageService {
             return Ok(None);
         }
 
-        let initiator = match phase {
-            ChannelCallPhase::Started => *sender,
-            ChannelCallPhase::Ended => self
-                .message_repo
-                .get(&row_id(channel, call, ChannelCallPhase::Started))?
-                .and_then(|m| match m.content {
-                    MessageContent::Call(c) => Some(c.initiator_id),
-                    _ => None,
-                })
-                .unwrap_or(*sender),
-        };
+        let started_id = row_id(channel, call, ChannelCallPhase::Started);
+        let ended_id = row_id(channel, call, ChannelCallPhase::Ended);
+        let started = self.message_repo.get(&started_id)?;
+        if phase == ChannelCallPhase::Started {
+            if started.is_some() || self.message_repo.get(&ended_id)?.is_some() {
+                return Ok(None);
+            }
+        } else if let Some(mut row) = started {
+            let MessageContent::Call(ref mut call_message) = row.content else {
+                return Ok(None);
+            };
+            if call_message.call_type == CallMessageType::Ended {
+                return Ok(None);
+            }
+            let at = crate::util::time::TimestampNanos::from_nanos(sent_at)
+                .to_datetime()
+                .unwrap_or_else(chrono::Utc::now);
+            call_message.call_type = CallMessageType::Ended;
+            call_message.ended_at = Some(at);
+            call_message.duration = (duration_secs > 0)
+                .then(|| chrono::Duration::seconds(i64::from(duration_secs)));
+            self.message_repo.update(&row)?;
+            self.event_bus.emit_domain(DomainEvent::MessageSnapshotChanged {
+                message: row.clone(),
+            });
+            return Ok(Some(row));
+        } else if self.message_repo.get(&ended_id)?.is_some() {
+            return Ok(None);
+        }
         let at = crate::util::time::TimestampNanos::from_nanos(sent_at)
             .to_datetime()
             .unwrap_or_else(chrono::Utc::now);
@@ -95,7 +111,7 @@ impl MessageService {
                 ChannelCallPhase::Started => CallMessageType::Started,
                 ChannelCallPhase::Ended => CallMessageType::Ended,
             },
-            initiator_id: initiator,
+            initiator_id: *sender,
             initiator_name: String::new(),
             started_at: (phase == ChannelCallPhase::Started).then_some(at),
             ended_at: (phase == ChannelCallPhase::Ended).then_some(at),
@@ -234,7 +250,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_members_call_files_one_started_and_one_ended_row() {
+    async fn a_members_call_updates_one_row_when_it_ends() {
         let f = fixture();
         let svc = f.client.messages();
         let call = uuid::Uuid::new_v4().to_string();
@@ -272,15 +288,32 @@ mod tests {
         let ended = svc
             .file_channel_call_event(&f.channel, &f.me, &call, ChannelCallPhase::Ended, 95, 20)
             .unwrap()
-            .expect("ENDED files its own row");
+            .expect("ENDED updates the STARTED row");
         assert_eq!(call_of(&ended).call_type, CallMessageType::Ended);
         assert_eq!(call_of(&ended).initiator_id, f.carol);
+        assert_eq!(ended.id, started.id);
+        assert_eq!(ended.sent_at, started.sent_at);
+        assert_eq!(ended.sender_id, started.sender_id);
+        assert_eq!(call_of(&ended).started_at, call_of(&started).started_at);
+        assert!(call_of(&ended).ended_at.is_some());
         assert_eq!(
             call_of(&ended).duration,
             Some(chrono::Duration::seconds(95))
         );
-        assert_ne!(ended.id, started.id);
-        // Carol's ENDED for the same call, arriving later, is the same row.
+        assert_eq!(
+            svc.message_repo.get(&started.id).unwrap().unwrap().content,
+            ended.content
+        );
+        assert!(svc
+            .message_repo
+            .get(&row_id(
+                &f.channel,
+                call.parse().unwrap(),
+                ChannelCallPhase::Ended
+            ))
+            .unwrap()
+            .is_none());
+        // Carol's ENDED for the same call, arriving later, changes nothing.
         assert!(
             svc.file_channel_call_event(
                 &f.channel,
@@ -292,6 +325,44 @@ mod tests {
             )
             .unwrap()
             .is_none()
+        );
+        assert!(svc
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, 22)
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn ended_without_started_files_one_row_and_late_started_is_ignored() {
+        let f = fixture();
+        let svc = f.client.messages();
+        let call = uuid::Uuid::new_v4().to_string();
+        let ended = svc
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 37, 20)
+            .unwrap()
+            .expect("ENDED files a row when STARTED was missed");
+        assert_eq!(call_of(&ended).call_type, CallMessageType::Ended);
+        assert!(call_of(&ended).started_at.is_none());
+        assert!(svc
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Started, 0, 10)
+            .unwrap()
+            .is_none());
+        assert!(svc
+            .file_channel_call_event(&f.channel, &f.carol, &call, ChannelCallPhase::Ended, 37, 20)
+            .unwrap()
+            .is_none());
+        assert!(svc
+            .message_repo
+            .get(&row_id(
+                &f.channel,
+                call.parse().unwrap(),
+                ChannelCallPhase::Started
+            ))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            svc.message_repo.get(&ended.id).unwrap().unwrap().content,
+            ended.content
         );
     }
 

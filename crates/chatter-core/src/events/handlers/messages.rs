@@ -283,7 +283,7 @@ impl EventHandlers {
                 }
             }
 
-            DomainEvent::SavedMessageSynced { message } => {
+            DomainEvent::MessageSnapshotChanged { message } => {
                 let message = if let Some(service) = &self.message_service {
                     let Some(stored) = service.message_repo.get(&message.id).ok().flatten()
                         .filter(|stored| stored.conversation_type == message.conversation_type
@@ -296,7 +296,7 @@ impl EventHandlers {
                     message
                 };
                 let channel_id = message.conversation_id;
-                trace!(?channel_id, message_id = ?message.id, "SavedMessageSynced: adding to state");
+                trace!(?channel_id, message_id = ?message.id, "MessageSnapshotChanged: updating state");
                 if self.message_state.get_messages(&channel_id).iter().any(|m| m.id == message.id) {
                     self.message_state.update_message(&channel_id, &message.id, |stored| {
                         *stored = message.clone();
