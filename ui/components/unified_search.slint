@@ -318,6 +318,8 @@ export component UnifiedSearch inherits Rectangle {
     in property <[QuickSwitcherItem]> picker-options: [];
     in property <bool> picker-searching: false;
     property <string> picker-mode: "";
+    // Typing goes to the sheet's own field, not the search behind it.
+    changed picker-mode => { if root.picker-mode != "" { picker-input.focus(); } }
     property <string> picker-query: "";
     callback picker-request(string, string);
     in property <[string]> recent-searches: [];
