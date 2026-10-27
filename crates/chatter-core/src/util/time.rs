@@ -19,6 +19,22 @@ pub fn format_message_time(sent_at: DateTime<Utc>) -> String {
     sent_at.with_timezone(&Local).format("%H:%M").to_string()
 }
 
+/// A moment for message details: "Today, 12:16:37", "Yesterday, 09:02:11",
+/// otherwise "21 Oct 2026, 18:40:05" — local time, as Signal's message info.
+pub fn format_detail_time(at: DateTime<Utc>) -> String {
+    let local = at.with_timezone(&Local);
+    let today = Local::now().date_naive();
+    let day = local.date_naive();
+    let date = if day == today {
+        "Today".to_string()
+    } else if today.pred_opt() == Some(day) {
+        "Yesterday".to_string()
+    } else {
+        local.format("%-d %b %Y").to_string()
+    };
+    format!("{date}, {}", local.format("%H:%M:%S"))
+}
+
 #[cfg(test)]
 use chrono::Datelike;
 

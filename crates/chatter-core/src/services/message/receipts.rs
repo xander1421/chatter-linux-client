@@ -342,10 +342,9 @@ impl MessageService {
                 value
                     .and_then(|value| i64::try_from(value).ok())
                     .map(|value| {
-                        chrono::DateTime::from_timestamp_nanos(value)
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M:%S")
-                            .to_string()
+                        crate::util::time::format_detail_time(
+                            chrono::DateTime::from_timestamp_nanos(value),
+                        )
                     })
                     .unwrap_or_else(|| "Pending".into())
             };
@@ -410,10 +409,8 @@ fn message_receipt_summary(message: &crate::domain::message::Message, show_read:
     let sent = i64::try_from(message.sent_at)
         .ok()
         .map(chrono::DateTime::from_timestamp_nanos)
-        .unwrap_or(message.created_at)
-        .with_timezone(&chrono::Local)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+        .unwrap_or(message.created_at);
+    let sent = crate::util::time::format_detail_time(sent);
     format!("Sent: {sent}\nStatus: {status}")
 }
 
@@ -577,7 +574,7 @@ mod tests {
         );
         message.delivery_status = "read".into();
         let summary = message_receipt_summary(&message, true);
-        assert!(summary.contains("Sent: 2023-"));
+        assert!(summary.contains("Nov 2023, "));
         assert!(summary.contains("Status: read"));
         assert!(message_receipt_summary(&message, false).contains("Status: delivered"));
     }
