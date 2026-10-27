@@ -401,6 +401,12 @@ impl UserSync {
             if self.user_repo.update_friendship(&friendship).is_err() {
                 let _ = self.user_repo.insert_friendship(&friendship);
             }
+            if self.user_repo.is_blocked(&current_user, user_id)
+                .map_err(|e| SyncError::Storage(format!("block status: {}", e)))?
+            {
+                self.user_repo.start_block_interval(&current_user, user_id)
+                    .map_err(|e| SyncError::Storage(format!("block interval: {}", e)))?;
+            }
         }
 
         // Clear local blocks the server no longer reports (an unblock made on
@@ -411,10 +417,13 @@ impl UserSync {
                     && friendship.requester_id == current_user
                     && !server_blocked.contains(&friendship.addressee_id)
                 {
-                    let _ = self.user_repo.update_friendship(&Friendship {
+                    let peer = friendship.addressee_id;
+                    self.user_repo.update_friendship(&Friendship {
                         status: FriendshipStatus::Accepted,
                         ..friendship
-                    });
+                    }).map_err(|e| SyncError::Storage(format!("unblock friendship: {}", e)))?;
+                    self.user_repo.end_block_interval(&current_user, &peer)
+                        .map_err(|e| SyncError::Storage(format!("unblock interval: {}", e)))?;
                 }
             }
         }

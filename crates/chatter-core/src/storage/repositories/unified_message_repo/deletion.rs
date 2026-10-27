@@ -22,16 +22,6 @@ fn queue_message_attachments(
 }
 
 impl UnifiedMessageRepository {
-    /// Remember a channel message intentionally ignored at receive time.
-    /// Its server copy may be fetched again after the sender is unblocked.
-    pub fn tombstone_ignored(&self, id: &MessageId) -> Result<(), StorageError> {
-        self.db.connection()?.execute(
-            "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
-            params![id.to_string()],
-        )?;
-        Ok(())
-    }
-
     /// Delete a message by ID (hard delete — CASCADE removes unified_reactions).
     /// Hard-delete every message of one conversation type.
     ///

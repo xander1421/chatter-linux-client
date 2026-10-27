@@ -130,6 +130,7 @@ mod v129_pending_dm_retry;
 mod v130_timestamp_quote_key;
 mod v131_mesh_archive_packets;
 mod v140_activity_actor_names;
+mod v141_user_block_intervals;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -487,4 +488,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v130_timestamp_quote_key::V130TimestampQuoteKey)
         .register(v131_mesh_archive_packets::V131MeshArchivePackets)
         .register(v140_activity_actor_names::V140ActivityActorNames)
+        .register(v141_user_block_intervals::V141UserBlockIntervals)
 }

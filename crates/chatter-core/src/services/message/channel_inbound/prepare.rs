@@ -91,7 +91,7 @@ impl ChannelInbound {
             Ok(true) => return Err(Ingested::Dropped),
             Ok(false) => {}
             Err(error) => {
-                tracing::warn!(%channel_id, %error, "Failed to record blocked channel message");
+                tracing::warn!(%channel_id, %error, "Failed to check blocked channel sender");
                 return Err(Ingested::RetryableFailure);
             }
         }

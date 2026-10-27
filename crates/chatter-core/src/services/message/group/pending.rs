@@ -231,7 +231,7 @@ impl MessageService {
                 Ok(false) => {}
                 Err(error) => {
                     tracing::warn!(%channel_id, %sender_id, %error,
-                        "Failed to record blocked deferred channel message");
+                        "Failed to check blocked deferred channel sender");
                     self.defer_pending_group_decrypt(
                         channel_id, sender_id, device_id, proto_msg,
                     );

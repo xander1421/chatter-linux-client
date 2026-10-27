@@ -67,8 +67,7 @@ pub struct ChannelInbound {
 
 impl ChannelInbound {
     /// Shared blocked-sender decision for live, catch-up, resync and key retry.
-    /// Persist the decision because later catch-up can replay this same row after
-    /// the sender has been unblocked.
+    /// Send-time intervals make catch-up agree with live receipt after an unblock.
     pub(crate) fn drop_blocked_sender(
         messages: &MessageService,
         proto_msg: &chat_v1::Message,
@@ -77,10 +76,7 @@ impl ChannelInbound {
         if proto_msg.channel_id.parse::<ChannelId>().ok() != Some(channel_id) {
             return Ok(false);
         }
-        let (Ok(sender), Ok(id)) = (
-            proto_msg.author_id.parse::<UserId>(),
-            proto_msg.id.parse::<crate::domain::ids::MessageId>(),
-        ) else {
+        let Ok(sender) = proto_msg.author_id.parse::<UserId>() else {
             return Ok(false);
         };
         let me = messages
@@ -94,19 +90,9 @@ impl ChannelInbound {
             messages.database.clone(),
         );
         let blocked = messages.user_repo.is_blocked(&me, &sender)?
-            || anon.is_user_blocked(&sender)?
-            || anon
-                .get_conversation(&crate::domain::anon_dm::AnonDmId::from_uuid(sender.0))?
-                .is_some_and(|dm| dm.status == crate::domain::anon_dm::AnonDmStatus::Blocked);
-        if !blocked {
-            return Ok(false);
-        }
-        // Existing history predates the block. Do not tombstone a retained row
-        // (or an unrelated row whose id a malformed envelope reused).
-        if messages.message_repo.get(&id)?.is_none() {
-            messages.message_repo.tombstone_ignored(&id)?;
-        }
-        Ok(true)
+            || messages.user_repo.was_blocked_at(&me, &sender, proto_msg.timestamp)?
+            || anon.is_user_blocked(&sender)?;
+        Ok(blocked)
     }
 
     pub fn new(

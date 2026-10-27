@@ -38,6 +38,9 @@ impl UserService {
                 tracing::warn!(error = %e, "block_user: local block row not written");
             }
         }
+        if self.user_repo.is_blocked(&current_user, user_id)? {
+            self.user_repo.start_block_interval(&current_user, user_id)?;
+        }
 
         Ok(())
     }
@@ -71,6 +74,7 @@ impl UserService {
             created_at: Utc::now(),
         };
         let _ = self.user_repo.update_friendship(&accepted);
+        self.user_repo.end_block_interval(&current_user, user_id)?;
 
         // Someone who was never a friend has no business in the friends list.
         // judged on the first page only; with a full page (or

@@ -29,6 +29,7 @@ async fn blocked_channel_message_stays_absent_after_unblock_and_catch_up() {
         created_at: chrono::Utc::now(),
     };
     users.insert_friendship(&friendship).unwrap();
+    users.start_block_interval(&me, &sender).unwrap();
 
     let inbound = ChannelInbound::new(
         client.messages().clone(),
@@ -41,7 +42,7 @@ async fn blocked_channel_message_stays_absent_after_unblock_and_catch_up() {
         id: id.to_string(),
         channel_id: channel.to_string(),
         author_id: sender.to_string(),
-        timestamp: 1_000,
+        timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64,
         content: Some(chat_v1::message::Content {
             r#type: Some(chat_v1::message::content::Type::Text("blocked".into())),
         }),
@@ -49,17 +50,19 @@ async fn blocked_channel_message_stays_absent_after_unblock_and_catch_up() {
     };
     let mut events = client.subscribe_events();
     assert_eq!(inbound.ingest(&row, channel, true).await, Ingested::Dropped);
-    assert!(client.messages().message_repo.is_tombstoned(&id).unwrap());
+    assert!(!client.messages().message_repo.is_tombstoned(&id).unwrap());
     assert!(client.messages().get_message_local(&id).unwrap().is_none());
 
     friendship.status = crate::domain::user::FriendshipStatus::Accepted;
     users.update_friendship(&friendship).unwrap();
+    users.end_block_interval(&me, &sender).unwrap();
     assert_eq!(inbound.ingest(&row, channel, false).await, Ingested::Dropped);
     inbound.ingest_resynced(&row, channel).await.unwrap();
     assert!(client.messages().get_message_local(&id).unwrap().is_none());
     assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
 
     row.id = crate::domain::ids::MessageId::new().to_string();
+    row.timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 + 1_000_000_000;
     assert_eq!(inbound.ingest(&row, channel, true).await, Ingested::Stored);
     assert!(matches!(events.try_recv(), Ok(DomainEvent::MessageReceived { .. })));
 }

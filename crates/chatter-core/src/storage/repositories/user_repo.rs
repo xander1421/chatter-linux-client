@@ -498,6 +498,44 @@ impl UserRepository {
         Ok(status.map(friendship_status_from_i32) == Some(FriendshipStatus::Blocked))
     }
 
+    /// Start an interval only on a transition to blocked. Repeated syncs keep its original start.
+    pub fn start_block_interval(&self, owner: &UserId, peer: &UserId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO user_block_intervals (owner_id, peer_id, started_at_ns)
+             SELECT ?1, ?2, ?3 WHERE NOT EXISTS (
+                 SELECT 1 FROM user_block_intervals
+                 WHERE owner_id = ?1 AND peer_id = ?2 AND ended_at_ns IS NULL)",
+            params![owner.to_string(), peer.to_string(), Utc::now().timestamp_nanos_opt()
+                .ok_or_else(|| StorageError::InvalidData("block timestamp out of range".into()))?],
+        )?;
+        Ok(())
+    }
+
+    pub fn end_block_interval(&self, owner: &UserId, peer: &UserId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE user_block_intervals SET ended_at_ns = ?3
+             WHERE owner_id = ?1 AND peer_id = ?2 AND ended_at_ns IS NULL",
+            params![owner.to_string(), peer.to_string(), Utc::now().timestamp_nanos_opt()
+                .ok_or_else(|| StorageError::InvalidData("unblock timestamp out of range".into()))?],
+        )?;
+        Ok(())
+    }
+
+    pub fn was_blocked_at(&self, owner: &UserId, peer: &UserId, sent_at_ns: u64) -> Result<bool, StorageError> {
+        let Ok(sent_at_ns) = i64::try_from(sent_at_ns) else { return Ok(false); };
+        let conn = self.db.read_connection()?;
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM user_block_intervals
+             WHERE owner_id = ?1 AND peer_id = ?2 AND started_at_ns <= ?3
+               AND (ended_at_ns IS NULL OR ?3 < ended_at_ns))",
+            params![owner.to_string(), peer.to_string(), sent_at_ns],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
     /// Everyone `user_id` has blocked, in the same orientation [`Self::is_blocked`]
     /// reads (`user_id = us, friend_id = them`).
     pub fn list_blocked_by(&self, user_id: &UserId) -> Result<Vec<UserId>, StorageError> {
