@@ -52,7 +52,7 @@ export global ModalHostState {
     // it opens (Sessions, Link device, ...), so it cannot key off
     // `active-modal`; written by back.rs alongside the stack.
     in-out property <bool> settings-open: false;
-    in property <string> third-party-notices: "";
+    in property <[string]> third-party-notices: [];
     callback nav-push(string);
     // Close that screen and everything pushed above it.
     callback nav-close(string);

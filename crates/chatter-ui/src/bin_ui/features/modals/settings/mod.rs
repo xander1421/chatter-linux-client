@@ -19,7 +19,15 @@ use crate::MainWindow;
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<crate::ModalHostState>()
-        .set_third_party_notices(include_str!("../../../../../../../assets/licenses/THIRD_PARTY_NOTICES.txt").into());
+        .set_third_party_notices(slint::ModelRc::new(slint::VecModel::from(
+            // One row per blank-line-separated block: the list only lays out
+            // what is on screen, where one 2 MB text field took seconds.
+            include_str!("../../../../../../../assets/licenses/THIRD_PARTY_NOTICES.txt")
+                .split("\n\n")
+                .filter(|block| !block.trim().is_empty())
+                .map(slint::SharedString::from)
+                .collect::<Vec<_>>(),
+        )));
     if let Some((height, width)) = ui_ctx.composer_keyboard_geometry() {
         window.set_remembered_keyboard_height_px(height);
         window.set_remembered_keyboard_width_px(width);
