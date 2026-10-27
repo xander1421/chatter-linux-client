@@ -468,7 +468,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Initial data load complete");
 }
 
-pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
+pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool, text: &str) {
     let model = window.global::<crate::SidebarPane>().get_chat_rows();
     for i in 0..model.row_count() {
         if let Some(mut row) = model.row_data(i) {
@@ -478,8 +478,9 @@ pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
             // the anonymous conversation to the identified one. A friend
             // DM's conversation id is the peer id, so it still matches.
             let named = row.conversation_id.as_str() == id;
-            if named && row.is_typing != is_typing {
+            if named && (row.is_typing != is_typing || row.typing_text.as_str() != text) {
                 row.is_typing = is_typing;
+                row.typing_text = text.into();
                 model.set_row_data(i, row);
                 crate::bin_ui::features::sidebar::refresh_flat_rows(window);
             }

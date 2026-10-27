@@ -26,6 +26,7 @@ export component ChannelListItem inherits Rectangle {
     in property <string> draft-preview: "";
     in property <string> timestamp: "";
     in property <bool> is-typing: false;
+    in property <string> typing-text;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <image> avatar-source;
@@ -261,7 +262,7 @@ export component ChannelListItem inherits Rectangle {
                 }
 
                 Text {
-                    text: "typing";
+                    text: root.typing-text != "" ? root.typing-text : "typing";
                     color: Colors.primary;
                     font-size: Typography.xs;
                 }

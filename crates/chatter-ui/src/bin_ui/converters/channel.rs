@@ -66,6 +66,7 @@ impl ChatRowExt for ChatRowSendData {
             unread_count: self.unread_count as i32,
             mention_count: self.mention_count as i32,
             is_typing: self.is_typing,
+            typing_text: Default::default(),
             is_pinned: self.is_pinned,
             is_muted: self.is_muted,
             can_leave: self.can_leave,

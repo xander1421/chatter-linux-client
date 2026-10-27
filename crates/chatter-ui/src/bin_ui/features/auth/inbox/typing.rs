@@ -58,7 +58,7 @@ pub fn set_typing_with_timer(
             .global::<crate::ChatPane>()
             .set_typing_indicator(text.into());
     }
-    update_sidebar_typing(window, key, true);
+    update_sidebar_typing(window, key, true, text);
 
     // Clear from cancelled set if it was there (we're starting fresh)
     CANCELLED_TIMERS.with(|cancelled| {
@@ -80,7 +80,7 @@ pub fn set_typing_with_timer(
                 w.global::<crate::ChatPane>()
                     .set_typing_indicator("".into());
             }
-            update_sidebar_typing(&w, &key_owned, false);
+            update_sidebar_typing(&w, &key_owned, false, "");
         }
         // Always remove from map when timer fires
         DM_TYPING_TIMERS.with(|timers| {
@@ -143,5 +143,5 @@ pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str, is_active: bool
             .set_typing_indicator("".into());
     }
     // Also clear sidebar typing state
-    update_sidebar_typing(window, peer_id, false);
+    update_sidebar_typing(window, peer_id, false, "");
 }
