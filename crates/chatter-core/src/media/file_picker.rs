@@ -161,8 +161,16 @@ fn dialogs_available() -> bool {
         return false;
     }
     if cfg!(target_os = "linux") {
-        return std::env::var_os("DISPLAY").is_some()
-            || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let x11 = std::env::var_os("DISPLAY").is_some();
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        // GTK honours GDK_BACKEND strictly: naming a backend whose display is
+        // absent makes gtk_init fail, and rfd's dialog future then never
+        // resolves, leaving every later pick waiting behind it.
+        return match std::env::var("GDK_BACKEND").ok().as_deref() {
+            Some("wayland") => wayland,
+            Some("x11") => x11,
+            _ => x11 || wayland,
+        };
     }
     true
 }
