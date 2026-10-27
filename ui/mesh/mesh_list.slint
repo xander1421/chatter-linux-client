@@ -145,7 +145,7 @@ export component MeshList inherits Rectangle {
                         x: Spacing.lg; spacing: Spacing.md;
                         for peer[index] in MeshGlobal.nearby-peers: VerticalLayout {
                             width: 80px; spacing: Spacing.xs; alignment: start;
-                            Rectangle {
+                            HorizontalLayout { alignment: center; Rectangle {
                                 width: 52px; height: 52px; border-radius: Spacing.radius-full;
                                 background: Math.mod(index, 3) == 0 ? Colors.avatar-teal
                                     : Math.mod(index, 3) == 1 ? Colors.avatar-blue : Colors.avatar-purple;
@@ -161,7 +161,7 @@ export component MeshList inherits Rectangle {
                                     accessible-label: "Open nearby mesh peer " + peer.name;
                                     clicked => { MeshGlobal.open-peer(peer.id); }
                                 }
-                            }
+                            } }
                             Text {
                                 text: peer.name; width: 80px; color: Colors.text-secondary;
                                 font-size: Typography.xs; overflow: elide; horizontal-alignment: center;
