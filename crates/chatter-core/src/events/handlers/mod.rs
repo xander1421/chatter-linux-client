@@ -227,9 +227,9 @@ impl EventHandlers {
             event @ DomainEvent::MessageSendFailed { .. } => self.handle_messages_event(event),
             // Chat-list presentation only; no state store holds it.
             DomainEvent::MessageSent { .. } => {}
-            event @ DomainEvent::KeyExchangeReceived { .. } => self.handle_channels_event(event),
-            event @ DomainEvent::SenderKeyReceived { .. } => self.handle_channels_event(event),
-            event @ DomainEvent::GroupMailboxReceived { .. } => self.handle_channels_event(event),
+            event @ DomainEvent::KeyExchangeReceived { .. } => self.handle_key_exchange_event(event),
+            event @ DomainEvent::SenderKeyReceived { .. } => self.handle_key_exchange_event(event),
+            event @ DomainEvent::GroupMailboxReceived { .. } => self.handle_key_exchange_event(event),
             event @ DomainEvent::ChannelMemberJoined { .. } => self.handle_channels_event(event),
             event @ DomainEvent::ChannelMemberLeft { .. } => self.handle_channels_event(event),
             event @ DomainEvent::ChannelUpdated { .. } => self.handle_channels_event(event),
@@ -246,8 +246,8 @@ impl EventHandlers {
                 self.handle_channels_event(event)
             }
             event @ DomainEvent::DmSessionHealed { .. } => self.handle_key_exchange_event(event),
-            event @ DomainEvent::PeerIdentityChanged { .. } => self.handle_channels_event(event),
-            event @ DomainEvent::PeerDevicesChanged { .. } => self.handle_channels_event(event),
+            event @ DomainEvent::PeerIdentityChanged { .. } => self.handle_key_exchange_event(event),
+            event @ DomainEvent::PeerDevicesChanged { .. } => self.handle_key_exchange_event(event),
             event @ DomainEvent::AnonGroupInviteReceived { .. } => {
                 self.handle_anonymous_event(event)
             }
