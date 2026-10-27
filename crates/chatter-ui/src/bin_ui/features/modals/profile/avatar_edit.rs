@@ -104,6 +104,12 @@ fn open(w: &MainWindow, owner: Owner, current_avatar: Option<&[u8]>) {
         .set_edit_profile_error("".into());
     w.global::<crate::ModalHostState>()
         .set_edit_profile_loading(false);
+    // A preset is not a photo: show it as the picker would, so an initials
+    // preset previews live and Save re-renders it for a new name (it kept
+    // the old letters, being treated as an uploaded photo).
+    if let Some(index) = current_preset {
+        crate::bin_ui::features::avatar_defaults::show_edit_default(w, index);
+    }
     crate::bin_ui::features::back::push(w, "edit-profile");
     EDIT.with(|s| {
         let mut s = s.borrow_mut();
