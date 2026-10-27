@@ -344,15 +344,19 @@ impl ChannelEventService {
         }
     }
 
-    /// File "{actor} changed the channel photo". Keyed on the event (or, for
-    /// our own change, filed once by the caller), like a rename notice.
-    pub fn record_channel_photo_changed(&self, channel_id: &ChannelId, actor: UserId, event_ts: u64) {
-        let id = if event_ts == 0 {
-            MessageId::new()
-        } else {
-            let key = format!("channel_photo_notice:{channel_id}:{actor}:{event_ts}");
-            MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), key.as_bytes()))
-        };
+    /// File "{actor} changed the channel photo". Keyed on the new icon's
+    /// bytes, as a rename notice is on its names: our own change files it from
+    /// the RPC and again from the stream echo, which can land first.
+    pub fn record_channel_photo_changed(
+        &self,
+        channel_id: &ChannelId,
+        actor: UserId,
+        icon: &[u8],
+        event_ts: u64,
+    ) {
+        let mut key = format!("channel_photo_notice:{channel_id}:{actor}:").into_bytes();
+        key.extend_from_slice(icon);
+        let id = MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), &key));
         let message = self.create_system_message(
             id,
             channel_id,

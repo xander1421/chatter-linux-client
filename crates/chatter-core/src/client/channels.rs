@@ -481,13 +481,14 @@ impl ChatterClient {
             .channels()
             .update_channel(channel_id, name, description, fitted.as_deref(), None)
             .await?;
-        // Our own rename or photo: the stream echo finds them already merged
-        // and files nothing, so file the notices here.
+        // Our own rename or photo: the stream echo may find them already merged
+        // and file nothing, so file the notices here too (keyed, so an echo
+        // that lands first is not doubled).
         if let (Some(icon), Some(me)) = (fitted.as_deref(), self.session_current_user_id()) {
             if !icon.is_empty() && icon != old_icon.as_slice() {
                 self.services
                     .channel_event_service
-                    .record_channel_photo_changed(channel_id, me, 0);
+                    .record_channel_photo_changed(channel_id, me, icon, 0);
             }
         }
         if let (Some(old_name), Some(me)) = (old_name, self.session_current_user_id()) {
