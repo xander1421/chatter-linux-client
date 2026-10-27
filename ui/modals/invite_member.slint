@@ -111,6 +111,13 @@ export component InviteMemberModal inherits Rectangle {
                             // Members and banned users can't be invited.
                             property <bool> unavailable: user.already-member || user.banned;
                             height: max(52px, Spacing.touch-target-min);
+                            accessible-role: checkbox;
+                            accessible-label: user.display-name
+                                + (user.banned ? ", banned" : user.already-member ? ", already a member" : "");
+                            accessible-checkable: !unavailable;
+                            accessible-checked: user.selected;
+                            accessible-enabled: !unavailable;
+                            accessible-action-default => { if !unavailable { root.toggle-user(index); } }
                             background: unavailable ? transparent :
                                 (user-touch.pressed ? Materials.pressed : user-touch.has-hover ? Colors.surface-hover : transparent);
                             border-radius: Spacing.radius-md;
