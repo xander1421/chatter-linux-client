@@ -339,6 +339,7 @@ export component AppSecondaryModals inherits Rectangle {
         show-disappearing: ChatPane.conversation-kind == ConversationKind.anon-dm;
         show-pinned: true;
         pinned => { ModalHostState.nav-close("chat-menu"); ChatPane.pinned-show-clicked(); }
+        search => { ModalHostState.nav-close("chat-menu"); ChatPane.search-in-chat-clicked(); }
         card-x: max(Spacing.sm, root.width - self.card-width - Spacing.sm);
         card-y: max(Spacing.sm, min(
             (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs,

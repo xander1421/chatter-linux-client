@@ -27,6 +27,22 @@ pub struct SearchFilterOption {
 }
 
 impl ChatterClient {
+    /// The open conversation as a search "In:" filter (id, label), when it is
+    /// one search can scope to: a friend DM or a channel.
+    pub fn active_search_scope(&self) -> Option<(String, String)> {
+        use crate::state::ActiveConversation;
+        match self.active_conversation() {
+            ActiveConversation::ServerDm { peer_id } => {
+                Some((peer_id.to_string(), self.display_name(&peer_id)))
+            }
+            ActiveConversation::Channel(id) => {
+                let name = self.get_channel_local(&id)?.name;
+                Some((id.to_string(), name))
+            }
+            _ => None,
+        }
+    }
+
     /// Eligible local picker rows, shaped in core using the same visibility gates as search.
     pub fn search_filter_options(&self, kind: &str, query: &str) -> Vec<SearchFilterOption> {
         let needle = query.trim().to_lowercase();

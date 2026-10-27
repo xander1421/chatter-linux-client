@@ -261,6 +261,24 @@ fn wire_opened(
     requests: Arc<Mutex<SearchRequests>>,
     recent_mode: Arc<Mutex<Option<bool>>>,
 ) {
+    // Chat menu "Search in chat": open search scoped to the open conversation.
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        window
+            .global::<crate::ChatPane>()
+            .on_search_in_chat_clicked(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let pane = w.global::<crate::SearchPane>();
+                if let Some((id, name)) = ui_ctx.active_search_scope() {
+                    pane.set_unified_search_in(id.into());
+                    pane.set_unified_search_in_label(name.into());
+                }
+                pane.set_unified_search_selected_index(0);
+                pane.set_unified_search_open(true);
+                pane.invoke_unified_search_opened();
+            });
+    }
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window
