@@ -165,6 +165,7 @@ fn wire_calendar(window: &MainWindow) {
                 .set_unified_search_calendar_month(current.format("%B %Y").to_string().into());
             let offset = current.weekday().num_days_from_monday() as i64;
             let first = *current - chrono::Duration::days(offset);
+            let today = chrono::Local::now().date_naive();
             let days = (0..42)
                 .map(|i| {
                     let date = first + chrono::Duration::days(i);
@@ -172,6 +173,7 @@ fn wire_calendar(window: &MainWindow) {
                         date: date.format("%Y-%m-%d").to_string().into(),
                         label: date.day().to_string().into(),
                         in_month: date.month() == current.month(),
+                        is_today: date == today,
                     }
                 })
                 .collect::<Vec<_>>();
