@@ -179,13 +179,16 @@ fn reconcile(
                 _ => None,
             }
         }).collect();
+        if posted.iter().any(|call| !ringing.contains(call)) {
+            tracing::warn!(target: "chatter_core::ring_lifecycle::withdrawn", "ring left the presentation");
+        }
         posted.retain(|call| {
             if ringing.contains(call) { return true; }
             if let Err(error) = notifications.cancel_incoming_call(call) {
                 tracing::error!(call_id = %call, %error, "ring notification cancel failed");
                 return true; // retry on the next invalidation
             }
-            tracing::info!(target: "chatter_core::ring_lifecycle::cancelled", "ring notification cancelled");
+            tracing::warn!(target: "chatter_core::ring_lifecycle::cancelled", "ring notification cancelled");
             false
         });
         for event in &snapshot.presentations {
@@ -198,7 +201,7 @@ fn reconcile(
                 };
                 match notifications.show_incoming_call(call.as_str(), title, &body) {
                     Ok(()) => {
-                        tracing::info!(target: "chatter_core::ring_lifecycle::posted", "ring notification posted");
+                        tracing::warn!(target: "chatter_core::ring_lifecycle::posted", "ring notification posted");
                         posted.insert(call.as_str().to_owned());
                     }
                     Err(error) => tracing::error!(call_id = %call.as_str(), %error, "ring notification failed"),
