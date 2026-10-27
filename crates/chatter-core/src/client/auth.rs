@@ -14,7 +14,16 @@ impl ClientError {
     pub fn user_message(&self) -> String {
         match self {
             Self::Auth(e) => e.user_message(),
-            other => other.to_string(),
+            Self::Validation(_) | Self::IdentityRecoveryRequired(_) | Self::CallEnded => {
+                self.to_string()
+            }
+            Self::Connection(crate::error::NetworkError::Unauthenticated) => {
+                "Wrong password.".to_string()
+            }
+            Self::Connection(_) | Self::NotConnected => {
+                "Couldn't reach the server. Try again.".to_string()
+            }
+            _ => "Something went wrong. Try again.".to_string(),
         }
     }
 }
