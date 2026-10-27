@@ -134,6 +134,8 @@ impl ChatterClient {
         else {
             return Ok(None);
         };
+        // Same own-join notice as `join_channel` and `join_channel_via_link`.
+        self.services.channel_event_service.record_own_join(channel_id);
 
         // Nudge the stream FIRST, ahead of the slower calls below. A brand-new
         // invitee was in no channel when their client started, so the server
