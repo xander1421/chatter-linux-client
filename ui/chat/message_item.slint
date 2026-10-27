@@ -708,6 +708,9 @@ export component MessageItem inherits Rectangle {
                                 color: root.is-ai ? Colors.info : Colors.sender-name;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
+                                // Elide alone lets a short message shrink the
+                                // name to "anon…"; widen the bubble for it first.
+                                min-width: min(self.preferred-width, 220px);
                                 overflow: elide;
                                 vertical-alignment: center;
                             }
