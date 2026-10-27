@@ -54,6 +54,12 @@ export component AppShortcuts inherits FocusScope {
             SidebarPane.channel-selected("00000000-0000-0000-0000-000000000000");
             return true;
         }
+        // Ctrl+Shift+F: search in the open chat (Signal Desktop's binding).
+        if (root.active-modal == "none" && !SearchPane.unified-search-open && ChatPane.channel-name != ""
+            && event.modifiers.control && event.modifiers.shift && (event.text == "F" || event.text == "f")) {
+            ChatPane.search-in-chat-clicked();
+            return true;
+        }
         // Ctrl+K / Ctrl+F: open unified search (which combo depends on pref)
         if (root.active-modal == "none" && event.modifiers.control
             && ((event.text == "k" && SearchPane.search-shortcut-pref != "f")
