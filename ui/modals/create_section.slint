@@ -44,6 +44,16 @@ export component CreateSectionModal inherits Rectangle {
     // Track whether emoji picker is expanded
     property <bool> picker-open: false;
 
+    function submit(name: string) {
+        if name != "" && !root.loading {
+            if root.rename-mode {
+                root.rename-section(root.section-id, name, root.selected-emoji);
+            } else {
+                root.create-section(name, root.selected-emoji);
+            }
+        }
+    }
+
     // Reset state when modal closes
     changed show-modal => {
         if !show-modal {
@@ -106,6 +116,7 @@ export component CreateSectionModal inherits Rectangle {
                     text <=> root.section-name;
                     // Created on open: the name is the only thing to type.
                     init => { self.focus(); }
+                    accepted => { root.submit(self.composed-text); }
                 }
             }
 
@@ -195,15 +206,7 @@ export component CreateSectionModal inherits Rectangle {
                     disabled: name-input.composed-text == "" || root.loading;
                     loading: root.loading;
 
-                    clicked => {
-                        if name-input.composed-text != "" && !root.loading {
-                            if root.rename-mode {
-                                root.rename-section(root.section-id, name-input.composed-text, root.selected-emoji);
-                            } else {
-                                root.create-section(name-input.composed-text, root.selected-emoji);
-                            }
-                        }
-                    }
+                    clicked => { root.submit(name-input.composed-text); }
                 }
             }
         }
