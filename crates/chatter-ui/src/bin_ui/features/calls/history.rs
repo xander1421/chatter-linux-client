@@ -408,10 +408,10 @@ pub(crate) fn reload(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     request_page(window, ui_ctx, HISTORY_PAGE, None, Paint::Replace);
 }
 
-/// After rows were deleted: re-read the span the user had loaded and swap it
+/// After rows were deleted or a call ended: re-read the span the user had loaded and swap it
 /// in place. `loading` is not raised, so the list element survives and the
 /// viewport stays where it was rather than jumping back to the newest call.
-fn refresh_in_place(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+pub(crate) fn refresh_in_place(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let loaded = window
         .global::<crate::CallView>()
         .get_call_history_rows()

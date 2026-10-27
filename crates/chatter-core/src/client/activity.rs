@@ -250,7 +250,7 @@ impl ChatterClient {
                     created_at_ms: now,
                 });
             }
-            DomainEvent::MissedCallsChanged => {
+            DomainEvent::CallHistoryChanged => {
                 if let Err(e) = self.activity.sync_missed_calls(owner) {
                     tracing::warn!(error = %e, "Could not record missed calls");
                 }

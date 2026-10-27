@@ -637,10 +637,10 @@ pub enum DomainEvent {
         kind: PushKind,
     },
 
-    /// The call-history recorder wrote or closed a missed incoming call, so
-    /// the Calls tab badge (`ChatterClient::missed_call_count`) may have
-    /// moved. Emitted after the row is written: a reader sees it.
-    MissedCallsChanged,
+    /// The call-history recorder closed a call's row, so the Calls list and
+    /// its badge (`ChatterClient::missed_call_count`) may have moved. Emitted
+    /// after the row is written: a reader sees it.
+    CallHistoryChanged,
 }
 
 /// Privacy mode of a push notification received from self-hosted ntfy.
@@ -725,7 +725,7 @@ impl DomainEvent {
             DomainEvent::UserProfileUpdated { .. } => None,
             DomainEvent::SyncComplete { .. } => None,
             DomainEvent::PushWakeup { .. } => None,
-            DomainEvent::MissedCallsChanged => None,
+            DomainEvent::CallHistoryChanged => None,
             DomainEvent::DmSessionHealed { .. } => None,
             DomainEvent::PeerIdentityChanged { .. } => None,
             DomainEvent::PeerDevicesChanged { .. } => None,

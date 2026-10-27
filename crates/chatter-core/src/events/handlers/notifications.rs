@@ -146,8 +146,8 @@ impl EventHandlers {
             DomainEvent::SyncComplete { .. } => {
                 // Sync completion is handled by the UI directly
             }
-            // The Calls badge is read from storage by the UI.
-            DomainEvent::MissedCallsChanged => {}
+            // The Calls list and badge are read from storage by the UI.
+            DomainEvent::CallHistoryChanged => {}
             DomainEvent::ConversationsRead { .. } => {}
 
             // ================================================================

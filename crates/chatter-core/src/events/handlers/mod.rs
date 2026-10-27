@@ -292,7 +292,7 @@ impl EventHandlers {
                 self.handle_notifications_event(event)
             }
             event @ DomainEvent::SyncComplete { .. } => self.handle_notifications_event(event),
-            event @ DomainEvent::MissedCallsChanged => self.handle_notifications_event(event),
+            event @ DomainEvent::CallHistoryChanged => self.handle_notifications_event(event),
             event @ DomainEvent::ConversationsRead { .. } => self.handle_notifications_event(event),
             event @ DomainEvent::PushWakeup { .. } => self.handle_notifications_event(event),
         }

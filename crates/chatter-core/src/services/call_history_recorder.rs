@@ -154,7 +154,7 @@ pub fn spawn_call_history_recorder(
                             tracing::warn!(error = %e, "call history: incoming insert failed");
                         }
                         if missed_on_arrival {
-                            announce_if_missed(&history, &messages, &call);
+                            announce_closed(&messages);
                             file_dm_bubble(&history, &messages, &call);
                         }
                     }
@@ -172,7 +172,7 @@ pub fn spawn_call_history_recorder(
                     CallOrchestratorEvent::ActiveEnded { call, reason }
                     | CallOrchestratorEvent::IncomingWithdrawn { call, reason } => {
                         finish(&history, &call, connected.remove(&call), &reason);
-                        announce_if_missed(&history, &messages, &call);
+                        announce_closed(&messages);
                         // Answered on another of our devices: that device has
                         // the call; here it is only a Calls-screen row.
                         if reason != CallEndReason::AnsweredElsewhere {
@@ -245,22 +245,13 @@ fn finish(
     }
 }
 
-/// Tell the UI the Calls badge moved, when `call`'s row — already written, so
-/// the badge read that follows sees it — is a missed incoming call. A ringing
+/// Tell the UI a call's row was closed — already written, so the reads that
+/// follow see it — so the Calls list and its missed badge repaint. A ringing
 /// row is not announced: it only counts once the call is over.
-fn announce_if_missed(
-    history: &CallHistoryRepository,
-    messages: &MessageService,
-    call: &CallHandle,
-) {
-    let Ok(Some(entry)) = history.get(call.as_str()) else {
-        return;
-    };
-    if entry.direction == CallDirection::Incoming && entry.result == CallResult::Missed {
-        messages
-            .event_bus
-            .emit_domain(DomainEvent::MissedCallsChanged);
-    }
+fn announce_closed(messages: &MessageService) {
+    messages
+        .event_bus
+        .emit_domain(DomainEvent::CallHistoryChanged);
 }
 
 /// File the Call bubble for a finished call, when it was a 1:1 call, and

@@ -712,13 +712,15 @@ pub async fn handle_domain_event(
         // Events with no UI render — core handles the work, UI doesn't
         // surface anything to the user.
         DomainEvent::PushWakeup { .. } => {}
-        // A call was missed mid-session: repaint the Calls tab badge now, not
-        // at the next restart or Calls open.
-        DomainEvent::MissedCallsChanged => {
+        // A call ended mid-session: repaint the Calls badge, and the list if
+        // it is loaded, now rather than at the next restart or Calls open.
+        DomainEvent::CallHistoryChanged => {
             let missed = ui_ctx.missed_call_count().await as i32;
-            crate::run_ui!(window, |w| w
-                .global::<crate::CallView>()
-                .set_missed_call_count(missed));
+            let ui_ctx = ui_ctx.clone();
+            crate::run_ui!(window, |w| {
+                w.global::<crate::CallView>().set_missed_call_count(missed);
+                crate::bin_ui::features::calls::history::refresh_in_place(&w, &ui_ctx);
+            });
         }
         DomainEvent::DmSessionHealed { .. } => {}
         DomainEvent::PeerDevicesChanged { .. } => {}
