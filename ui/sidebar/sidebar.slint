@@ -394,7 +394,10 @@ export component Sidebar inherits Rectangle {
                             } }
                         }
                         Text {
-                            text: entry.kind == "archive-back" ? "Chats" : "Archived";
+                            // Inside, the row titles the list it heads, as Telegram's
+                            // "Archived Chats" bar; its chevron is the way back.
+                            text: entry.kind == "archive-back" ? "Archived chats" : "Archived";
+                            font-weight: entry.kind == "archive-back" ? Typography.semibold : Typography.normal;
                             color: Colors.text-primary;
                             font-size: root.quick-link-text-size;
                             vertical-alignment: center;
