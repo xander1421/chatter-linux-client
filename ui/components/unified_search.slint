@@ -608,6 +608,12 @@ export component UnifiedSearch inherits Rectangle {
                 height: Spacing.touch-target-min;
                 viewport-width: filter-row.preferred-width;
                 viewport-height: self.height;
+                // An In: scope set on open (Search in chat) is the last chip:
+                // on a phone it sat past the edge, so the scope was invisible.
+                property <bool> scoped: root.show && root.in-filter != "";
+                changed scoped => {
+                    if self.scoped { self.viewport-x = min(0px, self.width - self.viewport-width); }
+                }
                 filter-row := HorizontalLayout {
                 spacing: Spacing.xs;
                 Rectangle {
