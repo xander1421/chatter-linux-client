@@ -764,8 +764,11 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
         let protection_client = client.clone();
         window.on_refresh_screen_protection(move || {
             if let Some(w) = weak.upgrade() {
+                // A tablet keeps the chat on screen beside or under the
+                // Calls / Contacts panels; only a phone's tab replaces it.
                 let chat_visible = w.get_current_view() == "main"
-                    && w.global::<crate::SidebarPane>().get_active_tab() == "chats"
+                    && (!w.get_compact_layout()
+                        || w.global::<crate::SidebarPane>().get_active_tab() == "chats")
                     && w.get_chat_content_visible();
                 let recovery_visible = w.get_active_modal() == "recovery-codes";
                 let exiting_kind = (w.get_compact_layout()
