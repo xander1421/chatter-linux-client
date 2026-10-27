@@ -75,7 +75,9 @@ import { ShieldWash } from "anon_mode/shield_wash.slint";
 export { ChatRowData, CustomSectionData, SidebarRowData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, ChannelInviteData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
 
 export component MainWindow inherits Window {
-    title: "Chatter";
+    // Unread chats in the title, as Signal Desktop ("Signal (3)"): it is what
+    // the taskbar and window switcher show while the window is in the back.
+    title: SidebarPane.total-unread-count > 0 ? "Chatter (" + SidebarPane.total-unread-count + ")" : "Chatter";
     icon: @image-url("../assets/icon-256.png");
     // Responsive: allow narrow widths for phones (360dp minimum)
     min-width: 360px;
