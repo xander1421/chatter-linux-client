@@ -2,6 +2,7 @@ import { SearchPane } from "app_search_pane.slint";
 import { SidebarPane } from "app_sidebar_pane.slint";
 import { ModalHostState } from "app_modal_host_state.slint";
 import { JarvisPane } from "app_jarvis_pane.slint";
+import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 import { ChatPane } from "app_chat_pane.slint";
 import { AuthFlow } from "app_auth_flow.slint";
 import { Materials } from "theme/materials.slint";
@@ -412,6 +413,8 @@ export component AppSecondaryModals inherits Rectangle {
     // Keyboard shortcuts help dialog
     if root.is-presented("keyboard-shortcuts"): KeyboardShortcutsDialog {
         shown: root.active-modal == "keyboard-shortcuts";
+        search-shortcut-pref: SearchPane.search-shortcut-pref;
+        ai-enabled: JarvisGlobal.enabled;
         width: root.width;
         height: root.window-height;
         close => { ModalHostState.nav-close("keyboard-shortcuts"); }
