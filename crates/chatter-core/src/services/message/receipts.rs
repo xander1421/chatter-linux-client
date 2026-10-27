@@ -403,7 +403,8 @@ impl MessageService {
 fn message_receipt_summary(message: &crate::domain::message::Message, show_read: bool) -> String {
     let status = match message.delivery_status.as_str() {
         "read" if !show_read => "delivered",
-        "" => "Unknown",
+        // No receipt recorded (Saved messages never get one): as the bubble.
+        "" => "sent",
         status => status,
     };
     let sent = i64::try_from(message.sent_at)
