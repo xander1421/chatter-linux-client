@@ -277,6 +277,15 @@ fn wire_opened(
                 pane.set_unified_search_selected_index(0);
                 pane.set_unified_search_open(true);
                 pane.invoke_unified_search_opened();
+                // The closing chat menu takes focus back after the overlay
+                // focused its field; focus it again once that has settled.
+                let weak = w.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+                    if let Some(w) = weak.upgrade() {
+                        let pane = w.global::<crate::SearchPane>();
+                        pane.set_unified_search_caret_end_seq(pane.get_unified_search_caret_end_seq() + 1);
+                    }
+                });
             });
     }
     let weak = window.as_weak();
