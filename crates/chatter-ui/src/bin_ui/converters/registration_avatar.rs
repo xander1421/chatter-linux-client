@@ -78,6 +78,23 @@ pub fn preset_avatar_index(avatar: &[u8], name: &str) -> Option<usize> {
                 .filter(|&i| DEFAULT_AVATARS[i].image.is_none())
                 .find(|&i| default_avatar_bytes(i, name).as_deref() == Some(avatar))
         })
+        .or_else(|| initials_preset_by_colour(avatar))
+}
+
+/// An initials preset rendered for an earlier name: a 256 px square whose
+/// corner is exactly a preset colour. Without this a rename kept the old
+/// letters, the stored image no longer matching the new name's rendering.
+// matches on colour alone: a custom 256 px photo with an exact preset-coloured
+// corner would be mistaken for the preset.
+fn initials_preset_by_colour(avatar: &[u8]) -> Option<usize> {
+    let image = image::load_from_memory_with_format(avatar, image::ImageFormat::Png).ok()?.to_rgba8();
+    if image.dimensions() != (256, 256) {
+        return None;
+    }
+    let corner = image.get_pixel(0, 0).0;
+    DEFAULT_AVATARS.iter().position(|choice| {
+        choice.image.is_none() && corner == [choice.color[0], choice.color[1], choice.color[2], 255]
+    })
 }
 
 // Render the same initials shown by Avatar into real image bytes. Registration
