@@ -250,7 +250,7 @@ impl InboxEventProcessor {
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *peer_id,
                                 emoji: emoji.clone(),
-                                timestamp: *target_sent_timestamp,
+                                timestamp: *timestamp / 1_000_000,
                             }
                         } else {
                             DomainEvent::ReactionAdded {
@@ -259,7 +259,7 @@ impl InboxEventProcessor {
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *peer_id,
                                 emoji: emoji.clone(),
-                                timestamp: *target_sent_timestamp,
+                                timestamp: *timestamp / 1_000_000,
                             }
                         };
                         self.event_bus.emit_domain(event);
@@ -313,7 +313,7 @@ impl InboxEventProcessor {
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *sender_id,
                                 emoji: emoji.clone(),
-                                timestamp: *target_sent_timestamp,
+                                timestamp: *timestamp / 1_000_000,
                             }
                         } else {
                             DomainEvent::ReactionAdded {
@@ -322,7 +322,7 @@ impl InboxEventProcessor {
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *sender_id,
                                 emoji: emoji.clone(),
-                                timestamp: *target_sent_timestamp,
+                                timestamp: *timestamp / 1_000_000,
                             }
                         };
                         self.event_bus.emit_domain(event);

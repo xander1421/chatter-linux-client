@@ -26,6 +26,65 @@ use super::*;
             .collect()
     }
 
+    #[tokio::test]
+    async fn inbox_reaction_delta_uses_action_time_and_skips_replay() {
+        use crate::inbox::events::InboxEvent;
+        use crate::services::inbox_processor::InboxEventProcessor;
+
+        let f = fixture();
+        let processor = InboxEventProcessor::from_client(&f.client);
+        let mut domain = f.client.event_bus().subscribe_domain();
+        let action_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 - 60_000_000_000;
+        let target_ns = action_ns - 600_000_000_000;
+        for (scope, event) in [
+            (
+                crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(f.carol), ConversationType::ServerDm,
+                ),
+                InboxEvent::DmReaction {
+                    conversation_peer_id: Some(f.carol), peer_id: f.carol,
+                    emoji: "😂".into(), remove: false,
+                    target_author_aci: crate::domain::reaction::encode_dm_reaction_target(
+                        &f.me, &f.me,
+                    ),
+                    target_sent_timestamp: target_ns, timestamp: action_ns,
+                },
+            ),
+            (
+                crate::domain::reaction::ReactionScope::new(
+                    f.channel, ConversationType::Channel,
+                ),
+                InboxEvent::ChannelReaction {
+                    channel_id: f.channel, sender_id: f.carol,
+                    emoji: "😂".into(), remove: false,
+                    target_author_aci: f.me.to_string(),
+                    target_sent_timestamp: target_ns, timestamp: action_ns,
+                },
+            ),
+        ] {
+            f.client.messages().message_repo.insert(&Message::new_text(
+                scope.id, scope.kind.clone(), Some(f.me), "own".into(), target_ns,
+            )).unwrap();
+            processor.process(&event).await;
+            match domain.try_recv().unwrap() {
+                crate::inbox::handlers::DomainEvent::ReactionAdded {
+                    scope: emitted_scope, sender_id, sent_at_ns, reactor_id,
+                    emoji, timestamp,
+                } => {
+                    assert_eq!(emitted_scope, scope);
+                    assert_eq!(sender_id, f.me);
+                    assert_eq!(sent_at_ns, target_ns);
+                    assert_eq!(reactor_id, f.carol);
+                    assert_eq!(emoji, "😂");
+                    assert_eq!(timestamp, action_ns / 1_000_000);
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+            processor.process(&event).await;
+            assert!(domain.try_recv().is_err(), "replayed reaction emitted a new delta");
+        }
+    }
+
     /// Connected control dispatch -> processor -> scoped ledger reproduction.
     /// Missing display membership refuses even a locally held target; hydration
     /// changes admission only for a new delivery, without replaying the refusal.

@@ -207,7 +207,7 @@ impl ChatterClient {
                     kind: "reaction", actor_id: Some(reactor_id), actor_name: "", detail: "", preview: &emoji,
                     conversation_id: Some(&scope.id.to_string()),
                     conversation_type: Some(scope.kind.as_str()), message_id: target_message.as_deref(),
-                    created_at_ms: if timestamp == 0 { now } else { timestamp as i64 },
+                    created_at_ms: if timestamp == 0 { now } else { (timestamp.min(now as u64)) as i64 },
                 });
             }
             DomainEvent::FriendRequestsUpdated { received, .. } => {
