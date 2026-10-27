@@ -556,12 +556,12 @@ fn wire_changed(
                     == "chats"
             }) || (query_str.trim().is_empty()
                 && weak.upgrade().is_some_and(|w| {
-                    matches!(
-                        w.global::<crate::SearchPane>()
-                            .get_unified_search_category()
-                            .as_str(),
-                        "all" | "messages"
-                    )
+                    let pane = w.global::<crate::SearchPane>();
+                    // A sender or chat filter lists its messages without a
+                    // query, as Telegram's "From: …" does.
+                    matches!(pane.get_unified_search_category().as_str(), "all" | "messages")
+                        && pane.get_unified_search_from().is_empty()
+                        && pane.get_unified_search_in().is_empty()
                 }))
             {
                 if let Some(w) = weak.upgrade() {

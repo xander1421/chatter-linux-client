@@ -95,7 +95,24 @@ impl SearchIndex {
     ) -> Result<Vec<SearchResult>, StorageError> {
         let escaped_query = escape_fts5_query(query);
         if escaped_query.is_empty() {
-            return Ok(Vec::new());
+            // No text but a sender or chat filter: that person's / chat's
+            // messages, newest first, as Telegram's "From: …" lists them.
+            if sender.is_none() && conversation.is_none() {
+                return Ok(Vec::new());
+            }
+            let conn = self.db.read_connection()?;
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.conversation_id, 0.0 FROM messages m
+                 WHERE m.is_deleted = 0
+                   AND m.id IN (SELECT message_id FROM messages_fts)
+                   AND (?1 IS NULL OR m.sender_id = ?1)
+                   AND (?2 IS NULL OR m.conversation_id = ?2)
+                   AND (?3 IS NULL OR m.sent_at >= ?3)
+                   AND (?4 IS NULL OR m.sent_at < ?4)
+                 ORDER BY m.sent_at DESC LIMIT ?5 OFFSET ?6",
+            )?;
+            let mut rows = stmt.query(params![sender, conversation, since, until, limit, offset])?;
+            return collect_results(&mut rows);
         }
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
