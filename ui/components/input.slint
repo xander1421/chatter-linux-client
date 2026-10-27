@@ -123,6 +123,9 @@ export component Input inherits Rectangle {
                 text <=> root.text;
                 // Toggle between password and text type
                 input-type: root.password && !root.show-password ? InputType.password : InputType.text;
+                // TextInput's default accessible value is its text, password or
+                // not: never hand a PIN or password to accessibility services.
+                accessible-value: root.password ? "" : self.text;
                 enabled: !root.disabled;
                 vertical-alignment: center;
 
