@@ -202,7 +202,11 @@ export component MainWindow inherits Window {
     // Settings is a pushed full-screen page, not a tab, so it covers the bar
     // the same way a pushed conversation does.
     property <bool> bottom-nav-visible: root.compact-layout && root.current-view == "main"
-        && !root.keyboard-open && (SidebarPane.active-tab != "chats" || !SidebarPane.mobile-show-chat)
+        // A mesh conversation is pushed over the Mesh tab the same way a
+        // chat is over Chats (the tab click clears the flag), so it hides
+        // the bar too; otherwise the bar covered its composer.
+        && !root.keyboard-open
+        && ((SidebarPane.active-tab != "chats" && SidebarPane.active-tab != "mesh") || !SidebarPane.mobile-show-chat)
         && !ModalHostState.settings-open;
     // The Chats tab's floating create button: only on the list itself, never
     // over a pushed screen, a dialog, the search palette or selection mode.
