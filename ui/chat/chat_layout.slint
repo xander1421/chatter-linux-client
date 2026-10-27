@@ -48,6 +48,7 @@ export component ChatLayout inherits Rectangle {
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
+    in property <string> header-last-seen: "";
     in property <image> channel-avatar-source;
     in property <bool> channel-has-avatar: false;
 
@@ -479,6 +480,7 @@ export component ChatLayout inherits Rectangle {
             // A mesh DM has no server presence; its dot is the core's reachability.
             presence-status: MeshGlobal.active-kind == "dm"
                 ? (MeshGlobal.active-reachable ? "online" : "offline") : root.presence-status;
+            last-seen: MeshGlobal.active-kind == "dm" ? "" : root.header-last-seen;
             avatar-source: root.channel-avatar-source;
             has-avatar: root.channel-has-avatar;
             jarvis-thinking: root.jarvis-thinking;

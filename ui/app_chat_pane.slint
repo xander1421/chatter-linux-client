@@ -34,6 +34,8 @@ export global ChatPane {
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> header-presence-status: "offline";
+    // A DM peer's "online" / "last seen …"; "" for every other conversation.
+    in property <string> header-last-seen: "";
     in property <image> channel-avatar-source;
     in property <bool> channel-has-avatar: false;
     in property <[MessageItemData]> messages: [];

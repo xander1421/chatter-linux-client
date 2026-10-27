@@ -49,6 +49,8 @@ export component ChatHeader inherits GlassSurface {
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
+    // "online" / "last seen 21:40" under a DM's name, as Telegram's header.
+    in property <string> last-seen: "";
 
     // Optional custom channel/peer avatar — replaces the type glyph (#, @,
     // shield, lock, bookmark) when the owner uploaded an icon.
@@ -331,6 +333,13 @@ export component ChatHeader inherits GlassSurface {
                                 }
                             }
                         }
+                    }
+                    if root.typing-indicator == "" && has-channel && is-dm && root.last-seen != "": Text {
+                        text: root.last-seen;
+                        color: root.presence-status == "online" ? Colors.primary : Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                        min-width: 0px;
                     }
                     // Secret chat (anon DM): device-bound and separate from
                     // the regular DM with the same person — say so under the

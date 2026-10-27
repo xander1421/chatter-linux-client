@@ -494,6 +494,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let title = ui_ctx.display_name(&peer_id);
 
             let status_str = ui_ctx.peer_presence(&peer_id).as_str();
+            let last_seen: String = ui_ctx.peer_last_seen(&peer_id)
+                .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
+                .unwrap_or_default();
 
             let mut display_messages = messages_to_display_batch_deferred(
                 &messages,
@@ -548,6 +551,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // the name already says, in the row with the least room for it.
                 w.global::<crate::ChatPane>().set_topic("".into());
                 w.global::<crate::ChatPane>().set_header_presence_status(status_str.into());
+                w.global::<crate::ChatPane>().set_header_last_seen(last_seen.clone().into());
                 if let Some((aw, ah, px)) = &header_avatar {
                     w.global::<crate::ChatPane>().set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(px, *aw, *ah));
                     w.global::<crate::ChatPane>().set_channel_has_avatar(true);

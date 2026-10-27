@@ -265,6 +265,8 @@ pub(super) fn handle_presence_changed(
                     if dm.is_selected && dm.conversation_id == user_id_str {
                         w.global::<crate::ChatPane>()
                             .set_header_presence_status(presence_slint.clone());
+                        w.global::<crate::ChatPane>()
+                            .set_header_last_seen(last_seen_label.clone());
                         break;
                     }
                 }

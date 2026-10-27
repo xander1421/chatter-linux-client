@@ -82,6 +82,7 @@ export component AppConversationLayout inherits Rectangle {
     in property <bool> header-can-open-pinned-list;
     in property <bool> header-can-open-settings;
     in property <string> header-presence-status;
+    in property <string> header-last-seen;
     in property <string> highlighted-message-id;
     in-out property <bool> history-load-failed;
     in property <bool> identity-change-attributed;
@@ -232,6 +233,7 @@ export component AppConversationLayout inherits Rectangle {
     topic: root.topic;
     typing-indicator: root.typing-indicator;
     presence-status: root.header-presence-status;
+    header-last-seen: root.header-last-seen;
     channel-avatar-source: root.channel-avatar-source;
     channel-has-avatar: root.channel-has-avatar;
     jarvis-thinking: root.jarvis-thinking;
