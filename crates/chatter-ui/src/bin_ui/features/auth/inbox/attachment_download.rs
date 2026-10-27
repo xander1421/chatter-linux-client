@@ -365,33 +365,36 @@ pub fn update_attachment_thumbnail(
         return;
     }
 
-    let messages = window.global::<crate::ChatPane>().get_messages();
+    let pane = window.global::<crate::ChatPane>();
 
-    for msg_idx in 0..messages.row_count() {
-        if let Some(msg) = messages.row_data(msg_idx) {
-            let attachments = &msg.attachments;
+    // The open thread panel keeps its own model; its images load too.
+    for messages in [pane.get_messages(), pane.get_thread_replies()] {
+        for msg_idx in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(msg_idx) {
+                let attachments = &msg.attachments;
 
-            for att_idx in 0..attachments.row_count() {
-                if let Some(att) = attachments.row_data(att_idx) {
-                    if att.id.as_str() == attachment_id {
-                        let mut updated_att = att.clone();
-                        let size = image.size();
-                        if updated_att.width <= 0 || updated_att.height <= 0 {
-                            updated_att.width = size.width as i32;
-                            updated_att.height = size.height as i32;
+                for att_idx in 0..attachments.row_count() {
+                    if let Some(att) = attachments.row_data(att_idx) {
+                        if att.id.as_str() == attachment_id {
+                            let mut updated_att = att.clone();
+                            let size = image.size();
+                            if updated_att.width <= 0 || updated_att.height <= 0 {
+                                updated_att.width = size.width as i32;
+                                updated_att.height = size.height as i32;
+                            }
+                            updated_att.thumbnail = image;
+                            updated_att.has_thumbnail = true;
+                            updated_att.is_downloading = false;
+                            updated_att.progress = 1.0;
+
+                            if let Some(att_model) = attachments
+                                .as_any()
+                                .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                            {
+                                att_model.set_row_data(att_idx, updated_att);
+                            }
+                            return;
                         }
-                        updated_att.thumbnail = image;
-                        updated_att.has_thumbnail = true;
-                        updated_att.is_downloading = false;
-                        updated_att.progress = 1.0;
-
-                        if let Some(att_model) = attachments
-                            .as_any()
-                            .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
-                        {
-                            att_model.set_row_data(att_idx, updated_att);
-                        }
-                        return;
                     }
                 }
             }
@@ -413,32 +416,35 @@ pub fn update_attachment_thumbnail_with_dims(
         return;
     }
 
-    let messages = window.global::<crate::ChatPane>().get_messages();
+    let pane = window.global::<crate::ChatPane>();
     let att_id = AttachmentId::from_cdn_key(cdn_key);
     let att_id_str = att_id.to_string();
 
-    for msg_idx in 0..messages.row_count() {
-        if let Some(msg) = messages.row_data(msg_idx) {
-            let attachments = msg.attachments.clone();
+    // The open thread panel keeps its own model; its images load too.
+    for messages in [pane.get_messages(), pane.get_thread_replies()] {
+        for msg_idx in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(msg_idx) {
+                let attachments = msg.attachments.clone();
 
-            for att_idx in 0..attachments.row_count() {
-                if let Some(att) = attachments.row_data(att_idx) {
-                    if att.id.as_str() == att_id_str || att.id.as_str() == cdn_key {
-                        let mut updated_att = att.clone();
-                        updated_att.has_thumbnail = true;
-                        updated_att.thumbnail = image.clone();
-                        updated_att.width = width;
-                        updated_att.height = height;
-                        updated_att.is_downloading = false;
-                        updated_att.progress = 1.0;
+                for att_idx in 0..attachments.row_count() {
+                    if let Some(att) = attachments.row_data(att_idx) {
+                        if att.id.as_str() == att_id_str || att.id.as_str() == cdn_key {
+                            let mut updated_att = att.clone();
+                            updated_att.has_thumbnail = true;
+                            updated_att.thumbnail = image.clone();
+                            updated_att.width = width;
+                            updated_att.height = height;
+                            updated_att.is_downloading = false;
+                            updated_att.progress = 1.0;
 
-                        if let Some(model) = attachments
-                            .as_any()
-                            .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
-                        {
-                            model.set_row_data(att_idx, updated_att);
+                            if let Some(model) = attachments
+                                .as_any()
+                                .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                            {
+                                model.set_row_data(att_idx, updated_att);
+                            }
+                            return;
                         }
-                        return;
                     }
                 }
             }
