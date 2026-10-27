@@ -125,6 +125,14 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-down(x, y) => { root.begin-swipe(x, y); }
                 gesture-moved(x, y) => { root.move-swipe(x, y); }
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                // Without these TalkBack had no way to open a photo.
+                accessible-role: button;
+                accessible-label: "Open photo " + attachment.filename;
+                accessible-action-default => {
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
                 clicked => {
                     if (self.hold-fired || root.swipe-active) { return; }
                     root.open-image(attachment.id,
@@ -279,6 +287,14 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-down(x, y) => { root.begin-swipe(x, y); }
                 gesture-moved(x, y) => { root.move-swipe(x, y); }
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                // Without these TalkBack had no way to open a photo.
+                accessible-role: button;
+                accessible-label: "Open photo " + attachment.filename;
+                accessible-action-default => {
+                    root.open-image(attachment.id,
+                        self.absolute-position.x, self.absolute-position.y,
+                        self.width, self.height);
+                }
                 clicked => {
                     if (self.hold-fired || root.swipe-active) { return; }
                     root.open-image(attachment.id,
@@ -457,6 +473,9 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-down(x, y) => { root.begin-swipe(x, y); }
                 gesture-moved(x, y) => { root.move-swipe(x, y); }
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                accessible-role: button;
+                accessible-label: "Play video " + attachment.filename;
+                accessible-action-default => { root.open-other-attachment(attachment.id); }
                 clicked => {
                     if (self.hold-fired || root.swipe-active) { return; }
                     root.open-other-attachment(attachment.id);
@@ -556,6 +575,9 @@ export component MessageAttachments inherits VerticalLayout {
                 gesture-down(x, y) => { root.begin-swipe(x, y); }
                 gesture-moved(x, y) => { root.move-swipe(x, y); }
                 gesture-ended(cancelled) => { root.end-swipe(cancelled); }
+                accessible-role: button;
+                accessible-label: "Open file " + attachment.filename;
+                accessible-action-default => { root.open-other-attachment(attachment.id); }
                 clicked => {
                     if (self.hold-fired || root.swipe-active) { return; }
                     root.open-other-attachment(attachment.id);
