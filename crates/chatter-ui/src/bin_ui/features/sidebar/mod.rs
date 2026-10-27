@@ -956,6 +956,7 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         // Clear the old header synchronously, before revealing the pane or
         // waiting for the next conversation's asynchronous load.
         w.global::<crate::ChatPane>().set_loading_messages(true);
+        w.global::<crate::ChatPane>().set_channel_id("".into());
         w.global::<crate::ChatPane>().set_channel_name("".into());
         w.global::<crate::ChatPane>().set_header_can_call(false);
         w.global::<crate::ChatPane>().set_header_can_invite(false);

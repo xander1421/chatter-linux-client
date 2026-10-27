@@ -100,6 +100,7 @@ pub fn load_private_group_messages(
             );
 
             // Set chat header info for private group
+            w.global::<crate::ChatPane>().set_channel_id(group_id_str.as_str().into());
             w.global::<crate::ChatPane>()
                 .set_channel_name(group_name.into());
             w.global::<crate::ChatPane>()
@@ -310,6 +311,7 @@ async fn load_private_group_messages_internal(
             0,
         );
 
+        w.global::<crate::ChatPane>().set_channel_id(group_id_str.as_str().into());
         w.global::<crate::ChatPane>()
             .set_channel_name(group_name.into());
         crate::bin_ui::converters::set_conversation_kind(
