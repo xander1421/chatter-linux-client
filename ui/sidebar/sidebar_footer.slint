@@ -88,7 +88,9 @@ export component SidebarFooter inherits GlassSurface {
                                 presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                             }
                         }
-                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        // With touch-sized icons the name can be left a few pixels: an
+                        // ellipsis alone reads as broken, so show the avatar only.
+                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; opacity: self.width < 28px ? 0 : 1; }
                     }
                 }
                 // The expanded desktop sidebar keeps both list destinations
