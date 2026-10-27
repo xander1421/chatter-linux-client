@@ -50,7 +50,8 @@ export component SidebarHeader inherits GlassSurface {
                 // as Saved Messages and the conversation avatars below it.
                 // macOS traffic lights still reserve their titlebar space.
                 padding-left: root.quick-link-inset - parent.x + root.traffic-lights-width;
-                padding-right: Spacing.sm;
+                // Clear of the two header controls drawn over this row's end.
+                padding-right: Spacing.sm + 2 * (root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box) + Spacing.header-action-gap;
                 spacing: Spacing.sm;
                 alignment: start;
                 // Use the same column on phones, tablets and desktop so the
@@ -58,7 +59,7 @@ export component SidebarHeader inherits GlassSurface {
                 VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                     HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
-                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
             }
             search-touch := TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
             // Create — New Chat / New Channel / New Section. Two-pane only; a

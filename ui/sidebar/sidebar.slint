@@ -451,7 +451,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: "Saved messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                        Text { text: "Saved messages"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
@@ -499,7 +499,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                             HorizontalLayout { alignment: center; Image { source: AnonMode.enabled ? Icons.user-plus : Icons.users; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                         }
-                        Text { text: AnonMode.enabled ? "Add contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
+                        Text { text: AnonMode.enabled ? "Add contact" : "Friends"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                     if root.collapsed: TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
