@@ -236,6 +236,7 @@ fn refresh_channel_call(
 /// Metadata-only reload shared by channel opens, settings Save, and inbox events.
 /// Read/decode off the UI thread; apply only after the caller's ownership guard.
 pub(crate) struct ChannelMetadata {
+    id: String,
     name: String,
     topic: String,
     icon: Option<(Vec<u8>, u32, u32)>,
@@ -245,6 +246,7 @@ impl ChannelMetadata {
     pub(crate) fn from_channel(channel: &chatter_core::domain::channel::Channel) -> Self {
         let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
         Self {
+            id: channel.id.to_string(),
             name: if is_saved {
                 "Saved messages".into()
             } else {
@@ -269,6 +271,9 @@ impl ChannelMetadata {
     }
 
     pub(crate) fn apply(self, w: &MainWindow) {
+        // Channel settings match their channel to the open one by this id;
+        // left unset, the settings sheet never showed the channel's icon.
+        w.global::<crate::ChatPane>().set_channel_id(self.id.into());
         w.global::<crate::ChatPane>()
             .set_channel_name(self.name.into());
         w.global::<crate::ChatPane>().set_topic(self.topic.into());
