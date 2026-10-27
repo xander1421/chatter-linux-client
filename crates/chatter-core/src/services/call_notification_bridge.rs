@@ -185,6 +185,7 @@ fn reconcile(
                 tracing::error!(call_id = %call, %error, "ring notification cancel failed");
                 return true; // retry on the next invalidation
             }
+            tracing::info!(target: "chatter_core::ring_lifecycle::cancelled", "ring notification cancelled");
             false
         });
         for event in &snapshot.presentations {
@@ -196,7 +197,10 @@ fn reconcile(
                     _ => format!("{} is calling", peer_name),
                 };
                 match notifications.show_incoming_call(call.as_str(), title, &body) {
-                    Ok(()) => { posted.insert(call.as_str().to_owned()); }
+                    Ok(()) => {
+                        tracing::info!(target: "chatter_core::ring_lifecycle::posted", "ring notification posted");
+                        posted.insert(call.as_str().to_owned());
+                    }
                     Err(error) => tracing::error!(call_id = %call.as_str(), %error, "ring notification failed"),
                 }
             }
