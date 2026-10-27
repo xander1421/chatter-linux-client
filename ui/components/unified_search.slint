@@ -650,7 +650,7 @@ export component UnifiedSearch inherits Rectangle {
                     property <bool> chip-set: (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "");
                     property <length> base-width: kind == "from" ? 126px : 112px;
                     width: self.chip-set
-                        ? max(self.base-width, min(200px, picker-chip-label.preferred-width + Spacing.touch-target-min + Spacing.sm))
+                        ? max(self.base-width, min(200px, picker-chip-label.preferred-width + Spacing.touch-target-min + Spacing.lg))
                         : self.base-width;
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                     background: chip-touch.pressed ? Materials.pressed : ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.row-selected : Materials.ultra-thin;
