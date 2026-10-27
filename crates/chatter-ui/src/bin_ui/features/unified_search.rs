@@ -273,6 +273,8 @@ fn wire_opened(
                 if let Some((id, name)) = ui_ctx.active_search_scope() {
                     pane.set_unified_search_in(id.into());
                     pane.set_unified_search_in_label(name.into());
+                    pane.set_unified_search_query("".into());
+                    CHAT_SCOPED.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 pane.set_unified_search_selected_index(0);
                 pane.set_unified_search_open(true);
@@ -407,10 +409,21 @@ fn wire_closed(
                 if !query.is_empty() {
                     set_recents(&w, ui_ctx.remember_search(&query));
                 }
+                // A scope set by "Search in chat" ends with that search; the
+                // next Ctrl+K searches everything again.
+                if CHAT_SCOPED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    let pane = w.global::<crate::SearchPane>();
+                    pane.set_unified_search_in("".into());
+                    pane.set_unified_search_in_label("".into());
+                    pane.set_unified_search_query("".into());
+                }
                 clear_search_rows(&w);
             }
         });
 }
+
+/// Whether the open search was scoped by the chat menu's "Search in chat".
+static CHAT_SCOPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn clear_search_rows(w: &MainWindow) {
     w.global::<crate::SearchPane>()
