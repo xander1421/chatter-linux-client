@@ -17,10 +17,17 @@ impl ChannelEventService {
         // Sync membership (insert or ignore if already exists)
         self.channel_repo.insert_or_ignore_membership(membership)?;
 
+        // Our own join is filed twice over — by the join RPC (`record_own_join`,
+        // keyed on joined_at) and by the verified log change (keyed on its own
+        // time) — with no shared id: keep the first, as for our own leave.
+        let is_me = self.settings_repo.current_user_id().ok() == Some(*user_id);
+        if is_me && self.recently_recorded_own_join(channel_id, user_id) {
+            return Ok(None);
+        }
+
         // Someone else signed this member in: "{by} added {name}", else a join.
         let (content, sender) = match added_by.filter(|by| by != user_id) {
             Some(by) => {
-                let is_me = self.settings_repo.current_user_id().ok() == Some(*user_id);
                 let added_name = if is_me { Some("you".to_string()) } else { self.known_name(user_id) };
                 (SystemMessage::UserAdded { by, added: *user_id, added_name }, by)
             }
@@ -523,6 +530,27 @@ impl ChannelEventService {
                 tracing::warn!(%channel_id, error = %e, "No current user; leave notice not filed")
             }
         }
+    }
+
+    /// Whether our newest membership notice in `channel_id` is a join (or an
+    /// "added you") filed in the last two minutes.
+    fn recently_recorded_own_join(&self, channel_id: &ChannelId, me: &UserId) -> bool {
+        let conv_type = crate::services::message::conversion::conversation_type_for_channel(
+            &self.channel_repo,
+            channel_id,
+        );
+        let Ok(recent) = self.message_repo.list(channel_id, &conv_type, None, 20) else {
+            return false;
+        };
+        let newest_own = recent.iter().find_map(|m| match &m.content {
+            MessageContent::System(SystemMessage::UserJoined(u)) if u == me => Some(Some(m.created_at)),
+            MessageContent::System(SystemMessage::UserAdded { added, .. }) if added == me => {
+                Some(Some(m.created_at))
+            }
+            MessageContent::System(SystemMessage::UserLeft(u)) if u == me => Some(None),
+            _ => None,
+        });
+        matches!(newest_own, Some(Some(at)) if Utc::now() - at < chrono::Duration::minutes(2))
     }
 
     /// Whether our newest membership notice in `channel_id` is a leave filed
