@@ -183,6 +183,9 @@ impl UserService {
         // SECURITY: Encrypt status_message with profile_key if being updated —
         // same E2E treatment as display_name (was previously sent plaintext).
         let encrypted_status = if let Some(ref s) = status_message {
+            if s.text.len() > crate::crypto::profile_crypto::MAX_STATUS_LENGTH {
+                return Err(UserError::InvalidInput("that bio is too long.".into()));
+            }
             let profile_key = profile_key.ok_or(UserError::NotLoggedIn)?;
             let encrypted = crate::crypto::profile_crypto::encrypt_status(&profile_key, &s.text)?;
             Some(base64::engine::general_purpose::STANDARD.encode(encrypted))
