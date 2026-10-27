@@ -36,7 +36,9 @@ export global Materials {
     out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
     // A dark optical base bounds the white FAB glyph against either backdrop.
     out property <color> fab-base: #0a383900;
-    out property <color> fab-accent: #0f766e55;
+    // A light page shows through a faint tint, leaving the white glyph on
+    // near-white: light mode needs the accent close to solid.
+    out property <color> fab-accent: Appearance.dark ? #0f766e55 : #0f766ed9;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
     // Dark: a lit top-left arc that fades out. Light: white chrome on a light
     // page needs a faint cool-ink lower rim to keep its silhouette.
