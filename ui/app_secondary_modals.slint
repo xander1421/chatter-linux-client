@@ -22,6 +22,7 @@ import { PinnedMessagesModal, PinnedItem } from "modals/pinned_messages.slint";
 import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 import { KeyboardShortcutsDialog } from "modals/keyboard_shortcuts.slint";
+import { LicensesModal } from "modals/licenses.slint";
 
 export component AppSecondaryModals inherits Rectangle {
     in property <string> active-modal;
@@ -43,6 +44,12 @@ export component AppSecondaryModals inherits Rectangle {
     }
 
     background: transparent;
+
+    if root.is-presented("licenses"): LicensesModal {
+        show-modal: root.active-modal == "licenses";
+        notices: ModalHostState.third-party-notices;
+        close => { ModalHostState.nav-close("licenses"); }
+    }
 
     // Forward Message Modal
     if root.is-presented("forward-message"): ForwardMessageModal {

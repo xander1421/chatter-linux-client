@@ -122,7 +122,7 @@ export component AppSettingsHost inherits Rectangle {
             ModalHostState.nav-close("settings");
         }
         open-licenses => {
-            ChatPane.open-message-link("https://github.com/xander1421/chatter-linux-client/tree/master/vendor", "https://github.com/xander1421/chatter-linux-client/tree/master/vendor");
+            ModalHostState.nav-push("licenses");
         }
         read-receipts-changed(value) => {
             SettingsPane.settings-read-receipts-changed(value);

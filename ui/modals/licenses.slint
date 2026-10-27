@@ -1,0 +1,37 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+
+export component LicensesModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <string> notices: "";
+    callback close();
+
+    Modal {
+        show: root.show-modal;
+        title: "Open-source licenses";
+        full-screen: true;
+        close => { root.close(); }
+
+        Flickable {
+            width: parent.width;
+            height: parent.height;
+            viewport-height: notice-text.preferred-height + Spacing.md * 2;
+            viewport-width: self.width;
+
+            notice-text := TextInput {
+                x: Spacing.md;
+                y: Spacing.sm;
+                width: max(0px, parent.width - Spacing.md * 2);
+                text: root.notices;
+                read-only: true;
+                single-line: false;
+                wrap: word-wrap;
+                color: Colors.text-primary;
+                font-family: "monospace";
+                font-size: Typography.sm;
+            }
+        }
+    }
+}
