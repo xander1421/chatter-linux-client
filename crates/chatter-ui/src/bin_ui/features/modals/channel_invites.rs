@@ -168,6 +168,19 @@ fn respond(
             }
             Err(e) => {
                 tracing::error!(channel_id = %cid_str, error = %e, "Failed to respond to channel invite");
+                let text = format!(
+                    "Couldn't {} the invite. {}",
+                    if accept { "accept" } else { "decline" },
+                    e.user_message()
+                );
+                let toast = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = toast.upgrade() {
+                        w.set_toast_message(text.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
             }
         }
 
