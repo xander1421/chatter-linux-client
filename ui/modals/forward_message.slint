@@ -47,7 +47,7 @@ export component ForwardMessageModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: root.contact-share ? "Share contact" : "Forward message";
+        title: root.contact-share ? "Share contact" : "Forward";
         modal-width: 480px;
         // The list takes the spare height and the buttons stay pinned: sized
         // to content, preview + search + a 300px list overran the 600px cap
@@ -151,7 +151,20 @@ export component ForwardMessageModal inherits Rectangle {
                                 spacing: Spacing.sm;
 
                                 // Avatar
-                                Avatar {
+                                // Saved messages wears its bookmark, as in the chat list.
+                                if target.target-type == "saved_messages": Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    border-radius: 16px;
+                                    background: Colors.primary.with-alpha(0.2);
+                                    Image {
+                                        source: Icons.bookmark;
+                                        width: 16px;
+                                        height: 16px;
+                                        colorize: Colors.primary;
+                                    }
+                                }
+                                if target.target-type != "saved_messages": Avatar {
                                     size: 32px;
                                     name: target.name;
                                     source: target.avatar-source;
@@ -178,13 +191,13 @@ export component ForwardMessageModal inherits Rectangle {
                                     Rectangle {
                                         width: type-text.width + Spacing.sm * 2;
                                         height: 20px;
-                                        background: target.target-type == "channel" || target.target-type == "group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
+                                        background: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
                                         border-radius: Spacing.radius-sm;
 
                                         type-text := Text {
                                             x: Spacing.sm;
-                                            text: target.target-type == "channel" ? "Channel" : target.target-type == "group" ? "Group" : target.is-anonymous ? "Secret" : "DM";
-                                            color: target.target-type == "channel" || target.target-type == "group" ? Colors.primary : Colors.success;
+                                            text: target.target-type == "channel" ? "Channel" : target.target-type == "group" || target.target-type == "anon_group" ? "Group" : target.is-anonymous ? "Secret" : "DM";
+                                            color: target.target-type == "channel" || target.target-type == "group" || target.target-type == "anon_group" ? Colors.primary : Colors.success;
                                             font-size: Typography.xs;
                                             font-weight: Typography.medium;
                                             vertical-alignment: center;

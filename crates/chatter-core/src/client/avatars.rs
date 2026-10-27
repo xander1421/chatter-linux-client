@@ -16,7 +16,6 @@ impl ChatterClient {
                 .ok()
                 .and_then(|channel| self.get_channel_local(&channel))
                 .and_then(|channel| channel.icon),
-            ConversationType::SavedMessages => self.my_avatar(),
             // Private groups currently have no stored group avatar field.
             _ => None,
         }
