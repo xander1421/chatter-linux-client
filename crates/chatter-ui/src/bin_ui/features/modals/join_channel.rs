@@ -269,7 +269,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         ) {
                             "Channel not found or is private".to_string()
                         } else {
-                            format!("Failed to join: {}", e)
+                            e.user_message()
                         };
                         tracing::error!("Failed to join channel: {}", e);
 
