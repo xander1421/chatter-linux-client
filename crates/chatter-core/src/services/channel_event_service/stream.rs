@@ -72,9 +72,13 @@ impl ChannelEventService {
                 Next::Item(Ok(event)) => {
                     // Read the old name before the update is merged locally.
                     let rename = self.rename_in(&event);
+                    let photo = self.photo_change_in(&event);
                     if let Some(event_data) = event.event {
                         self.handle_stream_event(event_data, &event.channel_id)
                             .await;
+                    }
+                    if let Some((channel_id, actor)) = photo {
+                        self.record_channel_photo_changed(&channel_id, actor, event.timestamp);
                     }
                     if let Some((channel_id, actor, old_name, new_name)) = rename {
                         self.record_channel_renamed(
@@ -142,6 +146,21 @@ impl ChannelEventService {
         let old_name = self.channel_repo.get(&channel_id).ok()??.name;
         (!old_name.is_empty() && old_name != updated.name)
             .then(|| (channel_id, actor, old_name, updated.name.clone()))
+    }
+
+    /// A `ChannelUpdated` carrying a new, non-empty icon, read before the
+    /// update is merged: (channel, actor).
+    fn photo_change_in(
+        &self,
+        event: &crate::proto::chat_v1::ChannelEvent,
+    ) -> Option<(ChannelId, UserId)> {
+        let Some(channel_event::Event::ChannelUpdated(updated)) = &event.event else {
+            return None;
+        };
+        let channel_id = ChannelId::from(event.channel_id.parse::<uuid::Uuid>().ok()?);
+        let actor = UserId::from(event.actor_id.parse::<uuid::Uuid>().ok()?);
+        let old_icon = self.channel_repo.get(&channel_id).ok()??.icon.unwrap_or_default();
+        (!updated.icon.is_empty() && updated.icon != old_icon).then_some((channel_id, actor))
     }
 
     /// Emit `ChannelInviteReceived` for every pending invite not yet announced.

@@ -474,13 +474,22 @@ impl ChatterClient {
         icon: Option<&[u8]>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let fitted = icon.map(Self::fit_icon_bytes).transpose()?;
-        let old_name = self.get_channel_local(channel_id).map(|c| c.name);
+        let old = self.get_channel_local(channel_id);
+        let old_name = old.as_ref().map(|c| c.name.clone());
+        let old_icon = old.and_then(|c| c.icon).unwrap_or_default();
         let updated = self
             .channels()
             .update_channel(channel_id, name, description, fitted.as_deref(), None)
             .await?;
-        // Our own rename: the stream echo finds the name already merged and
-        // files nothing, so file the notice here.
+        // Our own rename or photo: the stream echo finds them already merged
+        // and files nothing, so file the notices here.
+        if let (Some(icon), Some(me)) = (fitted.as_deref(), self.session_current_user_id()) {
+            if !icon.is_empty() && icon != old_icon.as_slice() {
+                self.services
+                    .channel_event_service
+                    .record_channel_photo_changed(channel_id, me, 0);
+            }
+        }
         if let (Some(old_name), Some(me)) = (old_name, self.session_current_user_id()) {
             if !old_name.is_empty() && old_name != updated.name {
                 self.services.channel_event_service.record_channel_renamed(

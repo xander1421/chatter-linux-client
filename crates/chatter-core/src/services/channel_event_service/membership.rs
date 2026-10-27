@@ -329,6 +329,37 @@ impl ChannelEventService {
         }
     }
 
+    /// File "{actor} changed the channel photo". Keyed on the event (or, for
+    /// our own change, filed once by the caller), like a rename notice.
+    pub fn record_channel_photo_changed(&self, channel_id: &ChannelId, actor: UserId, event_ts: u64) {
+        let id = if event_ts == 0 {
+            MessageId::new()
+        } else {
+            let key = format!("channel_photo_notice:{channel_id}:{actor}:{event_ts}");
+            MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), key.as_bytes()))
+        };
+        let message = self.create_system_message(
+            id,
+            channel_id,
+            SystemMessage::ChannelPhotoChanged,
+            Some(actor),
+            event_ts,
+        );
+        match self.message_repo.insert_or_ignore(&message) {
+            Ok(true) => {
+                if let Err(e) = self
+                    .event_bus
+                    .domain_sender()
+                    .send(DomainEvent::MessageReceived { message })
+                {
+                    tracing::warn!("Failed to publish photo notice: {}", e);
+                }
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(%channel_id, error = %e, "Failed to file photo notice"),
+        }
+    }
+
     /// Handle a member leaving/being removed from a channel.
     ///
     /// Creates a system message and removes membership from local storage.

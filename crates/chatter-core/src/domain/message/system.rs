@@ -20,6 +20,8 @@ pub enum SystemMessage {
         old_name: String,
         new_name: String,
     },
+    /// "{actor} changed the channel photo" (Telegram's "Channel photo updated").
+    ChannelPhotoChanged,
     UserAdded {
         by: UserId,
         added: UserId,
@@ -135,6 +137,7 @@ impl SystemMessage {
             Self::AnonGroupUserLeft { .. } => "left the group".to_string(),
             Self::UserGone(_) => "is no longer a member".to_string(),
             Self::ChannelCreated => "created the channel".to_string(),
+            Self::ChannelPhotoChanged => "changed the channel photo".to_string(),
             Self::ChannelRenamed { old_name, new_name } => {
                 format!(
                     "renamed the channel from \"{}\" to \"{}\"",
