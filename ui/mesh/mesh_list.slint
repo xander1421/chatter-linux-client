@@ -144,7 +144,7 @@ export component MeshList inherits Rectangle {
                     nearby-row := HorizontalLayout {
                         x: Spacing.lg; spacing: Spacing.md;
                         for peer[index] in MeshGlobal.nearby-peers: VerticalLayout {
-                            width: 64px; spacing: Spacing.xs; alignment: start;
+                            width: 80px; spacing: Spacing.xs; alignment: start;
                             Rectangle {
                                 width: 52px; height: 52px; border-radius: Spacing.radius-full;
                                 background: Math.mod(index, 3) == 0 ? Colors.avatar-teal
@@ -163,7 +163,7 @@ export component MeshList inherits Rectangle {
                                 }
                             }
                             Text {
-                                text: peer.name; width: 64px; color: Colors.text-secondary;
+                                text: peer.name; width: 80px; color: Colors.text-secondary;
                                 font-size: Typography.xs; overflow: elide; horizontal-alignment: center;
                             }
                         }
