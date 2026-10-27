@@ -105,6 +105,7 @@ export component MessageList inherits Rectangle {
     /// The one sentence the empty state makes about privacy. Set by the caller
     /// so this component never has to know what a geohash cell is.
     in property <string> privacy-line: "Messages are end-to-end encrypted";
+    in property <bool> saved-messages: false;
     in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
     in property <bool> can-thread: true;
@@ -408,6 +409,7 @@ export component MessageList inherits Rectangle {
         height: max(0px, root.height - root.top-inset - root.bottom-inset);
         public-broadcast: root.public-broadcast;
         privacy-line: root.privacy-line;
+        saved-messages: root.saved-messages;
     }
 
     // ── The list ─────────────────────────────────────────────────────────────

@@ -375,6 +375,7 @@ export component ChatLayout inherits Rectangle {
           : root.conversation-kind == ConversationKind.channel && !root.private-channel
             ? "Public channel — anyone can read this"
             : "Messages are end-to-end encrypted";
+        saved-messages: root.conversation-kind == ConversationKind.saved-messages;
         current-playing-attachment-id: root.current-playing-attachment-id;
         is-media-playing: root.is-media-playing;
         audio-progress: root.audio-progress;
