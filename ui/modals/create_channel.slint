@@ -117,6 +117,13 @@ export component CreateChannelModal inherits Rectangle {
 
     // Derived flags
     property <bool> is-private-group: root.access-mode == "private-group";
+    // The friend picker the group needs opens below the fold on a short
+    // window, and "Create group" stays disabled with no visible reason.
+    changed is-private-group => {
+        if root.is-private-group {
+            body-scroll.viewport-y = min(0px, body-scroll.height - body-scroll.viewport-height);
+        }
+    }
     property <bool> is-invite: root.access-mode == "invite";
 
     // Collapsible "More options"
@@ -223,7 +230,7 @@ export component CreateChannelModal inherits Rectangle {
             // live OUTSIDE this Flickable so they stay pinned and reachable
             // even when the viewport is short (Android landscape).
             // ============================================================
-            Flickable {
+            body-scroll := Flickable {
             vertical-stretch: 1;
             viewport-width: self.width;
             viewport-height: create-body.preferred-height;
