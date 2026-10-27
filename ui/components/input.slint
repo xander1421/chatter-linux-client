@@ -19,9 +19,8 @@ export component Input inherits Rectangle {
     in property <bool> error: false;
     in property <string> error-message: "";
 
-    accessible-role: text-input;
-    accessible-label: root.placeholder;
-    accessible-enabled: !root.disabled;
+    // The inner TextInput is the accessible field (name + value); a second
+    // text-input node here read as an empty, nameless twin.
 
     // What the field holds as the user sees it: the committed text plus the
     // input method's preedit. `text` excludes the preedit, so on Android a
@@ -126,6 +125,7 @@ export component Input inherits Rectangle {
                 // TextInput's default accessible value is its text, password or
                 // not: never hand a PIN or password to accessibility services.
                 accessible-value: root.password ? "" : self.text;
+                accessible-label: root.placeholder;
                 enabled: !root.disabled;
                 vertical-alignment: center;
 
