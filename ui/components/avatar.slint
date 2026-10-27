@@ -28,7 +28,7 @@ export component Avatar inherits Rectangle {
 
     accessible-role: image;
     accessible-label: root.name != "" ? "Avatar for " + root.name
-        : root.fallback-text != "" ? "Avatar for " + root.fallback-text : "Avatar";
+        : root.fallback-text != "" && root.fallback-text != "?" ? "Avatar for " + root.fallback-text : "Avatar";
 
     width: size;
     height: size;
