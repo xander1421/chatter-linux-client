@@ -397,7 +397,14 @@ impl ClientError {
             Self::Validation(_) | Self::IdentityRecoveryRequired(_) | Self::CallEnded => {
                 self.to_string()
             }
-            Self::Connection(_) | Self::NotConnected => {
+            Self::Auth(crate::services::auth_service::AuthError::InvalidCredentials)
+            | Self::Connection(NetworkError::Unauthenticated)
+            | Self::Auth(crate::services::auth_service::AuthError::Network(
+                NetworkError::Unauthenticated,
+            )) => "Wrong password.".to_string(),
+            Self::Connection(_)
+            | Self::NotConnected
+            | Self::Auth(crate::services::auth_service::AuthError::Network(_)) => {
                 "Couldn't reach the server. Try again.".to_string()
             }
             _ => "Something went wrong. Try again.".to_string(),

@@ -147,7 +147,7 @@ pub(super) fn wire_codes(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::warn!("Recovery code regeneration failed: {e}");
                             w.global::<crate::SettingsPane>()
                                 .set_settings_recovery_regen_error(
-                                    format!("Could not regenerate codes: {e}").into(),
+                                    format!("Couldn't make new codes. {}", e.user_message()).into(),
                                 );
                         }
                     }

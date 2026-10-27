@@ -939,7 +939,10 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         .set_channel_settings_saving(false);
                                     w.global::<crate::ModalHostState>()
                                         .set_channel_settings_error(
-                                            format!("Couldn't read channel icon: {e}").into(),
+                                            {
+                                                tracing::warn!(error = %e, "channel icon unreadable");
+                                                "Couldn't open that image. Try another one.".into()
+                                            },
                                         );
                                 }
                             });
