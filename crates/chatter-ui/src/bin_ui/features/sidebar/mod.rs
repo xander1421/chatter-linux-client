@@ -278,6 +278,15 @@ fn wire_context_menu_mute_for(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             Ok(()) => {
                 w.global::<crate::SidebarPane>().set_row_context_menu_muted(true);
                 refresh_mute_rows(&w, &ctx);
+                // Redraw the row when the mute runs out; a restart before then
+                // rebuilds the list from the lapsed state anyway.
+                if let Some(seconds) = seconds {
+                    let (weak, ctx) = (weak.clone(), ctx.clone());
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(seconds + 1)).await;
+                        history_changed(&weak, &ctx);
+                    });
+                }
             }
             Err(error) => {
                 tracing::error!(%error, "Could not update conversation mute");
