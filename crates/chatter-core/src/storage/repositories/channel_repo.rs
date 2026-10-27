@@ -34,7 +34,7 @@ const LISTED_CHANNEL_SELECT: &str = "SELECT c.id, c.channel_type, c.name, c.desc
         c.persistence, c.max_members, c.default_ttl_seconds,
         c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
         c.created_at, c.updated_at, c.archived,
-        (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+        (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL) as unread_count,
         (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at,
         (SELECT COUNT(*) FROM memberships WHERE channel_id = c.id) as member_count
      FROM channels c";
@@ -123,7 +123,7 @@ impl ChannelRepository {
                     persistence, max_members, default_ttl_seconds,
                     allow_reactions, allow_threads, allow_attachments, require_encryption,
                     created_at, updated_at, archived,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL) as unread_count,
                     (SELECT MAX(created_at) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at,
                     (SELECT COUNT(*) FROM memberships WHERE channel_id = channels.id) as member_count
              FROM channels WHERE id = ?1",
@@ -343,7 +343,7 @@ impl ChannelRepository {
                     persistence, max_members, default_ttl_seconds,
                     allow_reactions, allow_threads, allow_attachments, require_encryption,
                     created_at, updated_at, archived,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL) as unread_count,
                     (SELECT MAX(created_at) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at,
                     (SELECT COUNT(*) FROM memberships WHERE channel_id = channels.id) as member_count
              FROM channels WHERE channel_type = ?1

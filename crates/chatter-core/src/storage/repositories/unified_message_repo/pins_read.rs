@@ -175,7 +175,9 @@ impl UnifiedMessageRepository {
         })
     }
 
-    /// Get the count of unread messages in a conversation.
+    /// Get the count of unread messages in a conversation. Main-list only,
+    /// as [`Self::unread_anchor`]: a thread reply neither moves the row nor
+    /// badges it.
     pub fn get_unread_count(
         &self,
         conversation_id: &ChannelId,
@@ -185,7 +187,7 @@ impl UnifiedMessageRepository {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM messages \
              WHERE conversation_id = ?1 AND conversation_type = ?2 \
-               AND is_read = 0 AND is_deleted = 0",
+               AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL",
             params![conversation_id.to_string(), conversation_type.as_str()],
             |row| row.get(0),
         )?;

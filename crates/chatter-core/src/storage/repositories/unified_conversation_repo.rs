@@ -59,7 +59,7 @@ impl UnifiedConversationRepository {
                     conversation_id, 
                     conversation_type,
                     MAX(CASE WHEN thread_id IS NULL THEN created_at END) as last_msg_at,
-                    SUM(CASE WHEN is_read = 0 AND is_deleted = 0 THEN 1 ELSE 0 END) as unread_cnt
+                    SUM(CASE WHEN is_read = 0 AND is_deleted = 0 AND thread_id IS NULL THEN 1 ELSE 0 END) as unread_cnt
                 FROM messages
                 GROUP BY conversation_id, conversation_type
             )
@@ -164,7 +164,7 @@ impl UnifiedConversationRepository {
                     CASE WHEN c.archived = 1 THEN 2 ELSE 1 END as status,
                     c.archived,
                     (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = ?2 AND is_deleted = 0 AND thread_id IS NULL) as last_msg_at,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = ?2 AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = ?2 AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL) as unread_count,
                     c.created_at,
                     c.updated_at
                 FROM channels c WHERE c.id = ?1
@@ -182,7 +182,7 @@ impl UnifiedConversationRepository {
                     a.status,
                     0 as archived,
                     (SELECT MAX(created_at) FROM messages WHERE conversation_id = a.id AND conversation_type = 'anon_dm' AND is_deleted = 0 AND thread_id IS NULL) as last_msg_at,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = a.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = a.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL) as unread_count,
                     a.created_at,
                     a.updated_at
                 FROM anon_dm_conversations a WHERE a.id = ?1
@@ -205,7 +205,7 @@ impl UnifiedConversationRepository {
                     g.status,
                     0 as archived,
                     (SELECT MAX(created_at) FROM messages WHERE conversation_id = g.id AND conversation_type = 'anon_group' AND is_deleted = 0 AND thread_id IS NULL) as last_msg_at,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = g.id AND conversation_type = 'anon_group' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = g.id AND conversation_type = 'anon_group' AND is_read = 0 AND is_deleted = 0 AND thread_id IS NULL) as unread_count,
                     g.created_at,
                     g.updated_at
                 FROM anon_groups g WHERE g.id = ?1
@@ -264,7 +264,7 @@ impl UnifiedConversationRepository {
             SELECT conversation_id,
                    conversation_type,
                    MAX(CASE WHEN thread_id IS NULL THEN created_at END) as last_msg_at,
-                   SUM(CASE WHEN is_read = 0 AND is_deleted = 0 THEN 1 ELSE 0 END) as unread_cnt
+                   SUM(CASE WHEN is_read = 0 AND is_deleted = 0 AND thread_id IS NULL THEN 1 ELSE 0 END) as unread_cnt
             FROM messages
             GROUP BY conversation_id, conversation_type
             "#,
