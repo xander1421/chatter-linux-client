@@ -76,6 +76,16 @@ export component MessageItem inherits Rectangle {
 
     // Attachments
     in property <bool> has-attachments: false;
+    // What a screen reader says for the body: the text, else what the first
+    // attachment is (a voice note or photo has no text to read).
+    property <string> attachment-spoken: root.attachment-count == 0 ? ""
+        : root.attachments[0].category == "audio" ? "Voice message, " + root.attachments[0].duration-display
+        : root.attachments[0].is-image ? (root.attachment-count > 1 ? root.attachment-count + " photos" : "Photo")
+        : root.attachments[0].is-video ? "Video"
+        : "File " + root.attachments[0].filename;
+    property <string> spoken-content: root.content != "" && root.attachment-spoken != ""
+        ? root.attachment-spoken + ", " + root.content
+        : root.content != "" ? root.content : root.attachment-spoken;
     in property <int> attachment-count: 0;
     in property <[MessageAttachmentData]> attachments: [];
     in property <[int]> standalone-attachment-indices: [];
@@ -555,7 +565,7 @@ export component MessageItem inherits Rectangle {
                     y: 0px;
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
-                    accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
+                    accessible-label: root.is-own ? "Your message: " + root.spoken-content : root.sender-name + " says: " + root.spoken-content;
 
                     // One rounded surface avoids a square backing at the corners.
                     background: transparent;
