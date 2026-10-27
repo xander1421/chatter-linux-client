@@ -54,6 +54,8 @@ export component AppearanceSettings inherits VerticalLayout {
                 background: theme-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
                 accessible-action-default => {
                     Appearance.theme = opt.key;
                     Appearance.theme-changed(opt.key);
@@ -149,6 +151,8 @@ export component AppearanceSettings inherits VerticalLayout {
                 background: text-size-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
                 accessible-action-default => {
                     Appearance.text-size = opt.key;
                     Appearance.text-size-changed(opt.key);
@@ -304,6 +308,8 @@ export component AppearanceSettings inherits VerticalLayout {
                     background: selected ? Colors.action-fill : Colors.surface-hover;
                     accessible-role: button;
                     accessible-label: "Animation speed " + opt.label;
+                    accessible-checkable: true;
+                    accessible-checked: selected;
                     accessible-action-default => {
                         Appearance.animation-speed = opt.value;
                         Appearance.animation-speed-changed(opt.value);
@@ -360,6 +366,8 @@ export component AppearanceSettings inherits VerticalLayout {
                 background: density-touch.has-hover ? Colors.surface-hover : transparent;
                 accessible-role: button;
                 accessible-label: opt.label;
+                accessible-checkable: true;
+                accessible-checked: selected;
                 accessible-action-default => {
                     Appearance.density = opt.key;
                     Appearance.density-changed(opt.key);
@@ -466,6 +474,14 @@ export component AppearanceSettings inherits VerticalLayout {
                     { key: "both", label: "Both" },
                 ]: Rectangle {
                     property <bool> selected: root.search-shortcut == opt.key;
+                    accessible-role: button;
+                    accessible-label: "Search shortcut " + opt.label;
+                    accessible-checkable: true;
+                    accessible-checked: selected;
+                    accessible-action-default => {
+                        root.search-shortcut = opt.key;
+                        root.search-shortcut-changed(opt.key);
+                    }
                     height: Spacing.button-height;
                     min-width: 56px;
                     border-radius: Spacing.radius-md;
