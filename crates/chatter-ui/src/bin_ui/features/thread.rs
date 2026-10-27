@@ -665,7 +665,7 @@ pub fn apply_live_thread_reply(
         }
     }
 
-    bump_root_reply_count(w, root_message_id);
+    adjust_root_reply_count(w, &root_message_id.to_string(), 1);
 }
 
 /// Presentation intent survives both a model replacement and deferred row layout.
@@ -750,8 +750,7 @@ fn patch_edited_row(
 }
 
 /// Increment the "N replies" indicator on a thread root bubble in the main list.
-fn bump_root_reply_count(w: &MainWindow, root_message_id: &MessageId) {
-    let root_id = root_message_id.to_string();
+fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
     let messages = w.global::<crate::ChatPane>().get_messages();
     let Some(model) = messages
         .as_any()
@@ -767,11 +766,43 @@ fn bump_root_reply_count(w: &MainWindow, root_message_id: &MessageId) {
             continue;
         }
         let mut updated = msg;
-        updated.reply_count += 1;
+        updated.reply_count = (updated.reply_count + delta).max(0);
         updated.reply_count_text =
             crate::bin_ui::converters::format_count(updated.reply_count, "reply", "replies").into();
         model.set_row_data(i, updated);
         return;
+    }
+}
+
+/// Drop removed rows from the open thread panel (must run on the UI thread).
+/// The panel keeps its own model, so a delete or expiry applied to the main
+/// list never reached it: a reply deleted for everyone stayed in the panel and
+/// the root's "N replies" kept counting it until the channel was reloaded.
+pub(crate) fn remove_thread_replies_where(
+    w: &MainWindow,
+    gone: impl Fn(&MessageItemData) -> bool,
+) {
+    let pane = w.global::<crate::ChatPane>();
+    let replies = pane.get_thread_replies();
+    let Some(model) = replies
+        .as_any()
+        .downcast_ref::<VecModel<MessageItemData>>()
+    else {
+        return;
+    };
+    let mut removed = 0;
+    for i in (0..model.row_count()).rev() {
+        if model.row_data(i).is_some_and(|m| gone(&m)) {
+            model.remove(i);
+            if i < model.row_count() {
+                update_reply_continuation(model, i);
+            }
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        pane.set_thread_reply_count((pane.get_thread_reply_count() - removed).max(0));
+        adjust_root_reply_count(w, pane.get_thread_root_message_id().as_str(), -removed);
     }
 }
 

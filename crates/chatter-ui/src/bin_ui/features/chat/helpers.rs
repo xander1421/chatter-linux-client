@@ -307,6 +307,7 @@ pub(crate) fn remove_messages_where(
     window: &MainWindow,
     gone: impl Fn(&crate::MessageItemData) -> bool,
 ) {
+    crate::bin_ui::features::thread::remove_thread_replies_where(window, &gone);
     let mut removed_ids = Vec::new();
     let pane = window.global::<crate::ChatPane>();
     let mut unread_index = pane.get_unread_index();
