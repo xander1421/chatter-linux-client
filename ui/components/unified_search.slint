@@ -693,7 +693,10 @@ export component UnifiedSearch inherits Rectangle {
                 }
             }
 
-            if root.query == "" && root.recent-searches.length > 0: VerticalLayout {
+            // Recent searches belong to the search itself; a content tab
+            // (Media, Files, Links, Voice) lists what was shared instead.
+            if root.query == "" && root.recent-searches.length > 0
+                && (root.category == "all" || root.category == "chats" || root.category == "messages"): VerticalLayout {
                 height: Spacing.touch-target-min + root.recent-searches.length * (Spacing.touch-target-min + Spacing.xs);
                 vertical-stretch: 0;
                 spacing: Spacing.xs;
