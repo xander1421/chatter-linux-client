@@ -359,7 +359,7 @@ export component Sidebar inherits Rectangle {
                     ? (root.mobile-mode
                         ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
                             + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
-                        : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
+                        : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg + 13px + Spacing.sm : Spacing.button-height)
                             + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md)
                     : Spacing.none;
                 if entry.kind == "archive-entry" || entry.kind == "archive-back": Rectangle {

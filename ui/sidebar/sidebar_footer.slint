@@ -51,6 +51,8 @@ export component SidebarFooter inherits GlassSurface {
             height: root.collapsed
                 ? root.rail-button-count * root.rail-icon-size
                     + (root.rail-button-count - 1) * 8px + 16px
+                    // The 13px divider between the tabs and the tools, and its gap.
+                    + 13px + 8px
                 : 44px;
 
             // Top edge only — the one side that separates this strip from the
