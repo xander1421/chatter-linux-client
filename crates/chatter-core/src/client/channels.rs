@@ -176,6 +176,7 @@ impl ChatterClient {
                 initial_members,
             )
             .await?;
+        self.services.channel_event_service.record_own_create(&channel.id);
         // The global message stream subscribes from the server's membership
         // list; nudge it so the channel we just created is picked up now
         // rather than at the next reconnect.

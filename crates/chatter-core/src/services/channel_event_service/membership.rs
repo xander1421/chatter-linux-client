@@ -427,6 +427,26 @@ impl ChannelEventService {
         }
     }
 
+    /// File "You created the channel" in a channel we just created, as
+    /// Signal's "You created the group". Only the creator's device files it;
+    /// members who join later see their own join instead.
+    pub fn record_own_create(&self, channel_id: &ChannelId) {
+        let Ok(me) = self.settings_repo.current_user_id() else {
+            tracing::warn!(%channel_id, "No current user; create notice not filed");
+            return;
+        };
+        let message = self.create_system_message(
+            MessageId::new(),
+            channel_id,
+            SystemMessage::ChannelCreated,
+            Some(me),
+            0,
+        );
+        if let Err(e) = self.message_repo.insert_or_ignore(&message) {
+            tracing::warn!(%channel_id, error = %e, "Create notice not filed");
+        }
+    }
+
     /// File "You joined the channel" after our own join succeeded. This device
     /// subscribes to the channel only after joining, so it misses the server's
     /// broadcast, and the first roster sync backfills without announcing.
