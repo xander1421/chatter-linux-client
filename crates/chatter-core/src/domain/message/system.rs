@@ -22,9 +22,12 @@ pub enum SystemMessage {
     },
     /// "{actor} changed the channel photo" (Telegram's "Channel photo updated").
     ChannelPhotoChanged,
+    /// Rendered with the adder as sender: "{by} added {added_name}". The name
+    /// is snapshotted like [`Self::UserRemoved`]'s; "you" when it is us.
     UserAdded {
         by: UserId,
         added: UserId,
+        added_name: Option<String>,
     },
     /// Rendered with the moderator as sender: "{by} removed {removed_name}".
     /// The name is snapshotted when the event lands, while the member is still
@@ -144,7 +147,9 @@ impl SystemMessage {
                     old_name, new_name
                 )
             }
-            Self::UserAdded { .. } => "added a member".to_string(),
+            Self::UserAdded { added_name, .. } => {
+                format!("added {}", added_name.as_deref().unwrap_or("a member"))
+            }
             Self::UserRemoved { removed_name, .. } => {
                 format!("removed {}", removed_name.as_deref().unwrap_or("a member"))
             }

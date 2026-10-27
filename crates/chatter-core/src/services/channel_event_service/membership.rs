@@ -11,16 +11,26 @@ impl ChannelEventService {
         channel_id: &ChannelId,
         user_id: &UserId,
         membership: &Membership,
+        added_by: Option<UserId>,
         event_ts: u64,
     ) -> Result<Option<(Message, String)>, ChannelEventError> {
         // Sync membership (insert or ignore if already exists)
         self.channel_repo.insert_or_ignore_membership(membership)?;
 
+        // Someone else signed this member in: "{by} added {name}", else a join.
+        let (content, sender) = match added_by.filter(|by| by != user_id) {
+            Some(by) => {
+                let is_me = self.settings_repo.current_user_id().ok() == Some(*user_id);
+                let added_name = if is_me { Some("you".to_string()) } else { self.known_name(user_id) };
+                (SystemMessage::UserAdded { by, added: *user_id, added_name }, by)
+            }
+            None => (SystemMessage::UserJoined(*user_id), *user_id),
+        };
         let message = self.create_system_message(
             member_notice_id(channel_id, user_id, "joined", event_ts),
             channel_id,
-            SystemMessage::UserJoined(*user_id),
-            Some(*user_id),
+            content,
+            Some(sender),
             event_ts,
         );
         if !self.message_repo.insert_or_ignore(&message)? {
@@ -31,10 +41,15 @@ impl ChannelEventService {
     }
 
     /// [`Self::handle_member_joined`], then tell the UI.
-    pub(super) fn publish_member_joined(&self, membership: &Membership, event_ts: u64) {
+    pub(super) fn publish_member_joined(
+        &self,
+        membership: &Membership,
+        added_by: Option<UserId>,
+        event_ts: u64,
+    ) {
         let (channel_id, user_id) = (membership.channel_id, membership.user_id);
         let Ok(Some((message, display_name))) =
-            self.handle_member_joined(&channel_id, &user_id, membership, event_ts)
+            self.handle_member_joined(&channel_id, &user_id, membership, added_by, event_ts)
         else {
             return;
         };
@@ -57,7 +72,7 @@ impl ChannelEventService {
     /// server's `joined_at`, so every sync that sees this join files it once.
     pub fn record_synced_join(&self, membership: &Membership) {
         self.classify_unsigned(&membership.channel_id, &membership.user_id, true);
-        self.publish_member_joined(membership, membership_ts(membership));
+        self.publish_member_joined(membership, None, membership_ts(membership));
     }
 
     fn classify_unsigned(&self, channel_id: &ChannelId, user_id: &UserId, added: bool) {
@@ -489,7 +504,7 @@ impl ChannelEventService {
             .ok()
             .and_then(|me| self.channel_repo.get_membership(channel_id, &me).ok().flatten());
         match membership {
-            Some(membership) => self.publish_member_joined(&membership, membership_ts(&membership)),
+            Some(membership) => self.publish_member_joined(&membership, None, membership_ts(&membership)),
             None => tracing::warn!(%channel_id, "No own membership; join notice not filed"),
         }
     }

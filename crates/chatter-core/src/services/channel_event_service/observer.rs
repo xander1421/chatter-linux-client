@@ -71,7 +71,7 @@ impl LogObserver for ChannelEventService {
                         muted_until: None,
                     };
                     if notify && !(genesis && user == author) {
-                        self.publish_member_joined(&membership, ts);
+                        self.publish_member_joined(&membership, Some(author), ts);
                     } else if let Err(e) =
                         self.channel_repo.insert_or_ignore_membership(&membership)
                     {
