@@ -16,9 +16,12 @@ export component DeleteConfirm inherits Rectangle {
     in property <bool> is-dm: false;
     property <string> remote-label: root.is-dm ? "Delete for both" : "Delete for everyone";
 
-    in property <bool> choosing: false;
+    in property <bool> choosing-in: false;
     in property <bool> can-delete-everyone: false;
     in property <bool> can-delete-me: true;
+    // A choice of one is no choice (Saved messages, or a message only this
+    // account can drop): confirm that scope directly.
+    property <bool> choosing: root.choosing-in && root.can-delete-everyone && root.can-delete-me;
     callback scope-chosen(bool);
 
     callback confirmed();
@@ -26,7 +29,7 @@ export component DeleteConfirm inherits Rectangle {
 
     Modal {
         show: root.count > 0;
-        title: root.choosing ? root.count > 1 ? "Delete " + root.count + " messages" : "Delete message" : root.for-everyone ? root.remote-label + "?"
+        title: root.choosing ? root.count > 1 ? "Delete " + root.count + " messages" : "Delete message" : root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label + "?"
             : root.count > 1 ? "Delete " + root.count + " messages?" : "Delete message?";
         modal-width: 400px;
         show-close: false;
@@ -37,7 +40,7 @@ export component DeleteConfirm inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: root.choosing ? root.count > 1 ? "Choose who to delete these messages for." : "Choose who to delete this message for." : root.for-everyone
+                text: root.choosing ? root.count > 1 ? "Choose who to delete these messages for." : "Choose who to delete this message for." : root.for-everyone || (root.choosing-in && !root.can-delete-me)
                     ? root.count > 1 ? "These messages will be deleted for everyone in the chat." : "This message will be deleted for everyone in the chat."
                     : root.count > 1
                     ? "These messages will be deleted from your history."
@@ -72,9 +75,12 @@ export component DeleteConfirm inherits Rectangle {
                 }
 
                 if !root.choosing: Button {
-                    text: root.for-everyone ? root.remote-label : "Delete for me";
+                    text: root.for-everyone || (root.choosing-in && !root.can-delete-me) ? root.remote-label : root.choosing-in ? "Delete" : "Delete for me";
                     variant: "destructive";
-                    clicked => { root.confirmed(); }
+                    clicked => {
+                        if root.choosing-in { root.scope-chosen(!root.can-delete-me); }
+                        root.confirmed();
+                    }
                 }
             }
         }

@@ -384,7 +384,7 @@ export component AppTopOverlays inherits Rectangle {
         count: ChatPane.delete-confirm-count;
         is-dm: ChatPane.conversation-kind == ConversationKind.server-dm || ChatPane.conversation-kind == ConversationKind.anon-dm;
         for-everyone: ChatPane.delete-confirm-everyone;
-        choosing: ChatPane.delete-choosing;
+        choosing-in: ChatPane.delete-choosing;
         can-delete-everyone: ChatPane.delete-choice-everyone;
         can-delete-me: ChatPane.delete-choice-me;
         scope-chosen(everyone) => {
