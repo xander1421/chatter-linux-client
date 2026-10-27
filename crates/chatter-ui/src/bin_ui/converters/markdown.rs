@@ -55,6 +55,18 @@ pub(crate) fn parse_blocks(
             (!text.is_empty()).then(|| {
                 let mut paragraphs = paragraphs(&parse_inline(text));
                 for paragraph in &mut paragraphs {
+                    // Bare web addresses link too, as in Signal and Telegram.
+                    for (range, url) in bare_urls(&paragraph.text) {
+                        if paragraph.formatting.iter().any(|span| span.style == Style::Code
+                            && span.range.start < range.end && range.start < span.range.end)
+                            || paragraph.links.iter().any(|(link, _)|
+                                link.start < range.end && range.start < link.end)
+                        {
+                            continue;
+                        }
+                        paragraph.formatting.push(FormattedSpan { range: range.clone(), style: Style::Link });
+                        paragraph.links.push((range, url));
+                    }
                     for mention in MentionExtractor::resolve_mentions(&paragraph.text, members, broadcast) {
                         let range = mention.start_offset..mention.end_offset;
                         if paragraph.formatting.iter().any(|span| span.style == Style::Code
@@ -516,6 +528,27 @@ mod tests {
     }
 }
 
+/// Bare `http(s)://` addresses in `text` as byte ranges, without trailing
+/// sentence punctuation, each passing [`safe_web_url`].
+fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(offset) = text[from..].find("http") {
+        let start = from + offset;
+        let rest = &text[start..];
+        let len = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let token = rest[..len].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}', '\'', '"']);
+        let boundary = text[..start].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+        if boundary && (token.starts_with("https://") || token.starts_with("http://")) {
+            if let Some(url) = safe_web_url(token) {
+                found.push((start..start + token.len(), url));
+            }
+        }
+        from = start + len.max(4);
+    }
+    found
+}
+
 /// Browser destinations only; reject credentials, ambiguous separators and
 /// whitespace before URL parsing can silently normalize them.
 pub(crate) fn safe_web_url(value: &str) -> Option<String> {
@@ -542,6 +575,16 @@ pub(crate) fn safe_web_url(value: &str) -> Option<String> {
 #[cfg(test)]
 mod link_tests {
     use super::*;
+    #[test]
+    fn bare_urls_link_without_trailing_punctuation_or_code() {
+        let blocks = parse_blocks("see https://example.org/x27, `http://a.b` ok", &[], false);
+        let [MarkdownBlock::Inline(paras)] = blocks.as_slice() else { panic!("one inline block") };
+        assert_eq!(paras[0].links.len(), 1);
+        let (range, url) = &paras[0].links[0];
+        assert_eq!(&paras[0].text[range.clone()], "https://example.org/x27");
+        assert_eq!(url, "https://example.org/x27");
+    }
+
     #[test]
     fn unicode_link_ranges_and_style_are_preserved() {
         let paras = paragraphs(&parse_inline(
