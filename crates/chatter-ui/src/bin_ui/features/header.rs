@@ -800,8 +800,15 @@ fn row_of(w: &MainWindow, message_id: &str) -> Option<usize> {
 /// loaded has the history back to it loaded first. UI thread.
 pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, message_id: &str) {
     let Some(row) = row_of(w, message_id) else {
-        match message_id.parse() {
-            Ok(id) => load_history(w, ui_ctx, HistoryLoad::Reaching(id)),
+        match message_id.parse::<MessageId>() {
+            // A thread reply is not a row of this list: open its thread, as
+            // the "N replies" chip does.
+            Ok(id) => match ui_ctx.get_message_local(&id).and_then(|m| m.thread_id) {
+                Some(root) => w
+                    .global::<crate::ChatPane>()
+                    .invoke_thread_clicked(root.to_string().into()),
+                None => load_history(w, ui_ctx, HistoryLoad::Reaching(id)),
+            },
             Err(_) => {
                 tracing::debug!(message_id, "Jump target is not a stored message");
                 report_jump_unavailable(w);
@@ -828,8 +835,8 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
     });
 }
 
-/// A jump whose target is not in this device's history (deleted, expired, a
-/// thread reply, never synced here) says so instead of doing nothing. Local
+/// A jump whose target is not in this device's history (deleted, expired,
+/// never synced here) says so instead of doing nothing. Local
 /// history only: there is no server fetch behind a jump. UI thread.
 fn report_jump_unavailable(w: &MainWindow) {
     w.set_toast_message("That message isn't available on this device.".into());
