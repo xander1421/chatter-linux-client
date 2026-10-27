@@ -386,6 +386,8 @@ export component SectionContextMenu inherits Rectangle {
     callback set-pinned(/* conv-id */ string, /* pinned */ bool);
     callback set-archived(/* conv-id */ string, /* archived */ bool);
     callback set-muted(/* conv-id */ string, /* kind */ ConversationKind, /* muted */ bool);
+    // Mute for `seconds` (0 = always), as Signal's 1 hour / 8 hours / 1 day / Always.
+    callback set-muted-for(/* conv-id */ string, /* kind */ ConversationKind, /* seconds */ int);
     callback mark-read(/* conv-id */ string, /* kind */ ConversationKind);
     callback mark-unread(/* conv-id */ string, /* kind */ ConversationKind);
     callback create-section-clicked(/* conv-id */ string, /* conv-type */ ConversationKind);
@@ -409,7 +411,11 @@ export component SectionContextMenu inherits Rectangle {
         || root.conversation-type == ConversationKind.anon-group
         || root.conversation-type == ConversationKind.channel;
     private property <bool> has-unread: root.target-row.unread-count > 0;
-    private property <int> read-index: 2 + (root.has-mute ? 1 : 0);
+    // Mute opens its durations in place (anon groups mute by status, no timer).
+    property <bool> choose-mute: false;
+    private property <bool> timed-mute: root.has-mute && root.conversation-type != ConversationKind.anon-group;
+    private property <int> mute-choices: root.choose-mute ? 4 : 0;
+    private property <int> read-index: 2 + (root.has-mute ? 1 : 0) + root.mute-choices;
     private property <int> section-start: root.read-index + 1;
     private property <int> new-index: root.section-start + root.sections.length;
     private property <int> remove-index: root.new-index + 1;
@@ -431,6 +437,7 @@ export component SectionContextMenu inherits Rectangle {
     property <length> menu-space-above: max(0px, root.target-row-y - Spacing.sm - Spacing.md);
     property <bool> menu-below: root.menu-space-below >= root.menu-space-above;
     changed show => {
+        root.choose-mute = false;
         root.confirm-delete = false;
         root.confirm-leave = false;
         root.focus-index = 0;
@@ -546,12 +553,39 @@ export component SectionContextMenu inherits Rectangle {
                 navigate(from, direction) => { root.move-focus(from, direction); }
                 escape => { root.close(); }
                 icon: root.is-muted ? Icons.bell-off : Icons.bell;
-                label: root.is-muted ? "Unmute" : "Mute";
+                label: root.is-muted ? "Unmute" : root.timed-mute ? "Mute…" : "Mute";
                 mobile-mode: root.mobile-mode;
                 clicked => {
+                    if !root.is-muted && root.timed-mute {
+                        root.choose-mute = !root.choose-mute;
+                        return;
+                    }
                     root.set-muted(root.conversation-id, root.conversation-type, !root.is-muted);
                     root.close();
                 }
+            }
+
+            if root.choose-mute: VerticalLayout {
+              for choice[i] in [
+                { label: "For 1 hour", seconds: 3600 },
+                { label: "For 8 hours", seconds: 28800 },
+                { label: "For 1 day", seconds: 86400 },
+                { label: "Always", seconds: 0 },
+              ]: MenuItem {
+                nav-index: 3 + i;
+                focused-index: root.focus-index;
+                keyboard-active: root.show && !root.mobile-mode;
+                focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                navigate(from, direction) => { root.move-focus(from, direction); }
+                escape => { root.close(); }
+                icon: Icons.bell-off;
+                label: choice.label;
+                mobile-mode: root.mobile-mode;
+                clicked => {
+                    root.set-muted-for(root.conversation-id, root.conversation-type, choice.seconds);
+                    root.close();
+                }
+              }
             }
 
             // Read ↔ unread, as Telegram's row menu.

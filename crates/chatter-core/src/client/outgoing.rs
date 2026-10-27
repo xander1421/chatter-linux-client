@@ -704,6 +704,15 @@ impl ChatterClient {
         self.conversation(conv).mute_conversation(muted)
     }
 
+    /// Mute for `seconds`, or for good with `None`.
+    pub fn mute_conversation_for(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        seconds: Option<u64>,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).mute_for(seconds)
+    }
+
     /// Read a conversation's persisted mute state (inverse of
     /// [`Self::mute_conversation`]). Lets the UI reflect the real stored mute
     /// state (e.g. when reopening channel settings) instead of a stale bool.

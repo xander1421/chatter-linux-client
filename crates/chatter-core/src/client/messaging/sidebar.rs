@@ -385,9 +385,18 @@ impl ChatterClient {
     }
 
     fn sidebar_muted_settings(&self) -> std::collections::HashSet<String> {
-        self.channels().settings_repo.get_all().unwrap_or_default().into_iter()
+        let all = self.channels().settings_repo.get_all().unwrap_or_default();
+        let now = chrono::Utc::now().timestamp();
+        // A timed mute (`conv.muted_until.*`) that has run out no longer mutes.
+        let lapsed: std::collections::HashSet<String> = all.iter()
             .filter_map(|(key, value)| {
-                (value.trim() == "true" && key.starts_with("conv.muted.")).then_some(key)
+                let rest = key.strip_prefix("conv.muted_until.")?;
+                (value.trim().parse::<i64>().ok()? <= now).then(|| format!("conv.muted.{rest}"))
+            }).collect();
+        all.into_iter()
+            .filter_map(|(key, value)| {
+                (value.trim() == "true" && key.starts_with("conv.muted.") && !lapsed.contains(&key))
+                    .then_some(key)
             }).collect()
     }
 
