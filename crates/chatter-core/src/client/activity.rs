@@ -264,18 +264,26 @@ impl ChatterClient {
         let sender = message.sender_id.unwrap();
         let text = message.as_text().unwrap_or("");
         let mentioned = self.message_mentions_user(message, &owner);
+        let in_my_thread = message.thread_id
+            .filter(|id| self.get_message_local(id).is_some_and(|parent| parent.sender_id == Some(owner)));
         let reply_to_me = message.reply_to_author_id == Some(owner)
             || message.reply_to.and_then(|id| self.get_message_local(&id)).is_some_and(|parent| parent.sender_id == Some(owner))
-            || message.thread_id.and_then(|id| self.get_message_local(&id)).is_some_and(|parent| parent.sender_id == Some(owner));
+            || in_my_thread.is_some();
         let kind = if mentioned { "mention" }
             else if reply_to_me { "reply" }
             else { return };
+        // Replies in a thread of mine share one row, as Slack's "replied to
+        // your thread": 55 replies were 55 identical rows.
+        let id = match in_my_thread {
+            Some(root) if kind == "reply" => format!("{}{root}", crate::services::activity_service::THREAD_ACTIVITY_PREFIX),
+            _ => format!("{kind}:{}", message.id),
+        };
         let place = if message.conversation_type == ConversationType::Channel {
             self.get_channel_local(&message.conversation_id).map(|c| format!(" in #{}", c.name)).unwrap_or_default()
         } else { String::new() };
         let preview = crate::domain::message::truncate_preview_text(text, 140);
         self.record_activity(owner, NewActivity {
-            id: &format!("{kind}:{}", message.id), kind,
+            id: &id, kind,
             actor_id: Some(sender), actor_name: "", detail: &place, preview: &preview,
             conversation_id: Some(&message.conversation_id.to_string()),
             conversation_type: Some(message.conversation_type.as_str()),

@@ -42,6 +42,9 @@ pub struct NewActivity<'a> {
     pub created_at_ms: i64,
 }
 
+/// Id prefix of the single Activity row kept per thread of mine.
+pub const THREAD_ACTIVITY_PREFIX: &str = "thread:";
+
 pub struct ActivityService {
     db: Arc<Database>,
     changed: tokio::sync::broadcast::Sender<()>,
@@ -58,13 +61,20 @@ impl ActivityService {
 
     pub fn record(&self, owner: UserId, item: NewActivity<'_>) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        // One row per thread: a newer reply refreshes it and marks it unread
+        // again. Every other row is recorded once (a re-delivered message or a
+        // re-synced invite changes nothing).
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO activity_items
+            "INSERT INTO activity_items
              (owner_id,id,kind,actor_id,actor_name,detail,preview,conversation_id,conversation_type,message_id,created_at_ms)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+             ON CONFLICT(owner_id,id) DO UPDATE SET actor_id=excluded.actor_id, actor_name=excluded.actor_name,
+                 preview=excluded.preview, message_id=excluded.message_id, created_at_ms=excluded.created_at_ms, unread=1
+             WHERE excluded.id LIKE ?12 AND excluded.created_at_ms > activity_items.created_at_ms",
             params![owner.to_string(), item.id, item.kind, item.actor_id.map(|id| id.to_string()),
                 item.actor_name, item.detail, item.preview, item.conversation_id,
-                item.conversation_type, item.message_id, item.created_at_ms],
+                item.conversation_type, item.message_id, item.created_at_ms,
+                format!("{THREAD_ACTIVITY_PREFIX}%")],
         )?;
         if inserted != 0 {
             Self::prune(&conn, owner)?;
@@ -255,5 +265,38 @@ fn activity_title(kind: &str, actor_id: Option<&str>, actor_name: &str, detail: 
         "server" => "Server unreachable — messages will send later".to_owned(),
         "server-ok" => format!("Server was unreachable for {detail} — back online"),
         _ => kind.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item<'a>(id: &'a str, preview: &'a str, at: i64) -> NewActivity<'a> {
+        NewActivity {
+            id, kind: "reply", actor_id: None, actor_name: "", detail: "", preview,
+            conversation_id: None, conversation_type: None, message_id: None, created_at_ms: at,
+        }
+    }
+
+    #[test]
+    fn thread_rows_refresh_and_other_rows_are_recorded_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("activity.db"), "test-only").unwrap();
+        db.run_migrations().unwrap();
+        let service = ActivityService::new(Arc::new(db));
+        let owner = UserId::new();
+        let now = Utc::now().timestamp_millis();
+        service.record(owner, item("thread:root", "first", now - 2)).unwrap();
+        service.record(owner, item("reply:m1", "once", now - 2)).unwrap();
+        service.mark_all_read(owner).unwrap();
+        service.record(owner, item("thread:root", "second", now - 1)).unwrap();
+        service.record(owner, item("reply:m1", "again", now - 1)).unwrap();
+        let items = service.list(owner, true, |_| HashMap::new()).unwrap();
+        let thread = items.iter().find(|i| i.id == "thread:root").unwrap();
+        let reply = items.iter().find(|i| i.id == "reply:m1").unwrap();
+        assert_eq!((thread.preview.as_str(), thread.unread), ("second", true));
+        assert_eq!((reply.preview.as_str(), reply.unread), ("once", false));
+        assert_eq!(items.len(), 2);
     }
 }
