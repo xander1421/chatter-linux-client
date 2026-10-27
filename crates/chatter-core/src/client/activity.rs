@@ -221,8 +221,12 @@ impl ChatterClient {
                     });
                 }
             }
-            DomainEvent::ChannelInviteReceived { channel_id, inviter_id, message, expires_at } => {
-                let channel = self.get_channel_local(&channel_id).map(|c| c.name).unwrap_or_else(|| "a channel".to_owned());
+            DomainEvent::ChannelInviteReceived { channel_id, inviter_id, message, expires_at, channel_name } => {
+                let channel = self
+                    .get_channel_local(&channel_id)
+                    .map(|c| c.name)
+                    .or_else(|| (!channel_name.is_empty()).then_some(channel_name))
+                    .unwrap_or_else(|| "a channel".to_owned());
                 self.record_activity(owner, NewActivity {
                     id: &format!("invite:{channel_id}:{inviter_id}:{expires_at}"), kind: "invite",
                     actor_id: Some(inviter_id), actor_name: "", detail: &channel, preview: message.as_deref().unwrap_or(""),

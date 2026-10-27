@@ -569,6 +569,10 @@ pub enum DomainEvent {
         message: Option<String>,
         /// Unix nanoseconds; 0 when the invite does not expire.
         expires_at: u64,
+        /// The channel's name from the pending-invite listing; empty when the
+        /// server did not say (an invitee is not a member yet, so it is not
+        /// stored locally).
+        channel_name: String,
     },
 
     /// Someone answered an invitation.
