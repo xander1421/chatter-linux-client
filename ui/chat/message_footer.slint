@@ -265,15 +265,16 @@ export component MessageFooter inherits HorizontalLayout {
             }
 
             if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "waiting-tor" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked": ticks := Rectangle {
-                property <bool> double-tick: root.delivery-status != "sent";
+                // Only a receipt earns the second tick; an own row whose
+                // status is still empty (a Saved photo just sent) is "sent".
+                property <bool> double-tick: root.delivery-status == "delivered" || root.delivery-status == "read";
                 property <color> tick-color: root.overlay-media ? #ffffff : root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
                 width: self.double-tick ? 17px : 12px;
                 height: 12px;
                 animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                 accessible-role: text;
-                accessible-label: root.delivery-status == "sent" ? "Sent"
-                    : root.delivery-status == "delivered" ? "Delivered"
-                    : root.delivery-status == "read" ? "Read" : "";
+                accessible-label: root.delivery-status == "delivered" ? "Delivered"
+                    : root.delivery-status == "read" ? "Read" : "Sent";
 
                 // Second tick behind, offset left, so the
                 // pair reads as the usual overlapping ✓✓.
