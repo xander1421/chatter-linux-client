@@ -68,6 +68,9 @@ export component PinnedBar inherits GlassSurface {
                 }
 
                 prev-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Previous pinned message";
+                    accessible-action-default => { root.prev-clicked(); }
                     mouse-cursor: pointer;
                     clicked => {
                         root.prev-clicked();
@@ -97,6 +100,9 @@ export component PinnedBar inherits GlassSurface {
                 }
 
                 next-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Next pinned message";
+                    accessible-action-default => { root.next-clicked(); }
                     mouse-cursor: pointer;
                     clicked => {
                         root.next-clicked();

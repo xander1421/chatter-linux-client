@@ -42,6 +42,14 @@ export component MessageQuote inherits Rectangle {
     // their own clicks, while taps on text/thumbnail —
     // which carry no TouchArea — fall through here to jump.
     quote-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "Go to quoted message from " + root.reply-to-sender-name;
+        accessible-enabled: !root.reply-to-not-found && root.reply-to-message-id != "";
+        accessible-action-default => {
+            if (!root.reply-to-not-found && root.reply-to-message-id != "") {
+                root.quote-clicked(root.reply-to-message-id);
+            }
+        }
         mouse-cursor: (root.reply-to-not-found || root.reply-to-message-id == "") ? default : pointer;
         clicked => {
             if (!root.reply-to-not-found && root.reply-to-message-id != "") {
