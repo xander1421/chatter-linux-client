@@ -542,12 +542,17 @@ pub async fn handle_domain_event(
         // =========================================================================
         DomainEvent::ChannelMemberJoined {
             channel_id,
-            user_id: _,
+            user_id,
             display_name: _,
             message,
         } => {
             messaging::handle_message_received(window, ui_ctx, message);
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
+            // We rejoined a channel that is open as read-only: give the
+            // composer back, as a leave took it away.
+            if ui_ctx.session_current_user_id() == Some(user_id) {
+                crate::bin_ui::features::chat::refresh_send_notice(window, ui_ctx, channel_id);
+            }
         }
 
         DomainEvent::ChannelMemberLeft {
