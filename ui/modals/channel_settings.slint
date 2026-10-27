@@ -301,11 +301,15 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                         }
 
-                        if root.active-section == "general" || root.active-section == "destructive": Button {
-                            text: root.has-edits && root.active-section == "general" ? "‹ Info • unsaved changes" : "‹ Info";
-                            variant: "ghost";
-                            height: Spacing.touch-target-min;
-                            clicked => { root.active-section = "overview"; }
+                        // Back sits at the leading edge, as a navigation bar's would.
+                        if root.active-section == "general" || root.active-section == "destructive": HorizontalLayout {
+                            alignment: start;
+                            Button {
+                                text: root.has-edits && root.active-section == "general" ? "‹ Info • unsaved changes" : "‹ Info";
+                                variant: "ghost";
+                                height: Spacing.touch-target-min;
+                                clicked => { root.active-section = "overview"; }
+                            }
                         }
 
                         // Messenger-style info page: identity first, then destinations.
