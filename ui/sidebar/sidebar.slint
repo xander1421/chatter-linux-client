@@ -117,6 +117,7 @@ export component Sidebar inherits Rectangle {
     callback create-channel-clicked();
     callback join-channel-clicked();
     callback friends-clicked();
+    callback add-friend-clicked();
     callback calls-clicked();
     callback profile-clicked();
     callback friend-requests-clicked();
@@ -698,7 +699,7 @@ export component Sidebar inherits Rectangle {
                         icon: Icons.message-circle;
                         message: "No conversations";
                         cta-text: "Add a friend";
-                        cta-clicked => { root.friends-clicked(); }
+                        cta-clicked => { root.add-friend-clicked(); }
                     }
                     if !AnonMode.enabled: HorizontalLayout {
                         height: Spacing.touch-target-min;

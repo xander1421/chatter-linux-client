@@ -124,6 +124,10 @@ export component AppSidebarHost inherits Rectangle {
             ModalHostState.friends-modal-tab = AnonMode.enabled ? "find" : "friends";
             SidebarPane.active-tab = "contacts";
         }
+        add-friend-clicked => {
+            ModalHostState.friends-modal-tab = "find";
+            SidebarPane.active-tab = "contacts";
+        }
         // Wide-layout entry to the Calls screen — the same modal and
         // the same load the phone tab bar's Calls tab raises.
         calls-clicked => {
