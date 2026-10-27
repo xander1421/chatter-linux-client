@@ -6,7 +6,7 @@
 //! capabilities before changing the UI. Core call/session checks still apply.
 
 use slint::ComponentHandle;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chatter_core::client::ChatterClient;
 use jni::objects::{JClass, JString};
@@ -16,7 +16,16 @@ static CALL_CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
 
 /// Window handle for routing a notification "Accept" through the in-app accept
 /// flow (connect + render the active-call screen) once MainActivity foregrounds.
-static MAIN_WINDOW: OnceLock<slint::Weak<crate::MainWindow>> = OnceLock::new();
+#[derive(Default)]
+struct CallWindow {
+    window: Option<slint::Weak<crate::MainWindow>>,
+    pending_accept: Option<String>,
+}
+
+static MAIN_WINDOW: Mutex<CallWindow> = Mutex::new(CallWindow {
+    window: None,
+    pending_accept: None,
+});
 
 /// Register the client used to accept/decline calls from notification actions.
 pub fn register_call_client(client: Arc<ChatterClient>) {
@@ -26,13 +35,40 @@ pub fn register_call_client(client: Arc<ChatterClient>) {
 /// Register the main window so the Accept activity-intent can drive the in-app
 /// accept handler.
 pub fn register_main_window(window: slint::Weak<crate::MainWindow>) {
-    let _ = MAIN_WINDOW.set(window);
+    let pending = {
+        let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.window = Some(window.clone());
+        state.pending_accept.clone()
+    };
+    if let Some(call_id) = pending {
+        dispatch_accept(window, call_id);
+    }
 }
 
 /// The registered main window, for other JNI entry points that must reach the
 /// UI (upgrade it only inside `slint::invoke_from_event_loop`).
 pub(crate) fn main_window() -> Option<slint::Weak<crate::MainWindow>> {
-    MAIN_WINDOW.get().cloned()
+    MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).window.clone()
+}
+
+fn dispatch_accept(weak: slint::Weak<crate::MainWindow>, call_id: String) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            let should_accept = {
+                let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.pending_accept.as_deref() == Some(call_id.as_str()) {
+                    state.pending_accept = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_accept {
+                w.global::<crate::CallView>()
+                    .invoke_accept_incoming_call(call_id.into());
+            }
+        }
+    });
 }
 
 /// JNI entry point: MainActivity received an Accept activity-intent (the app is
@@ -65,16 +101,14 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeAcceptIncoming
                 return;
             }
 
-            let Some(weak) = MAIN_WINDOW.get().cloned() else {
-                tracing::warn!("nativeAcceptIncomingCall: window not registered");
-                return;
+            let weak = {
+                let mut state = MAIN_WINDOW.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.pending_accept = Some(call_id.clone());
+                state.window.clone()
             };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.global::<crate::CallView>()
-                        .invoke_accept_incoming_call(call_id.into());
-                }
-            });
+            if let Some(weak) = weak {
+                dispatch_accept(weak, call_id);
+            }
         })())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
@@ -114,7 +148,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeShowIncomingCa
             {
                 return;
             }
-            let Some(weak) = MAIN_WINDOW.get().cloned() else {
+            let Some(weak) = main_window() else {
                 return;
             };
             let _ = slint::invoke_from_event_loop(move || {
