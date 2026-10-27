@@ -71,7 +71,6 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     });
     let mut updates = client.subscribe_activity();
     let mut auth = client.subscribe_auth_snapshots();
-    client.start_activity_listener();
     refresh(window, client);
     refresh_status(window, client);
 

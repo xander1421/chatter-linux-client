@@ -331,6 +331,11 @@ impl ChatterClient {
             self.auth_state().get().current_user_id.is_some(),
         );
 
+        // Activity records events from the streams started below. A
+        // Service-first Android start has no UI yet, so the listener cannot
+        // wait for one: pending invites re-announced on connect were lost.
+        self.start_activity_listener();
+
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
         #[cfg(target_os = "android")]
