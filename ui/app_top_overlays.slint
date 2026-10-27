@@ -432,7 +432,11 @@ export component AppTopOverlays inherits Rectangle {
         can-delete-channel: SidebarPane.ctx-menu-can-delete-channel;
         sections: SidebarPane.custom-sections;
 
-        close => { SidebarPane.row-context-menu-open = false; }
+        // An action that opens a dialog (new section, delete) keeps it focused.
+        close => {
+            SidebarPane.row-context-menu-open = false;
+            if ModalHostState.modal-stack.length == 0 { root.refocus-composer(); }
+        }
         move-to-section(conv-id, conv-type, section-id) => {
             SidebarPane.move-to-section(conv-id, conv-type, section-id);
         }
@@ -457,7 +461,10 @@ export component AppTopOverlays inherits Rectangle {
         mobile-mode: root.is-mobile-platform;
         bottom-inset: root.sidebar-menu-bottom-inset;
 
-        close => { SidebarPane.section-context-menu-open = false; }
+        close => {
+            SidebarPane.section-context-menu-open = false;
+            if ModalHostState.modal-stack.length == 0 { root.refocus-composer(); }
+        }
         remove-section(section-id) => { SidebarPane.delete-section-clicked(section-id); }
         rename-section(section-id) => {
             ModalHostState.create-section-rename-mode = true;
