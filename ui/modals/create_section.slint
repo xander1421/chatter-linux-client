@@ -104,6 +104,8 @@ export component CreateSectionModal inherits Rectangle {
                     horizontal-stretch: 1;
                     placeholder: "Section name";
                     text <=> root.section-name;
+                    // Created on open: the name is the only thing to type.
+                    init => { self.focus(); }
                 }
             }
 
