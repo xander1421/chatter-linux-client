@@ -436,7 +436,15 @@ export component SectionContextMenu inherits Rectangle {
         root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
             : max(0, min(root.focus-count - 1, from + direction));
     }
+    // The focused item's place in the list. Slint drops focus on the next
+    // key press when the focused item is clipped out of view
+    // (vendor/i-slint-core/window.rs:1080), so a wheel scroll that moved it
+    // away left Escape and the arrows dead until a click.
+    private property <length> focused-top: 0px;
+    private property <length> focused-height: 0px;
     function keep-visible(top: length, item-height: length) {
+        root.focused-top = top;
+        root.focused-height = item-height;
         if (top + menu-scroll.viewport-y < 0px) { menu-scroll.viewport-y = -top; }
         else if (top + item-height + menu-scroll.viewport-y > menu-scroll.height) {
             menu-scroll.viewport-y = menu-scroll.height - top - item-height;
@@ -525,7 +533,31 @@ export component SectionContextMenu inherits Rectangle {
             }
         }
 
+        // Holds focus while the focused item is scrolled away; the arrows
+        // move to the next item, which scrolls back into view.
+        menu-fallback-keys := FocusScope {
+            x: 0px;
+            y: 0px;
+            width: 0px;
+            height: 0px;
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.close(); return accept; }
+                if event.text == Key.UpArrow { root.move-focus(root.focus-index, -1); return accept; }
+                if event.text == Key.DownArrow { root.move-focus(root.focus-index, 1); return accept; }
+                if event.text == Key.Home { root.move-focus(root.focus-index, -2); return accept; }
+                if event.text == Key.End { root.move-focus(root.focus-index, 2); return accept; }
+                reject
+            }
+        }
+
         menu-scroll := Flickable {
+            changed viewport-y => {
+                if !root.mobile-mode && root.focused-height > 0px
+                    && (root.focused-top + self.viewport-y < 0px
+                        || root.focused-top + root.focused-height + self.viewport-y > self.height) {
+                    menu-fallback-keys.focus();
+                }
+            }
             width: 100%;
             height: 100%;
             immediate-child-press: true;
