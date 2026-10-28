@@ -162,6 +162,15 @@ impl ActivityService {
         ).optional().map_err(Into::into)
     }
 
+    /// Drop one row: what it reported no longer happened (a withdrawn reaction).
+    pub fn forget(&self, owner: UserId, id: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        if conn.execute("DELETE FROM activity_items WHERE owner_id=?1 AND id=?2", params![owner.to_string(), id])? != 0 {
+            let _ = self.changed.send(());
+        }
+        Ok(())
+    }
+
     pub fn mark_read(&self, owner: UserId, id: &str) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         if conn.execute("UPDATE activity_items SET unread=0 WHERE owner_id=?1 AND id=?2 AND unread=1", params![owner.to_string(), id])? != 0 {

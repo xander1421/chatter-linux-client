@@ -219,6 +219,13 @@ impl ChatterClient {
                     created_at_ms: if timestamp == 0 { now } else { (timestamp.min(now as u64)) as i64 },
                 });
             }
+            // A withdrawn reaction takes its row with it, as in Telegram.
+            DomainEvent::ReactionRemoved { scope, sender_id, sent_at_ns, reactor_id, emoji, .. } if sender_id == owner && reactor_id != owner => {
+                let id = format!("reaction:{}:{sent_at_ns}:{reactor_id}:{emoji}", scope.id);
+                if let Err(e) = self.activity.forget(owner, &id) {
+                    tracing::warn!(error = %e, "Could not drop a withdrawn reaction's Activity row");
+                }
+            }
             DomainEvent::FriendRequestsUpdated { received, .. } => {
                 for request in received {
                     let actor_id = request.user_id.parse().ok();
