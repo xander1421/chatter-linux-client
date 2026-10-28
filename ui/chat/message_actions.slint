@@ -28,11 +28,13 @@ export component MessageActions inherits Rectangle {
     // Peer bubbles in a narrow pane: the bar would run off the
     // right edge, so it tucks inside the bubble's end instead.
     property <bool> overflows-right: !root.is-own
-        && root.bubble-x + root.bubble-width - 8px + action-btns.width
+        && root.bubble-x + root.bubble-width + Spacing.xxs + action-btns.width
             > root.row-x + root.row-width - Spacing.xs;
-    x: root.is-own ? -action-btns.width + 8px
+    // Beside the bubble, not over it: an 8px overlap hid the first letters
+    // of a one-line bubble ("bg27" read "g27").
+    x: root.is-own ? -action-btns.width - Spacing.xxs
         : self.overflows-right ? root.bubble-width - action-btns.width - Spacing.sm
-        : root.bubble-width - 8px;
+        : root.bubble-width + Spacing.xxs;
     y: -Spacing.button-height / 2; // Float halfway above the top edge
     width: action-btns.width;
     height: action-btns.height;
