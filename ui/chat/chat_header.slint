@@ -305,13 +305,16 @@ export component ChatHeader inherits GlassSurface {
                     if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
                         spacing: Spacing.xs;
                         min-width: 0px;
+                        // The dots follow the words; a stretching label left
+                        // them floating at the far end, by the call button.
+                        alignment: start;
                         Text {
                             text: root.mobile && root.is-dm ? "Typing" : root.typing-indicator;
                             color: Colors.text-secondary;
                             font-size: Typography.xs;
                             font-italic: true;
                             min-width: 0px;
-                            horizontal-stretch: 1;
+                            horizontal-stretch: 0;
                             overflow: elide;
                             vertical-alignment: center;
                         }
