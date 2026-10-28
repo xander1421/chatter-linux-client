@@ -217,7 +217,7 @@ pub fn handle_pin(
                 .set_pinned_message_preview(preview.into());
             window
                 .global::<crate::ChatPane>()
-                .set_pinned_current_index(pinned_count);
+                .set_pinned_current_index(1);
         } else if pinned_count == 0 {
             window
                 .global::<crate::ChatPane>()

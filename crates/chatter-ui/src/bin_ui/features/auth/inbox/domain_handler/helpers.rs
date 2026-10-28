@@ -210,7 +210,7 @@ pub(super) fn handle_pin_ui_update(
             w.global::<crate::ChatPane>()
                 .set_pinned_message_preview(preview.into());
             w.global::<crate::ChatPane>()
-                .set_pinned_current_index(pinned_count);
+                .set_pinned_current_index(1);
         }
 
         crate::bin_ui::features::header::refresh_pinned_ui(&w, &refresh_ctx);

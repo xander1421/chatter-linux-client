@@ -240,7 +240,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         w.global::<crate::ChatPane>()
                             .set_pinned_message_preview(preview_text.into());
                         w.global::<crate::ChatPane>()
-                            .set_pinned_current_index(pinned_count as i32);
+                            .set_pinned_current_index(1);
                         w.global::<crate::ChatPane>()
                             .set_pinned_total_count(pinned_count as i32);
                     } else {

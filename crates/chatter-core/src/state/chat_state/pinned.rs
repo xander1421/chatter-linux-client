@@ -124,11 +124,15 @@ impl ChatState {
         self.store.get().pinned.pinned_message_ids.len()
     }
 
-    /// Add a pinned message to the list (deduped, appended at end).
+    /// Add a newly pinned message (deduped) and show it: newest first, as the
+    /// list a conversation opens with, and the bar comes back if dismissed.
+    /// Appended at the end, a fresh pin left the bar on the older one.
     pub fn add_pinned_message(&self, message_id: MessageId) {
         self.store.update(|state| {
             if !state.pinned.pinned_message_ids.contains(&message_id) {
-                state.pinned.pinned_message_ids.push(message_id);
+                state.pinned.pinned_message_ids.insert(0, message_id);
+                state.pinned.current_index = 0;
+                state.pinned.is_dismissed = false;
             }
         });
     }
