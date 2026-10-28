@@ -29,6 +29,7 @@ use crate::MainWindow;
 pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let state = ui_ctx.clone();
+    let activity_client = ui_ctx.clone();
     let ui_ctx = ui_ctx.clone();
 
     window.window().on_winit_window_event(move |_win, event| {
@@ -58,6 +59,24 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             WindowEvent::HoveredFileCancelled => {
                 // Could hide the visual drop indicator here
                 tracing::trace!("File hover cancelled");
+                EventResult::Propagate
+            }
+            // Mouse and keyboard use is presence activity: reading and
+            // clicking around kept an auto-away (5 min without typing or
+            // sending) showing Away to contacts. At most once a minute.
+            WindowEvent::KeyboardInput { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. } => {
+                static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                if now.saturating_sub(LAST.load(std::sync::atomic::Ordering::Relaxed)) >= 60 {
+                    LAST.store(now, std::sync::atomic::Ordering::Relaxed);
+                    let _rt = crate::rt_handle().enter();
+                    let client = activity_client.clone();
+                    tokio::spawn(async move { client.record_presence_activity().await });
+                }
                 EventResult::Propagate
             }
             _ => EventResult::Propagate,
