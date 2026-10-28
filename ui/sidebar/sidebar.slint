@@ -957,7 +957,9 @@ export component Sidebar inherits Rectangle {
             server-unreachable: root.server-unreachable;
             profile-clicked => { root.profile-clicked(); }
             settings-clicked => { root.settings-clicked(); }
-            toggle-collapsed => { root.collapsed = !root.collapsed; root.toggle-collapsed(); }
+            // The host owns the state (SidebarPane.sidebar-collapsed); flipping
+            // `collapsed` here broke its binding and the chat never moved.
+            toggle-collapsed => { root.toggle-collapsed(); }
             anon-mode-clicked => { root.anon-mode-clicked(); }
             channel-selected(id) => { root.channel-selected(id); }
             tab-selected(tab) => { root.tab-selected(tab); }

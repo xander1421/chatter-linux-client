@@ -95,7 +95,10 @@ export component AppSidebarHost inherits Rectangle {
         // from being undone by a resize.
         // Never a rail on mobile — when this panel is on screen at all
         // it is the whole screen.
-        collapsed: root.compact-layout ? false : root.sidebar-is-rail;
+        // The stored choice, as before c8c1865e: on a small screen the chat
+        // keeps the rail's x (`sidebar-is-rail`) and an expanded panel
+        // overlays it.
+        collapsed: root.compact-layout ? false : SidebarPane.sidebar-collapsed;
         hidden: root.compact-layout ? false : SidebarPane.sidebar-hidden;
         pending-friend-requests: ModalHostState.friends-received-requests.length;
         pending-message-requests: ModalHostState.pending-message-requests;
@@ -183,6 +186,11 @@ export component AppSidebarHost inherits Rectangle {
         toggle-collapsed => {
             // Track user's explicit collapse choice for smart auto-expand
             root.sidebar-user-collapsed = !SidebarPane.sidebar-collapsed;
+            // The one source of truth: the chat pane, the rail and the
+            // persisted choice all read this. Before, only the sidebar's own
+            // copy flipped, so the chat stayed at the expanded width beside a
+            // rail and the choice saved was the old one.
+            SidebarPane.sidebar-collapsed = !SidebarPane.sidebar-collapsed;
             SidebarPane.toggle-sidebar();
         }
         create-section-clicked => {
