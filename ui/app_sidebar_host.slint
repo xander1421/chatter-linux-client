@@ -8,6 +8,7 @@ import { Sidebar } from "sidebar/sidebar.slint";
 import { Spacing } from "theme/spacing.slint";
 import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
+import { ChatPane } from "app_chat_pane.slint";
 import { FriendRequestData } from "modals/friends.slint";
 
 // Sidebar wiring and list navigation for the main conversation shell.
@@ -76,6 +77,7 @@ export component AppSidebarHost inherits Rectangle {
         chat-rows: SidebarPane.chat-rows;
         archived-rows: SidebarPane.archived-rows;
         archive-open: SidebarPane.archive-open;
+        saved-open: ChatPane.conversation-kind == ConversationKind.saved-messages;
         chat-rows-loading: AuthFlow.is-signed-in && SidebarPane.chat-rows-loading;
         custom-sections: SidebarPane.custom-sections;
         flat-rows: SidebarPane.flat-rows;

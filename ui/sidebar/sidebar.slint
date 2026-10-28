@@ -48,6 +48,9 @@ export component Sidebar inherits Rectangle {
     in property <[ChatRowData]> chat-rows: [];
     in property <[ChatRowData]> archived-rows: [];
     in property <bool> archive-open: false;
+    // Saved messages is the open conversation: its quick link is the
+    // selected row, as a chat row is.
+    in property <bool> saved-open: false;
     in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];
@@ -447,7 +450,8 @@ export component Sidebar inherits Rectangle {
                     property <bool> press-active: false;
                     property <length> press-x: 0px;
                     property <length> press-y: 0px;
-                    background: self.press-active ? Colors.surface-control-hover
+                    background: root.saved-open && !root.collapsed ? Colors.row-selected
+                        : self.press-active ? Colors.surface-control-hover
                         : (!root.mobile-mode && saved-touch.has-hover) ? Colors.surface-hover : transparent;
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: list-item;
