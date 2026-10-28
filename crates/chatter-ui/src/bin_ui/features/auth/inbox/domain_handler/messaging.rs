@@ -601,6 +601,16 @@ pub(super) fn handle_message_delete(
     }
     let conversation = ui_ctx.active_conversation();
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+    // A deleted thread reply is kept as a tombstone with its thread: the
+    // root's "N replies" has to drop even when the panel is not showing it.
+    let thread_root = match &target {
+        DeleteTarget::AuthorTimestamp { author, sent_at } => {
+            ui_ctx.get_message_by_sender_timestamp(author, *sent_at)
+        }
+        DeleteTarget::Id(id) => ui_ctx.get_message_local(id),
+    }
+    .and_then(|m| m.thread_id)
+    .map(|root| root.to_string());
     let ui_ctx = ui_ctx.clone();
     crate::run_ui!(window, |w| {
         if !owner.is_current() {
@@ -612,6 +622,12 @@ pub(super) fn handle_message_delete(
             conversation,
             |msg| target.matches(msg),
         );
+        // The open panel's own removal already lowered its root's count.
+        if let Some(root) = thread_root
+            && w.global::<crate::ChatPane>().get_thread_root_message_id().as_str() != root
+        {
+            crate::bin_ui::features::thread::adjust_root_reply_count(&w, &root, -1);
+        }
     });
 }
 

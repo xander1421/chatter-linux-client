@@ -752,7 +752,7 @@ fn patch_edited_row(
 }
 
 /// Increment the "N replies" indicator on a thread root bubble in the main list.
-fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
+pub(crate) fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
     let messages = w.global::<crate::ChatPane>().get_messages();
     let Some(model) = messages
         .as_any()
