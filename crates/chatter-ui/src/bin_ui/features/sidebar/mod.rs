@@ -823,9 +823,20 @@ pub(crate) fn apply_chat_list(
     use crate::bin_ui::converters::ChatRowExt;
     use slint::Model;
     let active = ui_ctx.active_conversation();
+    // The snapshot may predate the open conversation's mark-read (it is
+    // computed off the UI thread); its badge is re-read now so a stale count
+    // is not painted back over the cleared one (desktop: an opened channel
+    // kept "1" after a mention until another chat was selected).
+    let active_badge = ui_ctx.unread_badges(&active).row as i32;
     let rows: Vec<_> = rows.into_iter().map(|r| {
         let mut row = r.to_slint();
         row.is_selected = row_is_active(&active, row.conversation_type, row.conversation_id.as_str());
+        if row.is_selected {
+            row.unread_count = active_badge;
+            if active_badge == 0 {
+                row.mention_count = 0;
+            }
+        }
         row
     }).collect();
     let model = window.global::<crate::SidebarPane>().get_chat_rows();
