@@ -193,6 +193,9 @@ fn wire_redial(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             if is_video {
                 w.global::<crate::ChatPane>().invoke_start_video_call();
+            } else if kind.as_str() == "channel" {
+                // Ringing a whole channel asks first, as the header's button.
+                w.global::<crate::ChatPane>().set_call_confirm_open(true);
             } else {
                 w.global::<crate::ChatPane>().invoke_start_voice_call();
             }
