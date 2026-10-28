@@ -450,7 +450,13 @@ export component ChannelSettingsModal inherits Rectangle {
                                     border-radius: Spacing.radius-lg;
                                     manage-row := SettingsRow {
                                         touch: true;
-                                    icon: Icons.alert-triangle; title: "Leave, archive or delete";
+                                    icon: Icons.alert-triangle;
+                                    // Name only what this user can do: a member saw
+                                    // "Leave, archive or delete" over a page with Leave.
+                                    title: root.can-archive || root.can-delete
+                                        ? (root.can-leave ? "Leave, archive or delete" : "Archive or delete")
+                                        : root.is-private-group && !root.can-leave ? "Manage group"
+                                        : root.is-private-group ? "Leave group" : "Leave channel";
                                     destructive: true;
                                     clicked => { root.active-section = "destructive"; }
                                     }
