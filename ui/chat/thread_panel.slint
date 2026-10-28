@@ -39,6 +39,10 @@ export component ThreadPanel inherits Rectangle {
         root.panel-progress = Appearance.reduce-motion && root.visible ? 1 : 0;
         if root.visible && !root.touch { composer.focus-reply-input(); }
     }
+    // Asked again once the panel has entered: opened from a message menu,
+    // the first request landed while the menu was closing and focus ended
+    // nowhere, so typing and Esc did nothing until a click (desktop).
+    changed entered => { if root.entered && root.visible && !root.touch { composer.focus-reply-input(); } }
     // The app keeps this panel mounted while hidden. A visibility binding can
     // settle after initialization, so clear a premature entrance before the
     // next open even if no change callback fired during mounting.
