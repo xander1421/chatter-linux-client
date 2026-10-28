@@ -38,14 +38,19 @@ export component MessageActions inherits Rectangle {
         : root.bubble-width + Spacing.xxs;
     // Float halfway above the top edge, but never under the floating header
     // and pinned bar: a bubble scrolled up to them hid its own actions.
-    y: max(-Spacing.button-height / 2, root.chrome-bottom - root.bubble-y);
+    y: max(-root.btn / 2, root.chrome-bottom - root.bubble-y);
     width: action-btns.width;
     height: action-btns.height;
     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
 
+    // IconAction's own size: it never shrinks below the touch target, so a
+    // bar sized from button-height let the buttons run past its end and
+    // over the bubble.
+    property <length> btn: max(Spacing.touch-target-min, Spacing.button-height);
+
     action-btns := Rectangle {
-        height: Spacing.button-height + Spacing.xxs * 2;
-        width: (root.can-thread ? 4 : 3) * Spacing.button-height + (root.can-thread ? 5 : 4) * Spacing.xxs;
+        height: root.btn + Spacing.xxs * 2;
+        width: (root.can-thread ? 4 : 3) * root.btn + (root.can-thread ? 5 : 4) * Spacing.xxs;
         background: Colors.surface-raised;
         border-radius: Spacing.radius-md;
         border-width: Elevation.rim-width;
