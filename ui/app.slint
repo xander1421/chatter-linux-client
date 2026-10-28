@@ -691,6 +691,10 @@ export component MainWindow inherits Window {
             // Main chat layout — parent Rectangle already accounts for all insets.
             if current-view == "main": MainChatShell {
                 z: -2;
+                // Settings is an opaque full-window page; unpainted, the chat
+                // list and the open chat also leave the accessibility tree
+                // (tablet TalkBack read every chat row under Settings).
+                visible: !ModalHostState.settings-open;
                 chat-push-progress <=> root.chat-push-progress;
                 width: 100%;
                 height: parent.height;
@@ -756,6 +760,8 @@ export component MainWindow inherits Window {
 
         AppTabScreens {
             z: -1;
+            // Under Settings, as the chat shell above.
+            visible: !ModalHostState.settings-open;
             width: parent.width;
             height: parent.height;
             bottom-nav-visible : root.bottom-nav-visible;
