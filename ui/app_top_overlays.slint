@@ -432,8 +432,11 @@ export component AppTopOverlays inherits Rectangle {
 
     // Sidebar menu anchors come from window positions; this overlay starts
     // below the safe area. The selected row is measured from the sidebar top.
-    SectionContextMenu {
-        show: SidebarPane.row-context-menu-open;
+    // Mounted only while open: a menu scrolled with the wheel and then
+    // closed kept the pointer, so the next click anywhere in the sidebar
+    // (a chat row, Saved messages) did nothing.
+    if SidebarPane.row-context-menu-open: SectionContextMenu {
+        show: true;
         position-x: SidebarPane.ctx-menu-x;
         position-y: SidebarPane.ctx-menu-y - root.safe-area-top;
         target-row-x: 0px;
@@ -475,8 +478,9 @@ export component AppTopOverlays inherits Rectangle {
         leave-conversation(conv-id, kind) => { SidebarPane.leave-conversation(conv-id, kind); }
     }
 
-    SectionHeaderContextMenu {
-        show: SidebarPane.section-context-menu-open;
+    // Mounted only while open, as the row menu above.
+    if SidebarPane.section-context-menu-open: SectionHeaderContextMenu {
+        show: true;
         position-x: SidebarPane.section-header-ctx-menu-x;
         position-y: SidebarPane.section-header-ctx-menu-y - root.safe-area-top;
         section-id: SidebarPane.section-header-ctx-menu-section-id;
