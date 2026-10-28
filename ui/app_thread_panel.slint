@@ -25,6 +25,10 @@ export component AppThreadPanel inherits Rectangle {
     in-out property <length> viewer-origin-width;
     background: transparent;
     thread-panel := ThreadPanel {
+        // The host hides this wrapper; the panel's own entrance and composer
+        // focus run on its `visible` changing, which never did while it
+        // stayed true inside a hidden parent.
+        visible: root.visible;
         width: 100%;
         height: 100%;
         // Same expression `thread-panel-w` uses to give the panel
