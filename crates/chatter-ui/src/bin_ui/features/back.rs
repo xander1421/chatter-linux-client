@@ -373,6 +373,16 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // Edit channel info and the danger zone are pages under the settings
+    // Info tab; Back closed all of settings from them. Same as their "‹ Info".
+    if window.get_active_modal().as_str() == "channel-settings" {
+        let host = window.global::<crate::ModalHostState>();
+        if matches!(host.get_channel_settings_section().as_str(), "general" | "destructive") {
+            host.set_channel_settings_section("overview".into());
+            return true;
+        }
+    }
+
     // The profile's Edit contact dialog and shared-content page sit inside
     // the profile screen; Back closed the whole profile from either.
     if window.get_active_modal().as_str() == "user-profile" {
