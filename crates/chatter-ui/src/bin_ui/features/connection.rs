@@ -146,6 +146,15 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let account_free = ui_ctx_for_task.has_account_free_surfaces();
             let signed_in = ui_ctx_for_task.is_logged_in();
             let active_conversation = ui_ctx_for_task.active_conversation();
+            // The header's "online / last seen" line follows the dot: a DM
+            // opened while disconnected read "last seen 11 min ago" beside a
+            // green dot once the connection came back (S9).
+            let active_last_seen = match active_conversation {
+                chatter_core::state::ActiveConversation::ServerDm { peer_id } => ui_ctx_for_task
+                    .peer_last_seen(&peer_id)
+                    .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at)),
+                _ => None,
+            };
             let active_presence = ui_ctx_for_task.active_dm_presence();
             let weak_for_ui = weak.clone();
             let ui_ctx_for_ui = ui_ctx_for_task.clone();
@@ -162,6 +171,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     {
                         w.global::<crate::ChatPane>()
                             .set_header_presence_status(presence.as_str().into());
+                        if let Some(label) = active_last_seen {
+                            w.global::<crate::ChatPane>().set_header_last_seen(label.into());
+                        }
                     }
                 }
             });
