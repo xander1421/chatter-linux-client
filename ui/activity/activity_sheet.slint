@@ -163,7 +163,7 @@ export component ActivitySheet inherits Rectangle {
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: "Server host"; value: ActivityGlobal.server-host; touch: root.touch; tint: Colors.info; }
                                 Rectangle { height: 1px; background: Colors.divider; }
-                                StatusRow { title: "Last connected"; value: ActivityGlobal.last-connected; touch: root.touch; tint: Colors.info; }
+                                StatusRow { title: root.connection-status == "connected" ? "Connected since" : "Last connected"; value: ActivityGlobal.last-connected; touch: root.touch; tint: Colors.info; }
                                 Rectangle { height: 1px; background: Colors.divider; }
                                 StatusRow { title: "Push"; value: ActivityGlobal.push-status; touch: root.touch;
                                     tint: ActivityGlobal.push-status == "Registered" ? Colors.success : Colors.warning; }
