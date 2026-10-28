@@ -58,7 +58,10 @@ export component InviteMemberModal inherits Rectangle {
             spacing: Spacing.md;
 
             // Header text showing channel name
+            // Only the list takes the sheet's spare height; the header row and
+            // the search field stretched too and floated in empty bands.
             HorizontalLayout {
+                vertical-stretch: 0;
                 spacing: Spacing.xs;
                 alignment: start;
                 Text {
@@ -88,6 +91,7 @@ export component InviteMemberModal inherits Rectangle {
 
             // Search input
             Input {
+                vertical-stretch: 0;
                 placeholder: "Search by name or username...";
                 text <=> root.search-text;
                 edited(q) => { root.search-changed(q); }
