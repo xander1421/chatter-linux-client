@@ -36,6 +36,9 @@ export global SidebarPane {
     // Manual presence mode chosen in the status picker ("auto" default).
     in-out property <string> user-presence-mode: "auto";
     in-out property <bool> sidebar-collapsed: false;
+    // Expanded by the user on a window below 800 px, where the panel is a
+    // rail by default. Session-only; reset when the window size class changes.
+    in-out property <bool> small-screen-expanded: false;
     in-out property <bool> sidebar-hidden: false;
     in-out property <int> sidebar-focus-index: 0;
     in-out property <bool> row-context-menu-open: false;

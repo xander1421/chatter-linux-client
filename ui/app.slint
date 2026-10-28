@@ -262,7 +262,10 @@ export component MainWindow inherits Window {
     // state has to read the same expression — checking `sidebar-collapsed`
     // alone reports "expanded" on a phone that is showing a rail, which removed
     // the entire chat column and left a blank screen.
-    property <bool> sidebar-is-rail: root.is-small-screen || SidebarPane.sidebar-collapsed;
+    // Rail when collapsed, and on a small screen unless the user expanded it
+    // there. The sidebar, the chat's x and the menus all read this one value.
+    property <bool> sidebar-is-rail: SidebarPane.sidebar-collapsed
+        || (root.is-small-screen && !SidebarPane.small-screen-expanded);
     // Both phone panes stay mounted until the push settles. The message list
     // therefore keeps its scroll position while the header and composer travel
     // with the conversation, and Back reverses the same movement.
@@ -368,6 +371,7 @@ export component MainWindow inherits Window {
 
     // Update sidebar collapsed/hidden state when screen size changes
     changed is-small-screen => {
+        SidebarPane.small-screen-expanded = false;
         if (root.is-small-screen && !SidebarPane.sidebar-collapsed) {
             // Auto-collapse on small screen — don't mark as user choice
             SidebarPane.sidebar-collapsed = true;
