@@ -363,6 +363,9 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &Arc<ChatterClient>, leaving: 
         .set_composer_emoji_picker_visible(false);
     w.global::<crate::ChatPane>()
         .set_composer_gif_picker_visible(false);
+    // Mention suggestions belong to the text being left.
+    w.global::<crate::ChatPane>()
+        .set_mention_autocomplete_visible(false);
     // A word the input method is still composing belongs to the conversation
     // being left; fold it in and end the composition before the text moves.
     // The settle reads a mirror kept by `changed` handlers. Slint runs those

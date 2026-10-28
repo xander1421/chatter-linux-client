@@ -247,7 +247,10 @@ export component AppTopOverlays inherits Rectangle {
 
     // Mention autocomplete overlay (positioned above composer cursor)
     MentionAutocomplete {
-        show: ChatPane.mention-autocomplete-visible;
+        // On a phone the list belongs to the open chat: Back to the chat
+        // list left it floating over the conversations (S9).
+        show: ChatPane.mention-autocomplete-visible
+            && (!self.phone || (SidebarPane.mobile-show-chat && SidebarPane.active-tab == "chats"));
         suggestions: ChatPane.mention-suggestions;
         selected-index: ChatPane.mention-selected-index;
         // A phone's chat is the whole width: the list sits above the
