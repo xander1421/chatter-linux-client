@@ -49,6 +49,13 @@ export component AppTopOverlays inherits Rectangle {
     function refocus-composer() {
         if !root.is-mobile-platform { root.reply-focus-serial += 1; }
     }
+    // Every dialog, not only the ones wired above: when the last one closes
+    // (Esc, X, backdrop) focus goes back to the composer. Closing Contacts
+    // with Esc left Ctrl+K and typing dead until a click (desktop).
+    property <int> open-modals: ModalHostState.modal-stack.length;
+    changed open-modals => {
+        if self.open-modals == 0 { root.refocus-composer(); }
+    }
     in property <length> safe-area-top;
     in property <bool> sidebar-menu-collapsed;
     in property <length> sidebar-menu-width;
