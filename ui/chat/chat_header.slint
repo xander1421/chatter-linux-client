@@ -200,6 +200,8 @@ export component ChatHeader inherits GlassSurface {
             if root.has-avatar: Avatar {
                 size: root.header-avatar;
                 source: root.avatar-source;
+                // TalkBack read a bare "Avatar" in every DM header.
+                alt-name: root.channel-name;
                 anonymous: is-anon-dm || is-private-group;
                 y: (parent.height - self.height) / 2;
                 show-presence: root.is-dm;
