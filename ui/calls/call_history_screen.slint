@@ -447,10 +447,27 @@ export component CallHistoryScreen inherits Rectangle {
                                     alignment: center;
                                     horizontal-stretch: 0;
 
-                                    Avatar {
+                                    // A channel without an uploaded icon gets
+                                    // the chat list's # or lock glyph, not
+                                    // initials ("O2" beside a "#" row).
+                                    if row.conversation-type != "channel" || row.avatar-source.width > 0: Avatar {
                                         size: root.row-avatar;
                                         name: row.name;
                                         source: row.avatar-source;
+                                    }
+                                    if row.conversation-type == "channel" && row.avatar-source.width <= 0: Rectangle {
+                                        width: root.row-avatar;
+                                        height: root.row-avatar;
+                                        border-radius: self.width / 2;
+                                        background: Colors.surface-control;
+                                        accessible-role: image;
+                                        accessible-label: "Avatar for " + row.name;
+                                        Image {
+                                            source: row.private-channel ? Icons.lock : Icons.hash;
+                                            width: root.mobile-mode ? 24px : 16px;
+                                            height: self.width;
+                                            colorize: Colors.text-secondary;
+                                        }
                                     }
                                 }
 

@@ -668,6 +668,7 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
                 id: r.id.into(),
                 conversation_id: r.conversation_id.into(),
                 conversation_type: r.conversation_type.into(),
+                private_channel: r.private_channel,
                 name: name.into(),
                 initials: crate::bin_ui::converters::initials_from_name(name).into(),
                 timestamp: r

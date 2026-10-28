@@ -21,6 +21,9 @@ pub struct CallHistoryRowData {
     /// `None` = initials. Filled by `ChatterClient::call_history_page`, which
     /// has the stores — the `From` conversion leaves it empty.
     pub avatar_bytes: Option<Vec<u8>>,
+    /// A private channel's row: the UI draws its lock glyph, as the chat list
+    /// does, instead of initials. Filled with the avatar.
+    pub private_channel: bool,
     /// Raw call time and outcome for the presenter.
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub result: Option<CallResult>,
@@ -46,6 +49,7 @@ impl From<&CallHistoryEntry> for CallHistoryRowData {
             conversation_id: entry.conversation_id.clone(),
             conversation_type: entry.conversation_type.as_str().to_string(),
             avatar_bytes: None,
+            private_channel: false,
             name: entry.peer_name.clone(),
             started_at: Some(entry.started_at),
             result: Some(entry.result),

@@ -112,6 +112,15 @@ impl ChatterClient {
         .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))??;
         for row in &mut page.rows {
             row.avatar_bytes = self.call_peer_avatar(&row.conversation_type, &row.conversation_id);
+            row.private_channel = row.conversation_type == "channel"
+                && row
+                    .conversation_id
+                    .parse()
+                    .ok()
+                    .and_then(|id| self.get_channel_local(&id))
+                    .is_some_and(|channel| {
+                        matches!(channel.channel_type, crate::domain::ChannelType::Private)
+                    });
             if let Some(name) = self.call_peer_name(&row.conversation_type, &row.conversation_id) {
                 row.name = name;
             }
