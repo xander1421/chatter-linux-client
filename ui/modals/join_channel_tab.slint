@@ -13,6 +13,8 @@ export component JoinChannelTab inherits VerticalLayout {
     in property <bool> join-searching;
     in property <string> join-error;
     in-out property <string> join-selected-id;
+    property <bool> selected-joined: false;
+    changed join-selected-id => { if root.join-selected-id == "" { root.selected-joined = false; } }
     in property <bool> join-joining;
     callback join-search(string);
     callback join-channel(string);
@@ -190,10 +192,12 @@ export component JoinChannelTab inherits VerticalLayout {
                     member-count: channel.member-count;
                     icon: channel.icon;
                     has-icon: channel.has-icon;
+                    joined: channel.joined;
                     selected: channel.id == root.join-selected-id;
 
                     clicked => {
                         root.join-selected-id = channel.id;
+                        root.selected-joined = channel.joined;
                     }
                 }
             }
@@ -214,7 +218,7 @@ export component JoinChannelTab inherits VerticalLayout {
         }
 
         Button {
-            text: root.join-joining ? "" : "Join";
+            text: root.join-joining ? "" : root.selected-joined ? "Open" : "Join";
             variant: "primary";
             disabled: root.join-selected-id == "" || root.join-joining;
             loading: root.join-joining;

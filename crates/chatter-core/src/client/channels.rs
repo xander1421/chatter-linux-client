@@ -377,6 +377,20 @@ impl ChatterClient {
             })
     }
 
+    /// Whether this device holds our membership of the channel: a search hit
+    /// for it opens the chat instead of joining again.
+    pub fn is_channel_member(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
+        let Some(me) = self.session_current_user_id() else {
+            return false;
+        };
+        self.channels()
+            .channel_repo
+            .get_membership(channel_id, &me)
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
     pub fn is_former_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
         let Some(me) = self.session_current_user_id() else {
             return false;

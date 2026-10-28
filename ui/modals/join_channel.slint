@@ -14,6 +14,8 @@ export struct SearchResultChannel {
     member-count: int,
     icon: image,
     has-icon: bool,
+    // Already a member: shown as joined and opened instead of joined again.
+    joined: bool,
 }
 
 // Individual search result item
@@ -25,6 +27,7 @@ export component SearchResultItem inherits Rectangle {
     in property <image> icon;
     in property <bool> has-icon: false;
     in property <bool> selected: false;
+    in property <bool> joined: false;
 
     callback clicked();
 
@@ -94,6 +97,13 @@ export component SearchResultItem inherits Rectangle {
                     font-weight: Typography.semibold;
                     horizontal-stretch: 1;
                     overflow: elide;
+                }
+
+                if root.joined: Text {
+                    text: "Joined";
+                    color: Colors.primary;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
                 }
 
                 Text {

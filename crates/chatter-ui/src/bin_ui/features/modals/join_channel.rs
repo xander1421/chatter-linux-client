@@ -117,14 +117,16 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         // Ship raw data (Send) to the UI thread — slint::Image is !Send,
                         // so build SearchResultChannel inside the event-loop closure.
-                        let raw: Vec<(String, String, String, Option<Vec<u8>>)> = channels
+                        let raw: Vec<(String, String, String, Option<Vec<u8>>, bool)> = channels
                             .into_iter()
                             .map(|ch| {
+                                let joined = ui_ctx.is_channel_member(&ch.id);
                                 (
                                     ch.id.to_string(),
                                     ch.name,
                                     ch.description.unwrap_or_default(),
                                     ch.icon,
+                                    joined,
                                 )
                             })
                             .collect();
@@ -133,7 +135,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(w) = weak.upgrade() {
                                 let results: Vec<SearchResultChannel> = raw
                                     .into_iter()
-                                    .map(|(id, name, description, icon_bytes)| {
+                                    .map(|(id, name, description, icon_bytes, joined)| {
                                         let icon_img =
                                             icon_bytes.as_deref().and_then(avatar_bytes_to_image);
                                         SearchResultChannel {
@@ -141,6 +143,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                             name: name.into(),
                                             description: description.into(),
                                             member_count: 0,
+                                            joined,
                                             has_icon: icon_img.is_some(),
                                             icon: icon_img.unwrap_or_default(),
                                         }
@@ -207,7 +210,18 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 // A channel id or a join link; core tells them apart and sets up
                 // group encryption either way.
-                match ui_ctx.join_channel_from_input(&channel_id_str).await {
+                // Already a member: open it, as Telegram does, instead of a
+                // second join round trip.
+                let existing = channel_id_str
+                    .parse::<chatter_core::domain::ids::ChannelId>()
+                    .ok()
+                    .filter(|id| ui_ctx.is_channel_member(id))
+                    .and_then(|id| ui_ctx.get_channel_local(&id));
+                let joined = match existing {
+                    Some(channel) => Ok(channel),
+                    None => ui_ctx.join_channel_from_input(&channel_id_str).await,
+                };
+                match joined {
                     Ok(channel) => {
                         let channel_id = channel.id;
                         let channel_id_str: SharedString = channel_id.to_string().into();
