@@ -35,6 +35,8 @@ export component Input inherits Rectangle {
     // Forward focus to input
     forward-focus: input;
 
+    public function select-all() { input.select-all(); }
+
     // Internal state
     property <bool> focused: input.has-focus;
     property <bool> show-password: false;

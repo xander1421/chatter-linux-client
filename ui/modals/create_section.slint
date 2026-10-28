@@ -114,8 +114,9 @@ export component CreateSectionModal inherits Rectangle {
                     horizontal-stretch: 1;
                     placeholder: "Section name";
                     text <=> root.section-name;
-                    // Created on open: the name is the only thing to type.
-                    init => { self.focus(); }
+                    // Created on open: the name is the only thing to type. A
+                    // rename starts selected, so typing replaces the old name.
+                    init => { self.focus(); self.select-all(); }
                     accepted => { root.submit(self.composed-text); }
                 }
             }
