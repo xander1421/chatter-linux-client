@@ -214,6 +214,7 @@ impl ChatterClient {
         };
         // The local AI channel is a channel row with nobody to call, invite
         // or configure.
+        #[cfg(feature = "jarvis")]
         if conversation.channel_id().is_some_and(|id| super::is_jarvis_channel(&id)) {
             return ConversationActions::default();
         }
