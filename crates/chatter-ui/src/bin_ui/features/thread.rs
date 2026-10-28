@@ -987,11 +987,37 @@ pub fn load_thread_data(
                     count = count.max(model.row_count() as i32);
                     w.global::<crate::ChatPane>().set_thread_reply_count(count);
                     recompute_channel_continuations(&model);
-                    w.global::<crate::ChatPane>()
-                        .set_thread_replies(ModelRc::new(model));
-                    request_thread_tail(&w);
+                    // A jump to a reply (pin, search, Activity) opens on that
+                    // reply rather than the tail, if it is in the loaded page.
+                    let pane = w.global::<crate::ChatPane>();
+                    let focus = pane.get_thread_focus_reply_id();
+                    pane.set_thread_focus_reply_id(SharedString::default());
+                    let focus_index = (!focus.is_empty())
+                        .then(|| model.iter().position(|row| row.message_id == focus))
+                        .flatten();
+                    pane.set_thread_replies(ModelRc::new(model));
+                    match focus_index {
+                        Some(index) => show_thread_reply_at(&w, index, focus),
+                        None => request_thread_tail(&w),
+                    }
                 }
             });
+        }
+    });
+}
+
+/// Scroll the thread panel to reply `index` and flash it, as a jump in the
+/// main list does (header.rs `jump_to_message`). UI thread.
+fn show_thread_reply_at(w: &MainWindow, index: usize, message_id: SharedString) {
+    let pane = w.global::<crate::ChatPane>();
+    pane.set_thread_focus_index(index as i32);
+    pane.set_thread_focus_serial(pane.get_thread_focus_serial().wrapping_add(1));
+    pane.set_thread_highlighted_id(message_id);
+    let weak = w.as_weak();
+    slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+        if let Some(w) = weak.upgrade() {
+            w.global::<crate::ChatPane>()
+                .set_thread_highlighted_id(SharedString::default());
         }
     });
 }

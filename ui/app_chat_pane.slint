@@ -284,6 +284,12 @@ export global ChatPane {
     in property <int> thread-tail-serial: 0;
     in-out property <string> thread-composer-text: "";
     in-out property <int> thread-composer-caret-end-seq: 0;
+    // A jump to one reply: Rust sets the id before opening the thread, then
+    // the loaded row's index, a serial to act on, and the row to flash.
+    in-out property <string> thread-focus-reply-id: "";
+    in property <int> thread-focus-index: -1;
+    in property <int> thread-focus-serial: 0;
+    in property <string> thread-highlighted-id: "";
     // Editing one of the panel's own replies borrows the thread composer, as
     // the composer-* edit state does the chat's (chat/edit.rs `Field`).
     in-out property <bool> thread-composer-is-editing: false;

@@ -43,6 +43,9 @@ export component AppThreadPanel inherits Rectangle {
         replies: ChatPane.thread-replies;
         loading: ChatPane.thread-loading;
         tail-serial: ChatPane.thread-tail-serial;
+        focus-index: ChatPane.thread-focus-index;
+        focus-serial: ChatPane.thread-focus-serial;
+        highlighted-id: ChatPane.thread-highlighted-id;
         composer-text <=> ChatPane.thread-composer-text;
         composer-caret-end-seq: ChatPane.thread-composer-caret-end-seq;
         pending-attachments: ChatPane.thread-pending-attachments;

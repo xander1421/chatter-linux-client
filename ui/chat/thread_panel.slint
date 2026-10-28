@@ -71,6 +71,10 @@ export component ThreadPanel inherits Rectangle {
     in property <bool> loading: false;
     // Explicit intent for first-page replacement and a successfully sent reply.
     in property <int> tail-serial: 0;
+    // Open on reply `focus-index` (a jump to it) instead of the tail.
+    in property <int> focus-index: -1;
+    in property <int> focus-serial: 0;
+    in property <string> highlighted-id: "";
 
     // Touch input / small screen. On a phone this panel takes the whole width
     // and the chat column behind it is hidden (app.slint `thread-panel-w`), so
@@ -449,6 +453,21 @@ export component ThreadPanel inherits Rectangle {
                     }
                 }
             }
+            focus-settle := Timer {
+                interval: 1ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    if (root.focus-index >= 0 && root.replies.length > 0) {
+                        // Rows are virtualized: place the reply a third of
+                        // the way down by the average row height.
+                        replies-view.viewport-y = Math.max(
+                            Math.min(0px, replies-view.height - replies-view.viewport-height),
+                            Math.min(0px, replies-view.height / 3
+                                - root.focus-index * replies-view.viewport-height / root.replies.length));
+                    }
+                }
+            }
 
             // Replies list
             replies-view := ListView {
@@ -483,6 +502,13 @@ export component ThreadPanel inherits Rectangle {
                         self.restoring-anchor = false;
                     }
                     anchor-settled.start(); anchor-settled.restart();
+                }
+                property <int> focus-request: root.focus-serial;
+                changed focus-request => {
+                    self.user-scrolling = false;
+                    self.preserving-anchor = false;
+                    self.following-tail = false;
+                    focus-settle.start(); focus-settle.restart();
                 }
                 property <int> tail-request: root.tail-serial;
                 property <string> thread-id: root.root-message-id;
@@ -558,6 +584,7 @@ export component ThreadPanel inherits Rectangle {
                         attachments: item.attachments;
                         standalone-attachment-indices: item.standalone-attachment-indices;
                         is-continuation: item.is-continuation;
+                        highlighted: item.message-id == root.highlighted-id;
                         delivery-status: item.delivery-status;
                         failure-reason: item.failure-reason;
                         can-thread: false;

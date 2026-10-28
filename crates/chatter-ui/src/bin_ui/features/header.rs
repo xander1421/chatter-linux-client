@@ -804,9 +804,11 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
             // A thread reply is not a row of this list: open its thread, as
             // the "N replies" chip does.
             Ok(id) => match ui_ctx.get_message_local(&id).and_then(|m| m.thread_id) {
-                Some(root) => w
-                    .global::<crate::ChatPane>()
-                    .invoke_thread_clicked(root.to_string().into()),
+                Some(root) => {
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_thread_focus_reply_id(message_id.into());
+                    pane.invoke_thread_clicked(root.to_string().into());
+                }
                 None => load_history(w, ui_ctx, HistoryLoad::Reaching(id)),
             },
             Err(_) => {
