@@ -56,6 +56,14 @@ impl ChatterClient {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
+                // On a phone the app being on screen is the activity: taps and
+                // scrolls do not reach this timer, so a user reading for five
+                // minutes went Away to their contacts (S9). The screen's own
+                // timeout backgrounds the app when it is really unattended.
+                #[cfg(target_os = "android")]
+                if client.is_app_visible() {
+                    continue;
+                }
                 let mut state = client.presence_controller.state.lock().await;
                 if state.manual.is_none() && state.current == PresenceStatus::Online
                     && state.last_activity.elapsed() > Duration::from_secs(300) {
