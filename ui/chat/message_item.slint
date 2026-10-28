@@ -42,7 +42,10 @@ export component MessageItem inherits Rectangle {
 
     // Ordinary messages have one span, even when they contain no markdown.
     // Keep that common case out of the nested rich-text layout/repeater.
-    property <length> text-max-width: root.width * 0.7 - Spacing.sm * 2;
+    // 70% of the pane, but capped: on a wide tablet or desktop window a long
+    // message otherwise ran ~130 characters to a line.
+    property <length> bubble-max-width: min(root.width * 0.7, 600px * Appearance.text-grow);
+    property <length> text-max-width: root.bubble-max-width - Spacing.sm * 2;
 
     // Flags
     in property <bool> is-own: false;
@@ -538,8 +541,7 @@ export component MessageItem inherits Rectangle {
             // Message bubble
             VerticalLayout {
                 spacing: Spacing.xs;
-                // Limit bubble width to 70% of container
-                max-width: root.width * 0.7;
+                max-width: root.bubble-max-width;
 
                 // Bubble wrapper; reactions participate in the content layout.
                 Rectangle {
