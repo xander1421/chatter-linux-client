@@ -56,6 +56,28 @@ impl ChatterClient {
         self.services.chat_state.remove_pinned_message(message_id);
     }
 
+    /// Drop pins whose message is no longer stored (deleted for everyone,
+    /// deleted for me, expired). Returns whether any were dropped. The pinned
+    /// bar kept showing a deleted message until the conversation was
+    /// reopened. Private-group messages live in their own store and are left
+    /// to the group's pin events.
+    pub fn prune_deleted_pins(&self) -> bool {
+        if matches!(self.active_conversation(), crate::state::ActiveConversation::AnonGroup(_)) {
+            return false;
+        }
+        let gone: Vec<_> = self
+            .chat_snapshot()
+            .pinned
+            .pinned_message_ids
+            .into_iter()
+            .filter(|id| self.get_message_local(id).is_none_or(|m| m.is_deleted))
+            .collect();
+        for id in &gone {
+            self.services.chat_state.remove_pinned_message(id);
+        }
+        !gone.is_empty()
+    }
+
     /// Every stored pin, newest pin-added first, regardless of loaded history.
     pub async fn pinned_display_items(
         &self,
