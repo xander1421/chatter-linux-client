@@ -151,7 +151,9 @@ export component SectionHeaderContextMenu inherits Rectangle {
             header-scroll.viewport-y = header-scroll.height - top - item-height;
         }
     }
-    changed show => { if root.show { root.focus-index = 0; } }
+    // The menu stays mounted: open it at the top, not where it was last
+    // scrolled to.
+    changed show => { if root.show { root.focus-index = 0; header-scroll.viewport-y = 0; } }
 
     visible: root.show;
     accessible-role: groupbox;
@@ -459,6 +461,12 @@ export component SectionContextMenu inherits Rectangle {
         root.confirm-delete = false;
         root.confirm-leave = false;
         root.focus-index = 0;
+        // The menu stays mounted: a reopened menu kept its last scroll, with
+        // "Pin to top" cut off above the card. Focus starts on that top item,
+        // so the stale focused place must not hand focus to the fallback.
+        root.focused-top = 0px;
+        root.focused-height = 1px;
+        menu-scroll.viewport-y = 0;
     }
 
     visible: root.show;
