@@ -26,6 +26,9 @@ pub(super) fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // the chat list live.
             #[cfg(feature = "jarvis")]
             {
+                if let Some(w) = weak_ai_toggle.upgrade() {
+                    w.global::<crate::JarvisGlobal>().set_opted_in(enabled);
+                }
                 let (weak, ui_ctx) = (weak_ai_toggle.clone(), ui_ctx_ai.clone());
                 tokio::spawn(async move {
                     crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx)

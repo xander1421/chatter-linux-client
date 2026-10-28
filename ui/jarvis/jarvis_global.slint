@@ -7,6 +7,9 @@
 
 export global JarvisGlobal {
     in-out property <bool> enabled: false;
+    // The user's Settings › AI Assistant opt-in. The AI channel is hidden
+    // from the sidebar while it is off; shortcuts follow it too.
+    in-out property <bool> opted-in: false;
     // Memory browser "Clear history": core deletes the AI channel's turns
     // and summaries (`ChatterClient::jarvis_clear_history`).
     callback clear-history();

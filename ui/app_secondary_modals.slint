@@ -417,7 +417,7 @@ export component AppSecondaryModals inherits Rectangle {
     if root.is-presented("keyboard-shortcuts"): KeyboardShortcutsDialog {
         shown: root.active-modal == "keyboard-shortcuts";
         search-shortcut-pref: SearchPane.search-shortcut-pref;
-        ai-enabled: JarvisGlobal.enabled;
+        ai-enabled: JarvisGlobal.enabled && JarvisGlobal.opted-in;
         width: root.width;
         height: root.window-height;
         close => { ModalHostState.nav-close("keyboard-shortcuts"); }

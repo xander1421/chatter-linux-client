@@ -802,6 +802,9 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
     {
         use slint::ComponentHandle;
         window.global::<JarvisGlobal>().set_enabled(true);
+        window
+            .global::<JarvisGlobal>()
+            .set_opted_in(ui_ctx.local_ai_enabled().unwrap_or(false));
     }
 
     // FEAT-5: the create-channel "AI assistant" template. Same mirror pattern,
