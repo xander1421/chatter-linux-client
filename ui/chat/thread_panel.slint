@@ -583,8 +583,9 @@ export component ThreadPanel inherits Rectangle {
                         show-sender: item.show-sender;
                         // The same row as the main list: touch rules, media,
                         // continuation grouping and delivery state; no thread
-                        // inside a thread.
-                        mobile: root.mobile;
+                        // inside a thread. The platform flag, as the main list:
+                        // the panel's `mobile` is its layout.
+                        mobile: root.touch;
                         menu-open: root.menu-open;
                         attachments: item.attachments;
                         standalone-attachment-indices: item.standalone-attachment-indices;
