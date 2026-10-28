@@ -125,21 +125,28 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
 
     // "last seen just now" ages while the DM stays open; recompute it every
-    // half minute, as Telegram's header does, instead of only on events.
+    // half minute, as Telegram's header does, instead of only on events. The
+    // dot too: a peer whose presence stops being refreshed turns offline here
+    // with no event (`PRESENCE_STALE_SECS`).
     let weak_tick = window.as_weak();
     let ui_ctx_tick = ui_ctx.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut ticks: u32 = 0;
         loop {
             tick.tick().await;
+            ticks = ticks.wrapping_add(1);
+            // The chat list's dots expire the same way, every two minutes.
+            if ticks % 4 == 0 {
+                crate::bin_ui::features::sidebar::rebuild_chat_list(&weak_tick, &ui_ctx_tick);
+            }
             let active = ui_ctx_tick.active_conversation();
             let chatter_core::state::ActiveConversation::ServerDm { peer_id } = &active else {
                 continue;
             };
-            let Some(label) = ui_ctx_tick
-                .peer_last_seen(peer_id)
-                .map(|(presence, at)| crate::bin_ui::converters::last_seen_label(presence, at))
-            else {
+            let Some((presence, label)) = ui_ctx_tick.peer_last_seen(peer_id).map(|(presence, at)| {
+                (presence, crate::bin_ui::converters::last_seen_label(presence, at))
+            }) else {
                 continue;
             };
             let weak = weak_tick.clone();
@@ -148,7 +155,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(w) = weak.upgrade()
                     && ui_ctx.active_conversation() == active
                 {
-                    w.global::<crate::ChatPane>().set_header_last_seen(label.into());
+                    let pane = w.global::<crate::ChatPane>();
+                    pane.set_header_presence_status(presence.as_str().into());
+                    pane.set_header_last_seen(label.into());
                 }
             });
             if posted.is_err() {
