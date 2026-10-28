@@ -108,7 +108,7 @@ impl ChatterClient {
                     message.id,
                     (
                         sender_name,
-                        crate::util::time::format_message_time(message.created_at),
+                        crate::util::time::format_detail_time(message.created_at),
                     ),
                 )
             })
