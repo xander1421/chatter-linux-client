@@ -313,8 +313,10 @@ fn activity_title(kind: &str, actor_id: Option<&str>, actor_name: &str, detail: 
         } else { "Missed call".to_owned() },
         "device-linked" => if detail.is_empty() { "New device linked".to_owned() }
             else { format!("New device linked: {detail}") },
-        "server" => "Server unreachable — messages will send later".to_owned(),
-        "server-ok" => format!("Server was unreachable for {detail} — back online"),
+        // One line in a fixed-height row: the longer wording elided to
+        // "Server was unreachable for 4 s ..." on a phone.
+        "server" => "Can't reach the server".to_owned(),
+        "server-ok" => format!("Back online after {detail}"),
         _ => kind.to_owned(),
     }
 }
