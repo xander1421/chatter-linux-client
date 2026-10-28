@@ -59,7 +59,10 @@ impl ActivityService {
         self.changed.subscribe()
     }
 
-    pub fn record(&self, owner: UserId, item: NewActivity<'_>) -> Result<(), StorageError> {
+    pub fn record(&self, owner: UserId, mut item: NewActivity<'_>) -> Result<(), StorageError> {
+        // Times come from the sender (a message's own timestamp); a skewed or
+        // forged one in the future would hold the row at the top as "now".
+        item.created_at_ms = item.created_at_ms.min(Utc::now().timestamp_millis());
         let conn = self.db.connection()?;
         // One row per thread: a newer reply refreshes it and marks it unread
         // again. Every other row is recorded once (a re-delivered message or a
@@ -87,6 +90,10 @@ impl ActivityService {
         let owner = owner.to_string();
         let cutoff = Utc::now().timestamp_millis() - 30 * 24 * 60 * 60 * 1000;
         conn.execute("DELETE FROM activity_items WHERE owner_id=?1 AND created_at_ms<?2", params![owner, cutoff])?;
+        // A row stamped in the future (before `record` capped times) would stay
+        // first and read "now" for good; bring it back to the present.
+        conn.execute("UPDATE activity_items SET created_at_ms=?2 WHERE owner_id=?1 AND created_at_ms>?2",
+            params![owner, Utc::now().timestamp_millis()])?;
         conn.execute(
             "DELETE FROM activity_items WHERE owner_id=?1 AND id NOT IN
              (SELECT id FROM activity_items WHERE owner_id=?1 ORDER BY created_at_ms DESC,id DESC LIMIT 500)",
