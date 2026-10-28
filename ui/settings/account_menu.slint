@@ -255,7 +255,9 @@ export component AccountMenu inherits Rectangle {
                                         horizontal-stretch: 1;
                                     }
                                     VerticalLayout { alignment: center; horizontal-stretch: 0;
-                                        Toggle { checked: Appearance.dark; }
+                                        // The row is the switch; a second, unnamed one
+                                        // sat inside it for TalkBack.
+                                        Toggle { checked: Appearance.dark; accessible-role: none; }
                                     }
                                 }
                                 night-touch := TouchArea {
