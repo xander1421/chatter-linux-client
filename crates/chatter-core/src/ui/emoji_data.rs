@@ -20,15 +20,6 @@ pub struct PickerEmoji {
     pub category: i32,
 }
 
-/// Fitzpatrick skin tone modifiers (indices 1-5). Index 0 = no modifier (default yellow).
-const SKIN_TONE_MODIFIERS: [&str; 5] = [
-    "\u{1F3FB}", // Light
-    "\u{1F3FC}", // Medium-Light
-    "\u{1F3FD}", // Medium
-    "\u{1F3FE}", // Medium-Dark
-    "\u{1F3FF}", // Dark
-];
-
 /// SMP code points with Emoji_Presentation=No (Unicode `emoji-data.txt`).
 /// Being ≥ U+1F000 does not make an emoji colour-default: these are text-style
 /// even with VS16 on older fonts, and rendered as tofu on Android 10 (🛡️).
@@ -102,19 +93,13 @@ pub fn is_color_default(emoji: &str) -> bool {
     })
 }
 
-/// Apply a skin tone modifier to an emoji if it supports it (People & Body category).
-fn apply_skin_tone(emoji: &str, tone: i32) -> String {
-    if tone == 0 || tone < 0 || tone > 5 {
-        return emoji.to_string();
-    }
-    let modifier = SKIN_TONE_MODIFIERS[(tone - 1) as usize];
-    // Insert modifier after the base emoji character (before any variant selectors)
-    let mut chars = emoji.chars();
-    if let Some(first) = chars.next() {
-        let rest: String = chars.collect();
-        format!("{first}{modifier}{rest}")
-    } else {
-        emoji.to_string()
+/// A table row with skin `tone` (1-5) applied, when the emoji takes tones and
+/// the toned form draws in colour; otherwise the row as is. Tones come from
+/// Unicode's own toned sequences, so 🧑‍🤝‍🧑 gets both people toned.
+fn with_skin_tone(row: &TableRow, tone: i32) -> &'static str {
+    match (row.3, tone) {
+        (Some(tones), 1..=5) if is_color_default(tones[(tone - 1) as usize]) => tones[(tone - 1) as usize],
+        _ => row.0,
     }
 }
 
@@ -135,14 +120,12 @@ pub fn listing(category: i32, tone: i32, recent: &[String]) -> Vec<PickerEmoji> 
     if category == RECENT_CATEGORY {
         return recent_emojis(recent);
     }
-    let base = category_emojis(category);
-    if category != PEOPLE_CATEGORY || tone == 0 {
-        return base;
-    }
-    base.into_iter()
-        .map(|mut e| {
-            e.emoji = apply_skin_tone(&e.emoji, tone);
-            e
+    let tone = if category == PEOPLE_CATEGORY { tone } else { 0 };
+    category_rows(category)
+        .map(|row| PickerEmoji {
+            emoji: with_skin_tone(row, tone).to_string(),
+            name: row.1.to_string(),
+            category,
         })
         .collect()
 }
@@ -161,354 +144,52 @@ fn recent_emojis(recent: &[String]) -> Vec<PickerEmoji> {
         .collect()
 }
 
-/// Categories: 0=Smileys, 1=People, 2=Animals, 3=Food, 4=Travel, 5=Activities, 6=Objects, 7=Symbols, 8=Flags
-pub fn category_emojis(category: i32) -> Vec<PickerEmoji> {
-    let emojis: &[(&str, &str)] = match category {
-        0 => &[
-            // Smileys & Emotion
-            ("😀", "grinning"),
-            ("😃", "smiley"),
-            ("😄", "smile"),
-            ("😁", "grin"),
-            ("😅", "sweat_smile"),
-            ("😂", "joy"),
-            ("🤣", "rofl"),
-            ("😊", "blush"),
-            ("😇", "innocent"),
-            ("🙂", "slight_smile"),
-            ("😉", "wink"),
-            ("😍", "heart_eyes"),
-            ("🥰", "smiling_hearts"),
-            ("😘", "kissing_heart"),
-            ("😋", "yum"),
-            ("😜", "stuck_out_tongue_winking"),
-            ("🤪", "zany"),
-            ("🤨", "raised_eyebrow"),
-            ("🧐", "monocle"),
-            ("🤓", "nerd"),
-            ("😎", "sunglasses"),
-            ("🥳", "partying"),
-            ("😏", "smirk"),
-            ("😒", "unamused"),
-            ("😞", "disappointed"),
-            ("😔", "pensive"),
-            ("😟", "worried"),
-            ("😕", "confused"),
-            ("🙁", "slightly_frowning"),
-            ("😣", "persevere"),
-            ("😖", "confounded"),
-            ("😫", "tired"),
-            ("😩", "weary"),
-            ("🥺", "pleading"),
-            ("😢", "cry"),
-            ("😭", "sob"),
-            ("😤", "triumph"),
-            ("😠", "angry"),
-            ("😡", "rage"),
-            ("🤬", "cursing"),
-        ],
-        1 => &[
-            // People & Body
-            ("👋", "wave"),
-            ("🤚", "raised_back"),
-            ("🖐️", "hand_splayed"),
-            ("✋", "hand"),
-            ("🖖", "vulcan"),
-            ("👌", "ok_hand"),
-            ("🤌", "pinched"),
-            ("🤏", "pinching"),
-            ("✌️", "v"),
-            ("🤞", "crossed_fingers"),
-            ("🤟", "love_you"),
-            ("🤘", "metal"),
-            ("🤙", "call_me"),
-            ("👈", "point_left"),
-            ("👉", "point_right"),
-            ("👆", "point_up"),
-            ("👇", "point_down"),
-            ("☝️", "point_up_2"),
-            ("👍", "thumbsup"),
-            ("👎", "thumbsdown"),
-            ("✊", "fist"),
-            ("👊", "punch"),
-            ("🤛", "left_fist"),
-            ("🤜", "right_fist"),
-            ("👏", "clap"),
-            ("🙌", "raised_hands"),
-            ("👐", "open_hands"),
-            ("🤲", "palms_up"),
-            ("🤝", "handshake"),
-            ("🙏", "pray"),
-            ("💪", "muscle"),
-            ("🦾", "mechanical_arm"),
-        ],
-        2 => &[
-            // Animals & Nature
-            ("🐱", "cat"),
-            ("🐶", "dog"),
-            ("🐭", "mouse"),
-            ("🐹", "hamster"),
-            ("🐰", "rabbit"),
-            ("🦊", "fox"),
-            ("🐻", "bear"),
-            ("🐼", "panda"),
-            ("🐨", "koala"),
-            ("🐯", "tiger"),
-            ("🦁", "lion"),
-            ("🐮", "cow"),
-            ("🐷", "pig"),
-            ("🐸", "frog"),
-            ("🐵", "monkey"),
-            ("🐔", "chicken"),
-            ("🐧", "penguin"),
-            ("🐦", "bird"),
-            ("🐤", "baby_chick"),
-            ("🦆", "duck"),
-            ("🦅", "eagle"),
-            ("🦉", "owl"),
-            ("🦇", "bat"),
-            ("🐺", "wolf"),
-            ("🐗", "boar"),
-            ("🐴", "horse"),
-            ("🦄", "unicorn"),
-            ("🐝", "bee"),
-            ("🐛", "bug"),
-            ("🦋", "butterfly"),
-            ("🐌", "snail"),
-            ("🐞", "ladybug"),
-        ],
-        3 => &[
-            // Food & Drink
-            ("🍎", "apple"),
-            ("🍐", "pear"),
-            ("🍊", "orange"),
-            ("🍋", "lemon"),
-            ("🍌", "banana"),
-            ("🍉", "watermelon"),
-            ("🍇", "grapes"),
-            ("🍓", "strawberry"),
-            ("🫐", "blueberries"),
-            ("🍈", "melon"),
-            ("🍒", "cherries"),
-            ("🍑", "peach"),
-            ("🥭", "mango"),
-            ("🍍", "pineapple"),
-            ("🥥", "coconut"),
-            ("🥝", "kiwi"),
-            ("🍅", "tomato"),
-            ("🥑", "avocado"),
-            ("🥦", "broccoli"),
-            ("🥬", "leafy_green"),
-            ("🥒", "cucumber"),
-            ("🌶️", "hot_pepper"),
-            ("🫑", "bell_pepper"),
-            ("🌽", "corn"),
-            ("🥕", "carrot"),
-            ("🧄", "garlic"),
-            ("🧅", "onion"),
-            ("🥔", "potato"),
-            ("🍞", "bread"),
-            ("🥐", "croissant"),
-            ("🥖", "baguette"),
-            ("🍕", "pizza"),
-        ],
-        4 => &[
-            // Travel & Places
-            ("✈️", "airplane"),
-            ("🚀", "rocket"),
-            ("🚁", "helicopter"),
-            ("🛸", "flying_saucer"),
-            ("🚂", "steam_locomotive"),
-            ("🚃", "railway_car"),
-            ("🚄", "bullet_train"),
-            ("🚅", "train"),
-            ("🚆", "train2"),
-            ("🚇", "metro"),
-            ("🚈", "light_rail"),
-            ("🚉", "station"),
-            ("🚊", "tram"),
-            ("🚝", "monorail"),
-            ("🚞", "mountain_railway"),
-            ("🚋", "train_car"),
-            ("🚌", "bus"),
-            ("🚍", "oncoming_bus"),
-            ("🚎", "trolleybus"),
-            ("🚐", "minibus"),
-            ("🚑", "ambulance"),
-            ("🚒", "fire_engine"),
-            ("🚓", "police_car"),
-            ("🚕", "taxi"),
-            ("🚖", "oncoming_taxi"),
-            ("🚗", "car"),
-            ("🚘", "oncoming_car"),
-            ("🚙", "suv"),
-            ("🏠", "house"),
-            ("🏡", "house_garden"),
-            ("🏢", "office"),
-            ("🏰", "castle"),
-        ],
-        5 => &[
-            // Activities
-            ("⚽", "soccer"),
-            ("🏀", "basketball"),
-            ("🏈", "football"),
-            ("⚾", "baseball"),
-            ("🥎", "softball"),
-            ("🎾", "tennis"),
-            ("🏐", "volleyball"),
-            ("🏉", "rugby"),
-            ("🥏", "flying_disc"),
-            ("🎱", "8ball"),
-            ("🪀", "yo_yo"),
-            ("🏓", "ping_pong"),
-            ("🏸", "badminton"),
-            ("🏒", "ice_hockey"),
-            ("🏑", "field_hockey"),
-            ("🥍", "lacrosse"),
-            ("🏏", "cricket game"),
-            ("🪃", "boomerang"),
-            ("🥅", "goal_net"),
-            ("⛳", "golf"),
-            ("🪁", "kite"),
-            ("🏹", "bow and arrow"),
-            ("🎣", "fishing pole"),
-            ("🤿", "diving mask"),
-            ("🥊", "boxing glove"),
-            ("🥋", "martial arts uniform"),
-            ("🎿", "skis"),
-            ("⛷️", "skier"),
-            ("🏂", "snowboarder"),
-            ("🪂", "parachute"),
-            ("🏋️", "person lifting weights"),
-            ("🤸", "person cartwheeling"),
-        ],
-        6 => &[
-            // Objects
-            ("💡", "bulb"),
-            ("🔦", "flashlight"),
-            ("🏮", "lantern"),
-            ("🪔", "diya_lamp"),
-            ("📱", "iphone"),
-            ("📲", "calling"),
-            ("💻", "computer"),
-            ("🖥️", "desktop"),
-            ("🖨️", "printer"),
-            ("⌨️", "keyboard"),
-            ("🖱️", "mouse_computer"),
-            ("💽", "minidisc"),
-            ("💾", "floppy_disk"),
-            ("💿", "cd"),
-            ("📀", "dvd"),
-            ("🎥", "movie_camera"),
-            ("📷", "camera"),
-            ("📸", "camera_flash"),
-            ("📹", "video_camera"),
-            ("📼", "vhs"),
-            ("🔍", "mag"),
-            ("🔎", "mag_right"),
-            ("💰", "moneybag"),
-            ("💳", "credit_card"),
-            ("💎", "gem"),
-            ("⚖️", "scales"),
-            ("🔧", "wrench"),
-            ("🔨", "hammer"),
-            ("⚒️", "hammer_pick"),
-            ("🛠️", "tools"),
-            ("⛏️", "pick"),
-            ("🔩", "nut_and_bolt"),
-        ],
-        7 => &[
-            // Symbols
-            ("❤️", "heart"),
-            ("🧡", "orange_heart"),
-            ("💛", "yellow_heart"),
-            ("💚", "green_heart"),
-            ("💙", "blue_heart"),
-            ("💜", "purple_heart"),
-            ("🖤", "black_heart"),
-            ("🤍", "white_heart"),
-            ("🤎", "brown_heart"),
-            ("💔", "broken_heart"),
-            ("❣️", "heart_exclamation"),
-            ("💕", "two_hearts"),
-            ("💞", "revolving_hearts"),
-            ("💓", "heartbeat"),
-            ("💗", "heartpulse"),
-            ("💖", "sparkling_heart"),
-            ("💘", "cupid"),
-            ("💝", "gift_heart"),
-            ("✅", "white_check_mark"),
-            ("❌", "x"),
-            ("⭕", "o"),
-            ("❗", "exclamation"),
-            ("❓", "question"),
-            ("⚠️", "warning"),
-            ("🔴", "red_circle"),
-            ("🟠", "orange_circle"),
-            ("🟡", "yellow_circle"),
-            ("🟢", "green_circle"),
-            ("🔵", "blue_circle"),
-            ("🟣", "purple_circle"),
-            ("⚫", "black_circle"),
-            ("⚪", "white_circle"),
-        ],
-        8 => &[
-            // Flags
-            ("🏳️", "white_flag"),
-            ("🏴", "black_flag"),
-            ("🏁", "checkered_flag"),
-            ("🚩", "triangular_flag"),
-            ("🏳️‍🌈", "rainbow_flag"),
-            ("🏳️‍⚧️", "transgender_flag"),
-            ("🏴‍☠️", "pirate_flag"),
-            ("🇺🇸", "us"),
-            ("🇬🇧", "gb"),
-            ("🇨🇦", "ca"),
-            ("🇦🇺", "au"),
-            ("🇩🇪", "de"),
-            ("🇫🇷", "fr"),
-            ("🇮🇹", "it"),
-            ("🇪🇸", "es"),
-            ("🇯🇵", "jp"),
-            ("🇰🇷", "kr"),
-            ("🇨🇳", "cn"),
-            ("🇮🇳", "in"),
-            ("🇧🇷", "br"),
-            ("🇲🇽", "mx"),
-            ("🇷🇺", "ru"),
-            ("🇿🇦", "za"),
-            ("🇳🇱", "nl"),
-            ("🇧🇪", "be"),
-            ("🇨🇭", "ch"),
-            ("🇦🇹", "at"),
-            ("🇸🇪", "se"),
-            ("🇳🇴", "no"),
-            ("🇩🇰", "dk"),
-            ("🇫🇮", "fi"),
-        ],
-        _ => &[],
-    };
+type TableRow = (&'static str, &'static str, u8, Option<[&'static str; 5]>);
 
-    emojis
+/// A category's colour-default rows, in Unicode order.
+fn category_rows(category: i32) -> impl Iterator<Item = &'static TableRow> {
+    super::emoji_table::EMOJI_TABLE
         .iter()
-        .filter(|(emoji, _)| is_color_default(emoji))
-        .map(|(emoji, name)| PickerEmoji {
-            emoji: (*emoji).to_string(),
-            name: (*name).to_string(),
-            category,
-        })
-        .collect()
+        .filter(move |row| i32::from(row.2) == category && is_color_default(row.0))
 }
 
-/// Search emoji by name across all categories, ignoring case (at most 50).
+/// Categories: 0=Smileys, 1=People, 2=Animals, 3=Food, 4=Travel, 5=Activities, 6=Objects, 7=Symbols, 8=Flags
+pub fn category_emojis(category: i32) -> Vec<PickerEmoji> {
+    listing(category, 0, &[])
+}
+
+/// Search emoji by CLDR name across all categories, ignoring case (at most
+/// 50): an exact name first, then names with a word starting with the query,
+/// then any other match — "fire" lists 🔥 before 🚒 "fire engine".
 pub fn search(query: &str) -> Vec<PickerEmoji> {
     let query = query.to_lowercase();
-    let mut results: Vec<PickerEmoji> = (0..=8)
-        .flat_map(category_emojis)
-        .filter(|e| e.name.to_lowercase().contains(&query))
+    let rank = |name: &str| {
+        if name == query {
+            0
+        } else if name.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&query)) {
+            1
+        } else {
+            2
+        }
+    };
+    let mut results: Vec<(u8, &TableRow)> = super::emoji_table::EMOJI_TABLE
+        .iter()
+        .filter(|row| is_color_default(row.0))
+        .filter_map(|row| {
+            let name = row.1.to_lowercase();
+            name.contains(&query).then(|| (rank(&name), row))
+        })
         .collect();
-    results.truncate(50);
+    results.sort_by_key(|(rank, _)| *rank);
     results
+        .into_iter()
+        .take(50)
+        .map(|(_, row)| PickerEmoji {
+            emoji: row.0.to_string(),
+            name: row.1.to_string(),
+            category: i32::from(row.2),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -541,7 +222,7 @@ mod picker_tests {
         let plain = listing(PEOPLE_CATEGORY, 0, &recent);
         let toned = listing(PEOPLE_CATEGORY, 3, &recent);
         assert_eq!(plain.len(), toned.len());
-        assert_eq!(toned[0].emoji, format!("👋{}", SKIN_TONE_MODIFIERS[2]));
+        assert_eq!(toned[0].emoji, "\u{1F44B}\u{1F3FD}"); // 👋🏽
         assert_eq!(listing(0, 3, &recent), listing(0, 0, &recent));
         // Out-of-range tones are ignored.
         assert_eq!(listing(PEOPLE_CATEGORY, 9, &recent), plain);
@@ -562,7 +243,7 @@ mod picker_tests {
 
         assert_eq!(search("HEART"), search("heart"));
         let hits = search("heart");
-        assert!(hits.iter().any(|e| e.name == "heart_eyes"));
+        assert!(hits.iter().any(|e| e.name == "smiling face with heart-eyes"));
         assert!(hits.iter().any(|e| e.emoji == "\u{2764}\u{FE0F}"));
         assert!(hits.iter().all(|e| e.name.contains("heart")));
         assert!(search("").len() <= 50);
