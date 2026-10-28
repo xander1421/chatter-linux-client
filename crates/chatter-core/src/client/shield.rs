@@ -26,6 +26,10 @@ impl ChatterClient {
         if !visible || was_visible {
             return;
         }
+        // Coming back to the app is activity: an auto-away (5 min without
+        // typing or sending) returns to Online, as reading alone never did.
+        let presence = Arc::clone(self);
+        tokio::spawn(async move { presence.record_presence_activity().await });
         self.refresh_onion_routes();
         let active = self.chat_state().active_conversation();
         if !active.is_active() {
