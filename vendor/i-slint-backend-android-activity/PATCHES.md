@@ -33,6 +33,9 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   snapshot runs at a time. Snapshots over 200 ms are logged (tag SlintA11y).
   Without this a large screen (an emoji tab, ~700 nodes, O0 generated code
   on the S9) still timed out to "[]".
+  Snapshots skip items clipped out of view (and their subtrees); only the
+  root is always reported. An emoji tab's offscreen cells made each snapshot
+  ~1.2 s on the S9, stalling the UI thread on every TalkBack query.
   Text inputs carry their `value` (as the node text) and their label or
   placeholder (as the hint), like a native EditText.
   The provider caches a snapshot for 100 ms from when it is READY, so the

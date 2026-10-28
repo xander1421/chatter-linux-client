@@ -49,9 +49,11 @@ pub(crate) fn snapshot() -> String {
 // Accessible IDs are metadata, not spoken labels. The last visible marker in
 // accessible tree order is the frontmost overlay in the app's overlay stack.
 fn find_topmost_modal(item: &ItemRc, modal: &mut Option<ItemRc>) {
-    if item.is_visible()
-        && item.accessible_string_property(Property::Id).as_deref() == Some("modal-overlay")
-    {
+    // An overlay is on screen; nothing under a clipped-away item is.
+    if !item.is_visible() {
+        return;
+    }
+    if item.accessible_string_property(Property::Id).as_deref() == Some("modal-overlay") {
         *modal = Some(item.clone());
     }
     for child in accessible_descendents(item) {
@@ -72,6 +74,13 @@ fn visit(
     ids: &mut std::collections::HashMap<(usize, u32), i32>,
     nodes: &mut Vec<Value>,
 ) {
+    // Items clipped out of view (the rest of a 500-cell emoji tab, scrolled
+    // off messages) cannot be read or reached on screen, and every node costs
+    // property evaluation: with them a snapshot took ~1.2 s on the S9 and
+    // stalled the UI thread for each TalkBack query. The root always stays.
+    if parent >= 0 && !item.is_visible() {
+        return;
+    }
     // `items` only grows (ids must stay stable for clicks). Finding an item's
     // id by scanning it made every new node cost the whole list: after a few
     // emoji-grid rebuilds the S9 snapshot overran `query`'s 500 ms and
