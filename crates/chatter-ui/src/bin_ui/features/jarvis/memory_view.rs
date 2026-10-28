@@ -137,7 +137,11 @@ async fn refresh(
             entity_id: e.id.to_string().into(),
             name: e.name.clone().into(),
             kind: kind_str(e.entity_type).into(),
-            mention_label: format!("{} mentions", e.mention_count).into(),
+            mention_label: if e.mention_count == 1 {
+                "1 mention".into()
+            } else {
+                format!("{} mentions", e.mention_count).into()
+            },
             is_selected: selected_id.as_deref() == Some(&e.id.to_string()),
         })
         .collect();
