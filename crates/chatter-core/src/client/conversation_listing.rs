@@ -72,13 +72,13 @@ impl ChatterClient {
     /// an unread message there lit the tab with no row to clear it.
     ///
     /// Returns 0 on storage error: a missing badge beats a UI hard-fail.
-    pub fn unread_conversation_count(&self) -> u32 {
+    pub fn unread_conversation_count(self: &std::sync::Arc<Self>) -> u32 {
         self.unread_badges(&crate::state::ActiveConversation::None)
             .total
     }
 
     /// Desktop tray badge across the separate Chats and Mesh surfaces.
-    pub fn desktop_tray_unread_count(&self) -> u32 {
+    pub fn desktop_tray_unread_count(self: &std::sync::Arc<Self>) -> u32 {
         let count = self.unread_conversation_count();
         #[cfg(feature = "mesh")]
         {
@@ -99,7 +99,10 @@ impl ChatterClient {
     ///
     /// `row` is `conversation`'s own count ([`ActiveConversation::is_for_channel`]).
     /// Blocking storage read: call off the UI thread.
-    pub fn unread_badges(&self, conversation: &crate::state::ActiveConversation) -> UnreadBadges {
+    pub fn unread_badges(
+        self: &std::sync::Arc<Self>,
+        conversation: &crate::state::ActiveConversation,
+    ) -> UnreadBadges {
         let Ok(stats) = self.services.conversation_repo.conversation_stats() else {
             return UnreadBadges::default();
         };
@@ -111,7 +114,9 @@ impl ChatterClient {
             }
             let (id, _) = key;
             // Mesh conversations are not Chats rows: they have their own tab and badge.
-            if rows.contains(key) {
+            // A muted chat keeps its grey row count but does not light the tab,
+            // as Telegram's default badge counter.
+            if rows.contains(key) && !self.row_key_muted(key) {
                 badges.total += 1;
             }
             if id.parse().is_ok_and(|cid| conversation.is_for_channel(cid)) {
@@ -119,6 +124,14 @@ impl ChatterClient {
             }
         }
         badges
+    }
+
+    fn row_key_muted(
+        self: &std::sync::Arc<Self>,
+        (id, kind): &(String, crate::domain::message::ConversationType),
+    ) -> bool {
+        self.resolve_row_conversation(id, kind)
+            .is_some_and(|conv| self.is_conversation_muted(conv).unwrap_or(false))
     }
 
     /// Unread messages in a private group, for its sidebar row — the same
