@@ -860,6 +860,7 @@ export component MessageList inherits Rectangle {
 
                 message-bubble := MessageItem {
                     width: 100%;
+                    chrome-bottom: root.absolute-position.y + root.top-inset;
                     swipe-engaged(on) => { root.bubble-swiping = on; }
                     animate-arrival: idx >= root.arrival-start-index && idx < root.arrival-end-index;
                     arrival-stagger-index: idx - root.arrival-start-index;

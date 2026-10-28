@@ -18,6 +18,7 @@ export component MessageActions inherits Rectangle {
     in property <string> message-id;
     in property <length> row-width;
     in property <length> row-x;
+    in property <length> chrome-bottom: 0px;
     in property <string> sender-id;
     in property <string> timestamp-ns;
     callback reply-clicked(string, string);
@@ -35,7 +36,9 @@ export component MessageActions inherits Rectangle {
     x: root.is-own ? -action-btns.width - Spacing.xxs
         : self.overflows-right ? root.bubble-width - action-btns.width - Spacing.sm
         : root.bubble-width + Spacing.xxs;
-    y: -Spacing.button-height / 2; // Float halfway above the top edge
+    // Float halfway above the top edge, but never under the floating header
+    // and pinned bar: a bubble scrolled up to them hid its own actions.
+    y: max(-Spacing.button-height / 2, root.chrome-bottom - root.bubble-y);
     width: action-btns.width;
     height: action-btns.height;
     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;

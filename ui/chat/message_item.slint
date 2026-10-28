@@ -108,6 +108,8 @@ export component MessageItem inherits Rectangle {
 
     // Reactions
     in property <bool> has-reactions: false;
+    // Window y of the floating header's lower edge; hover actions stay below it.
+    in property <length> chrome-bottom: 0px;
     in property <string> reaction-summary: "";
     in property <[ReactionEntry]> reactions: [];
 
@@ -975,6 +977,7 @@ export component MessageItem inherits Rectangle {
                     bubble-y: bubble.absolute-position.y;
                     row-width: root.width;
                     row-x: root.absolute-position.x;
+                    chrome-bottom: root.chrome-bottom;
                     reply-clicked(a0, a1) => { root.reply-clicked(a0, a1); }
                     react-clicked(a0, a1, a2, a3) => { root.react-clicked(a0, a1, a2, a3); }
                     thread-clicked(a0) => { root.thread-clicked(a0); }
