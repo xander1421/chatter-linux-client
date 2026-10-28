@@ -1,6 +1,6 @@
 export struct ActivityItemData {
     id: string,            // stable id from core
-    kind: string,          // "mention" | "reply" | "reaction" | "missed-call" | "contact-request" | "invite" | "mesh-invite" | "device-linked" | "server" | "update"
+    kind: string,          // "mention" | "reply" | "thread" | "reaction" | "missed-call" | "contact-request" | "invite" | "mesh-invite" | "device-linked" | "server" | "update"
     title: string,         // already-worded by core/glue, e.g. "Alice mentioned you in #general"
     preview: string,       // "" when privacy hides it
     time-label: string,    // "2m", "14:05", "Yesterday"

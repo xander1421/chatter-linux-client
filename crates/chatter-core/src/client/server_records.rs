@@ -54,7 +54,7 @@ impl ChatterClient {
                 if let Ok(channel_id) = ChannelId::from_str(&row.channel_id) {
                     if let Some(channel) = channels.iter().find(|c| c.id == channel_id) {
                         if row.kind == "channel-invite" { row.body = channel.name.clone(); }
-                        if matches!(row.kind.as_str(), "message" | "mention" | "reply" | "reaction") { row.title = channel.name.clone(); }
+                        if matches!(row.kind.as_str(), "message" | "mention" | "reply" | "thread" | "reaction") { row.title = channel.name.clone(); }
                     }
                 }
                 if let Ok(actor) = UserId::from_str(&row.actor_id) {

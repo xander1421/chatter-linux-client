@@ -281,13 +281,19 @@ impl ChatterClient {
         let reply_to_me = message.reply_to_author_id == Some(owner)
             || message.reply_to.and_then(|id| self.get_message_local(&id)).is_some_and(|parent| parent.sender_id == Some(owner))
             || in_my_thread.is_some();
+        // A thread I only replied in is not a reply to me: "replied in a thread".
+        let followed_only = in_my_thread.is_some()
+            && message.reply_to_author_id != Some(owner)
+            && message.thread_id.and_then(|id| self.get_message_local(&id))
+                .is_some_and(|root| root.sender_id != Some(owner));
         let kind = if mentioned { "mention" }
+            else if followed_only { "thread" }
             else if reply_to_me { "reply" }
             else { return };
         // Replies in a thread of mine share one row, as Slack's "replied to
         // your thread": 55 replies were 55 identical rows.
         let id = match in_my_thread {
-            Some(root) if kind == "reply" => format!("{}{root}", crate::services::activity_service::THREAD_ACTIVITY_PREFIX),
+            Some(root) if kind != "mention" => format!("{}{root}", crate::services::activity_service::THREAD_ACTIVITY_PREFIX),
             _ => format!("{kind}:{}", message.id),
         };
         let place = if message.conversation_type == ConversationType::Channel {

@@ -68,7 +68,7 @@ impl ActivityService {
             "INSERT INTO activity_items
              (owner_id,id,kind,actor_id,actor_name,detail,preview,conversation_id,conversation_type,message_id,created_at_ms)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
-             ON CONFLICT(owner_id,id) DO UPDATE SET actor_id=excluded.actor_id, actor_name=excluded.actor_name,
+             ON CONFLICT(owner_id,id) DO UPDATE SET kind=excluded.kind, actor_id=excluded.actor_id, actor_name=excluded.actor_name,
                  preview=excluded.preview, message_id=excluded.message_id, created_at_ms=excluded.created_at_ms, unread=1
              WHERE excluded.id LIKE ?12 AND excluded.created_at_ms > activity_items.created_at_ms",
             params![owner.to_string(), item.id, item.kind, item.actor_id.map(|id| id.to_string()),
@@ -275,6 +275,7 @@ fn activity_title(kind: &str, actor_id: Option<&str>, actor_name: &str, detail: 
     match kind {
         "mention" => format!("{name} mentioned you{detail}"),
         "reply" => format!("{name} replied to you{detail}"),
+        "thread" => format!("{name} replied in a thread{detail}"),
         "reaction" => format!("{name} reacted to your message"),
         "contact-request" => format!("{name} sent you a contact request"),
         "invite" | "mesh-invite" => format!("{name} invited you to {detail}"),

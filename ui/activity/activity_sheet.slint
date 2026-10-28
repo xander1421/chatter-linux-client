@@ -43,7 +43,7 @@ component ActivityFeedRow inherits Rectangle {
         : root.kind == "server-ok" ? Colors.success
         : root.kind == "missed-call" ? Colors.error : root.kind == "update" ? Colors.info : Colors.primary;
     property <image> glyph: root.kind == "mention" ? Icons.megaphone
-        : root.kind == "reply" ? Icons.reply
+        : root.kind == "reply" || root.kind == "thread" ? Icons.reply
         : root.kind == "reaction" ? Icons.smile
         : root.kind == "missed-call" ? Icons.phone
         : root.kind == "contact-request" ? Icons.user-plus
