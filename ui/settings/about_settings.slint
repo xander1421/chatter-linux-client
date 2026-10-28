@@ -69,13 +69,17 @@ export component AboutSettings inherits VerticalLayout {
                 detail: "View third-party licenses and notices in Chatter.";
                 clicked => { root.open-licenses(); }
             }
-            Text {
-                width: max(0px, parent.width - parent.padding * 2);
-                text: "Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.";
-                color: Colors.text-secondary;
-                font-size: Typography.xs;
-                wrap: word-wrap;
-            }
+        }
+    }
+    // A page footnote, not part of the licenses card it used to sit in.
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        Text {
+            text: "Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.";
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            wrap: word-wrap;
         }
     }
 }
