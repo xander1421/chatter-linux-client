@@ -325,7 +325,13 @@ export component AppConversationLayout inherits Rectangle {
     gifs-available: root.composer-gifs-available;
 
     settings-clicked => { root.chat-settings-clicked(); }
-    voice-call-clicked => { root.start-voice-call(); }
+    voice-call-clicked => {
+        if root.conversation-kind == ConversationKind.channel && root.active-channel-call-id == "" {
+            ChatPane.call-confirm-open = true;
+        } else {
+            root.start-voice-call();
+        }
+    }
     header-more-clicked(video, settings) => {
         root.chat-menu-video = video;
         root.chat-menu-settings = settings;

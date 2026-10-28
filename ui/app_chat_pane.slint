@@ -332,6 +332,8 @@ export global ChatPane {
     // Invite member to channel modal properties
     callback invite-member();
     in-out property <string> link-confirm-url: "";
+    // The channel header's call button asks before ringing every member.
+    in-out property <bool> call-confirm-open: false;
     callback open-message-link(string, string);
     callback confirm-open-message-link();
     callback message-clicked(string);

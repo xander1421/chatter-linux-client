@@ -1,0 +1,46 @@
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+
+// Starting a call in a channel rings every member, so it is asked once, as
+// Telegram's "Start voice chat?". DMs and joining a running call stay one tap.
+export component CallConfirm inherits Rectangle {
+    in property <string> channel-name;
+    callback confirmed();
+    callback cancelled();
+
+    Modal {
+        show: true;
+        title: "Start a call?";
+        modal-width: 400px;
+        show-close: false;
+        close => { root.cancelled(); }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            Text {
+                text: "Everyone in " + root.channel-name + " will be notified.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: end;
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.cancelled(); }
+                }
+                Button {
+                    text: "Start call";
+                    clicked => { root.confirmed(); }
+                }
+            }
+        }
+    }
+}

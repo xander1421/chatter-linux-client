@@ -12,6 +12,7 @@ import { MessageContextMenu, MessageMenuActions } from "chat/message_context_men
 import { SelectionChrome } from "chat/selection_bar.slint";
 import { DeleteConfirm } from "chat/delete_confirm.slint";
 import { LinkConfirm } from "chat/link_confirm.slint";
+import { CallConfirm } from "chat/call_confirm.slint";
 import { EmojiData } from "components/emoji_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
 import { ImageViewer, EmojiData } from "components/mod.slint";
@@ -392,6 +393,12 @@ export component AppTopOverlays inherits Rectangle {
         url: ChatPane.link-confirm-url;
         cancelled => { ChatPane.link-confirm-url = ""; root.refocus-composer(); }
         confirmed => { ChatPane.confirm-open-message-link(); root.refocus-composer(); }
+    }
+
+    if ChatPane.call-confirm-open: CallConfirm {
+        channel-name: ChatPane.channel-name;
+        cancelled => { ChatPane.call-confirm-open = false; root.refocus-composer(); }
+        confirmed => { ChatPane.call-confirm-open = false; ChatPane.start-voice-call(); }
     }
 
     if ChatPane.delete-confirm-count > 0: DeleteConfirm {
