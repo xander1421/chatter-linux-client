@@ -52,8 +52,6 @@ export global ModalHostState {
     // it opens (Sessions, Link device, ...), so it cannot key off
     // `active-modal`; written by back.rs alongside the stack.
     in-out property <bool> settings-open: false;
-    // Bumped to hand keyboard focus to the Settings page (its dialogs closing).
-    in-out property <int> settings-focus-serial: 0;
     in property <[string]> third-party-notices: [];
     callback nav-push(string);
     // Close that screen and everything pushed above it.
