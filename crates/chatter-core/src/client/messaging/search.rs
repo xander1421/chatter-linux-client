@@ -268,7 +268,12 @@ impl ChatterClient {
             };
             // Names only: matching the hex user id made "@a" or "@4" list
             // nearly every member.
-            if display_name.to_lowercase().contains(&query_lower) {
+            // A word of the name starts with the query, as Signal and
+            // Telegram match: "@h" offers Hotel, not every name holding an h.
+            let name_lower = display_name.to_lowercase();
+            if name_lower.starts_with(&query_lower)
+                || name_lower.split_whitespace().any(|word| word.starts_with(&query_lower))
+            {
                 out.push(MentionSuggestionInfo {
                     id: member.user_id.to_string(),
                     name: display_name,
