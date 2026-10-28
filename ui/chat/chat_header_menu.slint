@@ -21,6 +21,9 @@ export component ChatHeaderMenu inherits Rectangle {
     // Regular DM only, when core can start a secret chat with the peer.
     in property <bool> show-secret-chat;
     in property <bool> show-disappearing;
+    // The header's add-member button drops out of a narrow (phone) row.
+    in property <bool> show-invite;
+    callback invite();
     callback pinned();
     callback search();
     out property <length> card-width: min(288px, root.width - 2 * Spacing.sm);
@@ -87,6 +90,7 @@ export component ChatHeaderMenu inherits Rectangle {
                 MenuRow { icon: Icons.search; label: "Search in chat"; clicked => { if root.show { root.search(); } } }
                 if root.show-pinned: MenuRow { icon: Icons.pin; label: "Pinned messages"; clicked => { if root.show { root.pinned(); } } }
                 if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { if root.show { root.video-call(); } } }
+                if root.show-invite: MenuRow { icon: Icons.user-plus; label: "Add members"; clicked => { if root.show { root.invite(); } } }
                 if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { if root.show { root.settings(); } } }
                 if root.show-secret-chat: MenuRow { icon: Icons.lock; label: "Start secret chat"; clicked => { if root.show { root.secret-chat(); } } }
                 if root.show-disappearing: MenuRow { icon: Icons.clock; label: "Disappearing messages"; clicked => { if root.show { root.disappearing(); } } }
