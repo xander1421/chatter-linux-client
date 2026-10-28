@@ -668,6 +668,7 @@ export component ChatLayout inherits Rectangle {
             keyboard-open: root.keyboard-open;
             enter-sends: root.composer-enter-sends;
             collapsed: root.composer-notice != "" || root.selection-mode;
+            keep-height: root.selection-mode && root.composer-notice == "";
             picker-open: root.emoji-picker-visible || root.gif-picker-visible;
             width: 100%;
             vertical-stretch: 0;

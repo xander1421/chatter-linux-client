@@ -45,6 +45,9 @@ export component MessageComposer inherits GlassSurface {
     border-color: Materials.glass-edge;
 
     in property <bool> collapsed: false;
+    // Collapsed but still holding its height, so the list above does not
+    // slide when message selection hides the composer.
+    in property <bool> keep-height: false;
     in property <bool> keyboard-open: false;
     visible: !root.collapsed;
     clip: root.recording-here;
@@ -254,7 +257,7 @@ export component MessageComposer inherits GlassSurface {
             + (is-replying ? reply-row-height + Spacing.xs : 0px));
     // The host already pads by the measured composer height, including the
     // attachment and reply rows. Add only the circle row as it lifts.
-    out property <length> list-clearance-extra: root.collapsed || root.recording-here
+    out property <length> list-clearance-extra: (root.collapsed && !root.keep-height) || root.recording-here
         ? 0px : lift-layout * (Spacing.touch-target-min + Spacing.xs);
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     // Reserve the inline terminal only when a mic actually occupies it. In
@@ -435,7 +438,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(80px, Spacing.touch-target-min + row-padding * 2);
-    height: root.collapsed ? 0px : root.recording-here ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
+    height: root.collapsed && !root.keep-height ? 0px : root.recording-here ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
