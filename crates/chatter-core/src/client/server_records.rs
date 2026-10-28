@@ -93,6 +93,13 @@ impl ChatterClient {
                         }
                     }
                 }
+                // A request or invite already answered (here or on another
+                // device) has nothing left to act on: it no longer reads unread.
+                if matches!(row.kind.as_str(), "friend-request" | "channel-invite")
+                    && !row.status.is_empty() && row.status != "Pending"
+                {
+                    row.read = true;
+                }
             }
             crate::services::server_records::collapse_friend_requests(&mut page.notifications);
         }
