@@ -108,6 +108,10 @@ pub fn autosave_composer_draft(w: &MainWindow, ctx: &ChatterClient) {
 /// stored while no thread is loaded (the root id is cleared when the panel
 /// closes), so a late tick cannot wipe the draft the close just parked.
 pub fn autosave_thread_draft(w: &MainWindow, ctx: &ChatterClient) {
+    // An edit borrows the field; its text is not the thread's draft.
+    if w.global::<crate::ChatPane>().get_thread_composer_is_editing() {
+        return;
+    }
     let Ok(root) = w
         .global::<crate::ChatPane>()
         .get_thread_root_message_id()

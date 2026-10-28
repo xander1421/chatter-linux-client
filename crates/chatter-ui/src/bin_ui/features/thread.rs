@@ -314,6 +314,8 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let chat = client.clone();
             let weak = weak_window.clone();
             if let Some(w) = weak_window.upgrade() {
+                // An edit in progress gives the field its draft back first.
+                crate::bin_ui::features::chat::edit::end_thread_edit(&w);
                 // The text stays with its thread; root first, so the text
                 // change's autosave has no thread to overwrite it under.
                 crate::bin_ui::features::composer::autosave_thread_draft(&w, &client);

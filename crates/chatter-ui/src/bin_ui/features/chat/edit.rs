@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, Model, SharedString};
 
 use crate::MainWindow;
 use crate::bin_ui::features::history_owner::HistoryOwner;
@@ -29,6 +29,132 @@ fn current_generation() -> u64 {
 
 fn next_generation() -> u64 {
     EDIT_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// The composer an edit session borrows: the chat's, or the open thread
+/// panel's when the message being edited is one of its replies. Editing a
+/// reply from the panel used to fill the chat composer, hidden behind the
+/// panel, and the next text typed in the panel went out as a new reply.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Field {
+    Chat,
+    Thread,
+}
+
+impl Field {
+    /// The composer whose edit session is `key`.
+    fn editing(w: &MainWindow, key: &str) -> Self {
+        let pane = w.global::<crate::ChatPane>();
+        if pane.get_thread_composer_is_editing()
+            && pane.get_thread_composer_edit_message_id().as_str() == key
+        {
+            Self::Thread
+        } else {
+            Self::Chat
+        }
+    }
+
+    fn text(self, w: &MainWindow) -> SharedString {
+        let pane = w.global::<crate::ChatPane>();
+        match self {
+            Self::Chat => pane.get_composer_text(),
+            Self::Thread => pane.get_thread_composer_text(),
+        }
+    }
+
+    /// Put `text` in the field with the caret at its end.
+    fn set_text(self, w: &MainWindow, text: SharedString) {
+        let pane = w.global::<crate::ChatPane>();
+        match self {
+            Self::Chat => {
+                pane.set_composer_text(text);
+                pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
+            }
+            Self::Thread => {
+                pane.set_thread_composer_text(text);
+                pane.set_thread_composer_caret_end_seq(pane.get_thread_composer_caret_end_seq() + 1);
+            }
+        }
+    }
+
+    fn edit_id(self, w: &MainWindow) -> SharedString {
+        let pane = w.global::<crate::ChatPane>();
+        match self {
+            Self::Chat => pane.get_composer_edit_message_id(),
+            Self::Thread => pane.get_thread_composer_edit_message_id(),
+        }
+    }
+
+    fn set_session(self, w: &MainWindow, key: SharedString, editing: bool) {
+        let pane = w.global::<crate::ChatPane>();
+        match self {
+            Self::Chat => {
+                pane.set_composer_edit_message_id(key);
+                pane.set_composer_is_editing(editing);
+            }
+            Self::Thread => {
+                pane.set_thread_composer_edit_message_id(key);
+                pane.set_thread_composer_is_editing(editing);
+            }
+        }
+    }
+
+    /// The unsent draft editing borrowed the field from: (held, text).
+    fn stash(self, w: &MainWindow) -> (bool, SharedString) {
+        let pane = w.global::<crate::ChatPane>();
+        match self {
+            Self::Chat => (pane.get_composer_stash_held(), pane.get_composer_stash()),
+            Self::Thread => (pane.get_thread_composer_stash_held(), pane.get_thread_composer_stash()),
+        }
+    }
+
+    fn set_stash(self, w: &MainWindow, held: bool, text: SharedString) {
+        let pane = w.global::<crate::ChatPane>();
+        match self {
+            Self::Chat => {
+                pane.set_composer_stash(text);
+                pane.set_composer_stash_held(held);
+            }
+            Self::Thread => {
+                pane.set_thread_composer_stash(text);
+                pane.set_thread_composer_stash_held(held);
+            }
+        }
+    }
+
+    /// Enter edit mode on `key` with `text`, keeping the unsent draft aside
+    /// (it used to be silently replaced and lost).
+    fn begin(self, w: &MainWindow, key: SharedString, text: SharedString) {
+        if !self.stash(w).0 {
+            self.set_stash(w, true, self.text(w));
+        }
+        self.set_text(w, text);
+        // Android: the composer keeps its IME client across the message
+        // menu (keyboard stays up), so the message text replaces the draft
+        // at the generation the IME is still reporting under; a snapshot of
+        // the old draft landing after this line put the draft back under
+        // the edit banner (RC89, S9). The replacement is a new app state of
+        // the field: new generation, pushed now.
+        #[cfg(target_os = "android")]
+        crate::platform::android::text_input::restore();
+        self.set_session(w, key, true);
+    }
+
+    /// Leave edit mode. `restore` gives the field back the draft the edit
+    /// borrowed it from; without it, text typed since stays.
+    fn finish(self, w: &MainWindow, restore: bool) {
+        let (held, draft) = self.stash(w);
+        if restore && held {
+            self.set_text(w, draft);
+            // Android: the accepted edit consumed the input method's copy of
+            // the composer; the draft going back in is a newer state of the
+            // field than the emptied one the IME may still be reporting.
+            #[cfg(target_os = "android")]
+            crate::platform::android::text_input::restore();
+        }
+        self.set_stash(w, false, SharedString::new());
+        self.set_session(w, SharedString::new(), false);
+    }
 }
 
 /// Ask core for the newest message with the same Edit eligibility as the menu,
@@ -127,28 +253,18 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if !owner.is_current() || current_generation() != generation {
                                 return;
                             }
-                            // Editing borrows the composer; keep the unsent draft
-                            // (it used to be silently replaced and lost).
-                            if !w.global::<crate::ChatPane>().get_composer_stash_held() {
-                                w.global::<crate::ChatPane>().set_composer_stash(
-                                    w.global::<crate::ChatPane>().get_composer_text(),
-                                );
-                                w.global::<crate::ChatPane>().set_composer_stash_held(true);
-                            }
-                            w.global::<crate::ChatPane>().set_composer_text(text.into());
-                            // Android: the composer keeps its IME client across
-                            // the message menu (keyboard stays up), so the
-                            // message text replaces the draft at the generation
-                            // the IME is still reporting under; a snapshot of
-                            // the old draft landing after this line put the
-                            // draft back under the edit banner (RC89, S9). The
-                            // replacement is a new app state of the field: new
-                            // generation, pushed now.
-                            #[cfg(target_os = "android")]
-                            crate::platform::android::text_input::restore();
-                            w.global::<crate::ChatPane>()
-                                .set_composer_edit_message_id(composite_key.into());
-                            w.global::<crate::ChatPane>().set_composer_is_editing(true);
+                            // A reply in the open thread panel is edited in
+                            // the panel's own composer.
+                            let in_thread = w
+                                .global::<crate::ChatPane>()
+                                .get_thread_replies()
+                                .iter()
+                                .any(|m| {
+                                    m.sender_id.as_str() == sender_id_str
+                                        && m.timestamp_ns.as_str() == timestamp_ns_str
+                                });
+                            let field = if in_thread { Field::Thread } else { Field::Chat };
+                            field.begin(&w, composite_key.into(), text.into());
                             tracing::debug!(
                                 sender_id = %sender_id_str,
                                 timestamp = %timestamp_ns_str,
@@ -210,8 +326,11 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // copy (the consume is a no-op while the field still holds text).
             // Slint's `reset-after-send` right after this callback is then an
             // empty reset, and the old text cannot come back into the box.
+            let field = weak
+                .upgrade()
+                .map_or(Field::Chat, |w| Field::editing(&w, &composite_key_str));
             if let Some(w) = weak.upgrade() {
-                w.global::<crate::ChatPane>().set_composer_text("".into());
+                field.set_text(&w, SharedString::new());
             }
             #[cfg(target_os = "android")]
             crate::platform::android::text_input::consume();
@@ -238,17 +357,12 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if let Some(w) = weak.upgrade() {
                             if !owner.is_current()
                                 || current_generation() != generation
-                                || w.global::<crate::ChatPane>()
-                                    .get_composer_edit_message_id()
-                                    .as_str()
-                                    != composite_key_str
+                                || field.edit_id(&w).as_str() != composite_key_str
                             {
                                 return;
                             }
-                            if w.global::<crate::ChatPane>().get_composer_text().is_empty() {
-                                let pane = w.global::<crate::ChatPane>();
-                                pane.set_composer_text(new_text_str.into());
-                                pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
+                            if field.text(&w).is_empty() {
+                                field.set_text(&w, new_text_str.into());
                                 #[cfg(target_os = "android")]
                                 crate::platform::android::text_input::restore();
                             }
@@ -272,23 +386,13 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         // stash is not restored over it.
                         if !owner.is_current()
                             || current_generation() != generation
-                            || w.global::<crate::ChatPane>()
-                                .get_composer_edit_message_id()
-                                .as_str()
-                                != composite_key_str
+                            || field.edit_id(&w).as_str() != composite_key_str
                         {
                             return;
                         }
-                        if w.global::<crate::ChatPane>().get_composer_text().is_empty() {
-                            end_edit(&w);
-                        } else {
-                            next_generation();
-                            w.global::<crate::ChatPane>().set_composer_stash("".into());
-                            w.global::<crate::ChatPane>().set_composer_stash_held(false);
-                            w.global::<crate::ChatPane>()
-                                .set_composer_edit_message_id("".into());
-                            w.global::<crate::ChatPane>().set_composer_is_editing(false);
-                        }
+                        next_generation();
+                        let restore = field.text(&w).is_empty();
+                        field.finish(&w, restore);
                     }
                 });
             });
@@ -304,11 +408,27 @@ pub fn wire_cancel_edit(window: &MainWindow) {
         let weak = weak_window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                end_edit(&w);
+                next_generation();
+                Field::Chat.finish(&w, true);
                 tracing::debug!("Cancelled edit mode");
             }
         });
     });
+    let weak_window = window.as_weak();
+    window.global::<crate::ChatPane>().on_thread_cancel_edit(move || {
+        if let Some(w) = weak_window.upgrade() {
+            end_thread_edit(&w);
+        }
+    });
+}
+
+/// Leave an edit of a thread reply, giving the panel's composer its draft
+/// back. Closing the panel goes through here before the draft is parked.
+pub(crate) fn end_thread_edit(w: &MainWindow) {
+    if w.global::<crate::ChatPane>().get_thread_composer_is_editing() {
+        next_generation();
+        Field::Thread.finish(w, true);
+    }
 }
 
 /// Leave edit mode and give the composer back the draft that editing borrowed
@@ -319,21 +439,8 @@ pub fn wire_cancel_edit(window: &MainWindow) {
 /// then posted it as a new message.
 pub(crate) fn end_edit(w: &MainWindow) {
     next_generation();
-    if w.global::<crate::ChatPane>().get_composer_stash_held() {
-        let pane = w.global::<crate::ChatPane>();
-        pane.set_composer_text(pane.get_composer_stash());
-        pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
-        w.global::<crate::ChatPane>().set_composer_stash_held(false);
-        // Android: the accepted edit consumed the input method's copy of
-        // the composer; the draft going back in is a newer state of the
-        // field than the emptied one the IME may still be reporting.
-        #[cfg(target_os = "android")]
-        crate::platform::android::text_input::restore();
-    }
-    w.global::<crate::ChatPane>().set_composer_stash("".into());
-    w.global::<crate::ChatPane>()
-        .set_composer_edit_message_id("".into());
-    w.global::<crate::ChatPane>().set_composer_is_editing(false);
+    Field::Chat.finish(w, true);
+    Field::Thread.finish(w, true);
 }
 
 /// Apply a persisted edit without changing message or pin identity/order.

@@ -91,6 +91,8 @@ export component ThreadPanel inherits Rectangle {
     in property <bool> mention-visible: false;
     in-out property <int> mention-selected-index: 0;
     in-out property <bool> is-replying: false;
+    in-out property <bool> is-editing: false;
+    in-out property <string> edit-message-id: "";
     in property <string> reply-to-sender-name: "";
     in property <string> reply-preview: "";
     in property <bool> reply-has-thumbnail: false;
@@ -109,6 +111,8 @@ export component ThreadPanel inherits Rectangle {
     callback mention-triggered(string);
     callback mention-selected(string, string);
     callback cancel-reply();
+    callback send-edit(string, string);  // (message_id, new_text)
+    callback cancel-edit();
     callback emoji-category-changed(int);
     callback emoji-search-changed(string);
     callback emoji-skin-tone-changed(int);
@@ -631,12 +635,16 @@ export component ThreadPanel inherits Rectangle {
             placeholder: "Reply in thread...";
             pending-attachments: root.pending-attachments;
             is-replying: root.is-replying;
+            is-editing <=> root.is-editing;
+            edit-message-id <=> root.edit-message-id;
             reply-to-sender: root.reply-to-sender-name;
             reply-to-preview: root.reply-preview;
             reply-has-thumbnail: root.reply-has-thumbnail;
             reply-thumbnail: root.reply-thumbnail;
             send(text) => { return root.send-reply(text); }
             cancel-reply => { root.cancel-reply(); }
+            send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
+            cancel-edit => { root.cancel-edit(); }
             attachment-clicked => { root.attachment-clicked(); }
             remove-attachment(id) => { root.remove-attachment(id); }
             paste-image => { root.paste-image(); }

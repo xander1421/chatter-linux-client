@@ -284,6 +284,12 @@ export global ChatPane {
     in property <int> thread-tail-serial: 0;
     in-out property <string> thread-composer-text: "";
     in-out property <int> thread-composer-caret-end-seq: 0;
+    // Editing one of the panel's own replies borrows the thread composer, as
+    // the composer-* edit state does the chat's (chat/edit.rs `Field`).
+    in-out property <bool> thread-composer-is-editing: false;
+    in-out property <string> thread-composer-edit-message-id: "";
+    in-out property <string> thread-composer-stash: "";
+    in-out property <bool> thread-composer-stash-held: false;
     in property <[PendingAttachmentData]> thread-pending-attachments: [];
     in-out property <bool> thread-composer-is-replying: false;
     in-out property <string> thread-reply-to-sender: "";
@@ -310,6 +316,7 @@ export global ChatPane {
     callback thread-mention-triggered(string);
     callback thread-mention-selected(string, string);
     callback thread-cancel-reply();
+    callback thread-cancel-edit();
     callback thread-emoji-category-changed(int);
     callback thread-emoji-search-changed(string);
     callback thread-emoji-skin-tone-changed(int);

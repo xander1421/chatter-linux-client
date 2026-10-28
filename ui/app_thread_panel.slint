@@ -55,6 +55,8 @@ export component AppThreadPanel inherits Rectangle {
         mention-visible: ChatPane.thread-mention-visible;
         mention-selected-index <=> ChatPane.thread-mention-selected-index;
         is-replying: ChatPane.thread-composer-is-replying;
+        is-editing <=> ChatPane.thread-composer-is-editing;
+        edit-message-id <=> ChatPane.thread-composer-edit-message-id;
         reply-to-sender-name: ChatPane.thread-reply-to-sender-name;
         reply-preview: ChatPane.thread-reply-preview;
         reply-has-thumbnail: ChatPane.thread-reply-has-thumbnail;
@@ -70,6 +72,8 @@ export component AppThreadPanel inherits Rectangle {
         mention-triggered(query) => { ChatPane.thread-mention-triggered(query); }
         mention-selected(id, display) => { ChatPane.thread-mention-selected(id, display); }
         cancel-reply => { ChatPane.thread-cancel-reply(); }
+        send-edit(msg-id, text) => { ChatPane.send-edit(msg-id, text); }
+        cancel-edit => { ChatPane.thread-cancel-edit(); }
         emoji-category-changed(category) => { ChatPane.thread-emoji-category-changed(category); }
         emoji-search-changed(query) => { ChatPane.thread-emoji-search-changed(query); }
         emoji-skin-tone-changed(tone) => { ChatPane.thread-emoji-skin-tone-changed(tone); }
