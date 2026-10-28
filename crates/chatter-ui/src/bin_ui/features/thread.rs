@@ -752,7 +752,7 @@ fn patch_edited_row(
 }
 
 /// Increment the "N replies" indicator on a thread root bubble in the main list.
-pub(crate) fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
+fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32) {
     let messages = w.global::<crate::ChatPane>().get_messages();
     let Some(model) = messages
         .as_any()
@@ -773,6 +773,36 @@ pub(crate) fn adjust_root_reply_count(w: &MainWindow, root_id: &str, delta: i32)
             crate::bin_ui::converters::format_count(updated.reply_count, "reply", "replies").into();
         model.set_row_data(i, updated);
         return;
+    }
+}
+
+/// Re-read the reply count of every thread root in the open list (UI
+/// thread). For a delete whose thread is no longer known.
+pub(crate) fn refresh_root_reply_counts(w: &MainWindow, ui_ctx: &ChatterClient) {
+    let messages = w.global::<crate::ChatPane>().get_messages();
+    let Some(model) = messages
+        .as_any()
+        .downcast_ref::<VecModel<MessageItemData>>()
+    else {
+        return;
+    };
+    for i in 0..model.row_count() {
+        let Some(mut row) = model.row_data(i) else {
+            continue;
+        };
+        if row.reply_count == 0 {
+            continue;
+        }
+        let Ok(root) = row.message_id.parse::<MessageId>() else {
+            continue;
+        };
+        let count = ui_ctx.thread_reply_count(&root) as i32;
+        if count != row.reply_count {
+            row.reply_count = count;
+            row.reply_count_text =
+                crate::bin_ui::converters::format_count(count, "reply", "replies").into();
+            model.set_row_data(i, row);
+        }
     }
 }
 
