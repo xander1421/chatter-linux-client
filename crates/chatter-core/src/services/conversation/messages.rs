@@ -1,7 +1,7 @@
 use super::*;
 
 impl ConversationHandle {
-    /// The newest own message for which the context menu currently offers Edit.
+    /// The newest own main-list message for which the context menu currently offers Edit.
     /// Search persisted history so the shortcut also finds messages outside the
     /// loaded UI page, and use the menu rule (including Saved's age exception).
     pub fn last_editable_own_message(&self) -> ConversationResult<Option<(UserId, u64)>> {
@@ -16,7 +16,10 @@ impl ConversationHandle {
         loop {
             let page = repo.list_for_conversation(&scope.id, &scope.kind, before, 100)?;
             for message in &page {
+                // A thread reply is not in the main list: Up there must not
+                // reach into a thread and edit a message nobody can see.
                 if message.sender_id == Some(own)
+                    && message.thread_id.is_none()
                     && stored_message_menu(message, true, now_ns).actions.edit
                 {
                     return Ok(Some((own, message.sent_at)));
