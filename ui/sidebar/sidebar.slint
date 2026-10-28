@@ -266,8 +266,10 @@ export component Sidebar inherits Rectangle {
     property <length> rail-slot-size: root.touch ? 44px : 32px;
     property <length> rail-slot-radius: 12px;
     property <brush> rail-slot-bg: Colors.surface-control;
-    // Shield, AI, Chats, Mesh (when compiled), expand, Settings, profile.
-    property <int> rail-button-count: MeshGlobal.enabled ? 7 : 6;
+    // Shield, AI, Chats, Activity, Mesh (when compiled), expand, Settings,
+    // profile. The Activity bell was added without counting it, so the rail
+    // footer was one slot short and the profile avatar hung off the bottom.
+    property <int> rail-button-count: MeshGlobal.enabled ? 8 : 7;
 
     // ── Sizing ──
     // Always a side panel, on every platform: collapsed to the icon rail or
