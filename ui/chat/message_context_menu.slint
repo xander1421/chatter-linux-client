@@ -421,12 +421,17 @@ export component MessageContextMenu inherits Rectangle {
         }
     }
 
-    // Backdrop touch area to close menu
+    // Backdrop touch area to close menu. A wheel closes it too instead of
+    // scrolling the messages under the lifted bubble.
     TouchArea {
         width: 100%;
         height: 100%;
         enabled: root.show;
         clicked => { root.close(); }
+        scroll-event(event) => {
+            root.close();
+            accept
+        }
     }
 
     if root.bubble-in-view: Rectangle {
