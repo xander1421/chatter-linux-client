@@ -235,8 +235,11 @@ export component MainChatShell inherits Rectangle {
                     forward-clicked => { ChatPane.selection-forward-clicked(); }
                 }
 
+                // Not destroyed under a full-width thread: the column is
+                // hidden instead, so the conversation keeps its scroll
+                // position and state. Rebuilt, it reopened at the newest
+                // messages when the thread closed (S9, desktop 800px).
                 if !CallView.active-call-fullscreen
-                    && !chat-panel-area.thread-covers-chat
                     && (ChatPane.channel-name != "" || ChatPane.loading-messages): AppConversationLayout {
                     vertical-stretch: 1;
                     active-call-fullscreen: CallView.active-call-fullscreen;
