@@ -210,6 +210,8 @@ export component PrivateGroupListItem inherits Rectangle {
                     text: root.typing-text != "" ? root.typing-text : "typing";
                     color: accent-color;
                     font-size: Typography.xs;
+                    min-width: 0px;
+                    overflow: elide;
                 }
             }
 
