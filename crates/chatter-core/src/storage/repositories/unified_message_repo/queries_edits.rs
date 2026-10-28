@@ -118,6 +118,16 @@ impl UnifiedMessageRepository {
         )?)
     }
 
+    /// Whether `sender` has a live reply in the thread under `thread_id`.
+    pub fn has_thread_reply_from(&self, thread_id: &MessageId, sender: &UserId) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE thread_id = ?1 AND sender_id = ?2 AND is_deleted = 0)",
+            params![thread_id.to_string(), sender.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Update delivery status by (conversation_id, sent_at).
     pub fn update_delivery_status(
         &self,

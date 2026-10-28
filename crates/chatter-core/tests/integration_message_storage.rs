@@ -2107,6 +2107,11 @@ fn test_thread_replies_excluded_from_channel_list() {
         [replies[0].id]
     );
     assert_eq!(message_repo.count_for_thread(&root.id).unwrap(), 3);
+    // Who has replied: the thread's followers for Activity.
+    assert!(message_repo.has_thread_reply_from(&root.id, &sender).unwrap());
+    assert!(!message_repo
+        .has_thread_reply_from(&root.id, &UserId::new())
+        .unwrap());
 
     // ...and counted for the root bubble's indicator.
     let counts = message_repo

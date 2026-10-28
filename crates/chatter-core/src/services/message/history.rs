@@ -341,6 +341,17 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
+    /// Whether `sender` has replied in the thread under `thread_root_id`.
+    pub fn has_thread_reply_from(
+        &self,
+        thread_root_id: &crate::domain::ids::MessageId,
+        sender: &crate::domain::UserId,
+    ) -> Result<bool, MessageError> {
+        self.message_repo
+            .has_thread_reply_from(thread_root_id, sender)
+            .map_err(MessageError::from)
+    }
+
     /// Update a message in local storage.
     pub fn update_message(&self, message: &Message) -> Result<(), MessageError> {
         self.message_repo

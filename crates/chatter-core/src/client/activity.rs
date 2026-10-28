@@ -273,8 +273,11 @@ impl ChatterClient {
         let sender = message.sender_id.unwrap();
         let text = message.as_text().unwrap_or("");
         let mentioned = self.message_mentions_user(message, &owner);
-        let in_my_thread = message.thread_id
-            .filter(|id| self.get_message_local(id).is_some_and(|parent| parent.sender_id == Some(owner)));
+        // A thread I started or have replied in, as Slack's thread followers.
+        let in_my_thread = message.thread_id.filter(|id| {
+            self.get_message_local(id).is_some_and(|parent| parent.sender_id == Some(owner))
+                || self.messages().has_thread_reply_from(id, &owner).unwrap_or(false)
+        });
         let reply_to_me = message.reply_to_author_id == Some(owner)
             || message.reply_to.and_then(|id| self.get_message_local(&id)).is_some_and(|parent| parent.sender_id == Some(owner))
             || in_my_thread.is_some();
