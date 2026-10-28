@@ -25,6 +25,13 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+/// Chatter patch: rare accessibility-bridge diagnostics (logcat tag SlintA11y).
+pub(crate) fn a11y_log(message: &str) {
+    if let Ok(message) = std::ffi::CString::new(message) {
+        unsafe { __android_log_write(5, c"SlintA11y".as_ptr(), message.as_ptr()); }
+    }
+}
+
 // Opt-in native probe for the Android 10 full-screen page touch cutoff. Build
 // with CHATTER_PROFILE_TAP_PROBE=1 and read the ProfileTap logcat tag. Keep it
 // compile-time gated so normal pointer/inset dispatch allocates nothing.

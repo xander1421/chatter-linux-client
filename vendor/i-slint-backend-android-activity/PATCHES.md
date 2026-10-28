@@ -28,6 +28,11 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   Scanning the ever-growing id list made each new node cost the whole list;
   after a few emoji-grid rebuilds the S9 snapshot overran `query`'s 500 ms
   and Android received an empty tree.
+  `query` waits up to 500 ms for a snapshot and otherwise returns the last
+  finished tree (a late snapshot replaces it for the next query); only one
+  snapshot runs at a time. Snapshots over 200 ms are logged (tag SlintA11y).
+  Without this a large screen (an emoji tab, ~700 nodes, O0 generated code
+  on the S9) still timed out to "[]".
   Text inputs carry their `value` (as the node text) and their label or
   placeholder (as the hint), like a native EditText.
   The provider caches a snapshot for 100 ms from when it is READY, so the

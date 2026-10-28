@@ -15,8 +15,19 @@ use jni::objects::{JClass, JString};
 use jni::sys::jint;
 use jni::Env;
 use serde_json::{Value, json};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+// The last finished tree and how many snapshots have finished. Android's
+// query waits at most 500 ms; on a large screen (an emoji tab, ~700 nodes,
+// O0 generated code on the S9) a snapshot took longer and Android was
+// handed "[]" — an empty tree for TalkBack until the screen got smaller.
+// A query that times out now returns the last finished tree, and the late
+// snapshot replaces it for the next query. One snapshot runs at a time.
+static LATEST: Mutex<(u64, String)> = Mutex::new((0, String::new()));
+static FINISHED: Condvar = Condvar::new();
+static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn snapshot() -> String {
     CURRENT_WINDOW.with_borrow(|window| {
@@ -120,14 +131,31 @@ pub(crate) fn query<'local>(
     env: &mut Env<'local>,
     _class: JClass<'local>,
 ) -> Result<JString<'local>, jni::errors::Error> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let result = i_slint_core::api::invoke_from_event_loop(move || {
-        let _ = sender.send(snapshot());
-    });
-    let tree = if result.is_ok() {
-        receiver.recv_timeout(Duration::from_millis(500)).unwrap_or_else(|_| "[]".into())
-    } else {
-        "[]".into()
+    let seen = LATEST.lock().map(|latest| latest.0).unwrap_or(0);
+    if !IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        let queued = i_slint_core::api::invoke_from_event_loop(|| {
+            let started = Instant::now();
+            let tree = snapshot();
+            let took = started.elapsed();
+            if took > Duration::from_millis(200) {
+                crate::a11y_log(&format!("accessibility snapshot took {} ms", took.as_millis()));
+            }
+            if let Ok(mut latest) = LATEST.lock() {
+                *latest = (latest.0 + 1, tree);
+            }
+            IN_FLIGHT.store(false, Ordering::Release);
+            FINISHED.notify_all();
+        });
+        if queued.is_err() {
+            IN_FLIGHT.store(false, Ordering::Release);
+        }
+    }
+    let tree = match LATEST.lock() {
+        Ok(latest) => match FINISHED.wait_timeout_while(latest, Duration::from_millis(500), |l| l.0 == seen) {
+            Ok((latest, _)) if !latest.1.is_empty() => latest.1.clone(),
+            _ => "[]".to_owned(),
+        },
+        Err(_) => "[]".to_owned(),
     };
     JString::new(env, tree)
 }
