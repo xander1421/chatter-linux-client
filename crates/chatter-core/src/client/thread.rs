@@ -9,6 +9,12 @@ impl ChatterClient {
 
     pub fn open_thread(&self, channel: ChannelId, root: MessageId) {
         self.services.chat_state.open_thread(channel, root);
+        // Opening the thread reads its replies, and with them its Activity row.
+        if let Some(owner) = self.auth_snapshot().current_user_id {
+            if let Err(e) = self.activity.mark_thread_read(owner, &root.to_string()) {
+                tracing::warn!(error = %e, "Could not mark thread activity read");
+            }
+        }
     }
 
     pub fn close_thread(&self, root: MessageId) {

@@ -71,6 +71,15 @@ impl ChatterClient {
         }
     }
 
+    /// The conversation was read: its mention/reply/reaction rows are too.
+    pub(crate) fn activity_mark_conversation_read(&self, conversation_id: &str) {
+        if let Some(owner) = self.auth_snapshot().current_user_id {
+            if let Err(e) = self.activity.mark_conversation_read(owner, conversation_id) {
+                tracing::warn!(error = %e, "Could not mark activity read");
+            }
+        }
+    }
+
     pub fn activity_mark_all_read(&self) {
         if let Some(owner) = self.auth_snapshot().current_user_id {
             if let Err(e) = self.activity.mark_all_read(owner) {

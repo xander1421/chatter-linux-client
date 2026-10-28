@@ -163,6 +163,27 @@ impl ActivityService {
         Ok(())
     }
 
+    /// Mark read the message rows (mention, reply, reaction) of one
+    /// conversation, as reading it does in Slack and Discord. Thread rows are
+    /// left for [`Self::mark_thread_read`]: their replies are read in the
+    /// thread, not the conversation.
+    pub fn mark_conversation_read(&self, owner: UserId, conversation_id: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        if conn.execute(
+            "UPDATE activity_items SET unread=0 WHERE owner_id=?1 AND conversation_id=?2 AND unread=1
+               AND kind IN ('mention','reply','reaction') AND id NOT LIKE ?3",
+            params![owner.to_string(), conversation_id, format!("{THREAD_ACTIVITY_PREFIX}%")],
+        )? != 0 {
+            let _ = self.changed.send(());
+        }
+        Ok(())
+    }
+
+    /// Mark read the Activity row of a thread rooted at `root` (opened).
+    pub fn mark_thread_read(&self, owner: UserId, root: &str) -> Result<(), StorageError> {
+        self.mark_read(owner, &format!("{THREAD_ACTIVITY_PREFIX}{root}"))
+    }
+
     pub fn mark_all_read(&self, owner: UserId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         if conn.execute("UPDATE activity_items SET unread=0 WHERE owner_id=?1 AND unread=1", [owner.to_string()])? != 0 {
@@ -277,6 +298,39 @@ mod tests {
             id, kind: "reply", actor_id: None, actor_name: "", detail: "", preview,
             conversation_id: None, conversation_type: None, message_id: None, created_at_ms: at,
         }
+    }
+
+    #[test]
+    fn reading_a_conversation_reads_its_message_rows_but_not_its_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("activity.db"), "test-only").unwrap();
+        db.run_migrations().unwrap();
+        let service = ActivityService::new(Arc::new(db));
+        let owner = UserId::new();
+        let now = Utc::now().timestamp_millis();
+        let mut mention = item("mention:m1", "", now);
+        mention.kind = "mention";
+        mention.conversation_id = Some("c1");
+        let mut thread = item("thread:root", "", now);
+        thread.conversation_id = Some("c1");
+        let mut other = item("reply:m2", "", now);
+        other.conversation_id = Some("c2");
+        for row in [mention, thread, other] {
+            service.record(owner, row).unwrap();
+        }
+        service.mark_conversation_read(owner, "c1").unwrap();
+        let unread: Vec<_> = service
+            .list(owner, true, |_| HashMap::new())
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.unread)
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(unread.len(), 2);
+        assert!(unread.contains(&"thread:root".to_string()));
+        assert!(unread.contains(&"reply:m2".to_string()));
+        service.mark_thread_read(owner, "root").unwrap();
+        assert_eq!(service.unread_count(owner).unwrap(), 1);
     }
 
     #[test]

@@ -280,10 +280,12 @@ impl ConversationHandle {
         ) else {
             return Err(ConversationError::NoConversation);
         };
-        Ok(self
+        let anchor = self
             .client
             .messages()
-            .mark_conversation_read(&conversation_id, &conversation_type)?)
+            .mark_conversation_read(&conversation_id, &conversation_type)?;
+        self.client.activity_mark_conversation_read(&conversation_id.to_string());
+        Ok(anchor)
     }
 
     /// Row menu "Mark as unread" (Telegram, Signal): the newest message from
