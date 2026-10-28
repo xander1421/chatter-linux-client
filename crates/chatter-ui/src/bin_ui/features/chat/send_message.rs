@@ -1163,6 +1163,10 @@ async fn deliver_inner(
             if let Some(parent) = stored.as_ref().and_then(|m| m.reply_to) {
                 msg_item.reply_to_message_id = parent.to_string().into();
             }
+            // And the quote text, so it reads as it will after a reload.
+            if let Some(text) = stored.as_ref().and_then(|m| m.reply_to_text.as_deref()) {
+                msg_item.reply_to_preview = text.into();
+            }
             // In place of the pending row, so the bubble does not move.
             upsert_message_in_ui(&w, &pending_id, msg_item);
             tracing::debug!(
