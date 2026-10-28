@@ -43,6 +43,8 @@ export struct CalendarDay {
     label: string,
     in-month: bool,
     is-today: bool,
+    // "27 Oct": the date filter chip names a chosen day or range with it.
+    short: string,
 }
 
 // One "Jump to" conversation row.
@@ -347,6 +349,8 @@ export component UnifiedSearch inherits Rectangle {
     callback calendar-shift(int);
     property <string> custom-start: "";
     property <string> custom-end: "";
+    property <string> custom-start-short: "";
+    property <string> custom-end-short: "";
     property <length> calendar-swipe-start: 0px;
     property <bool> calendar-swiped: false;
 
@@ -649,7 +653,10 @@ export component UnifiedSearch inherits Rectangle {
                     }
                     Rectangle { border-width: date-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                     date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; root.calendar-shift(0); } }
-                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year" : "Range"; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
+                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year"
+                        // The days chosen, not a bare "Range".
+                        : root.custom-end-short == "" || root.custom-end == root.custom-start ? root.custom-start-short
+                        : root.custom-start-short + " – " + root.custom-end-short; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 for kind in ["from", "in"]: Rectangle {
                     // A set filter grows to show its name (up to a cap) beside the ×.
@@ -1084,10 +1091,10 @@ export component UnifiedSearch inherits Rectangle {
                         accessible-role: button; accessible-label: day.date;
                         accessible-action-default => {
                             if (root.custom-start == "" || root.custom-end != "") {
-                                root.custom-start = day.date; root.custom-end = "";
+                                root.custom-start = day.date; root.custom-end = ""; root.custom-start-short = day.short; root.custom-end-short = "";
                             } else {
-                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; }
-                                else { root.custom-end = day.date; }
+                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; root.custom-end-short = root.custom-start-short; root.custom-start-short = day.short; }
+                                else { root.custom-end = day.date; root.custom-end-short = day.short; }
                                 root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
                                 root.date-sheet-open = false;
                                 root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
@@ -1097,10 +1104,10 @@ export component UnifiedSearch inherits Rectangle {
                             key-pressed(event) => {
                                 if event.text == Key.Space || event.text == Key.Return {
                                     if (root.custom-start == "" || root.custom-end != "") {
-                                        root.custom-start = day.date; root.custom-end = "";
+                                        root.custom-start = day.date; root.custom-end = ""; root.custom-start-short = day.short; root.custom-end-short = "";
                                     } else {
-                                        if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; }
-                                        else { root.custom-end = day.date; }
+                                        if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; root.custom-end-short = root.custom-start-short; root.custom-start-short = day.short; }
+                                        else { root.custom-end = day.date; root.custom-end-short = day.short; }
                                         root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
                                         root.date-sheet-open = false;
                                         root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
@@ -1125,10 +1132,10 @@ export component UnifiedSearch inherits Rectangle {
                             clicked => {
                             if (root.calendar-swiped) { root.calendar-swiped = false; return; }
                             if (root.custom-start == "" || root.custom-end != "") {
-                                root.custom-start = day.date; root.custom-end = "";
+                                root.custom-start = day.date; root.custom-end = ""; root.custom-start-short = day.short; root.custom-end-short = "";
                             } else {
-                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; }
-                                else { root.custom-end = day.date; }
+                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; root.custom-end-short = root.custom-start-short; root.custom-start-short = day.short; }
+                                else { root.custom-end = day.date; root.custom-end-short = day.short; }
                                 root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
                                 root.date-sheet-open = false;
                                 root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);

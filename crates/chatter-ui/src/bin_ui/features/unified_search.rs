@@ -174,6 +174,7 @@ fn wire_calendar(window: &MainWindow) {
                         label: date.day().to_string().into(),
                         in_month: date.month() == current.month(),
                         is_today: date == today,
+                        short: date.format("%-d %b").to_string().into(),
                     }
                 })
                 .collect::<Vec<_>>();
