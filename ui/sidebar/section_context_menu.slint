@@ -42,10 +42,6 @@ component MenuItem inherits Rectangle {
     border-width: menu-keys.has-focus ? 2px : 0px;
     border-color: Colors.focus-ring;
 
-    // The menus mount already shown, so `changed` never fires on open.
-    init => {
-        if root.initial-focus { menu-keys.focus(); }
-    }
     changed initial-focus => {
         if root.initial-focus { menu-keys.focus(); }
     }
