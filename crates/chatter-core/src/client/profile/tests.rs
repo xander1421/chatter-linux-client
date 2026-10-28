@@ -408,6 +408,10 @@
             let mut p = Profile::new(u, "x".into());
             p.presence = PresenceStatus::Online;
             repos.user_repo.upsert_profile(&p).unwrap();
+            repos
+                .user_repo
+                .set_presence(&u, PresenceStatus::Online, Some(chrono::Utc::now().timestamp()))
+                .unwrap();
         }
         assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);
 
@@ -434,6 +438,15 @@
 
         repos.user_repo.delete_friendship(&me, &peer).unwrap();
         assert_eq!(client.peer_presence(&peer), PresenceStatus::Online);
+
+        // A status nobody refreshed within the window is offline: the peer's
+        // app died without sending Offline.
+        let old = chrono::Utc::now().timestamp() - crate::client::profile::presence::PRESENCE_STALE_SECS - 1;
+        repos
+            .user_repo
+            .set_presence(&friend, PresenceStatus::Online, Some(old))
+            .unwrap();
+        assert_eq!(client.peer_presence(&friend), PresenceStatus::Offline);
     }
 
     /// Friends › Blocked › Delete chat on an anon peer: the conversation and

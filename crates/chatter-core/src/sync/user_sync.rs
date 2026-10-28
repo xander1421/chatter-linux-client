@@ -250,6 +250,16 @@ impl UserSync {
                     presence,
                 };
 
+                // The server just reported this status, so it is fresh for the
+                // stale-presence rule (`PRESENCE_STALE_SECS`) until the peer's
+                // own heartbeats take over.
+                if presence != crate::domain::user::PresenceStatus::Offline {
+                    let _ = self.user_repo.set_presence(
+                        &user_id,
+                        presence,
+                        Some(chrono::Utc::now().timestamp()),
+                    );
+                }
                 match self.user_repo.upsert_profile(&profile) {
                     Ok(changed) => {
                         result.profiles_updated += 1;

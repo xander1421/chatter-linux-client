@@ -14,6 +14,21 @@ impl ChatterClient {
         self.send_presence_updates(presence).await;
     }
 
+    /// Re-send the current status to the server only (no anon-DM sends, no
+    /// local event). The server keeps presence for five minutes after each
+    /// publish, so this keeps a live client distinguishable from one that died
+    /// without saying Offline.
+    pub(super) async fn refresh_identified_presence(
+        &self,
+        presence: crate::domain::user::PresenceStatus,
+    ) {
+        let _publication = self.presence_controller.publication_lock.lock().await;
+        let proto = crate::services::presence_service::domain_presence_to_proto(presence);
+        if let Err(e) = self.services.grpc_pool.user_client().update_presence(proto).await {
+            tracing::debug!("Presence refresh failed: {}", e);
+        }
+    }
+
     /// Shutdown already owns the lifecycle lock and sends the final status
     /// after all session tasks have stopped.
     pub(super) async fn set_presence_for_shutdown(

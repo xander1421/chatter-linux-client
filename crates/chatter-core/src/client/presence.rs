@@ -54,8 +54,20 @@ impl ChatterClient {
         let client = self.clone();
         *task = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
+            let mut ticks: u32 = 0;
             loop {
                 interval.tick().await;
+                ticks = ticks.wrapping_add(1);
+                // Every two minutes, inside the server's five-minute presence
+                // window: contacts expire a status that stops being refreshed
+                // (`PRESENCE_STALE_SECS`), which is how a client killed without
+                // sending Offline drops off. Offline (and Invisible) send nothing.
+                if ticks % 4 == 0 {
+                    let current = client.presence_controller.state.lock().await.current;
+                    if current != PresenceStatus::Offline {
+                        client.refresh_identified_presence(current).await;
+                    }
+                }
                 // On a phone the app being on screen is the activity: taps and
                 // scrolls do not reach this timer, so a user reading for five
                 // minutes went Away to their contacts (S9). The screen's own

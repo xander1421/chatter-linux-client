@@ -1,5 +1,9 @@
 use super::*;
 
+/// How long a peer's reported status holds without a refresh: the server's
+/// five-minute presence window plus one missed two-minute heartbeat.
+pub const PRESENCE_STALE_SECS: i64 = 7 * 60;
+
 impl ChatterClient {
     /// A peer's presence as this device shows it: the stored presence, or
     /// [`Self::peer_display_presence`] of it. Every dot and "online" line for
@@ -17,17 +21,29 @@ impl ChatterClient {
 
     /// `reported` (a stored or live presence) as it may be shown. A blocked
     /// user's presence is hidden. A disconnected client also hides the last
-    /// reported online state until it can receive fresh presence again.
+    /// reported online state until it can receive fresh presence again. A
+    /// status not refreshed for [`PRESENCE_STALE_SECS`] is offline: live
+    /// clients republish every two minutes, so silence means the peer's app
+    /// died without sending Offline.
     pub fn peer_display_presence(
         &self,
         id: &crate::domain::ids::UserId,
         reported: crate::domain::user::PresenceStatus,
     ) -> crate::domain::user::PresenceStatus {
         if !self.offline_snapshot().is_online || self.is_profile_user_blocked(id) {
-            crate::domain::user::PresenceStatus::Offline
-        } else {
-            reported
+            return crate::domain::user::PresenceStatus::Offline;
         }
+        if reported != crate::domain::user::PresenceStatus::Offline {
+            let repo =
+                crate::storage::repositories::UserRepository::new(self.services.database.clone());
+            let stale = repo.last_seen_at(id).ok().flatten().is_none_or(|seen| {
+                chrono::Utc::now().timestamp() - seen > PRESENCE_STALE_SECS
+            });
+            if stale {
+                return crate::domain::user::PresenceStatus::Offline;
+            }
+        }
+        reported
     }
 
     /// Anonymous chats have no live peer presence feed. Show their active
