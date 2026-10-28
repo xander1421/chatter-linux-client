@@ -86,6 +86,25 @@ impl ChatterClient {
         }
         self.set_conversation_archived(&id, false)
     }
+    /// A folder's header badge: unread in its rows, leaving out muted ones,
+    /// as Telegram's folder counters do (a muted chat keeps its own grey
+    /// count on its row).
+    pub fn section_unread_badge(
+        self: &std::sync::Arc<Self>,
+        section: &crate::domain::section::CustomSection,
+    ) -> u32 {
+        section
+            .conversations
+            .iter()
+            .filter(|c| c.unread_count > 0)
+            .filter(|c| {
+                self.resolve_row_conversation(&c.conversation_id, &c.conversation_type)
+                    .is_none_or(|conv| !self.is_conversation_muted(conv).unwrap_or(false))
+            })
+            .map(|c| c.unread_count)
+            .sum()
+    }
+
     // ── Sidebar sections (custom grouping) façade ────────────────────────
 
     /// Custom folders with their rows, already ordered by each folder's sort

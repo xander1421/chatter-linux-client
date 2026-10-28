@@ -497,7 +497,7 @@ fn build_section_data(
             name: section.name.clone(),
             icon_emoji: section.icon_emoji.clone(),
             is_expanded: section.is_expanded,
-            unread_count: section.unread_count as i32,
+            unread_count: ui_ctx.section_unread_badge(section) as i32,
             sort_mode: section.sort_mode.as_str().to_string(),
             conversations,
         })
