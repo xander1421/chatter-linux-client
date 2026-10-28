@@ -48,7 +48,13 @@ export component AppTopOverlays inherits Rectangle {
     // typing dead until a click. Hand it back to the composer on desktop
     // (on a phone that would raise the keyboard).
     function refocus-composer() {
-        if !root.is-mobile-platform { root.reply-focus-serial += 1; }
+        if root.is-mobile-platform { return; }
+        // Settings hides the chat; its own page takes focus instead.
+        if ModalHostState.settings-open {
+            ModalHostState.settings-focus-serial += 1;
+        } else {
+            root.reply-focus-serial += 1;
+        }
     }
     // Every dialog, not only the ones wired above: when the last one closes
     // (Esc, X, backdrop) focus goes back to the composer. Closing Contacts

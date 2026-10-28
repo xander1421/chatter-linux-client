@@ -225,6 +225,19 @@ export component SettingsScreen inherits Rectangle {
 
     background: Materials.ambient;
 
+    // Where focus returns when a dialog opened from Settings closes. The
+    // chat behind Settings is hidden, so the composer that usually takes it
+    // back cannot: the next key dropped focus and Escape no longer closed
+    // Settings. Keys bubble on to the window's back scope.
+    in property <int> focus-serial: 0;
+    changed focus-serial => { page-keys.focus(); }
+    page-keys := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+    }
+
     // Responsive breakpoint: compact mode when width < 500px
     property <bool> compact-mode: root.width < 500px;
 
