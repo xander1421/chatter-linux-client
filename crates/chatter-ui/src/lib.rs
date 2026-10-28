@@ -961,6 +961,11 @@ pub async fn app_init() -> Result<AppState, chatter_core::client::StartupError> 
             let ui_ctx_for_events = ui_ctx.clone();
             tokio::spawn(async move {
                 bin_ui::features::auth::load_initial_data(weak_window, &ui_ctx_for_events).await;
+                // As after a sign-in (login.rs): a restored session published
+                // no presence, applied no saved manual status and ran no
+                // auto-away timer, so a restarted client read "last seen"
+                // to its contacts while in use.
+                ui_ctx_for_events.initialize_presence().await;
             });
         }
     } else {
