@@ -1086,10 +1086,12 @@ async fn deliver_inner(
             // finds only the provisional row (with a different timestamp).
             // Read the persisted status now so that early receipts survive
             // the replacement of that provisional row.
-            let delivery_status = msg_id
+            let stored = msg_id
                 .parse::<chatter_core::domain::ids::MessageId>()
                 .ok()
-                .and_then(|id| ui_ctx.get_message_local(&id))
+                .and_then(|id| ui_ctx.get_message_local(&id));
+            let delivery_status = stored
+                .as_ref()
                 .map(|message| {
                     chatter_core::services::message::display_delivery_status(
                         &message.delivery_status,
@@ -1155,6 +1157,12 @@ async fn deliver_inner(
                 );
             }
             msg_item.failure_reason = failure_reason.into();
+            // The stored row knows the parent. Nothing replaces this bubble
+            // with it later, so without the id the quote stayed untappable
+            // until the chat was reopened.
+            if let Some(parent) = stored.as_ref().and_then(|m| m.reply_to) {
+                msg_item.reply_to_message_id = parent.to_string().into();
+            }
             // In place of the pending row, so the bubble does not move.
             upsert_message_in_ui(&w, &pending_id, msg_item);
             tracing::debug!(

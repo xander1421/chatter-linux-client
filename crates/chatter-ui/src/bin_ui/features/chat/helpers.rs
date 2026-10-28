@@ -82,9 +82,9 @@ pub fn build_own_message_item(
         standalone_attachment_indices,
         is_reply,
         // Optimistic echo identifies its reply by (sender, timestamp), not a
-        // parent MessageId; the id stays empty (tap-to-jump suppressed) until the
-        // canonical DB-converted message — which carries reply_to — replaces it.
-        // Own outgoing reply: the parent existed at send time.
+        // parent MessageId; the send path fills the id from the stored row
+        // once it exists (send_message.rs). Own outgoing reply: the parent
+        // existed at send time.
         reply_to_sender_name: reply_to_sender_name.into(),
         reply_to_preview: reply_to_preview.into(),
         // Parent-media snapshot (resolved at send time) so the echo shows the
