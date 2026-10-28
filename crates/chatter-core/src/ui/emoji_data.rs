@@ -82,11 +82,15 @@ const SMP_TEXT_DEFAULT: &[(u32, u32)] = &[
 /// True if emoji renders in color by default (Emoji_Presentation=Yes).
 ///
 /// First char must be in the SMP emoji range (≥ U+1F000) and not one of the
-/// SMP text-default exceptions. BMP emoji (e.g. ✈, ⚽, ❤, ☝) default to
-/// monochrome text presentation and render grey without VS16 — we exclude
-/// them entirely for visual consistency. A ZWJ sequence (🏳️‍🌈) is its own
-/// colour glyph in the emoji font, so the exception list does not apply.
+/// SMP text-default exceptions, unless the entry carries VS16 (U+FE0F): text
+/// shaping then takes the colour emoji font first (vendored parley
+/// `select_font`), so ❤️ and ✈️ draw in colour. Bare BMP emoji (✈, ⚽, ❤, ☝)
+/// default to monochrome text presentation and stay out. A ZWJ sequence (🏳️‍🌈)
+/// is its own colour glyph in the emoji font, so the exception list does not apply.
 pub fn is_color_default(emoji: &str) -> bool {
+    if emoji.contains('\u{FE0F}') {
+        return true;
+    }
     let zwj_sequence = emoji.contains('\u{200D}');
     emoji.chars().next().is_some_and(|c| {
         let c = c as u32;
@@ -515,10 +519,14 @@ mod color_default_tests {
     fn smp_text_default_emoji_are_excluded() {
         assert!(is_color_default("\u{1F600}")); // 😀
         assert!(is_color_default("\u{1F3C1}")); // 🏁
-        assert!(!is_color_default("\u{1F6E1}\u{FE0F}")); // 🛡️
-        assert!(!is_color_default("\u{1F3F3}\u{FE0F}")); // 🏳️
+        assert!(!is_color_default("\u{1F6E1}")); // 🛡 bare
         assert!(!is_color_default("\u{1F441}")); // 👁
-        assert!(!is_color_default("\u{2708}\u{FE0F}")); // ✈️ (BMP)
+        assert!(!is_color_default("\u{2708}")); // ✈ bare (BMP)
+        assert!(!is_color_default("\u{2764}")); // ❤ bare (BMP)
+        // VS16 selects the colour glyph.
+        assert!(is_color_default("\u{1F6E1}\u{FE0F}")); // 🛡️
+        assert!(is_color_default("\u{2708}\u{FE0F}")); // ✈️
+        assert!(is_color_default("\u{2764}\u{FE0F}")); // ❤️
         assert!(is_color_default("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}")); // 🏳️‍🌈
     }
 }
@@ -542,7 +550,7 @@ mod picker_tests {
     #[test]
     fn recents_and_search() {
         let recent = vec![
-            "\u{1F6E1}\u{FE0F}".to_string(), // 🛡️, text-default: never offered
+            "\u{1F6E1}".to_string(), // bare 🛡, text-default: never offered
             "😀".to_string(),
         ];
         let tab = listing(RECENT_CATEGORY, 0, &recent);
@@ -555,6 +563,7 @@ mod picker_tests {
         assert_eq!(search("HEART"), search("heart"));
         let hits = search("heart");
         assert!(hits.iter().any(|e| e.name == "heart_eyes"));
+        assert!(hits.iter().any(|e| e.emoji == "\u{2764}\u{FE0F}"));
         assert!(hits.iter().all(|e| e.name.contains("heart")));
         assert!(search("").len() <= 50);
         assert!(listing(42, 0, &recent).is_empty());
@@ -566,7 +575,7 @@ mod picker_tests {
         assert_eq!(category, DEFAULT_CATEGORY);
         assert_eq!(shown, category_emojis(DEFAULT_CATEGORY));
         // Only tofu in history counts as no history.
-        let (category, _) = initial_listing(&["\u{1F6E1}\u{FE0F}".to_string()], 0);
+        let (category, _) = initial_listing(&["\u{1F6E1}".to_string()], 0);
         assert_eq!(category, DEFAULT_CATEGORY);
         let (category, shown) = initial_listing(&["🎉".to_string()], 0);
         assert_eq!(category, RECENT_CATEGORY);

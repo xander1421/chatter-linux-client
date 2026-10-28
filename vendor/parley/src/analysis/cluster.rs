@@ -13,6 +13,8 @@ const MAX_CLUSTER_SIZE: usize = 32;
 pub(crate) struct CharCluster {
     pub chars: Vec<Char>,
     pub is_emoji: bool,
+    /// Carries U+FE0F, which asks for emoji presentation.
+    pub emoji_presentation: bool,
     pub map_len: u8,
     pub start: u32,
     pub end: u32,
@@ -94,6 +96,7 @@ impl CharCluster {
     pub(crate) fn clear(&mut self) {
         self.chars.clear();
         self.is_emoji = false;
+        self.emoji_presentation = false;
         self.map_len = 0;
         self.start = 0;
         self.end = 0;

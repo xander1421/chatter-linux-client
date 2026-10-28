@@ -237,6 +237,7 @@ fn fill_cluster_in_place(
 
     let mut force_normalize = false;
     let mut is_emoji_or_pictograph = false;
+    let mut emoji_presentation = false;
     let mut map_len: u8 = 0;
     let start = *code_unit_offset_in_string as u32;
 
@@ -247,6 +248,7 @@ fn fill_cluster_in_place(
         //  much as possible:
         //  https://github.com/conor-93/parley/blob/4637d826732a1a82bbb3c904c7f47a16a21cceec/parley/src/shape/mod.rs#L221-L269
         is_emoji_or_pictograph |= info.is_emoji_or_pictograph();
+        emoji_presentation |= ch == '\u{FE0F}';
         *code_unit_offset_in_string += ch.len_utf8();
 
         // TODO: Explore ignoring other modifiers in determining `contributes_to_shaping`:
@@ -282,6 +284,7 @@ fn fill_cluster_in_place(
     // Finalize cluster metadata
     let end = *code_unit_offset_in_string as u32;
     char_cluster.is_emoji = is_emoji_or_pictograph;
+    char_cluster.emoji_presentation = is_emoji_or_pictograph && emoji_presentation;
     char_cluster.map_len = map_len;
     char_cluster.start = start;
     char_cluster.end = end;
@@ -623,7 +626,13 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
             if is_emoji {
                 use core::iter::once;
                 let emoji_family = QueryFamily::Generic(fontique::GenericFamily::Emoji);
-                self.query.set_families(fonts.chain(once(emoji_family)));
+                // VS16 asks for the colour glyph: a text font that also maps
+                // the base (Inter's ❤) must not win it.
+                if cluster.emoji_presentation {
+                    self.query.set_families(once(emoji_family).chain(fonts));
+                } else {
+                    self.query.set_families(fonts.chain(once(emoji_family)));
+                }
                 self.fonts_id = None;
             } else if self.fonts_id != Some(fonts_id) {
                 self.query.set_families(fonts);
