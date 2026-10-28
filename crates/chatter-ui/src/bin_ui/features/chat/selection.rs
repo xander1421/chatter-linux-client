@@ -382,6 +382,10 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let Some(snapshot) = snapshot else { return };
                     if !snapshot.copy_text.is_empty() {
                         std::thread::spawn(move || super::actions::copy_text(&snapshot.copy_text));
+                        // Same confirmation as a single message's Copy.
+                        w.set_toast_message("Copied".into());
+                        w.set_toast_variant("success".into());
+                        w.set_toast_visible(true);
                     }
                     exit(&w, &selected_ids, &generation);
                 }) {
