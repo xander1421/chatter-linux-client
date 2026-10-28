@@ -419,8 +419,9 @@ export component DMListItem inherits Rectangle {
     // Touch area for click + right-click handling
     touch := HoldArea {
         clicked => {
-            // A hold already acted; swallow its release so it is not also a tap.
-            if (!self.hold-fired) { root.clicked(); }
+            // A hold already acted, or the finger swiped the row: swallow the
+            // release so it is not also a tap.
+            if (!self.hold-fired && !self.dragged) { root.clicked(); }
         }
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
         gesture-down(x, y) => { root.press-down(x, y); root.swipe-down(x, y); }
