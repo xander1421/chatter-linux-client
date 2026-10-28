@@ -653,7 +653,10 @@ export component ThreadPanel inherits Rectangle {
         composer := MessageComposer {
             width: 100%;
             vertical-stretch: 0;
-            mobile: root.mobile;
+            // The platform, not the layout: a narrow desktop window covers the
+            // chat with the thread (`mobile`) but still has a keyboard, and the
+            // composer's Up-to-edit and hover affordances follow `mobile`.
+            mobile: root.touch;
             enter-sends: root.composer-enter-sends;
             keyboard-open: root.keyboard-open;
             available-pane-height: root.height;
