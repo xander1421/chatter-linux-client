@@ -168,7 +168,12 @@ export component MainChatShell inherits Rectangle {
                 VerticalLayout {
                     x: 0;
                     y: 0;
-                    width: parent.width - chat-panel-area.thread-panel-w;
+                    // Hidden behind a full-width thread it keeps its width:
+                    // collapsed to 0px, every row re-laid out and closing the
+                    // thread dropped the reader at the newest messages
+                    // instead of where they were (S9).
+                    width: chat-panel-area.thread-covers-chat ? parent.width
+                        : parent.width - chat-panel-area.thread-panel-w;
                     height: 100%;
                     visible: !chat-panel-area.thread-covers-chat;
 
