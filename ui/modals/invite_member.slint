@@ -58,10 +58,10 @@ export component InviteMemberModal inherits Rectangle {
             spacing: Spacing.md;
 
             // Header text showing channel name
-            // Only the list takes the sheet's spare height; the header row and
-            // the search field stretched too and floated in empty bands.
+            // Only the list takes the sheet's spare height; the header row
+            // stretched and floated in empty bands.
             HorizontalLayout {
-                vertical-stretch: 0;
+                height: Spacing.touch-target-min;
                 spacing: Spacing.xs;
                 alignment: start;
                 Text {
@@ -100,6 +100,10 @@ export component InviteMemberModal inherits Rectangle {
             // User list (scrollable)
             Rectangle {
                 min-height: 200px;
+                // Explicit: the implicit maximum merged from the Flickable
+                // stopped the list growing, and the sheet's spare height
+                // went to the rows above it instead.
+                max-height: 100000px;
                 vertical-stretch: 1;
                 background: Colors.surface;
                 border-radius: Spacing.radius-md;
