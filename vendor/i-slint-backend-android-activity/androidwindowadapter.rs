@@ -43,6 +43,8 @@ pub struct AndroidWindowAdapter {
     pub(super) java_helper: JavaHelper,
     /// Virtual Android node IDs index this weak table. Rebuilt only for an accessibility query.
     pub(crate) accessibility_items: RefCell<Vec<i_slint_core::item_tree::ItemWeak>>,
+    /// `accessibility_items` index by (item-tree address, item index).
+    pub(crate) accessibility_ids: RefCell<std::collections::HashMap<(usize, u32), i32>>,
     pub(crate) fullscreen: Cell<bool>,
     /// The offset at which the Slint view is drawn in the native window (account for status bar)
     pub offset: Cell<PhysicalPosition>,
@@ -673,6 +675,7 @@ impl AndroidWindowAdapter {
             last_motion: Default::default(),
             java_helper,
             accessibility_items: RefCell::default(),
+            accessibility_ids: RefCell::default(),
             fullscreen: Cell::new(false),
             offset: Default::default(),
             show_cursor_handles: Cell::new(false),

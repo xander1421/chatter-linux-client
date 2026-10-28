@@ -25,12 +25,12 @@ pub(crate) fn snapshot() -> String {
         inner.ensure_tree_instantiated();
         let Some(component) = inner.try_component() else { return "[]".into() };
         let mut items = adapter.accessibility_items.borrow_mut();
+        let mut ids = adapter.accessibility_ids.borrow_mut();
         let root = ItemRc::new_root(component);
         let mut modal = None;
         find_topmost_modal(&root, &mut modal);
         let mut nodes = Vec::new();
-        let mut hint = 0;
-        visit(modal.unwrap_or(root), -1, adapter.window.scale_factor(), &mut items, &mut hint, &mut nodes);
+        visit(modal.unwrap_or(root), -1, adapter.window.scale_factor(), &mut items, &mut ids, &mut nodes);
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     })
 }
@@ -58,23 +58,25 @@ fn visit(
     parent: i32,
     scale: f32,
     items: &mut Vec<i_slint_core::item_tree::ItemWeak>,
-    hint: &mut usize,
+    ids: &mut std::collections::HashMap<(usize, u32), i32>,
     nodes: &mut Vec<Value>,
 ) {
+    // `items` only grows (ids must stay stable for clicks). Finding an item's
+    // id by scanning it made every new node cost the whole list: after a few
+    // emoji-grid rebuilds the S9 snapshot overran `query`'s 500 ms and
+    // Android got an empty tree. Look ids up by item-tree address and index;
+    // an address a freed tree left behind is trusted only while the stored
+    // weak still names this item.
     let weak = item.downgrade();
-    // `items` only grows (ids must stay stable for clicks), and a tree walks
-    // in the same order each snapshot: search on from the previous hit, so a
-    // long session's list is not rescanned from the start for every node.
-    let start = (*hint).min(items.len());
-    let found = items[start..].iter().position(|entry| *entry == weak).map(|i| start + i)
-        .or_else(|| items[..start].iter().position(|entry| *entry == weak));
-    let id = if let Some(id) = found {
-        *hint = id + 1;
-        id as i32
-    } else {
-        let id = items.len() as i32;
-        items.push(weak);
-        id
+    let key = (vtable::VRef::as_ptr(vtable::VRc::borrow(item.item_tree())).as_ptr() as usize, item.index());
+    let id = match ids.get(&key) {
+        Some(&id) if items[id as usize] == weak => id,
+        _ => {
+            let id = items.len() as i32;
+            items.push(weak);
+            ids.insert(key, id);
+            id
+        }
     };
     let geometry = item.geometry();
     let origin = item.map_to_window(geometry.origin);
@@ -110,7 +112,7 @@ fn visit(
         "visible": item.is_visible() && right > left && bottom > top,
     }));
     for child in accessible_descendents(&item) {
-        visit(child, id, scale, items, hint, nodes);
+        visit(child, id, scale, items, ids, nodes);
     }
 }
 

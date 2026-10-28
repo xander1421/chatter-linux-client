@@ -96,6 +96,9 @@ version = "0.22"
 [target.'cfg(target_os = "android")'.dependencies.serde_json]
 version = "1"
 
+[target.'cfg(target_os = "android")'.dependencies.vtable]
+version = "0.4.0"
+
 [target.'cfg(target_os = "android")'.dependencies.ndk-08]
 version = "0.8.0"
 features = ["rwh_06"]

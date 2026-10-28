@@ -22,9 +22,12 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   reachable. The Java provider's host node remains the tree root.
   Click dispatch also checks current modal membership, so a stale cached
   virtual-view ID cannot activate content behind a newly opened overlay.
-  `accessibility.rs` finds each item's stable id by searching on from the
-  previous hit (tree order repeats between snapshots) instead of from the
-  start of the ever-growing id list.
+  `accessibility.rs` finds each item's stable id in a map keyed by item-tree
+  address and item index (`vtable` dependency, same version as i-slint-core),
+  checked against the stored weak in case a freed tree's address is reused.
+  Scanning the ever-growing id list made each new node cost the whole list;
+  after a few emoji-grid rebuilds the S9 snapshot overran `query`'s 500 ms
+  and Android received an empty tree.
   Text inputs carry their `value` (as the node text) and their label or
   placeholder (as the hint), like a native EditText.
   The provider caches a snapshot for 100 ms from when it is READY, so the
