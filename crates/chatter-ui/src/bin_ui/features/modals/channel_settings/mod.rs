@@ -265,6 +265,8 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
     w.global::<crate::ModalHostState>()
         .set_channel_settings_error("".into());
     crate::bin_ui::features::chat::membership::reset_access(w);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_section("overview".into());
     crate::bin_ui::features::back::push(w, "channel-settings");
 }
 

@@ -110,8 +110,9 @@ export component ChannelSettingsModal inherits Rectangle {
     // ("" = none). Nothing leaves the UI until the second tap.
     property <string> confirm-action: "";
     changed role-picker-user => { self.confirm-action = ""; }
+    // The section is reset where settings is opened (Rust), not here: this
+    // also fires when a sheet opened from settings covers it.
     changed show-modal => {
-        self.active-section = "overview";
         self.show-delete-confirm = false;
         self.show-leave-confirm = false;
         self.show-discard-confirm = false;

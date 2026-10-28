@@ -210,6 +210,9 @@ export global ModalHostState {
     in property <[PendingLinkInfo]> sessions-pending-links: [];
     // Channel settings modal properties
     in property <string> channel-settings-id: "";
+    // Kept here, not in the modal: the modal unmounts under a sheet it
+    // opens (Invite), and came back on Info. Reset when settings is opened.
+    in-out property <string> channel-settings-section: "overview";
     in property <string> channel-settings-name: "";
     in property <string> channel-settings-description: "";
     in property <bool> channel-settings-saving: false;

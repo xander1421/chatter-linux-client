@@ -174,6 +174,7 @@ export component AppSecondaryModals inherits Rectangle {
     if root.is-presented("channel-settings"): ChannelSettingsModal {
         show-modal: root.active-modal == "channel-settings";
         channel-id: ModalHostState.channel-settings-id;
+        active-section <=> ModalHostState.channel-settings-section;
         integrations => {
             ModalHostState.nav-push("server-records");
             ServerRecordsGlobal.open("integrations", ModalHostState.channel-settings-id);
