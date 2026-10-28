@@ -283,12 +283,14 @@ fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> 
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
     window.global::<crate::ChatPane>().on_copy_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
+        let weak = weak.clone();
 
         let conversation = ui_ctx.active_conversation();
 
@@ -324,6 +326,13 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             copy_text(&text);
+            // Android before 13 shows nothing when the clipboard changes, and
+            // desktop never does: say so, as Telegram and Signal do.
+            run_ui!(weak, |w| {
+                w.set_toast_message("Copied".into());
+                w.set_toast_variant("success".into());
+                w.set_toast_visible(true);
+            });
         });
     });
 }
