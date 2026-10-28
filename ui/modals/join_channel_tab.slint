@@ -5,6 +5,7 @@ import { Input } from "../components/input.slint";
 import { Button } from "../components/button.slint";
 import { SearchResultChannel, SearchResultItem } from "join_channel.slint";
 import { MembershipGlobal } from "../chat/membership_global.slint";
+import { VirtualKeyboard } from "../components/modal_container.slint";
 
 export component JoinChannelTab inherits VerticalLayout {
     in-out property <string> join-search-query;
@@ -57,7 +58,9 @@ export component JoinChannelTab inherits VerticalLayout {
         // so on a phone-height dialog this box shrinks and its
         // centred text spilled straight over the Cancel/Join
         // footer (§112r). Floor the height and clip the overflow.
-        min-height: 104px;
+        // With the keyboard up the floor drops: the card above a phone
+        // keyboard had no room left for Cancel/Join, which sat under it.
+        min-height: VirtualKeyboard.height > 0 ? Spacing.touch-target-min : 104px;
         clip: true;
 
         // Loading state
