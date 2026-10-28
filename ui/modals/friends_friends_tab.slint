@@ -124,7 +124,7 @@ export component FriendsTab inherits VerticalLayout {
                             : Colors.offline;
                         }
 
-                        VerticalLayout {
+                        info := VerticalLayout {
                             horizontal-stretch: 1;
                             alignment: center;
                             spacing: root.mobile-mode ? Spacing.xs : Spacing.xxs;
@@ -137,8 +137,13 @@ export component FriendsTab inherits VerticalLayout {
                                 overflow: elide;
                             }
 
-                            if friend.custom-status != "": Text {
-                                text: friend.custom-status;
+                            // A custom status, else "online" / "last seen …"
+                            // as Telegram's contact list (the dot alone did
+                            // not say when an away friend was last there).
+                            property <string> subtitle: friend.custom-status != "" ? friend.custom-status
+                                : friend.is-anon ? "" : friend.last-seen-label;
+                            if info.subtitle != "": Text {
+                                text: info.subtitle;
                                 color: Colors.text-muted;
                                 font-size: root.row-sub-size;
                                 overflow: elide;

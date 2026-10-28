@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use chatter_core::client::{ChatterClient, ConnectionState};
 #[cfg(test)]
@@ -139,6 +139,45 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // The chat list's dots expire the same way, every two minutes.
             if ticks % 4 == 0 {
                 crate::bin_ui::features::sidebar::rebuild_chat_list(&weak_tick, &ui_ctx_tick);
+                // And the Contacts rows: their dot and "last seen" line were
+                // only patched on presence events, so an expired friend
+                // stayed green there and "last seen 2 min ago" never aged.
+                let friends: Vec<(slint::SharedString, slint::SharedString, slint::SharedString)> =
+                    ui_ctx_tick
+                        .listed_friends()
+                        .iter()
+                        .filter_map(|id| {
+                            let (presence, at) = ui_ctx_tick.peer_last_seen(id)?;
+                            Some((
+                                id.to_string().into(),
+                                presence.as_str().into(),
+                                crate::bin_ui::converters::last_seen_label(presence, at).into(),
+                            ))
+                        })
+                        .collect();
+                let weak = weak_tick.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    let rows = w.global::<crate::ModalHostState>().get_friends_list();
+                    let mut changed = false;
+                    for i in 0..rows.row_count() {
+                        let Some(mut f) = rows.row_data(i) else { continue };
+                        let Some((_, presence, label)) =
+                            friends.iter().find(|(id, ..)| !f.is_anon && *id == f.user_id)
+                        else {
+                            continue;
+                        };
+                        if f.presence_status != *presence || f.last_seen_label != *label {
+                            f.presence_status = presence.clone();
+                            f.last_seen_label = label.clone();
+                            rows.set_row_data(i, f);
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        crate::bin_ui::features::modals::friends::refresh_new_chat_results(&w);
+                    }
+                });
             }
             let active = ui_ctx_tick.active_conversation();
             let chatter_core::state::ActiveConversation::ServerDm { peer_id } = &active else {
