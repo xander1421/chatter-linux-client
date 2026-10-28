@@ -171,6 +171,19 @@ impl ActivityService {
         Ok(())
     }
 
+    /// Drop the rows about a message deleted for everyone: a mention or reply
+    /// that no longer exists. A thread's summary row stays with the thread.
+    pub fn forget_message(&self, owner: UserId, message_id: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        if conn.execute(
+            "DELETE FROM activity_items WHERE owner_id=?1 AND message_id=?2 AND id NOT LIKE ?3",
+            params![owner.to_string(), message_id, format!("{THREAD_ACTIVITY_PREFIX}%")],
+        )? != 0 {
+            let _ = self.changed.send(());
+        }
+        Ok(())
+    }
+
     pub fn mark_read(&self, owner: UserId, id: &str) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         if conn.execute("UPDATE activity_items SET unread=0 WHERE owner_id=?1 AND id=?2 AND unread=1", params![owner.to_string(), id])? != 0 {

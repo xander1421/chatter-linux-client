@@ -219,6 +219,11 @@ impl ChatterClient {
                     created_at_ms: if timestamp == 0 { now } else { (timestamp.min(now as u64)) as i64 },
                 });
             }
+            DomainEvent::MessageDeleted { message_id, .. } => {
+                if let Err(e) = self.activity.forget_message(owner, &message_id.to_string()) {
+                    tracing::warn!(error = %e, "Could not drop a deleted message's Activity rows");
+                }
+            }
             // A withdrawn reaction takes its row with it, as in Telegram.
             DomainEvent::ReactionRemoved { scope, sender_id, sent_at_ns, reactor_id, emoji, .. } if sender_id == owner && reactor_id != owner => {
                 let id = format!("reaction:{}:{sent_at_ns}:{reactor_id}:{emoji}", scope.id);
