@@ -212,6 +212,11 @@ impl ChatterClient {
         let Some(kind) = self.conversation_type_of(&conversation) else {
             return ConversationActions::default();
         };
+        // The local AI channel is a channel row with nobody to call, invite
+        // or configure.
+        if conversation.channel_id().is_some_and(|id| super::is_jarvis_channel(&id)) {
+            return ConversationActions::default();
+        }
         let can_call = matches!(kind, Kind::Channel | Kind::ServerDm)
             && !conversation
                 .channel_id()
