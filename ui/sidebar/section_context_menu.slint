@@ -405,6 +405,10 @@ export component SectionContextMenu inherits Rectangle {
     // Delete asks once, inside the menu; reset whenever the menu closes.
     property <bool> confirm-delete: false;
     property <bool> confirm-leave: false;
+    // The leave confirm is the menu's last block: show it whole, warning
+    // and Cancel included, not only the focused Leave row (desktop row menus
+    // opened near the top were clipped at the window's bottom edge).
+    changed confirm-leave => { if (self.confirm-leave) { leave-reveal.start(); leave-reveal.restart(); } }
     private property <int> focus-index: 0;
     private property <bool> has-mute: root.conversation-type == ConversationKind.server-dm
         || root.conversation-type == ConversationKind.anon-dm
@@ -499,6 +503,15 @@ export component SectionContextMenu inherits Rectangle {
 
         // Block backdrop clicks on menu area
         TouchArea { }
+
+        leave-reveal := Timer {
+            interval: 1ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                menu-scroll.viewport-y = Math.min(0px, menu-scroll.height - menu-scroll.viewport-height);
+            }
+        }
 
         menu-scroll := Flickable {
             width: 100%;
