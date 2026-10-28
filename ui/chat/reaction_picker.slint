@@ -14,6 +14,9 @@ import { QuickReactions } from "types.slint";
 export component ReactionPicker inherits Rectangle {
     // Visibility
     in property <bool> show: false;
+    // Opened from the message menu, whose focused item then closes: without
+    // this nothing held focus, so typing and Escape did nothing (desktop).
+    changed show => { if root.show && !root.touch { picker.focus(); } }
     // Touch platform: minimum 48px quick controls and picker cells.
     in property <bool> touch: false;
     private property <length> quick-target: root.touch
@@ -186,7 +189,7 @@ export component ReactionPicker inherits Rectangle {
             }
 
             // EmojiPicker
-            EmojiPicker {
+            picker := EmojiPicker {
                 // The outer reaction panel already supplies the material.
                 material-enabled: false;
                 touch: root.touch;

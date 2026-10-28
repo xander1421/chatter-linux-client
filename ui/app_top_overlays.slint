@@ -218,6 +218,10 @@ export component AppTopOverlays inherits Rectangle {
         page-next => { ChatPane.pdf-page-next(); }
     }
 
+    // Closing the picker leaves focus in its hidden search field.
+    property <bool> reaction-picker-open: ChatPane.reaction-picker-visible;
+    changed reaction-picker-open => { if !self.reaction-picker-open { root.refocus-composer(); } }
+
     // Reaction picker overlay
     ReactionPicker {
         show: ChatPane.reaction-picker-visible;
