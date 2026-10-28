@@ -120,6 +120,9 @@ fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
         && !stack.iter().any(|s| s == "user-profile")
     {
         crate::bin_ui::features::modals::profile::clear_shared_content(w);
+        // The profile reopens on its own page, not inside a layer it left.
+        w.global::<crate::ModalHostState>().set_profile_shared_page_open(false);
+        w.global::<crate::ModalHostState>().set_profile_edit_contact_open(false);
     }
     if w.global::<crate::ModalHostState>()
         .get_modal_stack()
@@ -368,6 +371,21 @@ pub fn handle_back(window: &MainWindow) -> bool {
     // Keep their screen present while the user is deciding where to save them.
     if window.get_active_modal().as_str() == "recovery-codes" {
         return true;
+    }
+
+    // The profile's Edit contact dialog and shared-content page sit inside
+    // the profile screen; Back closed the whole profile from either.
+    if window.get_active_modal().as_str() == "user-profile" {
+        let host = window.global::<crate::ModalHostState>();
+        if host.get_profile_edit_contact_open() {
+            host.set_profile_edit_contact_open(false);
+            return true;
+        }
+        if host.get_profile_shared_page_open() {
+            host.set_profile_shared_page_open(false);
+            host.invoke_profile_shared_page_closed();
+            return true;
+        }
     }
 
     if pop(window) {

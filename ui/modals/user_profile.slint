@@ -91,9 +91,9 @@ export component UserProfileModal inherits Rectangle {
     property <bool> confirm-remove: false;
     property <bool> confirm-unblock: false;
     property <bool> more-open: false;
-    property <bool> edit-contact-open: false;
+    in-out property <bool> edit-contact-open: false;
     property <string> contact-draft: "";
-    property <bool> shared-page-open: false;
+    in-out property <bool> shared-page-open: false;
     // The opened category's own label ("2 videos"), shown as the page title.
     property <string> shared-title: "";
     // The disappearing-messages choices are unfolded under their row.

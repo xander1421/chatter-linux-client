@@ -195,6 +195,8 @@ export component AppModalHost inherits Rectangle {
     // that modal is this page's Edit button — so its backdrop dims the
     // profile it edits (§112u).
     if root.is-presented("user-profile") || root.is-presented("edit-profile"): UserProfileModal {
+        shared-page-open <=> ModalHostState.profile-shared-page-open;
+        edit-contact-open <=> ModalHostState.profile-edit-contact-open;
         // Fill the window: left to its preferred height the modal ended
         // where its content was measured to, and on a phone the lower
         // controls painted past that edge received no input.

@@ -131,6 +131,10 @@ export global ModalHostState {
     // Rows, tab labels and counts are all built by chatter-core.
     in property <[SharedTab]> profile-shared-tabs: [];
     in-out property <string> profile-shared-tab: "";
+    // Layers inside the profile screen, so Back closes them before the
+    // profile itself (features/back.rs).
+    in-out property <bool> profile-shared-page-open: false;
+    in-out property <bool> profile-edit-contact-open: false;
     in property <[SharedContentItem]> profile-shared-items: [];
     in property <bool> profile-shared-has-previous: false;
     in property <bool> profile-shared-has-more: false;
