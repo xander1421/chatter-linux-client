@@ -265,6 +265,10 @@ export component ChannelListItem inherits Rectangle {
                     text: root.typing-text != "" ? root.typing-text : "typing";
                     color: Colors.primary;
                     font-size: Typography.xs;
+                    // "Alpha is typing…" elides; at its natural width it
+                    // pushed the row's timestamp out past the edge.
+                    min-width: 0px;
+                    overflow: elide;
                 }
             }
 
