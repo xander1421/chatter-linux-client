@@ -643,7 +643,8 @@ export component UnifiedSearch inherits Rectangle {
                     Text { text: root.sort-order == "relevance" ? "Relevance" : root.sort-order == "newest" ? "Newest" : root.sort-order == "oldest" ? "Oldest" : "Largest"; color: root.sort-order != "relevance" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 Rectangle {
-                    width: 90px; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    // Grows to a chosen range ("27 Oct – 28 Oct"), like From/In.
+                    width: max(90px, min(170px, date-label.preferred-width + 2 * Spacing.md)); height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                     background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.row-selected : Materials.ultra-thin;
                     border-width: Spacing.stroke; border-color: root.date-filter != "any" ? Colors.primary : Colors.border;
                     accessible-role: button; accessible-label: "Date filter: " + root.date-filter;
@@ -653,7 +654,7 @@ export component UnifiedSearch inherits Rectangle {
                     }
                     Rectangle { border-width: date-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring; border-radius: Spacing.radius-lg; }
                     date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; root.calendar-shift(0); } }
-                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year"
+                    date-label := Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year"
                         // The days chosen, not a bare "Range".
                         : root.custom-end-short == "" || root.custom-end == root.custom-start ? root.custom-start-short
                         : root.custom-start-short + " – " + root.custom-end-short; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
