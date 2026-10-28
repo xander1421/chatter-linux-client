@@ -202,6 +202,50 @@ pub fn wire_edit_last_requested(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     });
 }
 
+/// Up in the thread composer: the newest editable own reply of the open
+/// thread enters edit mode the way the menu's Edit does.
+pub fn wire_thread_edit_last_requested(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+
+    window.global::<crate::ChatPane>().on_thread_edit_last_requested(move || {
+        let Some(thread) = ui_ctx.active_thread() else {
+            return;
+        };
+        let conversation = ui_ctx.active_conversation();
+        let owner = HistoryOwner::capture(&ui_ctx, conversation);
+        let handle = ui_ctx.conversation(conversation);
+        let weak = weak_window.clone();
+
+        tokio::spawn(async move {
+            let Some((sender, timestamp)) = handle
+                .last_editable_own_thread_reply(&thread.root_message_id)
+                .ok()
+                .flatten()
+            else {
+                return;
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if !owner.is_current() {
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    let pane = w.global::<crate::ChatPane>();
+                    if pane.get_thread_composer_is_editing()
+                        || !pane.get_thread_composer_text().is_empty()
+                    {
+                        return;
+                    }
+                    pane.invoke_edit_message(
+                        sender.to_string().into(),
+                        timestamp.to_string().into(),
+                    );
+                }
+            });
+        });
+    });
+}
+
 /// Wire edit-message callback - enters edit mode by populating composer.
 pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();

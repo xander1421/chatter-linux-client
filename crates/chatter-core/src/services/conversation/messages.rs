@@ -40,6 +40,24 @@ impl ConversationHandle {
         }
     }
 
+    /// The newest own reply in the thread under `root` that the menu would
+    /// let us edit: Up in the thread composer.
+    pub fn last_editable_own_thread_reply(
+        &self,
+        root: &crate::domain::ids::MessageId,
+    ) -> ConversationResult<Option<(UserId, u64)>> {
+        let Some(own) = self.client.auth_state().get().current_user_id else {
+            return Ok(None);
+        };
+        let now_ns = crate::util::time::TimestampNanos::now().as_u64();
+        let replies = self.client.messages().message_repo.list_for_thread(root, None, 100)?;
+        Ok(replies
+            .iter()
+            .rev()
+            .find(|m| m.sender_id == Some(own) && stored_message_menu(m, true, now_ns).actions.edit)
+            .map(|m| (own, m.sent_at)))
+    }
+
     /// Get message text by sender + timestamp across any conversation type.
     pub fn get_message_text(
         &self,

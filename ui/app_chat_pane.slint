@@ -347,6 +347,8 @@ export global ChatPane {
     callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
     callback edit-last-requested();
+    // Up in the thread composer: edit our last reply in the open thread.
+    callback thread-edit-last-requested();
     callback cancel-edit();
     callback cancel-reply();
     callback attachment-clicked();

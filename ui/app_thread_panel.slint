@@ -93,6 +93,7 @@ export component AppThreadPanel inherits Rectangle {
             root.reply-focus-serial += 1;
         }
         quote-clicked(id) => { ChatPane.quote-clicked(id); }
+        edit-last-requested => { ChatPane.thread-edit-last-requested(); }
         sender-profile-requested(user-id) => { ChatPane.sender-profile-requested(user-id); }
         current-playing-attachment-id: ChatPane.current-playing-attachment-id;
         is-media-playing: ChatPane.is-media-playing;

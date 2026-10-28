@@ -121,6 +121,7 @@ export component ThreadPanel inherits Rectangle {
     callback cancel-reply();
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
+    callback edit-last-requested();
     callback emoji-category-changed(int);
     callback emoji-search-changed(string);
     callback emoji-skin-tone-changed(int);
@@ -676,6 +677,7 @@ export component ThreadPanel inherits Rectangle {
             cancel-reply => { root.cancel-reply(); }
             send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
             cancel-edit => { root.cancel-edit(); }
+            edit-last-requested => { root.edit-last-requested(); }
             attachment-clicked => { root.attachment-clicked(); }
             remove-attachment(id) => { root.remove-attachment(id); }
             paste-image => { root.paste-image(); }
