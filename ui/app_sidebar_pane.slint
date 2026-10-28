@@ -39,6 +39,10 @@ export global SidebarPane {
     // Expanded by the user on a window below 800 px, where the panel is a
     // rail by default. Session-only; reset when the window size class changes.
     in-out property <bool> small-screen-expanded: false;
+    // The user collapsed the panel themselves (not the small-screen auto
+    // collapse); a wider window then leaves it collapsed. Set with the stored
+    // state at startup, or the first resize expanded a saved collapse.
+    in-out property <bool> sidebar-user-collapsed: false;
     in-out property <bool> sidebar-hidden: false;
     in-out property <int> sidebar-focus-index: 0;
     in-out property <bool> row-context-menu-open: false;

@@ -314,9 +314,12 @@ pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 }
 
 pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    window
-        .global::<crate::SidebarPane>()
-        .set_sidebar_collapsed(ui_ctx.sidebar_collapsed());
+    let collapsed = ui_ctx.sidebar_collapsed();
+    let pane = window.global::<crate::SidebarPane>();
+    // A stored collapse is the user's choice: without this the first resize
+    // at startup took it for the small-screen auto-collapse and expanded it.
+    pane.set_sidebar_user_collapsed(collapsed);
+    pane.set_sidebar_collapsed(collapsed);
 }
 
 /// Wire message requests click handler.

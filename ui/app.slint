@@ -367,7 +367,7 @@ export component MainWindow inherits Window {
     // No separate "mobile-screen" mode — Android renders identically to a
     // narrow desktop window, per the user's "1-to-1 with desktop" preference.
     // Track whether the user manually toggled collapse (vs auto-collapse on resize)
-    property <bool> sidebar-user-collapsed: false;
+    property <bool> sidebar-user-collapsed <=> SidebarPane.sidebar-user-collapsed;
 
     // Update sidebar collapsed/hidden state when screen size changes
     changed is-small-screen => {
