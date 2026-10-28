@@ -42,9 +42,11 @@ export component PinnedBar inherits GlassSurface {
         // the preview never grew and the close button floated mid-row.
 
         // Navigation buttons on LEFT (only if multiple pinned)
+        // Fixed width: unsized, this layout stretched to half the bar and
+        // pushed the preview to the middle.
         if root.has-multiple: HorizontalLayout {
+            width: Spacing.touch-target-min * 2 + Spacing.xxs;
             spacing: Spacing.xxs;
-            alignment: center;
 
             // Up/prev button
             Rectangle {
