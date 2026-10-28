@@ -144,7 +144,12 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                             }
                             Err(error) => {
                                 tracing::warn!(%error, "Voice recording failed");
-                                finish_ui(weak, generation, ticket, Err("Couldn't record a voice message. Please try again.".into()));
+                                let message = if error == chatter_core::services::voice_recording::NO_MICROPHONE {
+                                    error
+                                } else {
+                                    "Couldn't record a voice message. Please try again.".into()
+                                };
+                                finish_ui(weak, generation, ticket, Err(message));
                             }
                         }
                         return;

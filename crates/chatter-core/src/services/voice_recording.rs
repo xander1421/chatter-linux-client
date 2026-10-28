@@ -8,6 +8,9 @@ use crate::state::{ActiveConversation, ChatState};
 
 pub const MAX_RECORDING_SECONDS: u64 = 300;
 
+/// The `Finished` error when no input device could be opened.
+pub const NO_MICROPHONE: &str = "No microphone found. Connect one to record a voice message.";
+
 pub enum RecordingEvent {
     Started,
     Elapsed(u64),
@@ -92,7 +95,12 @@ fn record(
     conversation: ActiveConversation,
     cache: &std::path::Path,
 ) -> Result<Option<RecordedVoiceNote>, String> {
-    let mut recorder = AudioRecorder::new().map_err(|e| e.to_string())?;
+    // No usable input device (none, unplugged, or ALSA refusing it) is not
+    // something "try again" fixes: say what is missing.
+    let mut recorder = AudioRecorder::new().map_err(|e| {
+        tracing::warn!(error = %e, "No microphone available for voice recording");
+        NO_MICROPHONE.to_string()
+    })?;
     recorder.start().map_err(|e| e.to_string())?;
     let _ = events.send(RecordingEvent::Started);
     let mut stopped = false;
