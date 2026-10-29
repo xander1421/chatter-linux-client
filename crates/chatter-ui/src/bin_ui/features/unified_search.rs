@@ -1034,7 +1034,14 @@ fn search_messages(
     let mut thumbnails = Vec::with_capacity(page.hits.len());
     let mut kinds = Vec::with_capacity(page.hits.len());
     for hit in page.hits {
-        let (before, matched, after, start, end) = preview_fragments(&hit.preview, query);
+        // Split inside the preview's bidi isolates: each fragment is its own
+        // Text, and an unpaired U+2068/U+2069 left a stray node for TalkBack.
+        let body = hit
+            .preview
+            .strip_prefix('\u{2068}')
+            .and_then(|body| body.strip_suffix('\u{2069}'))
+            .unwrap_or(&hit.preview);
+        let (before, matched, after, start, end) = preview_fragments(body, query);
         rows.push(SearchResult {
             message_id: hit.message_id.into(),
             channel_id: hit.channel_id.into(),
