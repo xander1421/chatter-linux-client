@@ -769,9 +769,14 @@ export component ChatLayout inherits Rectangle {
             // A fullscreen call can destroy/remount the chat while picker
             // flags stay true, so restore Back ownership on this mount too.
             root.composer-focus-released();
-            // Desktop: typing searches, as in Signal Desktop's picker. It
-            // went nowhere: the composer had let go and nothing took focus.
-            if !root.mobile { drawer-search.focus(); }
+        }
+        // Desktop: typing searches, as in Signal Desktop's picker. It went
+        // nowhere: the composer had let go and nothing took focus. A tick
+        // later: focus() from init, inside the opening click, did not stick.
+        Timer {
+            interval: 1ms;
+            running: !root.mobile;
+            triggered => { self.running = false; drawer-search.focus(); }
         }
         // Touch: the whole pane width, docked under the composer where the
         // IME stood (drawer-occupied-height reserves the space). Desktop: a popover
