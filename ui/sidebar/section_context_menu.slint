@@ -140,7 +140,7 @@ export component SectionHeaderContextMenu inherits Rectangle {
     callback move-section(/* section-id */ string, /* delta */ int);
     callback set-sort-mode(/* section-id */ string, /* mode */ string);
     callback close();
-    private property <int> focus-index: 0;
+    private property <int> focus-index: -1;
     function move-focus(from: int, direction: int) {
         root.focus-index = direction == -2 ? 0 : direction == 2 ? 6
             : max(0, min(6, from + direction));
@@ -153,7 +153,9 @@ export component SectionHeaderContextMenu inherits Rectangle {
     }
     // The menu stays mounted: open it at the top, not where it was last
     // scrolled to.
-    changed show => { if root.show { root.focus-index = 0; header-scroll.viewport-y = 0; } }
+    // -1 on close so a reopen is a real focus-index change (0 is the default
+    // after one open), which fires the first item's focus on the next open.
+    changed show => { root.focus-index = root.show ? 0 : -1; if root.show { header-scroll.viewport-y = 0; } }
 
     visible: root.show;
     accessible-role: groupbox;
@@ -417,7 +419,7 @@ export component SectionContextMenu inherits Rectangle {
     // and Cancel included, not only the focused Leave row (desktop row menus
     // opened near the top were clipped at the window's bottom edge).
     changed confirm-leave => { if (self.confirm-leave) { leave-reveal.start(); leave-reveal.restart(); } }
-    private property <int> focus-index: 0;
+    private property <int> focus-index: -1;
     private property <bool> has-mute: root.conversation-type == ConversationKind.server-dm
         || root.conversation-type == ConversationKind.anon-dm
         || root.conversation-type == ConversationKind.anon-group
@@ -460,7 +462,9 @@ export component SectionContextMenu inherits Rectangle {
         root.choose-mute = false;
         root.confirm-delete = false;
         root.confirm-leave = false;
-        root.focus-index = 0;
+        // -1 on close so a reopen is a real focus-index change (0 is the
+        // default after one open), which fires the first item's focus.
+        root.focus-index = root.show ? 0 : -1;
         // The menu stays mounted: a reopened menu kept its last scroll, with
         // "Pin to top" cut off above the card. Focus starts on that top item,
         // so the stale focused place must not hand focus to the fallback.
