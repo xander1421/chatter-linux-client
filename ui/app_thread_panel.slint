@@ -71,7 +71,11 @@ export component AppThreadPanel inherits Rectangle {
         attachment-prepare-serial: ChatPane.thread-attachment-prepare-serial;
         attachment-restore-serial: ChatPane.thread-attachment-restore-serial;
 
-        close-clicked => { ChatPane.close-thread-clicked(); }
+        close-clicked => {
+            ChatPane.close-thread-clicked();
+            // Keys typed next go to the conversation's composer, not nowhere.
+            if !root.touch { root.reply-focus-serial += 1; }
+        }
         send-reply(text) => { return ChatPane.send-thread-reply(text); }
         attachment-clicked => { ChatPane.thread-attachment-clicked(); }
         remove-attachment(id) => { ChatPane.thread-remove-attachment(id); }
