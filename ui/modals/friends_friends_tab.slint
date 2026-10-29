@@ -86,6 +86,19 @@ export component FriendsTab inherits VerticalLayout {
 
                 for friend in root.friends: Rectangle {
                     height: root.row-height;
+                    // One screen-reader stop per contact; Message and More
+                    // stay their own.
+                    accessible-role: button;
+                    accessible-label: friend.display-name
+                        + (friend.custom-status != "" ? ", " + friend.custom-status
+                            : !friend.is-anon && friend.last-seen-label != "" ? ", " + friend.last-seen-label : "");
+                    accessible-action-default => {
+                        if (friend.is-anon) {
+                            root.start-dm(friend.user-id);
+                        } else {
+                            root.view-profile(friend.user-id);
+                        }
+                    }
                     background: friend-touch.has-hover ? Colors.surface-hover : transparent;
                     border-radius: Spacing.radius-md;
 
