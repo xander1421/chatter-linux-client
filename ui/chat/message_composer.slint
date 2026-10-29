@@ -324,7 +324,9 @@ export component MessageComposer inherits GlassSurface {
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - edit-bar-height
                 - format-bar-height - raised-toolbar-height - row-padding * 2))
-        : 400px;
+        // Desktop: 400px, but never more than half the pane — in an 800x600
+        // window a long draft grew over two thirds of it and hid the chat.
+        : max(min-input-height, min(400px, available-pane-height * 0.5));
     property <length> padding-vertical: Spacing.sm * 2;
     function reveal-cursor() {
         // Native geometry shapes the full input and follows the actual IME
