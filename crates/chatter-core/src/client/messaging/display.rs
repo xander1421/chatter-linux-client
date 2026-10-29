@@ -6,7 +6,8 @@ impl ChatterClient {
     // The presentation layer copies these straight onto its display struct and
     // must not branch on conversation type or re-resolve names itself.
 
-    /// Header shown when an attachment is opened from the current conversation.
+    /// Header shown when an attachment is opened from the current conversation:
+    /// sender, sent time and the message's text (the caption, raw markdown).
     /// Resolves the owner from the message rather than from attachment metadata,
     /// which has no sender or sent time.
     pub fn media_viewer_header(
@@ -14,7 +15,7 @@ impl ChatterClient {
         conversation: &crate::state::ActiveConversation,
         message_id: Option<&crate::domain::ids::MessageId>,
         attachment_id: &crate::domain::ids::AttachmentId,
-    ) -> Option<(String, String)> {
+    ) -> Option<(String, String, String)> {
         let message = message_id
             .and_then(|id| self.get_message_local(id))
             .filter(|message| !message.is_deleted && message.attachments.contains(attachment_id))
@@ -31,7 +32,8 @@ impl ChatterClient {
         };
         let date = message.created_at.with_timezone(&chrono::Local).format("%b %-d, %Y");
         let time = crate::util::time::format_message_time(message.created_at.clone());
-        Some((sender, format!("{date} · {time}")))
+        let caption = message.as_text().unwrap_or_default().trim().to_owned();
+        Some((sender, format!("{date} · {time}"), caption))
     }
 
     /// Sender display name, scoped to the conversation so anon channels show

@@ -62,6 +62,8 @@ export component ImageViewer inherits Rectangle {
     in property <string> size-display: "";
     in property <string> sender: "";
     in property <string> datetime: "";
+    // The message's text; shown above the actions, up to four lines.
+    in property <string> caption: "";
     property <float> zoom: 1.0;
     property <length> pan-x: 0px;
     property <length> pan-y: 0px;
@@ -421,7 +423,30 @@ export component ImageViewer inherits Rectangle {
         }
     }
 
-    GlassSurface {
+    if root.caption != "": Rectangle {
+        x: root.touch ? 0px : root.chrome-x;
+        y: footer.y - self.height - (root.touch ? 0px : Spacing.xs);
+        width: root.touch ? root.width : root.chrome-width;
+        height: min(caption-text.preferred-height, 4 * Typography.base * 1.4) + 2 * Spacing.sm;
+        background: #101010e8;
+        border-radius: root.touch ? 0px : Spacing.radius-lg;
+        opacity: root.chrome-alpha * root.arrival;
+        visible: root.chrome-visible || self.opacity > 0;
+        TouchArea { width: 100%; height: 100%; }
+        caption-text := Text {
+            x: Spacing.md;
+            y: Spacing.sm;
+            width: parent.width - 2 * Spacing.md;
+            height: parent.height - 2 * Spacing.sm;
+            text: root.caption;
+            color: Colors.on-media;
+            font-size: Typography.base;
+            wrap: word-wrap;
+            overflow: elide;
+        }
+    }
+
+    footer := GlassSurface {
         x: root.touch ? 0px : root.chrome-x;
         y: root.touch ? root.height - self.height : root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
         width: root.touch ? root.width : root.chrome-width;

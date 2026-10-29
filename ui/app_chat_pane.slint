@@ -110,6 +110,8 @@ export global ChatPane {
     in property <string> image-viewer-size: "";
     in property <string> image-viewer-sender: "";
     in property <string> image-viewer-datetime: "";
+    // The message's text, shown under the photo (Signal, Telegram).
+    in property <string> image-viewer-caption: "";
     callback close-image-viewer();
     in-out property <string> media-viewer-attachment-id: "";
     in-out property <string> media-viewer-position: "";

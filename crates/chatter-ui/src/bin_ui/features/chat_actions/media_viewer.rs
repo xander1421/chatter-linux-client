@@ -130,6 +130,8 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         .set_image_viewer_sender("".into());
     w.global::<crate::ChatPane>()
         .set_image_viewer_datetime("".into());
+    w.global::<crate::ChatPane>()
+        .set_image_viewer_caption("".into());
     if let Some(client) = CLIENT.get() {
         let client = client.clone();
         let weak = w.as_weak();
@@ -153,9 +155,12 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                 {
                     return;
                 }
-                if let Some((sender, datetime)) = header {
+                if let Some((sender, datetime, caption)) = header {
                     w.global::<crate::ChatPane>().set_image_viewer_sender(sender.into());
                     w.global::<crate::ChatPane>().set_image_viewer_datetime(datetime.into());
+                    w.global::<crate::ChatPane>().set_image_viewer_caption(
+                        crate::bin_ui::converters::markdown::strip_markdown(&caption).into(),
+                    );
                 }
             });
         });
