@@ -622,6 +622,19 @@ export component MainWindow inherits Window {
                 return accept;
             }
             if (event.text == Key.Escape && shortcuts.handle-escape()) { return accept; }
+            // As Telegram/Signal Desktop: typing with no field focused (after
+            // Escape out of a thread or search, or a click in the list) goes
+            // into the open chat's composer instead of nowhere.
+            if (!root.is-mobile-platform && root.current-view == "main" && root.active-modal == "none"
+                && ChatPane.channel-name != "" && !ChatPane.thread-panel-visible
+                && !SearchPane.unified-search-open && !ChatPane.context-menu-visible
+                && !ChatPane.reaction-picker-visible && !ChatPane.composer-emoji-picker-visible
+                && !ChatPane.composer-gif-picker-visible
+                && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta
+                && ChatPane.type-to-compose(event.text)) {
+                root.reply-focus-serial += 1;
+                return accept;
+            }
             return reject;
         }
 

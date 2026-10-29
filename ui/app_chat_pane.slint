@@ -61,6 +61,9 @@ export global ChatPane {
     in-out property <int> unread-count: 0;
     in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
     in-out property <string> composer-text: "";
+    // A character typed while nothing holds focus (desktop): Rust appends it
+    // to composer-text and returns true when it is printable.
+    callback type-to-compose(string) -> bool;
     // Bumped by Rust after it rewrites composer-text (mention pick) so the
     // composer puts the caret after the inserted text.
     in-out property <int> composer-caret-end-seq: 0;

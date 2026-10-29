@@ -42,6 +42,26 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_per_conversation_drafts(window, ui_ctx);
     wire_draft_autosave(window, ui_ctx);
     wire_thread_draft_autosave(window, ui_ctx);
+    wire_type_to_compose(window);
+}
+
+/// A printable character typed while no field has focus is appended to the
+/// composer; the UI then focuses it. Control characters and Slint's
+/// private-use key codes (arrows, F-keys, …) are refused.
+fn wire_type_to_compose(window: &MainWindow) {
+    let weak = slint::ComponentHandle::as_weak(window);
+    window.global::<crate::ChatPane>().on_type_to_compose(move |text| {
+        let mut chars = text.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else { return false };
+        if c.is_control() || ('\u{f700}'..='\u{f8ff}').contains(&c) {
+            return false;
+        }
+        let Some(w) = weak.upgrade() else { return false };
+        let pane = w.global::<crate::ChatPane>();
+        pane.set_composer_text(format!("{}{c}", pane.get_composer_text()).into());
+        pane.set_composer_caret_end_seq(pane.get_composer_caret_end_seq() + 1);
+        true
+    });
 }
 
 /// Retry failed writes without needing another edit. Keep the timer alive in
