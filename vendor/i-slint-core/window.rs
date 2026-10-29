@@ -517,6 +517,10 @@ pub struct WindowInner {
 
     /// ItemRC that currently have the focus (possibly an instance of TextInput)
     pub focus_item: RefCell<crate::item_tree::ItemWeak>,
+    /// Chatter patch: the focused item's ancestors when it took focus, nearest
+    /// first. A key that arrives after that item was removed or hidden is
+    /// delivered from the nearest one still visible (see `process_key_input`).
+    focus_ancestors: RefCell<Vec<crate::item_tree::ItemWeak>>,
     /// The last text that was sent to the input method
     pub(crate) last_ime_text: RefCell<SharedString>,
     /// Don't let ComponentContainers's instantiation change the focus.
@@ -589,6 +593,7 @@ impl WindowInner {
                 ),
             }),
             focus_item: Default::default(),
+            focus_ancestors: Default::default(),
             last_ime_text: Default::default(),
             cursor_blinker: Default::default(),
             active_popups: Default::default(),
@@ -1081,17 +1086,20 @@ impl WindowInner {
         if item.as_ref().is_some_and(|i| !i.is_visible()) {
             // Reset the focus... not great, but better than keeping it.
             self.take_focus_item(&FocusEvent::FocusOut(FocusReason::TabNavigation));
-            // Chatter patch: deliver this key from the nearest visible ancestor
-            // instead of dropping it, so window-level handlers still see it. A
-            // focused item that scrolled out of a menu or was removed by a tab
-            // switch left Escape doing nothing until the next click.
-            item = item.and_then(|mut i| loop {
-                match i.parent_item(ParentItemTraversalMode::StopAtPopups) {
-                    Some(parent) if parent.is_visible() => break Some(parent),
-                    Some(parent) => i = parent,
-                    None => break None,
-                }
-            });
+            item = None;
+        }
+        // Chatter patch: with the focused item hidden or removed (scrolled out
+        // of a menu, its tab or settings page switched away), upstream
+        // delivered the key to nothing and Escape did nothing until a click.
+        // Deliver it from the nearest ancestor of the last focused item that
+        // is still alive and visible, so window-level handlers see it.
+        if item.is_none() {
+            item = self
+                .focus_ancestors
+                .borrow()
+                .iter()
+                .filter_map(|weak| weak.upgrade())
+                .find(|ancestor| ancestor.is_visible());
         }
 
         let item_list = {
@@ -1306,6 +1314,13 @@ impl WindowInner {
         match item {
             Some(item) => {
                 *self.focus_item.borrow_mut() = item.downgrade();
+                let mut ancestors = Vec::new();
+                let mut parent = item.parent_item(ParentItemTraversalMode::StopAtPopups);
+                while let Some(p) = parent {
+                    ancestors.push(p.downgrade());
+                    parent = p.parent_item(ParentItemTraversalMode::StopAtPopups);
+                }
+                *self.focus_ancestors.borrow_mut() = ancestors;
                 let result = item.borrow().as_ref().focus_event(
                     &FocusEvent::FocusIn(reason),
                     &self.window_adapter(),

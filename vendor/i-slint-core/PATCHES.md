@@ -72,8 +72,10 @@ elided settings, and checks the leftmost visible cluster. The existing visual
 glyph elision still handles styled, wrapped and multiline text.
 
 Hidden focus item (2026-10-29): `window.rs` `process_key_input` drops focus when
-the focused item is no longer visible (clipped out of a scrolled menu, or its
-tab removed). Upstream then delivers the key to nothing, so Escape did nothing
-until a click (desktop row menu after a wheel scroll; New channel after
-switching to Join). The key is now delivered from the nearest visible ancestor,
-so window-level handlers (the app's back scope) still receive it.
+the focused item is no longer visible, and finds nothing when it was removed (a
+dialog tab or settings page switched away). Upstream then delivers the key to
+nothing, so Escape did nothing until a click (desktop row menu after a wheel
+scroll; New channel after switching to Join; Settings after leaving a focused
+field's page). `publish_focus_item` now records the focused item's ancestors,
+and such a key is delivered from the nearest one still alive and visible, so
+window-level handlers (the app's back scope) still receive it.
