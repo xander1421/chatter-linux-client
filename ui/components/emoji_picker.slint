@@ -193,7 +193,7 @@ export component EmojiPicker inherits GlassSurface {
             background: transparent;
             border-radius: Spacing.radius-md;
 
-            Flickable {
+            category-flick := Flickable {
                 viewport-width: categories.preferred-width;
                 viewport-height: self.height;
                 categories := HorizontalLayout {
@@ -203,7 +203,11 @@ export component EmojiPicker inherits GlassSurface {
                     for icon[index] in root.category-icons: Rectangle {
                         property <int> cat: root.icon-index-to-category(index);
                         property <bool> current: cat == root.selected-category;
-                        width: root.cell;
+                        // All ten share the row: at a full cell each the last
+                        // ones (Flags; from Objects in the reaction picker)
+                        // sat past the edge, and a mouse cannot flick sideways.
+                        width: max(32px, min(root.cell,
+                            (category-flick.width - 2 * Spacing.xs) / root.category-icons.length));
                         height: root.cell;
                         border-radius: Spacing.radius-sm;
                         background: current ? Colors.tint-strong
