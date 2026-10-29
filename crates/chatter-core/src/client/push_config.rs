@@ -245,6 +245,13 @@ impl ChatterClient {
                 std::collections::HashMap::<String, tokio::task::AbortHandle>::new();
             let mut tasks = tokio::task::JoinSet::new();
             let mut refresh_at = std::time::Instant::now();
+            // Cached wake topics. They are written once per session (login/register,
+            // or the identity refresh below for a linked device) and never rotate
+            // mid-session — this supervisor restarts on a new session revision — so
+            // once known we stop re-reading them from the encrypted settings store
+            // every 2 s on every logged-in device.
+            let mut device_topic = String::new();
+            let mut push_topic = String::new();
             loop {
                 let Some(owner) = client.upgrade() else { break };
                 if !owner.auth_state().session_is_current(revision) {
@@ -260,47 +267,54 @@ impl ChatterClient {
                 let Some(owner) = client.upgrade() else { break };
                 if owner.push_wakeup_allowed(revision) {
                     use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
-                    let settings = SettingsRepository::new(owner.services.database.clone());
-                    if settings
-                        .get_string(keys::DEVICE_WAKE_TOPIC)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default()
-                        .is_empty()
-                        && std::time::Instant::now() >= refresh_at
-                    {
-                        // Linked devices receive no AuthResponse. Fetch their own
-                        // capabilities through authenticated identity, with session fencing.
-                        refresh_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
-                        let _guard = owner.auth_lifecycle_lock.lock().await;
-                        if !owner.auth_state().session_is_current(revision) {
-                            break;
+                    // Only touch the encrypted settings store while a topic is still
+                    // unknown. A linked device may learn both capabilities after the
+                    // initial account listener configuration already returned, so keep
+                    // reading until each is non-empty, then rely on the cache.
+                    if device_topic.is_empty() || push_topic.is_empty() {
+                        let settings = SettingsRepository::new(owner.services.database.clone());
+                        if device_topic.is_empty() {
+                            device_topic = settings
+                                .get_string(keys::DEVICE_WAKE_TOPIC)
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
                         }
-                        let mut auth = owner.services.grpc_pool.auth_client();
-                        if let Ok(Ok(identity)) = tokio::time::timeout(
-                            std::time::Duration::from_secs(15),
-                            auth.get_my_identity(),
-                        )
-                        .await
-                        {
-                            let _ = settings
-                                .set_string(keys::DEVICE_WAKE_TOPIC, &identity.device_wake_topic);
-                            let _ = settings.set_string(keys::PUSH_TOPIC, &identity.push_topic);
+                        if push_topic.is_empty() {
+                            push_topic = settings
+                                .get_string(keys::PUSH_TOPIC)
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
                         }
-                    }
-                    if let Ok(Some(topic)) = settings.get_string(keys::DEVICE_WAKE_TOPIC) {
-                        if !topic.is_empty() {
-                            active.push((topic, false, PushSubscription::Device));
-                        }
-                    }
-                    // A linked device may learn both capabilities after the
-                    // initial account listener configuration already returned.
-                    if owner.push_shutdown.lock().is_none() {
-                        if let Ok(Some(topic)) = settings.get_string(keys::PUSH_TOPIC) {
-                            if !topic.is_empty() {
-                                active.push((topic, false, PushSubscription::Account));
+                        if device_topic.is_empty() && std::time::Instant::now() >= refresh_at {
+                            // Linked devices receive no AuthResponse. Fetch their own
+                            // capabilities through authenticated identity, with session fencing.
+                            refresh_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                            let _guard = owner.auth_lifecycle_lock.lock().await;
+                            if !owner.auth_state().session_is_current(revision) {
+                                break;
+                            }
+                            let mut auth = owner.services.grpc_pool.auth_client();
+                            if let Ok(Ok(identity)) = tokio::time::timeout(
+                                std::time::Duration::from_secs(15),
+                                auth.get_my_identity(),
+                            )
+                            .await
+                            {
+                                let _ = settings
+                                    .set_string(keys::DEVICE_WAKE_TOPIC, &identity.device_wake_topic);
+                                let _ = settings.set_string(keys::PUSH_TOPIC, &identity.push_topic);
+                                device_topic = identity.device_wake_topic;
+                                push_topic = identity.push_topic;
                             }
                         }
+                    }
+                    if !device_topic.is_empty() {
+                        active.push((device_topic.clone(), false, PushSubscription::Device));
+                    }
+                    if owner.push_shutdown.lock().is_none() && !push_topic.is_empty() {
+                        active.push((push_topic.clone(), false, PushSubscription::Account));
                     }
                 }
                 drop(owner);
