@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -86,6 +87,12 @@ pub struct ChatState {
     /// conversation (a STOPPED, or a message). Kept out of `store` so
     /// recording one does not wake every state subscriber.
     typing_ended_at: Arc<Mutex<HashMap<(ChannelId, UserId), u64>>>,
+    /// Local monotonic time each sender's typing was last (re)started in each
+    /// conversation. Receivers resend STARTED every 10 s while typing, so an
+    /// entry older than the stale window means the STOPPED was lost; it lets
+    /// `get_typing_users` drop a stuck indicator without depending on a UI
+    /// timer. Kept out of `store` like `typing_ended_at`.
+    typing_started_at: Arc<Mutex<HashMap<(ChannelId, UserId), Instant>>>,
     /// Whether the app is on screen (platform lifecycle). Outside `store` for
     /// the same reason: a focus change is not a navigation change.
     app_visible: Arc<AtomicBool>,
@@ -98,6 +105,7 @@ impl ChatState {
         Self {
             store: Store::new(ChatStateData::default()),
             typing_ended_at: Arc::default(),
+            typing_started_at: Arc::default(),
             app_visible: Arc::new(AtomicBool::new(true)),
         }
     }

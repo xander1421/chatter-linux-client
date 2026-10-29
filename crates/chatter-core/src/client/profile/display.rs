@@ -62,6 +62,11 @@ impl ChatterClient {
         if !state.accept_typing(channel_id, user_id, timestamp, started) {
             return false;
         }
+        if started {
+            state.mark_typing_started(channel_id, user_id);
+        } else {
+            state.forget_typing_started(channel_id, user_id);
+        }
         let mut users = state.get_typing_users(&channel_id);
         users.retain(|id| *id != user_id);
         if started {

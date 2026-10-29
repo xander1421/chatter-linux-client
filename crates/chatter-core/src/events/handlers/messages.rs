@@ -415,6 +415,9 @@ impl EventHandlers {
         channel_id: crate::domain::ids::ChannelId,
         user_id: crate::domain::ids::UserId,
     ) {
+        // Record the start time first so the staleness filter in
+        // `get_typing_users` keeps this user instead of dropping them.
+        self.chat_state.mark_typing_started(channel_id, user_id);
         let mut typers = self.chat_state.get_typing_users(&channel_id);
         if !typers.contains(&user_id) {
             typers.push(user_id);
@@ -431,6 +434,7 @@ impl EventHandlers {
         channel_id: crate::domain::ids::ChannelId,
         user_id: crate::domain::ids::UserId,
     ) {
+        self.chat_state.forget_typing_started(channel_id, user_id);
         let mut typers = self.chat_state.get_typing_users(&channel_id);
         if let Some(pos) = typers.iter().position(|id| *id == user_id) {
             typers.remove(pos);
