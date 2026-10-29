@@ -92,6 +92,10 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     background: qr-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
                     accessible-label: "Show username QR code";
+                    accessible-action-default => {
+                        root.show-share-qr = !root.show-share-qr;
+                        if root.share-link == "" { root.generate-share-link(); }
+                    }
 
                     // Drawn rather than an SVG asset: three
                     // finder squares and a dot read as a QR at

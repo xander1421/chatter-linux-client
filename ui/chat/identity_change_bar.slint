@@ -139,6 +139,7 @@ export component IdentityChangeBar inherits Rectangle {
                     mouse-cursor: pointer;
                     accessible-role: button;
                     accessible-label: "Accept new safety number";
+                    accessible-action-default => { root.accept-clicked(); }
                     clicked => {
                         root.accept-clicked();
                     }

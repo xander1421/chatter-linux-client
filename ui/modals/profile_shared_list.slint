@@ -15,6 +15,7 @@ export component ProfileSharedList inherits VerticalLayout {
         background: list-touch.has-hover ? Colors.surface-hover : transparent;
         accessible-role: button;
         accessible-label: item.title;
+        accessible-action-default => { root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle); }
 
         HorizontalLayout {
             padding-left: Spacing.md;

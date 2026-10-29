@@ -362,6 +362,10 @@ export component UserProfileModal inherits Rectangle {
                             background: Colors.online;
                             accessible-role: button;
                             accessible-label: "Verified — show safety number";
+                            accessible-action-default => {
+                                if root.safety-number == "" { root.view-safety-number(); }
+                                root.show-safety-number = true;
+                            }
 
                             Text {
                                 text: "\u{2713}";

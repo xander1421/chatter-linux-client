@@ -227,6 +227,7 @@ export component RegisterPage inherits Rectangle {
                                     Rectangle {
                                         accessible-role: button;
                                         accessible-label: "Edit profile photo";
+                                        accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
                                         width: 96px;
                                         height: 96px;
                                         background: transparent;

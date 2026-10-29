@@ -92,6 +92,7 @@ export component ComposerReplyPreview inherits GlassSurface {
                 border-radius: Spacing.radius-chrome-inner;
                 accessible-role: button;
                 accessible-label: "Cancel reply";
+                accessible-action-default => { root.cancel-reply(); }
 
                 Image {
                     source: Icons.x;

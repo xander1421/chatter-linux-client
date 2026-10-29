@@ -42,6 +42,7 @@ component InfoActionRow inherits Rectangle {
         mouse-cursor: pointer;
         accessible-role: button;
         accessible-label: root.title;
+        accessible-action-default => { root.clicked(); }
         clicked => { root.clicked(); }
     }
 }
@@ -136,6 +137,13 @@ export component MeshInfoSheet inherits Rectangle {
                                     mouse-cursor: pointer;
                                     accessible-role: button;
                                     accessible-label: "View " + member.display-name;
+                                    accessible-action-default => {
+                                        if MeshGlobal.private-can-manage {
+                                            root.selected-member-id = member.peer-id;
+                                            root.selected-member-name = member.display-name;
+                                            root.confirm-kind = "member";
+                                        } else { MeshGlobal.open-peer(member.peer-id); }
+                                    }
                                     clicked => {
                                         if MeshGlobal.private-can-manage {
                                             root.selected-member-id = member.peer-id;

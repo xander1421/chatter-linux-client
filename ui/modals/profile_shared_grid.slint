@@ -17,6 +17,7 @@ export component ProfileSharedGrid inherits Rectangle {
         clip: true;
         accessible-role: button;
         accessible-label: item.title;
+        accessible-action-default => { root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle); }
 
         if item.has-thumbnail: Image {
             width: 100%;

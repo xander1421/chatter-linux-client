@@ -67,6 +67,7 @@ export component EditProfileModal inherits Rectangle {
                                 background: transparent;
                                 accessible-role: button;
                                 accessible-label: "Edit profile photo";
+                                accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
                                 Avatar {
                                     size: 96px;
                                     name: root.display-name;

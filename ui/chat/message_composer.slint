@@ -804,6 +804,14 @@ export component MessageComposer inherits GlassSurface {
                     * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
                 accessible-label: "Send message";
+                accessible-action-default => {
+                    if (root.is-editing) {
+                        root.send-edit(root.edit-message-id, root.outgoing-text);
+                        root.reset-after-send();
+                    } else {
+                        if root.send(root.outgoing-text) { root.reset-after-send(); }
+                    }
+                }
 
                 // SVG, not a glyph: "\u{27A4}" has no coverage in the Android
                 // system font and rendered as a tofu box on device.

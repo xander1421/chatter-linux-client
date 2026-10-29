@@ -259,6 +259,7 @@ export component ConnectionBanner inherits Rectangle {
                 }
                 accessible-role: button;
                 accessible-label: "Dismiss the connection banner";
+                accessible-action-default => { root.dismissed(); }
             }
         }
 

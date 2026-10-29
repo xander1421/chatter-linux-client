@@ -25,6 +25,7 @@ export component MessageThreadIndicator inherits HorizontalLayout {
             : Colors.primary.transparentize(0.9);
         accessible-role: button;
         accessible-label: "Open thread: " + root.reply-count-text;
+        accessible-action-default => { root.thread-clicked(root.message-id); }
 
         thread-layout := HorizontalLayout {
             height: parent.height;

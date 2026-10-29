@@ -46,6 +46,7 @@ export component ComposerEditBar inherits Rectangle {
             border-radius: Spacing.radius-sm;
             accessible-role: button;
             accessible-label: "Cancel edit";
+            accessible-action-default => { root.cancel-edit(); }
 
             Image {
                 source: Icons.x;

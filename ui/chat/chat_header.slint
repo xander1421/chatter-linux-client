@@ -567,6 +567,10 @@ export component ChatHeader inherits GlassSurface {
                 mouse-cursor: pointer;
                 accessible-role: button;
                 accessible-label: "Open mesh conversation information";
+                accessible-action-default => {
+                    if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                    else { MeshGlobal.open-sheet("mesh-info"); }
+                }
                 clicked => {
                     if MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
                     else { MeshGlobal.open-sheet("mesh-info"); }

@@ -932,6 +932,7 @@ export component UnifiedSearch inherits Rectangle {
                             clip: true;
                             accessible-role: button;
                             accessible-label: m.content-preview;
+                            accessible-action-default => { root.message-selected(m.message-id); }
                             if index < root.has-thumbnails.length && root.has-thumbnails[index]: Image {
                                 width: 100%; height: 100%; source: root.thumbnails[index]; image-fit: cover;
                             }

@@ -438,6 +438,7 @@ export component Sidebar inherits Rectangle {
                     animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
                     accessible-role: button;
                     accessible-label: "Search";
+                    accessible-action-default => { root.search-clicked(); }
                     TooltipArea {
                         width: 44px; x: (parent.width - self.width) / 2; height: 100%;
                         tooltip-text: "Search"; tooltip-enabled: true; placement: "right";

@@ -23,6 +23,12 @@ export component ComposerEmojiButton inherits Rectangle {
     background: transparent;
     opacity: root.disabled ? 0.5 : 1.0;
     accessible-role: button;
+    accessible-action-default => {
+        if !root.picker-open { root.suspend-input(); }
+        if root.picker-open { root.keyboard-requested(); }
+        root.emoji-clicked();
+        if !root.picker-open { root.restore-input(); }
+    }
     // On a phone the open drawer stands where the keyboard was, so
     // the button offers the keyboard back; a desktop window has no
     // soft keyboard, so there the same click is "close".
@@ -97,6 +103,7 @@ export component ComposerAttachButton inherits Rectangle {
     opacity: root.disabled ? 0.5 : 1.0;
     accessible-role: button;
     accessible-label: "Attach file";
+    accessible-action-default => { root.attachment-clicked(); }
 
     GlassSurface {
         width: parent.width - (attachment-touch.pressed ? 4px : 0px);

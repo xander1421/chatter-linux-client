@@ -44,6 +44,7 @@ export component SidebarHeader inherits GlassSurface {
             animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
             accessible-role: button;
             accessible-label: "Search";
+            accessible-action-default => { root.search-clicked(); }
             HorizontalLayout {
                 // The phone's floating surface starts one `sm` inside the
                 // list. Cancel that inset so this slot keeps the same centre

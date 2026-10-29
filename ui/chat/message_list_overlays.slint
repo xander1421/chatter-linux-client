@@ -20,6 +20,7 @@ export component MessageScrollPill inherits GlassSurface {
     material-level: 2;
     backdrop-paused: root.scrolling;
     accessible-role: button;
+    accessible-action-default => { root.clicked(); }
     accessible-label: root.unread-count == 1 ? "1 new message, jump to newest"
         : root.unread-count > 0 ? root.unread-count + " new messages, jump to newest"
         : "Scroll to bottom";

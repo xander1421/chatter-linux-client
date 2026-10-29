@@ -187,6 +187,7 @@ export component PinnedBar inherits GlassSurface {
             animate transform-scale-y { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             accessible-role: button;
             accessible-label: "Hide pinned messages";
+            accessible-action-default => { root.dismiss-clicked(); }
 
             Image {
                 source: Icons.x;

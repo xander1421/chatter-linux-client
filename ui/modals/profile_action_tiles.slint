@@ -64,6 +64,17 @@ export component ProfileActionTiles inherits HorizontalLayout {
         animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
         accessible-role: button;
         accessible-label: act.label;
+        accessible-action-default => {
+            if (act.id == "message") {
+                root.send-message();
+            } else if (act.id == "mute") {
+                root.toggle-mute();
+            } else if (act.id == "call") {
+                root.start-call(false);
+            } else {
+                root.open-more();
+            }
+        }
 
         VerticalLayout {
             alignment: center;
