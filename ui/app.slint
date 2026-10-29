@@ -309,10 +309,27 @@ export component MainWindow inherits Window {
     // Leaving the pane (Back on a phone) leaves the call screen too; the
     // return-to-call bar then stands in for it. The user has navigated for
     // themselves, so the call's end no longer owes them a trip to the list.
+    // A chat opened from another tab (Calls, Contacts, …) on a phone returns
+    // there on Back, as in Telegram and Signal; it landed on Chats (S9).
+    // Handlers run deferred, so both properties are already settled here.
+    private property <string> observed-tab: SidebarPane.active-tab;
+    private property <string> settled-tab: "chats";
+    private property <string> chat-return-tab: "chats";
+    changed observed-tab => {
+        root.chat-return-tab = root.observed-tab == "chats" && SidebarPane.mobile-show-chat
+            ? root.settled-tab : "chats";
+        root.settled-tab = root.observed-tab;
+    }
     private property <bool> observed-mobile-show-chat: SidebarPane.mobile-show-chat;
     changed observed-mobile-show-chat => {
         root.refresh-screen-protection();
         root.chat-push-progress = SidebarPane.mobile-show-chat ? 1 : 0;
+        if !SidebarPane.mobile-show-chat && root.chat-return-tab != "chats" {
+            if root.compact-layout && SidebarPane.active-tab == "chats" {
+                SidebarPane.active-tab = root.chat-return-tab;
+            }
+            root.chat-return-tab = "chats";
+        }
         if !SidebarPane.mobile-show-chat {
             root.cancel-composer-keyboard-handover();
             CallView.active-call-fullscreen = false;
