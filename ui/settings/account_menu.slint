@@ -249,6 +249,8 @@ export component AccountMenu inherits Rectangle {
                                     }
                                     Text {
                                         text: "Night mode";
+                                        // The row's own label says it.
+                                        accessible-role: none;
                                         color: Colors.text-primary;
                                         font-size: Typography.base;
                                         vertical-alignment: center;
