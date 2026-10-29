@@ -8,12 +8,13 @@ import { Button } from "../components/button.slint";
 // Telegram's "Start voice chat?". DMs and joining a running call stay one tap.
 export component CallConfirm inherits Rectangle {
     in property <string> channel-name;
+    in property <bool> video: false;
     callback confirmed();
     callback cancelled();
 
     Modal {
         show: true;
-        title: "Start a call?";
+        title: root.video ? "Start a video call?" : "Start a call?";
         modal-width: 400px;
         show-close: false;
         close => { root.cancelled(); }

@@ -327,6 +327,7 @@ export component AppConversationLayout inherits Rectangle {
     settings-clicked => { root.chat-settings-clicked(); }
     voice-call-clicked => {
         if root.conversation-kind == ConversationKind.channel && root.active-channel-call-id == "" {
+            ChatPane.call-confirm-video = false;
             ChatPane.call-confirm-open = true;
         } else {
             root.start-voice-call();

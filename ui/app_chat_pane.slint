@@ -334,6 +334,8 @@ export global ChatPane {
     in-out property <string> link-confirm-url: "";
     // The channel header's call button asks before ringing every member.
     in-out property <bool> call-confirm-open: false;
+    // The asked-for call is video (menu or Calls redial), not voice.
+    in-out property <bool> call-confirm-video: false;
     callback open-message-link(string, string);
     callback confirm-open-message-link();
     callback message-clicked(string);

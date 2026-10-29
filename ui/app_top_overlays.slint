@@ -401,8 +401,12 @@ export component AppTopOverlays inherits Rectangle {
 
     if ChatPane.call-confirm-open: CallConfirm {
         channel-name: ChatPane.channel-name;
+        video: ChatPane.call-confirm-video;
         cancelled => { ChatPane.call-confirm-open = false; root.refocus-composer(); }
-        confirmed => { ChatPane.call-confirm-open = false; ChatPane.start-voice-call(); }
+        confirmed => {
+            ChatPane.call-confirm-open = false;
+            if ChatPane.call-confirm-video { ChatPane.start-video-call(); } else { ChatPane.start-voice-call(); }
+        }
     }
 
     if ChatPane.delete-confirm-count > 0: DeleteConfirm {

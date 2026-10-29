@@ -10,6 +10,7 @@ import { ServerRecordsGlobal } from "server_records/screen.slint";
 import { Spacing } from "theme/spacing.slint";
 import { SecretTimerModal } from "chat/secret_timer_modal.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
+import { CallView } from "app_call_view.slint";
 import { FriendData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
 import { SessionsModal, SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
@@ -351,7 +352,14 @@ export component AppSecondaryModals inherits Rectangle {
         close => { ModalHostState.nav-close("chat-menu"); }
         video-call => {
             ModalHostState.nav-close("chat-menu");
-            ChatPane.start-video-call();
+            // A channel video call rings every member too: ask, as the
+            // header's voice button does.
+            if ChatPane.conversation-kind == ConversationKind.channel && CallView.active-channel-call-id == "" {
+                ChatPane.call-confirm-video = true;
+                ChatPane.call-confirm-open = true;
+            } else {
+                ChatPane.start-video-call();
+            }
         }
         settings => {
             ModalHostState.nav-close("chat-menu");
