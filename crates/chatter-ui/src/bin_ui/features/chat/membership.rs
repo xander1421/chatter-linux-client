@@ -118,6 +118,7 @@ fn run_action<F>(
     ui_ctx: Arc<ChatterClient>,
     channel_id: ChannelId,
     done: &'static str,
+    clear_link_id: Option<String>,
     action: F,
 ) where
     F: std::future::Future<
@@ -147,6 +148,15 @@ fn run_action<F>(
                     if let Some(link) = link {
                         g.set_new_link(link.into());
                     }
+                    // Clear the created-link copy box only when the revoked link is
+                    // the one currently shown. Evaluated HERE at completion (against
+                    // the live new-link), not captured at dispatch, so a link created
+                    // while the revoke was in flight is never wiped.
+                    if let Some(id) = &clear_link_id {
+                        if ChatterClient::invite_link_url_has_id(g.get_new_link().as_str(), id) {
+                            g.set_new_link("".into());
+                        }
+                    }
                     g.set_access_status(done.into());
                 }
                 Err(e) => g.set_access_status(e.user_message().into()),
@@ -174,6 +184,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             ctx.clone(),
             channel_id,
             "Link created. Copy it now: it cannot be shown again.",
+            None,
             async move {
                 c.create_channel_invite_link(&channel_id, needs_approval)
                     .await
@@ -201,24 +212,19 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         };
         let (c, link_id) = (ctx.clone(), link_id.to_string());
-        // Clear the created-link copy box only when THIS revoke targets the link
-        // shown in it. The box is the link's only copy, so revoking a different
-        // row must not wipe a still-valid link.
-        let clears_box = weak.upgrade().is_some_and(|w| {
-            ChatterClient::invite_link_url_has_id(
-                w.global::<MembershipGlobal>().get_new_link().as_str(),
-                &link_id,
-            )
-        });
         run_action(
             weak.clone(),
             ctx.clone(),
             channel_id,
             "Link revoked",
+            // Clear the copy box only if, at completion, the revoked link is still
+            // the one shown. The box holds the link's only copy, so revoking a
+            // different row must not wipe a still-valid link.
+            Some(link_id.clone()),
             async move {
                 c.revoke_channel_invite_link(&channel_id, &link_id)
                     .await
-                    .map(|()| clears_box.then(String::new))
+                    .map(|()| None)
             },
         );
     });
@@ -235,6 +241,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             ctx.clone(),
             channel_id,
             "Request approved",
+            None,
             async move {
                 c.approve_channel_join_request(&channel_id, &user_id)
                     .await
@@ -274,6 +281,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             ctx.clone(),
             channel_id,
             "Request rejected",
+            None,
             async move {
                 c.reject_channel_join_request(&channel_id, &user_id)
                     .await
