@@ -33,6 +33,26 @@ export component ComposerEmojiButton inherits Rectangle {
     // the button offers the keyboard back; a desktop window has no
     // soft keyboard, so there the same click is "close".
     accessible-label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
+    // Keyboard: a Tab stop on desktop (Space / Return), ringed when focused.
+    // Without it the picker and file attach were mouse-only.
+    emoji-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled && !root.mobile;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.emoji-clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Rectangle {
+        z: 1;
+        border-radius: self.width / 2;
+        border-width: emoji-keys.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
+    }
 
     GlassSurface {
         width: parent.width - (emoji-touch.pressed ? 4px : 0px);
@@ -104,6 +124,26 @@ export component ComposerAttachButton inherits Rectangle {
     accessible-role: button;
     accessible-label: "Attach file";
     accessible-action-default => { root.attachment-clicked(); }
+    // Keyboard: a Tab stop on desktop (Space / Return), ringed when focused.
+    // Without it the picker and file attach were mouse-only.
+    attach-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.attachment-clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Rectangle {
+        z: 1;
+        border-radius: self.width / 2;
+        border-width: attach-keys.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
+    }
 
     GlassSurface {
         width: parent.width - (attachment-touch.pressed ? 4px : 0px);
