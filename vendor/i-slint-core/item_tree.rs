@@ -510,7 +510,16 @@ impl ItemRc {
         let mut cur = self.parent_item(ParentItemTraversalMode::StopAtPopups);
         while let Some(ref ancestor) = cur {
             if ancestor.borrow().as_ref().clips_children() {
-                let (_, ancestor_geom) = ancestor.absolute_clip_rect_and_geometry();
+                // Chatter patch: only the ancestor's window geometry is needed.
+                // Calling absolute_clip_rect_and_geometry here also rebuilt the
+                // ancestor's own clip (discarded), recursing once per clipping
+                // ancestor: 2^n work under n nested clips, paid by every
+                // is_visible() (an emoji tab's ~500 cells per Android
+                // accessibility snapshot).
+                let ancestor_geom: LogicalRect = ancestor
+                    .local_to_window_transform(|_| false)
+                    .outer_transformed_rect(&ancestor.geometry().cast())
+                    .cast();
                 clip = ancestor_geom.intersection(&clip).unwrap_or_default();
             }
             cur = ancestor.parent_item(ParentItemTraversalMode::StopAtPopups);

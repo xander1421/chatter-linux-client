@@ -79,3 +79,9 @@ scroll; New channel after switching to Join; Settings after leaving a focused
 field's page). `publish_focus_item` now records the focused item's ancestors,
 and such a key is delivered from the nearest one still alive and visible, so
 window-level handlers (the app's back scope) still receive it.
+
+Clip rect cost (2026-10-29): `item_tree.rs` `absolute_clip_rect_and_geometry`
+called itself for each clipping ancestor and discarded that ancestor's clip,
+so the work doubled with every nested clip (2^n). It now computes only the
+ancestor's window geometry; the result is identical. Every `is_visible()` pays
+this, including each node of an Android accessibility snapshot.
