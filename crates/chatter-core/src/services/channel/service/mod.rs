@@ -421,10 +421,10 @@ where
     Ok(())
 }
 
-/// Longest channel or group name, in characters (Telegram's limit). The
-/// server stores names in a VARCHAR(255) and checks no length, so a longer
-/// name failed there with an opaque error instead of here with a clear one.
-pub const MAX_CHANNEL_NAME_CHARS: usize = 128;
+/// Longest channel or group name, in characters: the server's own limit
+/// (`max_len: 100` on the name in `pkg/proto/chat/v1/channel/channel.proto`).
+/// Checked here too so the form answers without a round trip.
+pub const MAX_CHANNEL_NAME_CHARS: usize = 100;
 
 fn check_name_length(name: &str) -> Result<(), ChannelError> {
     if name.chars().count() > MAX_CHANNEL_NAME_CHARS {
