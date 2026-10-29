@@ -378,6 +378,17 @@ export component CallHistoryScreen inherits Rectangle {
 
                         Rectangle {
                             height: root.row-height;
+                            // One screen-reader stop per call, as a chat row:
+                            // its name, outcome and time were three.
+                            accessible-role: button;
+                            accessible-label: row.name + ", " + row.detail + ", " + row.timestamp;
+                            accessible-action-default => {
+                                if root.selecting {
+                                    root.toggle-select(row.id);
+                                } else {
+                                    root.open-conversation(row.conversation-id, row.conversation-type);
+                                }
+                            }
                             background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
                                 : row-touch.pressed ? Materials.pressed : row-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
