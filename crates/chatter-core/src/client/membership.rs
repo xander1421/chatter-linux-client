@@ -370,6 +370,23 @@ fn parse_hex_key(id: &str) -> Result<Vec<u8>, ChannelError> {
 }
 
 impl ChatterClient {
+    /// Whether the join-link `url` shown in the create-link copy box is the
+    /// link identified by `link_id` (hex of the capability public key). The UI
+    /// clears that box only when its own link is the one being revoked — the
+    /// box holds the link's only copy, so revoking a different row must not
+    /// wipe a still-valid link.
+    #[must_use]
+    pub fn invite_link_url_has_id(url: &str, link_id: &str) -> bool {
+        use crate::services::channel::membership_log::InviteLink;
+        let Some(link) = InviteLink::parse(url) else {
+            return false;
+        };
+        let Ok(want) = parse_hex_key(link_id) else {
+            return false;
+        };
+        link.invite_pub().as_ref() == want.as_slice()
+    }
+
     fn verified_channel(&self, channel_id: &ChannelId) -> Option<VerifiedChannel> {
         self.channels()
             .membership_log()
