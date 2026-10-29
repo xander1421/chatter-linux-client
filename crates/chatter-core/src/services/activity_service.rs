@@ -264,8 +264,10 @@ impl ActivityService {
             (true, Some((_, None))) | (false, None) | (false, Some((_, Some(_)))) => return Ok(()),
             (true, Some((id, Some(resolved)))) if now - resolved < OUTAGE_REOPEN_MS => {
                 conn.execute("UPDATE activity_outages SET resolved_at_ms=NULL WHERE owner_id=?1", [&owner_id])?;
-                conn.execute("UPDATE activity_items SET kind='server', detail='', unread=1 WHERE owner_id=?1 AND id=?2",
-                    params![owner_id, id])?;
+                // The row is gone if that outage was a blip (below).
+                conn.execute("INSERT INTO activity_items(owner_id,id,kind,created_at_ms) VALUES (?1,?2,'server',?3)
+                    ON CONFLICT(owner_id,id) DO UPDATE SET kind='server', detail='', unread=1",
+                    params![owner_id, id, now])?;
             }
             (true, _) => {
                 let id = format!("server-down:{now}");
@@ -283,10 +285,16 @@ impl ActivityService {
                 let secs = ((now - started) / 1000).max(1);
                 let span = if secs < 120 { format!("{secs} s") } else { format!("{} min", secs / 60) };
                 conn.execute("UPDATE activity_outages SET resolved_at_ms=?2 WHERE owner_id=?1", params![owner_id, now])?;
-                // A blip of a few seconds stays in the log but must not raise the badge.
+                // A reconnect of a few seconds is not news: it leaves no row.
+                // Kept as read "Back online after 1 s" rows, they made up most
+                // of the S9's feed and buried the replies and mentions in it.
                 const BLIP_SECS: i64 = 10;
-                conn.execute("UPDATE activity_items SET kind='server-ok', detail=?3, unread=CASE WHEN ?4 THEN 0 ELSE unread END WHERE owner_id=?1 AND id=?2",
-                    params![owner_id, id, span, secs < BLIP_SECS])?;
+                if secs < BLIP_SECS {
+                    conn.execute("DELETE FROM activity_items WHERE owner_id=?1 AND id=?2", params![owner_id, id])?;
+                } else {
+                    conn.execute("UPDATE activity_items SET kind='server-ok', detail=?3 WHERE owner_id=?1 AND id=?2",
+                        params![owner_id, id, span])?;
+                }
             }
         }
         let _ = self.changed.send(());
