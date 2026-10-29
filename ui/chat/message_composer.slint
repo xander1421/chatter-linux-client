@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { VoiceRecording } from "voice_recording.slint";
 import { LiquidComposerSilhouette, DropletNeck } from "composer_geometry.slint";
@@ -778,6 +779,7 @@ export component MessageComposer inherits GlassSurface {
                 accessible-label: "Record voice message";
                 accessible-enabled: !root.disabled && !root.can-send;
                 accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); } }
+                KeyFocus { enabled: !root.disabled && !root.can-send; border-radius: self.height / 2; activate => { root.start-recording(); } }
                 Image {
                     source: Icons.mic;
                     width: 20px;

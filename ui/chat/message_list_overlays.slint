@@ -1,4 +1,5 @@
 // Floating controls over the virtualized message rows.
+import { KeyFocus } from "../components/key_focus.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Icons } from "../theme/icons.slint";
@@ -24,6 +25,7 @@ export component MessageScrollPill inherits GlassSurface {
     accessible-label: root.unread-count == 1 ? "1 new message, jump to newest"
         : root.unread-count > 0 ? root.unread-count + " new messages, jump to newest"
         : "Scroll to bottom";
+    KeyFocus { enabled: !root.hide-pill; border-radius: parent.border-radius; activate => { root.clicked(); } }
 
     opacity: self.hide-pill ? 0 : 1;
     visible: !self.hide-pill || self.opacity > 0;

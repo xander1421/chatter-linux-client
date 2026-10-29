@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Chat header component
 //
@@ -288,6 +289,7 @@ export component ChatHeader inherits GlassSurface {
                         accessible-label: root.channel-name;
                         accessible-enabled: root.show-settings;
                         accessible-action-default => { if root.show-settings { root.settings-clicked(); } }
+                        KeyFocus { enabled: root.show-settings; border-radius: Spacing.radius-sm; activate => { root.settings-clicked(); } }
                         Text {
                             accessible-role: none;
                             width: 100%;

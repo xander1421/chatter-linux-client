@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -45,6 +46,7 @@ export component SidebarHeader inherits GlassSurface {
             accessible-role: button;
             accessible-label: "Search";
             accessible-action-default => { root.search-clicked(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.search-clicked(); } }
             HorizontalLayout {
                 // The phone's floating surface starts one `sm` inside the
                 // list. Cancel that inset so this slot keeps the same centre
