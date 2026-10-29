@@ -291,6 +291,9 @@ export component ThreadPanel inherits Rectangle {
             transform-scale-y: root-preview-touch.pressed ? 96% : 100%;
             animate transform-scale-x { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             animate transform-scale-y { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            accessible-role: button;
+            accessible-label: "Original message from " + root.root-sender-name + ": " + root.root-content-preview;
+            accessible-action-default => { root.message-clicked(root.root-message-id); }
 
             root-preview-touch := TouchArea {
                 width: 100%;
@@ -306,6 +309,7 @@ export component ThreadPanel inherits Rectangle {
 
                 // Sender name
                 Text {
+                    accessible-role: none;
                     text: root.root-sender-name;
                     color: Colors.text-primary;
                     font-size: Typography.sm;
@@ -315,6 +319,7 @@ export component ThreadPanel inherits Rectangle {
 
                 // Content preview (truncated)
                 Text {
+                    accessible-role: none;
                     text: root.root-content-preview;
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
@@ -410,7 +415,20 @@ export component ThreadPanel inherits Rectangle {
                 y: 0px;
                 height: Spacing.button-height;
                 width: 100%;
+                accessible-role: button;
+                accessible-label: "Load earlier replies";
+                accessible-action-default => {
+                    replies-view.following-tail = false;
+                    replies-view.anchor-count = root.replies.length;
+                    replies-view.anchor-first = root.replies[0].message-id;
+                    replies-view.anchor-index = replies-view.top-row();
+                    replies-view.anchor-offset = replies-view.viewport-y
+                        + replies-view.anchor-index * replies-view.viewport-height / root.replies.length;
+                    replies-view.preserving-anchor = true;
+                    root.load-more-replies();
+                }
                 Text {
+                    accessible-role: none;
                     text: "Load earlier replies";
                     color: more-touch.has-hover ? Colors.text-primary : Colors.primary;
                     font-size: Typography.xs;

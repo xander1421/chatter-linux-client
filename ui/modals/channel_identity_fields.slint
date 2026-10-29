@@ -31,6 +31,9 @@ export component ChannelIdentityFields inherits HorizontalLayout {
             border-radius: Spacing.radius-md;
             background: Colors.inset;
             clip: true;
+            accessible-role: button;
+            accessible-label: root.has-icon-preview ? "Change channel icon" : "Upload channel icon";
+            accessible-action-default => { root.pick-channel-icon(); }
 
             if root.has-icon-preview: Image {
                 source: root.icon-preview;

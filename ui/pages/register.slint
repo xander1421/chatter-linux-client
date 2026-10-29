@@ -563,6 +563,9 @@ export component RegisterPage inherits Rectangle {
                                 color: Colors.primary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
+                                accessible-role: button;
+                                accessible-label: "Sign in";
+                                accessible-action-default => { root.go-to-login(); }
                                 TouchArea { clicked => { root.go-to-login(); } }
                             }
                         }

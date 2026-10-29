@@ -140,6 +140,10 @@ export component ForwardMessageModal inherits Rectangle {
                             animate transform-scale-x { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                             animate transform-scale-y { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                             animate background { duration: Materials.motion-quick; easing: Materials.glide; }
+                            accessible-role: list-item;
+                            accessible-label: target.name;
+                            accessible-item-selected: is-selected;
+                            accessible-action-default => { root.selected-target-id = target.id; }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
@@ -177,6 +181,7 @@ export component ForwardMessageModal inherits Rectangle {
                                     alignment: center;
 
                                     Text {
+                                        accessible-role: none;
                                         text: target.name;
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;

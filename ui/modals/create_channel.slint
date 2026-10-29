@@ -347,6 +347,11 @@ export component CreateChannelModal inherits Rectangle {
                                 animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                                 animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                                 animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                accessible-role: checkbox;
+                                accessible-label: friend.display-name;
+                                accessible-checkable: true;
+                                accessible-checked: friend.selected;
+                                accessible-action-default => { root.toggle-friend-selection(idx); }
 
                                 friend-touch := TouchArea {
                                     mouse-cursor: pointer;
@@ -398,6 +403,7 @@ export component CreateChannelModal inherits Rectangle {
                                         background: transparent;
 
                                         Text {
+                                            accessible-role: none;
                                             y: (parent.height - self.height) / 2;
                                             width: parent.width;
                                             text: friend.display-name;
@@ -429,8 +435,13 @@ export component CreateChannelModal inherits Rectangle {
                                             clip: true;
                                             animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                                             animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                                            accessible-role: button;
+                                            accessible-label: "Role for " + friend.display-name + ": " + role-text.text;
+                                            accessible-enabled: friend.selected;
+                                            accessible-action-default => { if friend.selected { root.toggle-friend-role(idx); } }
 
                                             role-text := Text {
+                                                accessible-role: none;
                                                 text: friend.role == "admin" ? "Admin" : "Member";
                                                 color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
                                                 font-size: Typography.xs;
@@ -463,6 +474,9 @@ export component CreateChannelModal inherits Rectangle {
                 Rectangle {
                     height: Spacing.button-height;
                     background: transparent;
+                    accessible-role: button;
+                    accessible-label: root.more-options-expanded ? "Hide more options" : "Show more options";
+                    accessible-action-default => { root.more-options-expanded = !root.more-options-expanded; }
 
                     HorizontalLayout {
                         width: 100%;
@@ -489,6 +503,7 @@ export component CreateChannelModal inherits Rectangle {
                         }
 
                         Text {
+                            accessible-role: none;
                             text: "More options";
                             wrap: no-wrap;
                             horizontal-stretch: 0;
@@ -616,8 +631,18 @@ export component CreateChannelModal inherits Rectangle {
                                     border-width: root.ai-provider == provider.id ? Spacing.stroke : 0px;
                                     border-color: Colors.primary;
                                     background: root.ai-provider == provider.id ? Colors.inset : (provider-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                                    accessible-role: button;
+                                    accessible-label: provider.name;
+                                    accessible-checkable: true;
+                                    accessible-checked: root.ai-provider == provider.id;
+                                    accessible-action-default => {
+                                        root.ai-provider = provider.id;
+                                        root.ai-model = "";
+                                        root.provider-selected(provider.id);
+                                    }
 
                                     Text {
+                                        accessible-role: none;
                                         text: provider.name;
                                         color: root.ai-provider == provider.id ? Colors.primary : Colors.text-primary;
                                         font-size: Typography.xs;
@@ -677,12 +702,18 @@ export component CreateChannelModal inherits Rectangle {
                                             border-width: root.ai-model == model.id ? Spacing.stroke : 0px;
                                             border-color: Colors.primary;
                                             background: root.ai-model == model.id ? Colors.inset : (model-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                                            accessible-role: button;
+                                            accessible-label: model.name;
+                                            accessible-checkable: true;
+                                            accessible-checked: root.ai-model == model.id;
+                                            accessible-action-default => { root.ai-model = model.id; }
 
                                             HorizontalLayout {
                                                 padding-left: Spacing.sm;
                                                 padding-right: Spacing.sm;
 
                                                 Text {
+                                                    accessible-role: none;
                                                     text: model.name;
                                                     color: root.ai-model == model.id ? Colors.primary : Colors.text-primary;
                                                     font-size: Typography.xs;

@@ -92,8 +92,12 @@ export component CreateSectionModal inherits Rectangle {
                     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                    accessible-role: button;
+                    accessible-label: "Section icon " + root.selected-emoji;
+                    accessible-action-default => { root.picker-open = !root.picker-open; }
 
                     Text {
+                        accessible-role: none;
                         text: root.selected-emoji;
                         font-family: Typography.font-family-emoji;
                         font-size: Typography.xl;
@@ -158,12 +162,21 @@ export component CreateSectionModal inherits Rectangle {
                                 ? Colors.tint-strong
                                 : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
                             transform-scale-x: icon-touch.pressed ? 0.82 : 1;
+                            accessible-role: button;
+                            accessible-label: "Choose icon " + icon;
+                            accessible-checkable: true;
+                            accessible-checked: icon == root.selected-emoji;
+                            accessible-action-default => {
+                                root.selected-emoji = icon;
+                                root.picker-open = false;
+                            }
                             transform-scale-y: icon-touch.pressed ? 0.82 : 1;
                             animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                             animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                             animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                             Text {
+                                accessible-role: none;
                                 text: icon;
                                 font-size: Typography.lg;
                                 horizontal-alignment: center;

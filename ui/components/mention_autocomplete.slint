@@ -98,6 +98,16 @@ export component MentionAutocomplete inherits GlassSurface {
                     border-radius: Spacing.radius-sm;
                     background: index == root.selected-index ? Colors.tint-strong : (item-area.pressed ? Materials.pressed : item-area.has-hover ? Materials.hover : transparent);
                     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                    accessible-role: list-item;
+                    accessible-label: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
+                    accessible-item-selected: index == root.selected-index;
+                    accessible-action-default => {
+                        if suggestion.mention-type == "channel" {
+                            root.suggestion-selected(suggestion.id, "#" + suggestion.name);
+                        } else {
+                            root.suggestion-selected(suggestion.id, "@" + suggestion.name);
+                        }
+                    }
                     transform-scale-x: item-area.pressed ? 97% : 100%;
                     transform-scale-y: item-area.pressed ? 94% : 100%;
                     animate transform-scale-x { duration: item-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
@@ -150,6 +160,7 @@ export component MentionAutocomplete inherits GlassSurface {
 
                             // Display name with prefix
                             Text {
+                                accessible-role: none;
                                 text: suggestion.mention-type == "user" ? suggestion.name : suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
                                 color: index == root.selected-index ? Colors.text-primary : Colors.text-secondary;
                                 font-size: Typography.sm;

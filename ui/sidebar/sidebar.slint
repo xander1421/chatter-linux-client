@@ -694,6 +694,9 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-new-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
+                            accessible-role: button;
+                            accessible-label: "New channel";
+                            accessible-action-default => { root.create-channel-clicked(); }
                             Image { source: Icons.plus; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-new-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
                             c-new-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-channel-clicked(); } }
@@ -706,6 +709,9 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
                             background: c-sec-touch.has-hover ? Colors.surface-hover.brighter(0.6) : root.rail-slot-bg;
+                            accessible-role: button;
+                            accessible-label: "New section";
+                            accessible-action-default => { root.create-section-clicked(); }
                             Image { source: Icons.folder; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 colorize: c-sec-touch.has-hover ? Colors.text-primary : Colors.text-muted; }
                             c-sec-touch := TouchArea { mouse-cursor: pointer; clicked => { root.create-section-clicked(); } }
@@ -729,6 +735,9 @@ export component Sidebar inherits Rectangle {
                         alignment: center;
                         Text {
                             text: "Browse channels";
+                            accessible-role: button;
+                            accessible-label: "Browse channels";
+                            accessible-action-default => { root.join-channel-clicked(); }
                             color: browse-touch.has-hover ? Colors.primary-hover : Colors.primary;
                             font-size: Typography.sm;
                             vertical-alignment: center;

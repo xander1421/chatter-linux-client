@@ -18,6 +18,15 @@ export component ProfileSafetyNumber inherits VerticalLayout {
     safety-number-toggle := TouchArea {
         mouse-cursor: pointer;
         height: 32px;
+        accessible-role: button;
+        accessible-label: root.is-verified ? "Verified, safety number" : "Not verified, safety number";
+        accessible-action-default => {
+            if root.safety-number == "" {
+                root.view-safety-number();
+            } else {
+                root.show-safety-number = !root.show-safety-number;
+            }
+        }
 
         clicked => {
             if root.safety-number == "" {
@@ -31,6 +40,7 @@ export component ProfileSafetyNumber inherits VerticalLayout {
             alignment: space-between;
 
             Text {
+                accessible-role: none;
                 text: root.is-verified ? "✓ Verified" : "Not verified · Safety number";
                 color: root.is-verified ? Colors.online : Colors.text-muted;
                 font-size: Typography.sm;

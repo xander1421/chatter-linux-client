@@ -528,6 +528,12 @@ export component MessageItem inherits Rectangle {
                 source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
                 alt-name: root.sender-name;
+                accessible-role: button;
+                accessible-label: "View profile of " + root.sender-name;
+                accessible-action-default => {
+                    if root.selection-mode { root.selection-toggled(root.message-id); }
+                    else { root.sender-profile-requested(root.sender-id); }
+                }
                 TouchArea {
                     mouse-cursor: pointer;
                     clicked => {

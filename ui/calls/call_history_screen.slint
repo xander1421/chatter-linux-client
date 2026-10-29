@@ -753,8 +753,16 @@ export component CallHistoryScreen inherits Rectangle {
                     VerticalLayout {
                         Rectangle {
                             height: Spacing.touch-target-min;
+                            accessible-role: button;
+                            accessible-label: select-label.text;
+                            accessible-action-default => {
+                                root.show-more-menu = false;
+                                root.show-clear-confirm = false;
+                                root.select-all(false);
+                            }
 
                             select-label := Text {
+                                accessible-role: none;
                                 text: "Select calls";
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
@@ -776,8 +784,16 @@ export component CallHistoryScreen inherits Rectangle {
 
                         Rectangle {
                             height: Spacing.touch-target-min;
+                            accessible-role: button;
+                            accessible-label: menu-label.text;
+                            accessible-action-default => {
+                                root.show-more-menu = false;
+                                root.confirm-selected = false;
+                                root.show-clear-confirm = true;
+                            }
 
                             menu-label := Text {
+                                accessible-role: none;
                                 text: "Clear call history";
                                 color: Colors.error;
                                 font-size: Typography.base;

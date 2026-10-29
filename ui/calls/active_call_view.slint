@@ -27,6 +27,11 @@ component ParticipantTile inherits Rectangle {
     in property <bool> interactive: true;
     callback clicked();
 
+    accessible-role: button;
+    accessible-label: root.participant.display-name;
+    accessible-enabled: root.interactive;
+    accessible-action-default => { if root.interactive { root.clicked(); } }
+
     TouchArea {
         enabled: root.interactive;
         clicked => { root.clicked(); }
@@ -492,8 +497,12 @@ export component ActiveCallView inherits Rectangle {
                         // Small text needs 4.5:1: white on `error` is 3.63:1 in
                         // dark, so the label sits on the deeper red step.
                         background: stop-touch.has-hover ? Colors.error-hover.darker(0.2) : Colors.error-hover;
+                        accessible-role: button;
+                        accessible-label: "Stop screen sharing";
+                        accessible-action-default => { root.toggle-screen-share(); }
 
                         stop-text := Text {
+                            accessible-role: none;
                             x: Spacing.sm;
                             text: "Stop";
                             font-size: Typography.xs;

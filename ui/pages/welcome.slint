@@ -125,6 +125,10 @@ export component WelcomePage inherits Rectangle {
                     transform-scale-y: friends-touch.pressed ? 94% : 100%;
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                    accessible-role: button;
+                    accessible-label: "Add friends";
+                    accessible-description: "Find people you know on Chatter";
+                    accessible-action-default => { root.add-friends(); }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;
@@ -153,6 +157,7 @@ export component WelcomePage inherits Rectangle {
                             horizontal-stretch: 1;
 
                             Text {
+                                accessible-role: none;
                                 text: "Add friends";
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
@@ -160,6 +165,7 @@ export component WelcomePage inherits Rectangle {
                             }
 
                             Text {
+                                accessible-role: none;
                                 text: "Find people you know on Chatter";
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;
@@ -190,6 +196,10 @@ export component WelcomePage inherits Rectangle {
                     transform-scale-y: channels-touch.pressed ? 94% : 100%;
                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                    accessible-role: button;
+                    accessible-label: "Browse channels";
+                    accessible-description: "Join public conversations";
+                    accessible-action-default => { root.browse-channels(); }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;
@@ -218,6 +228,7 @@ export component WelcomePage inherits Rectangle {
                             horizontal-stretch: 1;
 
                             Text {
+                                accessible-role: none;
                                 text: "Browse channels";
                                 color: Colors.text-primary;
                                 font-size: Typography.base;
@@ -225,6 +236,7 @@ export component WelcomePage inherits Rectangle {
                             }
 
                             Text {
+                                accessible-role: none;
                                 text: "Join public conversations";
                                 color: Colors.text-muted;
                                 font-size: Typography.xs;

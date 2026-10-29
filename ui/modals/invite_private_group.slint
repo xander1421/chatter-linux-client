@@ -75,6 +75,11 @@ export component InvitePrivateGroupModal inherits Rectangle {
                             animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                             animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                             animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                            accessible-role: checkbox;
+                            accessible-label: friend.display-name;
+                            accessible-checkable: true;
+                            accessible-checked: friend.selected;
+                            accessible-action-default => { root.toggle-selection(index); }
 
                             // Keep the row target behind the role chip so
                             // pressing Admin/Member changes the role instead
@@ -103,6 +108,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     alignment: center;
 
                                     Text {
+                                        accessible-role: none;
                                         text: friend.display-name;
                                         color: Colors.text-primary;
                                         font-size: Typography.sm;
@@ -136,8 +142,13 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                         transform-scale-y: invite-role-touch.pressed ? 0.9 : 1;
                                         animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                                         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                        accessible-role: button;
+                                        accessible-label: "Role for " + friend.display-name + ": " + invite-role-text.text;
+                                        accessible-enabled: friend.selected;
+                                        accessible-action-default => { if friend.selected { root.toggle-role(index); } }
 
                                         invite-role-text := Text {
+                                            accessible-role: none;
                                             text: friend.role == "admin" ? "Admin" : "Member";
                                             color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
                                             font-size: Typography.xs;

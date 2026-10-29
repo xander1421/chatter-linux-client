@@ -31,6 +31,11 @@ export component SearchResultItem inherits Rectangle {
 
     callback clicked();
 
+    accessible-role: list-item;
+    accessible-label: root.name;
+    accessible-item-selected: root.selected;
+    accessible-action-default => { root.clicked(); }
+
     property <bool> hovered: touch.has-hover;
 
     height: max(Spacing.touch-target-min, 68px);
@@ -91,6 +96,7 @@ export component SearchResultItem inherits Rectangle {
                 spacing: Spacing.sm;
 
                 Text {
+                    accessible-role: none;
                     text: root.name;
                     color: selected ? Colors.primary : Colors.text-primary;
                     font-size: Typography.sm;

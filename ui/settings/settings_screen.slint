@@ -296,6 +296,15 @@ export component SettingsScreen inherits Rectangle {
                                : nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
                     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                     opacity: item.enabled ? 1.0 : 0.5;
+                    accessible-role: tab;
+                    accessible-label: item.label;
+                    accessible-item-selected: active-section == item.id;
+                    accessible-enabled: item.enabled;
+                    accessible-action-default => {
+                        if item.enabled {
+                            active-section = item.id;
+                        }
+                    }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;
@@ -320,6 +329,7 @@ export component SettingsScreen inherits Rectangle {
                         }
 
                         Text {
+                            accessible-role: none;
                             text: item.label;
                             color: active-section == item.id ? (root.compact-mode ? Colors.on-action : Colors.text-primary) :
                                    (item.enabled ? Colors.text-secondary : Colors.text-muted);

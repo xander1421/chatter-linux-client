@@ -284,7 +284,12 @@ export component ChatHeader inherits GlassSurface {
                     Rectangle {
                         height: root.header-title-size + Spacing.xs;
                         min-width: 0px;
+                        accessible-role: button;
+                        accessible-label: root.channel-name;
+                        accessible-enabled: root.show-settings;
+                        accessible-action-default => { if root.show-settings { root.settings-clicked(); } }
                         Text {
+                            accessible-role: none;
                             width: 100%;
                             text: root.channel-name;
                             color: name-touch.has-hover ? Colors.primary : Colors.text-primary;

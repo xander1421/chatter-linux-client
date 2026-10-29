@@ -304,6 +304,11 @@ export component AISettings inherits VerticalLayout {
                 height: 44px * Appearance.text-grow;
                 border-radius: Spacing.radius-md;
                 background: provider.is-active ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: provider.display-name;
+                accessible-checkable: true;
+                accessible-checked: provider.is-active;
+                accessible-action-default => { root.local-ai-select-provider(provider.kind); }
                 provider-touch := TouchArea {
                     clicked => { root.local-ai-select-provider(provider.kind); }
                 }
@@ -322,6 +327,7 @@ export component AISettings inherits VerticalLayout {
                         horizontal-stretch: 1;
                         alignment: center;
                         Text {
+                            accessible-role: none;
                             text: provider.display-name;
                             color: Colors.text-primary;
                             font-size: Typography.sm;
@@ -334,6 +340,7 @@ export component AISettings inherits VerticalLayout {
                         }
                     }
                     if provider.is-active: Text {
+                        accessible-role: none;
                         text: "Active";
                         color: Colors.primary;
                         font-size: Typography.xs;
@@ -364,6 +371,11 @@ export component AISettings inherits VerticalLayout {
                 height: Spacing.button-height;
                 border-radius: Spacing.radius-md;
                 background: model == root.local-ai-active-model ? Colors.surface-hover : transparent;
+                accessible-role: button;
+                accessible-label: model;
+                accessible-checkable: true;
+                accessible-checked: model == root.local-ai-active-model;
+                accessible-action-default => { root.local-ai-select-model(model); }
                 model-touch := TouchArea {
                     clicked => { root.local-ai-select-model(model); }
                 }
@@ -371,6 +383,7 @@ export component AISettings inherits VerticalLayout {
                     padding-left: Spacing.sm;
                     padding-right: Spacing.sm;
                     Text {
+                        accessible-role: none;
                         horizontal-stretch: 1;
                         text: model;
                         color: Colors.text-primary;
@@ -378,6 +391,7 @@ export component AISettings inherits VerticalLayout {
                         vertical-alignment: center;
                     }
                     if model == root.local-ai-active-model: Text {
+                        accessible-role: none;
                         text: "✓";
                         color: Colors.primary;
                         font-size: Typography.sm;

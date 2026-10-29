@@ -234,12 +234,17 @@ export component JarvisMemoryModal inherits GlassSurface {
                                     animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    accessible-role: list-item;
+                                    accessible-label: row.name;
+                                    accessible-item-selected: row.is-selected;
+                                    accessible-action-default => { root.select-entity(row.entity-id); }
                                     chip-touch := TouchArea { enabled: root.show; clicked => { root.select-entity(row.entity-id); } }
                                     HorizontalLayout {
                                         padding-left: Spacing.sm;
                                         padding-right: Spacing.sm;
                                         spacing: Spacing.sm;
                                         Text {
+                                            accessible-role: none;
                                             horizontal-stretch: 1;
                                             text: row.name;
                                             color: Colors.text-primary;

@@ -183,6 +183,9 @@ export component FriendsTab inherits VerticalLayout {
                                     height: 44px;
                                     border-radius: Spacing.radius-sm;
                                     background: msg-touch.has-hover ? Colors.surface : transparent;
+                                    accessible-role: button;
+                                    accessible-label: "Message " + friend.display-name;
+                                    accessible-action-default => { root.start-dm(friend.user-id); }
 
                                     Image {
                                         source: Icons.message-circle;
@@ -208,6 +211,15 @@ export component FriendsTab inherits VerticalLayout {
                                     height: 44px;
                                     border-radius: Spacing.radius-sm;
                                     background: more-touch.has-hover ? Colors.surface : transparent;
+                                    accessible-role: button;
+                                    accessible-label: friend.is-anon ? "Message " + friend.display-name : "View profile of " + friend.display-name;
+                                    accessible-action-default => {
+                                        if (friend.is-anon) {
+                                            root.start-dm(friend.user-id);
+                                        } else {
+                                            root.view-profile(friend.user-id);
+                                        }
+                                    }
 
                                     // Icons.more-vertical, not U+22EE:
                                     // Inter has no vertical-ellipsis glyph

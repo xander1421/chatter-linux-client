@@ -49,6 +49,12 @@ export component MessageCall inherits HorizontalLayout {
         anonymous: root.is-anonymous;
         source: root.sender-avatar-source;
         fallback-text: root.sender-initials;
+        accessible-role: button;
+        accessible-label: "View profile of " + root.sender-name;
+        accessible-action-default => {
+            if root.selection-mode { root.selection-toggled(root.message-id); }
+            else { root.sender-profile-requested(root.sender-id); }
+        }
         TouchArea {
             mouse-cursor: pointer;
             clicked => {
@@ -76,6 +82,13 @@ export component MessageCall inherits HorizontalLayout {
         border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
         border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
         border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
+        accessible-role: button;
+        accessible-label: call-status.accessible-label;
+        accessible-action-default => {
+            if root.selection-mode { root.selection-toggled(root.message-id); return; }
+            if root.hold-tier != 0 { root.clear-hold-tier(); return; }
+            root.message-clicked(root.message-id);
+        }
 
         Rectangle {
             y: 0;
@@ -124,13 +137,14 @@ export component MessageCall inherits HorizontalLayout {
                             vertical-alignment: center;
                         }
 
-                        Text {
+                        call-status := Text {
                             text: is-missed ? "Missed call"
                                 : root.call-type == "declined" ? "Declined call"
                                 : root.call-type == "started" ? "Call started"
                                 : root.call-type == "ended" ? "Call ended"
                                 : is-outgoing ? "Outgoing call" : "Incoming call";
-                            accessible-role: text;
+                            // Spoken by the call card, which is the button.
+                            accessible-role: none;
                             accessible-label: root.call-type == "started" || root.call-type == "ended"
                                 ? (is-outgoing ? "Outgoing call " : "Incoming call ") + root.call-type
                                 : self.text;

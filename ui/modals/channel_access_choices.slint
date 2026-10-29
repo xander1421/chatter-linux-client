@@ -26,6 +26,11 @@ export component ChannelAccessChoices inherits VerticalLayout {
         // Open
         Rectangle {
             border-radius: Spacing.radius-md;
+            accessible-role: button;
+            accessible-label: "Open";
+            accessible-checkable: true;
+            accessible-checked: root.access-mode == "open";
+            accessible-action-default => { root.access-mode = "open"; }
             border-width: root.access-mode == "open" ? Spacing.stroke : 0px;
             border-color: Colors.primary;
             background: root.access-mode == "open" ? Colors.inset : (open-touch.pressed ? Materials.pressed : open-touch.has-hover ? Colors.surface-hover : Colors.surface);
@@ -52,6 +57,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                         }
                     }
                     Text {
+                        accessible-role: none;
                         text: "Open";
                         color: root.access-mode == "open" ? Colors.primary : Colors.text-primary;
                         font-size: Typography.sm;
@@ -78,6 +84,11 @@ export component ChannelAccessChoices inherits VerticalLayout {
         // Invite-only
         Rectangle {
             border-radius: Spacing.radius-md;
+            accessible-role: button;
+            accessible-label: "Invite-only";
+            accessible-checkable: true;
+            accessible-checked: root.access-mode == "invite";
+            accessible-action-default => { root.access-mode = "invite"; }
             border-width: root.access-mode == "invite" ? Spacing.stroke : 0px;
             border-color: Colors.primary;
             background: root.access-mode == "invite" ? Colors.inset : (invite-touch.pressed ? Materials.pressed : invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
@@ -104,6 +115,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                         }
                     }
                     Text {
+                        accessible-role: none;
                         text: "Invite-only";
                         color: root.access-mode == "invite" ? Colors.primary : Colors.text-primary;
                         font-size: Typography.sm;
@@ -130,6 +142,11 @@ export component ChannelAccessChoices inherits VerticalLayout {
         // Private group
         Rectangle {
             border-radius: Spacing.radius-md;
+            accessible-role: button;
+            accessible-label: "Anon group";
+            accessible-checkable: true;
+            accessible-checked: root.access-mode == "private-group";
+            accessible-action-default => { root.access-mode = "private-group"; }
             border-width: root.access-mode == "private-group" ? Spacing.stroke : 0px;
             border-color: Colors.primary;
             background: root.access-mode == "private-group" ? Colors.inset : (pg-touch.pressed ? Materials.pressed : pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
@@ -156,6 +173,7 @@ export component ChannelAccessChoices inherits VerticalLayout {
                         }
                     }
                     Text {
+                        accessible-role: none;
                         text: "Anon group";
                         color: root.access-mode == "private-group" ? Colors.group-accent : Colors.text-primary;
                         font-size: Typography.sm;
