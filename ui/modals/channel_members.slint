@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { ChannelMemberData, ChannelRosterRowData } from "channel_member_types.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
@@ -171,6 +172,7 @@ export component ChannelMembersSection inherits Rectangle {
             accessible-role: button;
             accessible-label: "Invite members";
             accessible-action-default => { root.invite-members(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.invite-members(); } }
             background: invite-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
             border-radius: Spacing.radius-sm;
 
@@ -196,6 +198,7 @@ export component ChannelMembersSection inherits Rectangle {
             accessible-role: button;
             accessible-label: "Invite members";
             accessible-action-default => { root.invite-channel-members(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.invite-channel-members(); } }
             background: invite-ch-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
             border-radius: Spacing.radius-sm;
 
@@ -390,6 +393,13 @@ export component ChannelMembersSection inherits Rectangle {
                     accessible-action-default => {
                         root.menu-member = member;
                         root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                    }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            root.menu-member = member;
+                            root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                        }
                     }
 
                     // Icons.more-vertical, not U+22EE (no glyph in Inter).
