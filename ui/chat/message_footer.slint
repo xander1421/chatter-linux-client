@@ -40,7 +40,9 @@ export component MessageFooter inherits HorizontalLayout {
             width: reactions-row.preferred-width + 8px;
             background: transparent;
             border-width: 0px;
-            accessible-role: button;
+            // A group: each reaction inside is its own button. As a button it
+            // had nothing to do and AT-SPI listed it with no action.
+            accessible-role: groupbox;
             accessible-label: "Reactions: " + root.reaction-summary;
 
             reactions-row := HorizontalLayout {
