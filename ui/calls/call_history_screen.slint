@@ -389,6 +389,10 @@ export component CallHistoryScreen inherits Rectangle {
                                     root.open-conversation(row.conversation-id, row.conversation-type);
                                 }
                             }
+                            // Double tap and hold: start selecting, as a long press.
+                            accessible-action-expand => {
+                                if !root.selecting { root.toggle-select(row.id); }
+                            }
                             background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
                                 : row-touch.pressed ? Materials.pressed : row-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
