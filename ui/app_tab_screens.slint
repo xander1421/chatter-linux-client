@@ -25,7 +25,9 @@ export component AppTabScreens inherits Rectangle {
         z: -1;
         show-modal: true;
         mobile-mode: root.compact-layout;
-        root-screen: true;
+        // A tab's root screen only where there is a tab bar (phone layout);
+        // on desktop and tablets it is a dialog, modal for screen readers.
+        root-screen: root.compact-layout;
         bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         display-name: SidebarPane.user-display-name;
         username: SettingsPane.settings-username;
@@ -64,7 +66,7 @@ export component AppTabScreens inherits Rectangle {
         z: -1;
         mobile-mode: root.compact-layout;
         // A tab's root screen: the tab bar navigates, no back chevron.
-        root-screen: true;
+        root-screen: root.compact-layout;
         // During a call the return bar occupies the strip above the dock.
         // Reserve it for fixed confirmation controls as well as list rows.
         bottom-inset: (root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px)
@@ -115,7 +117,7 @@ export component AppTabScreens inherits Rectangle {
         z: -1;
         mobile-mode: root.compact-layout;
         // A tab's root screen: the tab bar navigates, no back chevron.
-        root-screen: true;
+        root-screen: root.compact-layout;
         // Keep the tab bar visible under the Contacts screen — unless the
         // keyboard has replaced it, in which case there is nothing to leave
         // room for.
