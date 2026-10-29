@@ -558,6 +558,8 @@ export component CallHistoryScreen inherits Rectangle {
                                         animate transform-scale-y { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: button;
                                         accessible-label: "Call " + row.name;
+                                        // TalkBack activates through the default action.
+                                        accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, false); }
 
                                         Image {
                                             source: Icons.phone;
@@ -586,6 +588,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         animate transform-scale-y { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: button;
                                         accessible-label: "Video call " + row.name;
+                                        accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, true); }
 
                                         Image {
                                             source: Icons.video;

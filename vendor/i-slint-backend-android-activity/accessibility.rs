@@ -138,7 +138,12 @@ fn visit(
         "clickable": clickable,
         // TalkBack stopped on the row ("Ops 265, last message …") and again
         // on each text inside it ("Ops 265", "You: …", "01:37").
-        "focusable": clickable || (label.as_deref().is_some_and(|l| !l.is_empty()) && !in_labelled_clickable),
+        // Interactive roles stay stops inside a row even without a default
+        // action (the Calls row's redial buttons went unreachable).
+        "focusable": clickable
+            || matches!(item.accessible_role(), AccessibleRole::Button | AccessibleRole::Checkbox
+                | AccessibleRole::Switch | AccessibleRole::TextInput)
+            || (label.as_deref().is_some_and(|l| !l.is_empty()) && !in_labelled_clickable),
         "enabled": property(Property::Enabled).as_deref() != Some("false"),
         "checkable": property(Property::Checkable).as_deref() == Some("true"),
         "checked": property(Property::Checked).as_deref() == Some("true"),
