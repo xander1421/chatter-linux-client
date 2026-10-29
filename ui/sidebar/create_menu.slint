@@ -25,6 +25,10 @@ import { Input } from "../components/input.slint";
 import { VirtualKeyboard } from "../components/modal_container.slint";
 
 export component CreateMenu inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <length> card-x;
     in property <length> card-y;
     out property <length> card-width: 240px;

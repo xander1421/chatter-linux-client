@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { AccountSettings } from "account_settings.slint";
 import { DevicesSettings } from "devices_settings.slint";
 import { PrivacySettings } from "privacy_settings.slint";
@@ -305,6 +306,7 @@ export component SettingsScreen inherits Rectangle {
                             active-section = item.id;
                         }
                     }
+                    KeyFocus { enabled: item.enabled; border-radius: parent.border-radius; activate => { active-section = item.id; } }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;

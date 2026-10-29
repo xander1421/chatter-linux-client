@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // CallHistoryScreen — the mobile bottom nav's "Calls" tab.
@@ -226,6 +227,7 @@ export component CallHistoryScreen inherits Rectangle {
                         accessible-label: tab.label;
                         accessible-item-selected: root.active-filter == tab.id;
                         accessible-action-default => { root.filter-changed(tab.id); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.filter-changed(tab.id); } }
 
                         Text {
                             width: 100%;
@@ -387,6 +389,16 @@ export component CallHistoryScreen inherits Rectangle {
                                     root.toggle-select(row.id);
                                 } else {
                                     root.open-conversation(row.conversation-id, row.conversation-type);
+                                }
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    if root.selecting {
+                                        root.toggle-select(row.id);
+                                    } else {
+                                        root.open-conversation(row.conversation-id, row.conversation-type);
+                                    }
                                 }
                             }
                             // Double tap and hold: start selecting, as a long press.
@@ -564,6 +576,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         accessible-label: "Call " + row.name;
                                         // TalkBack activates through the default action.
                                         accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, false); }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, false); } }
 
                                         Image {
                                             source: Icons.phone;
@@ -593,6 +606,7 @@ export component CallHistoryScreen inherits Rectangle {
                                         accessible-role: button;
                                         accessible-label: "Video call " + row.name;
                                         accessible-action-default => { root.call-back(row.conversation-id, row.conversation-type, true); }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.call-back(row.conversation-id, row.conversation-type, true); } }
 
                                         Image {
                                             source: Icons.video;
@@ -760,6 +774,14 @@ export component CallHistoryScreen inherits Rectangle {
                                 root.show-clear-confirm = false;
                                 root.select-all(false);
                             }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.show-more-menu = false;
+                                    root.show-clear-confirm = false;
+                                    root.select-all(false);
+                                }
+                            }
 
                             select-label := Text {
                                 accessible-role: none;
@@ -790,6 +812,14 @@ export component CallHistoryScreen inherits Rectangle {
                                 root.show-more-menu = false;
                                 root.confirm-selected = false;
                                 root.show-clear-confirm = true;
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.show-more-menu = false;
+                                    root.confirm-selected = false;
+                                    root.show-clear-confirm = true;
+                                }
                             }
 
                             menu-label := Text {

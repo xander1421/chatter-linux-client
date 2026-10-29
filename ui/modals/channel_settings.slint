@@ -1,5 +1,6 @@
 // ChannelSettingsModal - Modal for viewing and editing channel settings
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { ChannelNotificationsSection } from "channel_notifications.slint";
 import { ChannelAccessSection } from "channel_access.slint";
 import { ChannelMembersSection } from "channel_members.slint";
@@ -210,6 +211,13 @@ export component ChannelSettingsModal inherits Rectangle {
                         accessible-action-default => {
                             root.active-section = index == 0 ? "overview" : index == 1 ? "members"
                                 : root.has-access-pane && index == 2 ? "access" : "notifications";
+                        }
+                        KeyFocus {
+                            border-radius: parent.border-radius;
+                            activate => {
+                                root.active-section = index == 0 ? "overview" : index == 1 ? "members"
+                                    : root.has-access-pane && index == 2 ? "access" : "notifications";
+                            }
                         }
                         Text {
                             accessible-role: none;

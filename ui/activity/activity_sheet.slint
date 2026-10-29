@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { ModalContainer } from "../components/modal_container.slint";
 import { ActivityGlobal } from "activity_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
@@ -77,16 +78,14 @@ component ActivityFeedRow inherits Rectangle {
             }
         }
     }
-    FocusScope {
-        width: 0px; height: 0px;
-        key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return { ActivityGlobal.open-item(root.item-id); return accept; }
-            return reject;
-        }
-    }
+    // The row is the accessible button, so keyboard focus on it is
+    // reported as the row (on the TouchArea it read as the dialog).
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-action-default => { ActivityGlobal.open-item(root.item-id); }
+    KeyFocus { activate => { ActivityGlobal.open-item(root.item-id); } }
     row-touch := TouchArea {
-        mouse-cursor: pointer; accessible-role: button; accessible-label: root.title;
-        accessible-action-default => { ActivityGlobal.open-item(root.item-id); }
+        mouse-cursor: pointer;
         clicked => { ActivityGlobal.open-item(root.item-id); }
     }
 }
@@ -128,6 +127,7 @@ export component ActivitySheet inherits Rectangle {
                     width: 90px; height: Spacing.touch-target-min;
                     accessible-role: button; accessible-label: "Close activity";
                     accessible-action-default => { root.close(); }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.close(); } }
                     Text { text: "Done"; color: Colors.primary; font-size: Typography.base;
                         vertical-alignment: center; }
                     TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
@@ -140,6 +140,7 @@ export component ActivitySheet inherits Rectangle {
                     accessible-role: button; accessible-label: "Mark all read";
                     accessible-enabled: ActivityGlobal.unread-count > 0;
                     accessible-action-default => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if ActivityGlobal.unread-count > 0 { ActivityGlobal.mark-all-read(); } } }
                     Text { text: "Mark all read"; color: ActivityGlobal.unread-count > 0 ? Colors.primary : Colors.text-muted;
                         font-size: Typography.xs; font-weight: Typography.semibold;
                         horizontal-alignment: right; vertical-alignment: center; }
