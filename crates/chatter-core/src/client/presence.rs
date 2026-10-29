@@ -10,6 +10,7 @@ pub(super) struct PresenceController {
     state: Mutex<PresenceState>,
     pub(super) publication_lock: Mutex<()>,
     idle_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    peer_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 struct PresenceState {
@@ -27,6 +28,7 @@ impl PresenceController {
             }),
             publication_lock: Mutex::new(()),
             idle_task: Mutex::new(None),
+            peer_task: Mutex::new(None),
         }
     }
 }
@@ -84,7 +86,56 @@ impl ChatterClient {
                 }
             }
         }));
+        drop(task);
+        self.spawn_presence_answer().await;
         tracing::info!(mode = %mode, "Presence initialized");
+    }
+
+    /// The server fans presence out only when someone publishes, so a device
+    /// that just came online saw every friend as "last seen …" until each
+    /// friend's next two-minute refresh (tablet, 2026-10-29: Foxtrot and Alpha
+    /// arrived 60 and 85 s after start). When a friend appears — first seen
+    /// this session, back from Offline, or silent past the refresh window —
+    /// publish our own status again so they see us at once. At most one
+    /// answer per 15 s; a friend we already hold as present gets none, so two
+    /// clients answer each other once and stop.
+    async fn spawn_presence_answer(self: &Arc<Self>) {
+        let mut events = self.services.event_bus.subscribe_domain();
+        let client = self.clone();
+        let handle = tokio::spawn(async move {
+            let mut seen: std::collections::HashMap<crate::domain::ids::UserId, (PresenceStatus, Instant)> =
+                std::collections::HashMap::new();
+            let mut last_answer: Option<Instant> = None;
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                let crate::events::DomainEvent::UserPresenceChanged { user_id, presence, .. } = event else {
+                    continue;
+                };
+                if client.session_current_user_id() == Some(user_id) || !client.is_friend(&user_id) {
+                    continue;
+                }
+                let appeared = presence != PresenceStatus::Offline
+                    && seen.get(&user_id).is_none_or(|(status, at)| {
+                        *status == PresenceStatus::Offline || at.elapsed() > Duration::from_secs(180)
+                    });
+                seen.insert(user_id, (presence, Instant::now()));
+                if !appeared || last_answer.is_some_and(|at| at.elapsed() < Duration::from_secs(15)) {
+                    continue;
+                }
+                let current = client.presence_controller.state.lock().await.current;
+                if current != PresenceStatus::Offline {
+                    last_answer = Some(Instant::now());
+                    client.refresh_identified_presence(current).await;
+                }
+            }
+        });
+        if let Some(old) = self.presence_controller.peer_task.lock().await.replace(handle) {
+            old.abort();
+        }
     }
 
     pub async fn record_presence_activity(&self) {
@@ -109,6 +160,7 @@ impl ChatterClient {
 
     pub async fn shutdown_presence(&self) {
         if let Some(task) = self.presence_controller.idle_task.lock().await.take() { task.abort(); }
+        if let Some(task) = self.presence_controller.peer_task.lock().await.take() { task.abort(); }
         let mut state = self.presence_controller.state.lock().await;
         self.publish_presence(&mut state, PresenceStatus::Offline).await;
         tracing::info!("Presence shutdown complete");
