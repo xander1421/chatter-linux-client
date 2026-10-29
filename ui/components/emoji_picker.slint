@@ -329,11 +329,19 @@ export component EmojiPicker inherits GlassSurface {
                         border-radius: Spacing.radius-sm;
                         background: emoji-area.pressed ? Materials.pressed
                             : emoji-area.has-hover ? Materials.hover : transparent;
-                        accessible-role: button;
+                        // Only cells in view are accessible: a tab holds up to ~500,
+                        // and every accessible cell costs the Android bridge a
+                        // visibility and property pass per TalkBack query (~570 ms
+                        // for People on the S9). Scrolled-off cells cannot be
+                        // reached on screen anyway.
+                        property <bool> on-screen: self.y + self.height + emoji-grid.viewport-y >= 0
+                            && self.y + emoji-grid.viewport-y <= emoji-grid.height;
+                        accessible-role: self.on-screen ? AccessibleRole.button : AccessibleRole.none;
                         accessible-label: emoji-data.emoji;
                         accessible-action-default => { root.emoji-selected(emoji-data.emoji); }
 
                         Text {
+                            accessible-role: none;
                             text: emoji-data.emoji;
                             font-family: Typography.font-family-emoji;
                             font-size: emoji-area.pressed ? Typography.xl * 0.82 : Typography.xl;
