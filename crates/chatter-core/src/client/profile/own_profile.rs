@@ -50,6 +50,17 @@ impl ChatterClient {
         let profile = self
             .with_profile_owner(user, revision, &edit_alive, || async {
                 // The encrypted profile blob adds a 12-byte nonce and 16-byte tag.
+                // The encrypted name and bio have fixed padding buckets; past
+                // the largest, encryption failed with a raw "display name too
+                // long: 300 > 257" in the dialog.
+                if display_name.len() > crate::crypto::profile_crypto::MAX_NAME_LENGTH {
+                    return Err(UserError::InvalidInput("that name is too long.".into()));
+                }
+                if status.as_ref().is_some_and(|s| {
+                    s.text.len() > crate::crypto::profile_crypto::MAX_STATUS_LENGTH
+                }) {
+                    return Err(UserError::InvalidInput("that bio is too long.".into()));
+                }
                 if avatar.as_ref().is_some_and(|b| {
                     b.is_empty()
                         || b.len()
