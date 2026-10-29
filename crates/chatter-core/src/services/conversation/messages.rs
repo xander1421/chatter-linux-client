@@ -289,7 +289,43 @@ impl ConversationHandle {
         let message = self.stored_message(target_author, target_sent_timestamp)?;
         let is_own = message.sender_id == self.client.auth_state().get().current_user_id;
         let now_ns = crate::util::time::TimestampNanos::now().as_u64();
-        Ok(stored_message_menu(&message, is_own, now_ns))
+        let mut menu = stored_message_menu(&message, is_own, now_ns);
+        // A channel owner/admin/moderator may delete anyone's message for
+        // everyone, not just their own within the window — the server authorizes
+        // this via message `delete = author + channel->moderate` (schema.zed:128).
+        // `decide` keeps channel delete-for-everyone author-only, so extend it
+        // here for moderators. The server stays authoritative; offering the
+        // action to a non-moderator only yields a rejected request.
+        if let ActiveConversation::Channel(channel_id) = &self.conversation {
+            if !menu.actions.delete_for_everyone && !message.is_deleted && message.sent_at > 0 {
+                // on_server, mirroring `decide`: someone else's message has
+                // reached the server; our own must not be failed/sending.
+                let reached = !is_own
+                    || !matches!(message.delivery_status.as_str(), "failed" | "sending");
+                if reached {
+                    if let Some(me) = self.client.session_current_user_id() {
+                        use crate::domain::channel::MemberRole;
+                        let can_moderate = self
+                            .client
+                            .channels()
+                            .channel_repo
+                            .get_membership(channel_id, &me)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|m| {
+                                matches!(
+                                    m.role,
+                                    MemberRole::Moderator | MemberRole::Admin | MemberRole::Owner
+                                )
+                            });
+                        if can_moderate {
+                            menu.actions.delete_for_everyone = true;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(menu)
     }
 
     pub(super) fn stored_message(
