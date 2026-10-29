@@ -180,6 +180,10 @@ bind_java_type! {
             sig = (id: jint) -> (),
             fn = crate::accessibility::long_click,
         },
+        pub static fn accessibility_scroll {
+            sig = (id: jint, forward: jint) -> (),
+            fn = crate::accessibility::scroll,
+        },
     },
 }
 

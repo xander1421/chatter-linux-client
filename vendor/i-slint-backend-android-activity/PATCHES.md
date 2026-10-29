@@ -53,6 +53,14 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   A node with zero width or height is reported not visible to the user:
   banners that collapse by animating height to 0 stay `is_visible()` in Slint
   and were otherwise read out by TalkBack while hidden.
+  Each Flickable that sits between an accessible node and its accessible
+  parent and can move is reported once as a scrollable node (class
+  ScrollView) offering ACTION_SCROLL_FORWARD/BACKWARD; the rows under it are
+  its children. `accessibilityScroll` moves its viewport 80% of a page on
+  the vertical axis if that scrolls, else the horizontal one, and the
+  provider sends TYPE_VIEW_SCROLLED. Slint exposes no Flickable to
+  accessibility, so with off-screen rows dropped TalkBack had nothing to
+  scroll and anything past the first screen of a list was unreachable.
 
 - `androidwindowadapter.rs` (game-activity path): IME state handling — see the
   `[patch.crates-io]` comment in the workspace `Cargo.toml`.

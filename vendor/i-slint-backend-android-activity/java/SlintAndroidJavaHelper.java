@@ -254,6 +254,14 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
             info.setLongClickable(true);
             info.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
         }
+        // A Flickable (accessibility.rs `scroller`): TalkBack scrolls it to
+        // reach rows that are off screen and so not in the tree.
+        if (node.optBoolean("scrollable")) {
+            info.setClassName("android.widget.ScrollView");
+            info.setScrollable(true);
+            if (node.optBoolean("scroll_forward")) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+            if (node.optBoolean("scroll_backward")) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+        }
         return info;
     }
 
@@ -268,6 +276,14 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
         if (action == AccessibilityNodeInfo.ACTION_LONG_CLICK) {
             SlintAndroidJavaHelper.accessibilityLongClick(id);
             nodes = null;
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) {
+            SlintAndroidJavaHelper.accessibilityScroll(id,
+                    action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ? 1 : 0);
+            nodes = null;
+            sendFocusEvent(id, AccessibilityEvent.TYPE_VIEW_SCROLLED);
             return true;
         }
         if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {
@@ -806,6 +822,7 @@ public class SlintAndroidJavaHelper {
 
     static public native void accessibilityClick(int id);
     static public native void accessibilityLongClick(int id);
+    static public native void accessibilityScroll(int id, int forward);
 
     static public native void setNightMode(int nightMode);
 
