@@ -636,6 +636,7 @@ mod tests {
             conv_type: "channel".into(),
             presence_status: String::new(),
             unread_count: unread,
+            private_channel: false,
         }
     }
 

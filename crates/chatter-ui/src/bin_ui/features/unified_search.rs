@@ -126,6 +126,7 @@ fn wire_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 conv_type: option.kind.into(),
                                 presence_status: "".into(),
                                 unread_count: 0,
+                                private_channel: false,
                                 has_avatar: avatar.is_some(),
                                 avatar: avatar.unwrap_or_default(),
                             }
@@ -991,6 +992,7 @@ fn conversation_items(
             conv_type: e.conv_type.into(),
             presence_status: e.presence_status.into(),
             unread_count: e.unread_count,
+            private_channel: e.private_channel,
             avatar: slint::Image::default(),
             has_avatar: false,
         })

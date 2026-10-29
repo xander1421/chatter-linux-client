@@ -20,6 +20,8 @@ export struct QuickSwitcherItem {
     conv-type: string,
     presence-status: string,
     unread-count: int,
+    // Invite-only channel: the sidebar's lock glyph instead of #.
+    private-channel: bool,
     avatar: image,
     has-avatar: bool,
 }
@@ -53,6 +55,7 @@ component ConvRow inherits Rectangle {
     in property <string> item-id;
     in property <string> name;
     in property <string> conv-type;
+    in property <bool> private-channel;
     in property <int> unread-count;
     in property <bool> selected: false;
     callback clicked(string, string);
@@ -102,7 +105,7 @@ component ConvRow inherits Rectangle {
             width: 20px;
             Image {
                 source: root.conv-type == "saved_messages" ? Icons.bookmark
-                      : root.conv-type == "channel" ? Icons.hash
+                      : root.conv-type == "channel" ? (root.private-channel ? Icons.lock : Icons.hash)
                       : root.conv-type == "private_group" ? Icons.users
                       : Icons.user;
                 width: 16px;
@@ -873,6 +876,7 @@ export component UnifiedSearch inherits Rectangle {
                             item-id: c.id;
                             name: c.name;
                             conv-type: c.conv-type;
+                            private-channel: c.private-channel;
                             unread-count: c.unread-count;
                             selected: i == root.selected-index;
                             clicked(id, t) => { root.conversation-selected(id, t); }

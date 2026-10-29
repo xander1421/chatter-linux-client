@@ -108,6 +108,7 @@ impl ChatterClient {
                     conv_type: conv_type.to_string(),
                     presence_status: presence,
                     unread_count: i32::try_from(unread_count).unwrap_or(i32::MAX),
+                    private_channel: false,
                 }
             };
 
@@ -133,10 +134,17 @@ impl ChatterClient {
                 dm.unread_count,
             ));
         }
+        let private = |channel: &crate::domain::channel::Channel| {
+            channel.channel_type == crate::domain::channel::ChannelType::Private
+        };
         for channel in self.sidebar_channels() {
             let id = channel.id.to_string();
             let count = unread(&id, channel.conversation_type());
-            entries.push(entry(id, channel.name, "channel", String::new(), count));
+            let private_channel = private(&channel);
+            entries.push(QuickSwitcherEntry {
+                private_channel,
+                ..entry(id, channel.name, "channel", String::new(), count)
+            });
         }
         for section in self.list_sections_with_conversations().unwrap_or_default() {
             for conv in section.conversations {
@@ -152,13 +160,23 @@ impl ChatterClient {
                     // Saved Messages has its own row.
                     CT::SavedMessages => continue,
                 };
-                entries.push(entry(
-                    conv.conversation_id,
-                    conv.display_name,
-                    kind,
-                    String::new(),
-                    conv.unread_count,
-                ));
+                let private_channel = kind == "channel"
+                    && conv
+                        .conversation_id
+                        .parse()
+                        .ok()
+                        .and_then(|id| self.get_channel_local(&id))
+                        .is_some_and(|channel| private(&channel));
+                entries.push(QuickSwitcherEntry {
+                    private_channel,
+                    ..entry(
+                        conv.conversation_id,
+                        conv.display_name,
+                        kind,
+                        String::new(),
+                        conv.unread_count,
+                    )
+                });
             }
         }
         #[cfg(feature = "mesh")]
