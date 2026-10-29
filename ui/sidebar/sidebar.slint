@@ -924,6 +924,7 @@ export component Sidebar inherits Rectangle {
 
         // Pinned like SidebarHeader; without x/y a child of this Rectangle is centred.
         if !root.collapsed && root.active-tab == "mesh": Rectangle {
+            property <length> action-box: root.touch ? Spacing.header-action-box-touch : Spacing.header-action-box;
             x: 0px;
             y: 0px;
             width: root.width;
@@ -932,6 +933,12 @@ export component Sidebar inherits Rectangle {
             HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.md;
+                // Centre the action buttons in the row: a bare HorizontalLayout
+                // top-aligns a fixed-height child, which clipped the bell's
+                // -4px activity badge against the panel's clip bound. The chats
+                // header avoids this by centring its bell; match that here.
+                padding-top: (root.top-row-height - parent.action-box) / 2;
+                padding-bottom: (root.top-row-height - parent.action-box) / 2;
                 spacing: Spacing.sm;
                 // iOS large-title bar: actions only, the title is MeshList's.
                 Rectangle { horizontal-stretch: 1; }
