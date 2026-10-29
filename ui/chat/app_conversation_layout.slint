@@ -122,6 +122,13 @@ export component AppConversationLayout inherits Rectangle {
     in-out property <string> reaction-picker-timestamp-ns;
     in-out property <bool> reaction-picker-visible;
     in-out property <int> reply-focus-serial;
+    // Opening a chat on desktop puts the caret in its composer, as Telegram
+    // and Signal Desktop do: after a click (or a screen reader's activation)
+    // on a chat row, typing went nowhere until the field was clicked.
+    property <string> open-conversation: ChatPane.channel-id;
+    changed open-conversation => {
+        if !root.is-mobile-platform && self.open-conversation != "" { root.reply-focus-serial += 1; }
+    }
     in property <int> scroll-to-message-index;
     in property <bool> secret-request-actions;
     in property <bool> selection-mode;
