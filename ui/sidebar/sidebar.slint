@@ -459,6 +459,7 @@ export component Sidebar inherits Rectangle {
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: list-item;
                     accessible-label: "Saved messages";
+                    accessible-action-default => { root.saved-messages-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
                     if !root.collapsed: HorizontalLayout {
@@ -507,6 +508,7 @@ export component Sidebar inherits Rectangle {
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: list-item;
                     accessible-label: AnonMode.enabled ? "Add contact" : "Friends";
+                    accessible-action-default => { root.friends-clicked(); }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
                     if !root.collapsed: HorizontalLayout {
@@ -600,6 +602,12 @@ export component Sidebar inherits Rectangle {
                     height: root.quick-link-height;
                     accessible-role: list-item;
                     accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
+                    accessible-action-default => {
+                        root.message-requests-clicked();
+                        root.group-invites-clicked();
+                        root.channel-invites-clicked();
+                        root.friend-requests-clicked();
+                    }
                     border-width: parent.roving-highlight ? 2px : 0px;
                     border-color: Colors.focus-ring;
                     background: requests-touch.pressed ? Colors.surface-control-hover
