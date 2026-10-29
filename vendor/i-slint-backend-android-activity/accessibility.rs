@@ -41,7 +41,7 @@ pub(crate) fn snapshot() -> String {
         let mut modal = None;
         find_topmost_modal(&root, &mut modal);
         let mut nodes = Vec::new();
-        visit(modal.unwrap_or(root), -1, adapter.window.scale_factor(), &mut items, &mut ids, &mut nodes);
+        visit(modal.unwrap_or(root), -1, None, adapter.window.scale_factor(), &mut items, &mut ids, &mut nodes);
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     })
 }
@@ -69,6 +69,7 @@ fn contains_accessible_item(root: &ItemRc, target: &ItemRc) -> bool {
 fn visit(
     item: ItemRc,
     parent: i32,
+    parent_label: Option<&str>,
     scale: f32,
     items: &mut Vec<i_slint_core::item_tree::ItemWeak>,
     ids: &mut std::collections::HashMap<(usize, u32), i32>,
@@ -79,6 +80,13 @@ fn visit(
     // property evaluation: with them a snapshot took ~1.2 s on the S9 and
     // stalled the UI thread for each TalkBack query. The root always stays.
     if parent >= 0 && !item.is_visible() {
+        return;
+    }
+    // A button's visible text repeats the button's own label ("Saved
+    // messages", "Edit profile", "GIFs"): TalkBack stopped on both. A native
+    // Button is one node; drop the repeat.
+    let label = item.accessible_string_property(Property::Label).map(|s| s.to_string());
+    if item.accessible_role() == AccessibleRole::Text && label.is_some() && label.as_deref() == parent_label {
         return;
     }
     // `items` only grows (ids must stay stable for clicks). Finding an item's
@@ -119,7 +127,7 @@ fn visit(
             AccessibleRole::Switch => "Switch",
             _ => "View",
         },
-        "label": property(Property::Label),
+        "label": label.clone(),
         "description": property(Property::Description),
         "value": property(Property::Value),
         "placeholder": property(Property::PlaceholderText),
@@ -132,7 +140,7 @@ fn visit(
         "visible": item.is_visible() && right > left && bottom > top,
     }));
     for child in accessible_descendents(&item) {
-        visit(child, id, scale, items, ids, nodes);
+        visit(child, id, label.as_deref(), scale, items, ids, nodes);
     }
 }
 
