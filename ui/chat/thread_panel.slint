@@ -11,6 +11,7 @@ import { DismissButton } from "../components/dismiss_button.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
 import { MessageItem } from "message_item.slint";
+import { DateSeparator } from "message_row_separators.slint";
 import { ConversationKind } from "conversation_kind.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
@@ -581,6 +582,12 @@ export component ThreadPanel inherits Rectangle {
                     padding-right: Spacing.sm;
                     padding-top: idx == 0 ? Spacing.sm : Spacing.none;
                     padding-bottom: idx == root.replies.length - 1 ? Spacing.sm : Spacing.xxs;
+                    // Day label where it changes, as the main list does.
+                    if item.date-separator-text != ""
+                        && (idx == 0 || root.replies[idx - 1].date-separator-text != item.date-separator-text): DateSeparator {
+                        width: 100%;
+                        label: item.date-separator-text;
+                    }
                     MessageItem {
                         width: 100%;
                         message-id: item.message-id;
