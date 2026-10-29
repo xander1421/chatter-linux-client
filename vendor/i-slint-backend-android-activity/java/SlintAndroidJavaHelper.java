@@ -243,7 +243,7 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
         info.setCheckable(node.optBoolean("checkable"));
         info.setChecked(node.optBoolean("checked"));
         boolean clickable = node.optBoolean("clickable");
-        info.setFocusable(clickable || !label.isEmpty());
+        info.setFocusable(node.optBoolean("focusable", clickable || !label.isEmpty()));
         info.setAccessibilityFocused(id == accessibilityFocus);
         info.addAction(id == accessibilityFocus
                 ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS

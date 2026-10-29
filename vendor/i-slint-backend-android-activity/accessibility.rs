@@ -41,7 +41,7 @@ pub(crate) fn snapshot() -> String {
         let mut modal = None;
         find_topmost_modal(&root, &mut modal);
         let mut nodes = Vec::new();
-        visit(modal.unwrap_or(root), -1, None, adapter.window.scale_factor(), &mut items, &mut ids, &mut nodes);
+        visit(modal.unwrap_or(root), -1, None, false, adapter.window.scale_factor(), &mut items, &mut ids, &mut nodes);
         serde_json::to_string(&nodes).unwrap_or_else(|_| "[]".into())
     })
 }
@@ -70,6 +70,9 @@ fn visit(
     item: ItemRc,
     parent: i32,
     parent_label: Option<&str>,
+    // Inside a clickable node with its own label: that label already speaks
+    // for this text, as a native row reads its children as one stop.
+    in_labelled_clickable: bool,
     scale: f32,
     items: &mut Vec<i_slint_core::item_tree::ItemWeak>,
     ids: &mut std::collections::HashMap<(usize, u32), i32>,
@@ -133,6 +136,9 @@ fn visit(
         "placeholder": property(Property::PlaceholderText),
         "left": left, "top": top, "right": right, "bottom": bottom,
         "clickable": clickable,
+        // TalkBack stopped on the row ("Ops 265, last message …") and again
+        // on each text inside it ("Ops 265", "You: …", "01:37").
+        "focusable": clickable || (label.as_deref().is_some_and(|l| !l.is_empty()) && !in_labelled_clickable),
         "enabled": property(Property::Enabled).as_deref() != Some("false"),
         "checkable": property(Property::Checkable).as_deref() == Some("true"),
         "checked": property(Property::Checked).as_deref() == Some("true"),
@@ -140,7 +146,9 @@ fn visit(
         "visible": item.is_visible() && right > left && bottom > top,
     }));
     for child in accessible_descendents(&item) {
-        visit(child, id, label.as_deref(), scale, items, ids, nodes);
+        let labelled_clickable = in_labelled_clickable
+            || (clickable && label.as_deref().is_some_and(|l| !l.is_empty()));
+        visit(child, id, label.as_deref(), labelled_clickable, scale, items, ids, nodes);
     }
 }
 

@@ -39,6 +39,9 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   A Text node whose label equals its parent's label (a button's own visible
   text) is dropped, so TalkBack stops on the button once, as on a native
   Button.
+  Each node reports `focusable`: a labelled node inside a clickable,
+  labelled ancestor is not (the Java provider reads the flag), so a chat row
+  is one TalkBack stop rather than one per text inside it.
   Text inputs carry their `value` (as the node text) and their label or
   placeholder (as the hint), like a native EditText.
   The provider caches a snapshot for 100 ms from when it is READY, so the
