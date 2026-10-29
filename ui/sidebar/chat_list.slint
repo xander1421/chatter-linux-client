@@ -53,6 +53,12 @@ export component ChatRow inherits Rectangle {
     accessible-role: list-item;
     accessible-label: root.data.accessible-label-text;
     accessible-action-default => { root.activate(); }
+    // Long press for a screen reader (TalkBack: double tap and hold): the
+    // row menu (Archive, Mute, Pin, …) had no other route but a swipe.
+    accessible-action-expand => {
+        root.context-menu-requested(root.absolute-position.x + root.width / 2,
+            root.absolute-position.y + root.height / 2);
+    }
 
     callback clicked();
     callback pin-requested(bool);

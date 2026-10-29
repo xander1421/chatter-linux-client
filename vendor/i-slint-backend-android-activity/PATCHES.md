@@ -42,6 +42,10 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   Each node reports `focusable`: a labelled node inside a clickable,
   labelled ancestor is not (the Java provider reads the flag), so a chat row
   is one TalkBack stop rather than one per text inside it.
+  Android's ACTION_LONG_CLICK runs Slint's Expand action
+  (`accessibilityLongClick`), so items with `accessible-action-expand`
+  (chat rows → their menu) are reachable with TalkBack's double tap and
+  hold.
   Text inputs carry their `value` (as the node text) and their label or
   placeholder (as the hint), like a native EditText.
   The provider caches a snapshot for 100 ms from when it is READY, so the

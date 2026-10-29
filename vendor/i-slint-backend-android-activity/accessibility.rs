@@ -136,6 +136,7 @@ fn visit(
         "placeholder": property(Property::PlaceholderText),
         "left": left, "top": top, "right": right, "bottom": bottom,
         "clickable": clickable,
+        "long_clickable": item.supported_accessibility_actions().contains(SupportedAccessibilityAction::Expand),
         // TalkBack stopped on the row ("Ops 265, last message …") and again
         // on each text inside it ("Ops 265", "You: …", "01:37").
         // Interactive roles stay stops inside a row even without a default
@@ -195,7 +196,23 @@ pub(crate) fn click<'local>(
     _class: JClass<'local>,
     id: jint,
 ) -> Result<(), jni::errors::Error> {
-    if id < 0 { return Ok(()) }
+    perform(id, AccessibilityAction::Default, SupportedAccessibilityAction::Default);
+    Ok(())
+}
+
+/// Android's long click (TalkBack: double tap and hold) runs the item's
+/// Expand action: chat rows open their menu with it, as a long press does.
+pub(crate) fn long_click<'local>(
+    _env: &mut Env<'local>,
+    _class: JClass<'local>,
+    id: jint,
+) -> Result<(), jni::errors::Error> {
+    perform(id, AccessibilityAction::Expand, SupportedAccessibilityAction::Expand);
+    Ok(())
+}
+
+fn perform(id: jint, action: AccessibilityAction, required: SupportedAccessibilityAction) {
+    if id < 0 { return }
     let _ = i_slint_core::api::invoke_from_event_loop(move || {
         CURRENT_WINDOW.with_borrow(|window| {
             let Some(adapter) = window.upgrade() else { return };
@@ -212,11 +229,10 @@ pub(crate) fn click<'local>(
                 {
                     return;
                 }
-                if item.supported_accessibility_actions().contains(SupportedAccessibilityAction::Default) {
-                    item.accessible_action(&AccessibilityAction::Default);
+                if item.supported_accessibility_actions().contains(required) {
+                    item.accessible_action(&action);
                 }
             }
         });
     });
-    Ok(())
 }

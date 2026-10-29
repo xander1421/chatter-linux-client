@@ -176,6 +176,10 @@ bind_java_type! {
             sig = (id: jint) -> (),
             fn = crate::accessibility::click,
         },
+        pub static fn accessibility_long_click {
+            sig = (id: jint) -> (),
+            fn = crate::accessibility::long_click,
+        },
     },
 }
 

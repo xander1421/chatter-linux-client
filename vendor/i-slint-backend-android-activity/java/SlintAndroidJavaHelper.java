@@ -250,6 +250,10 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
                 : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
         info.setClickable(clickable);
         if (clickable) info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+        if (node.optBoolean("long_clickable")) {
+            info.setLongClickable(true);
+            info.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
+        }
         return info;
     }
 
@@ -258,6 +262,11 @@ class SlintNodeProvider extends AccessibilityNodeProvider {
         if (id < 0) return false;
         if (action == AccessibilityNodeInfo.ACTION_CLICK) {
             SlintAndroidJavaHelper.accessibilityClick(id);
+            nodes = null;
+            return true;
+        }
+        if (action == AccessibilityNodeInfo.ACTION_LONG_CLICK) {
+            SlintAndroidJavaHelper.accessibilityLongClick(id);
             nodes = null;
             return true;
         }
@@ -796,6 +805,7 @@ public class SlintAndroidJavaHelper {
     static public native String accessibilityTree();
 
     static public native void accessibilityClick(int id);
+    static public native void accessibilityLongClick(int id);
 
     static public native void setNightMode(int nightMode);
 
