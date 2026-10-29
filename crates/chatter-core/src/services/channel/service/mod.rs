@@ -128,6 +128,7 @@ impl ChannelService {
                 "channel name cannot be empty".to_string(),
             ));
         }
+        check_name_length(trimmed_name)?;
 
         let proto_type = domain_channel_type_to_proto(channel_type);
         let proto_config = config.as_ref().map(domain_config_to_proto);
@@ -292,6 +293,9 @@ impl ChannelService {
                 "Name must be at least 3 characters".to_string(),
             ));
         }
+        if let Some(name) = name {
+            check_name_length(name)?;
+        }
 
         let existing = self
             .channel_repo
@@ -417,6 +421,20 @@ where
     Ok(())
 }
 
+/// Longest channel or group name, in characters (Telegram's limit). The
+/// server stores names in a VARCHAR(255) and checks no length, so a longer
+/// name failed there with an opaque error instead of here with a clear one.
+pub const MAX_CHANNEL_NAME_CHARS: usize = 128;
+
+fn check_name_length(name: &str) -> Result<(), ChannelError> {
+    if name.chars().count() > MAX_CHANNEL_NAME_CHARS {
+        return Err(ChannelError::InvalidInput(format!(
+            "Name must be at most {MAX_CHANNEL_NAME_CHARS} characters"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod deletion_tests {
     use super::*;
@@ -466,3 +484,4 @@ mod deletion_tests {
         ));
     }
 }
+
