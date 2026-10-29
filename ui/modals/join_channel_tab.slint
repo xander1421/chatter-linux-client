@@ -9,6 +9,11 @@ import { VirtualKeyboard } from "../components/modal_container.slint";
 
 export component JoinChannelTab inherits VerticalLayout {
     in-out property <string> join-search-query;
+    // Desktop: the search takes focus when the tab appears. The Create tab's
+    // field that had it is gone, and Slint then drops focus on the next key,
+    // so Escape stopped closing the dialog after switching to Join.
+    in property <bool> focus-on-show: false;
+    init => { if root.focus-on-show { search-input.focus(); } }
     in property <[SearchResultChannel]> join-results;
     in property <bool> join-searching;
     in property <string> join-error;
@@ -36,7 +41,7 @@ export component JoinChannelTab inherits VerticalLayout {
             font-size: Typography.sm;
         }
 
-        Input {
+        search-input := Input {
             placeholder: "Name, channel ID or chatter://join/ link";
             text <=> root.join-search-query;
 

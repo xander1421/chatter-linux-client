@@ -88,6 +88,7 @@ export component AppModalHost inherits Rectangle {
     // Create Channel Modal
     if root.is-presented("create-channel"): CreateChannelModal {
         show-modal: root.active-modal == "create-channel";
+        touch: root.is-mobile-platform;
         channel-name <=> ModalHostState.create-channel-name;
         channel-description <=> ModalHostState.create-channel-description;
         selected-template <=> ModalHostState.create-channel-template;

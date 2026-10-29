@@ -56,6 +56,7 @@ export struct CreateChannelConfig {
 
 export component CreateChannelModal inherits Rectangle {
     in property <bool> show-modal: false;
+    in property <bool> touch: false;
     in-out property <string> channel-name: "";
     in-out property <string> channel-description: "";
     in-out property <string> selected-template: "";
@@ -806,6 +807,7 @@ export component CreateChannelModal inherits Rectangle {
             }
 
             if root.active-tab == 1: JoinChannelTab {
+                focus-on-show: !root.touch;
                 join-search-query <=> root.join-search-query;
                 join-results: root.join-results;
                 join-searching: root.join-searching;
