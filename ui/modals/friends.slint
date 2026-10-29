@@ -8,6 +8,7 @@ import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
+import { KeyFocus } from "../components/key_focus.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { FriendsTab } from "friends_friends_tab.slint";
 import { FindTab } from "friends_find_tab.slint";
@@ -187,6 +188,7 @@ export component FriendsModal inherits Rectangle {
                             " (" + root.received-requests.length + ")" : "");
                         accessible-item-selected: root.active-tab == tab.id;
                         accessible-action-default => { root.open-tab(tab.id); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.open-tab(tab.id); } }
 
                         Text {
                             accessible-role: none;

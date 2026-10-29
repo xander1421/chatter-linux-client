@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -114,6 +115,16 @@ export component FriendsTab inherits VerticalLayout {
                             }
                         }
                     }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            if (friend.is-anon) {
+                                root.start-dm(friend.user-id);
+                            } else {
+                                root.view-profile(friend.user-id);
+                            }
+                        }
+                    }
 
                     HorizontalLayout {
                         padding: Spacing.sm;
@@ -186,6 +197,7 @@ export component FriendsTab inherits VerticalLayout {
                                     accessible-role: button;
                                     accessible-label: "Message " + friend.display-name;
                                     accessible-action-default => { root.start-dm(friend.user-id); }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.start-dm(friend.user-id); } }
 
                                     Image {
                                         source: Icons.message-circle;
@@ -218,6 +230,16 @@ export component FriendsTab inherits VerticalLayout {
                                             root.start-dm(friend.user-id);
                                         } else {
                                             root.view-profile(friend.user-id);
+                                        }
+                                    }
+                                    KeyFocus {
+                                        border-radius: parent.border-radius;
+                                        activate => {
+                                            if (friend.is-anon) {
+                                                root.start-dm(friend.user-id);
+                                            } else {
+                                                root.view-profile(friend.user-id);
+                                            }
                                         }
                                     }
 
