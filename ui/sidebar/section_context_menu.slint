@@ -548,6 +548,8 @@ export component SectionContextMenu inherits Rectangle {
             y: 0px;
             width: 0px;
             height: 0px;
+            // Not a Tab stop: it read as an unnamed panel between items.
+            focus-on-tab-navigation: false;
             key-pressed(event) => {
                 if event.text == Key.Escape { root.close(); return accept; }
                 if event.text == Key.UpArrow { root.move-focus(root.focus-index, -1); return accept; }
