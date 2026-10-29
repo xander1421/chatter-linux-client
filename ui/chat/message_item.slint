@@ -575,6 +575,20 @@ export component MessageItem inherits Rectangle {
                     // Selecting messages: say which ones are picked.
                     accessible-checkable: root.selection-mode;
                     accessible-checked: root.selected;
+                    // A screen reader has no long press: its activation opens the
+                    // message's menu (Reply, react, Edit, …), or picks the
+                    // message while selecting. Without it TalkBack could read a
+                    // message but do nothing with it.
+                    accessible-action-default => {
+                        if root.selection-mode {
+                            root.selection-toggled(root.message-id);
+                        } else if !root.is-system && !root.is-deleted {
+                            root.request-menu(self.absolute-position.x + self.width / 2,
+                                self.absolute-position.y + self.height,
+                                self.absolute-position.y, self.absolute-position.y + self.height,
+                                self.absolute-position.x, self.absolute-position.x + self.width);
+                        }
+                    }
 
                     // One rounded surface avoids a square backing at the corners.
                     background: transparent;
