@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -128,6 +129,13 @@ export component NotificationsSettings inherits VerticalLayout {
                     root.notification-detail = opt.key;
                     root.notification-detail-changed(opt.key);
                 }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        root.notification-detail = opt.key;
+                        root.notification-detail-changed(opt.key);
+                    }
+                }
 
                 HorizontalLayout {
                     padding-left: Spacing.sm;
@@ -189,6 +197,7 @@ export component NotificationsSettings inherits VerticalLayout {
         accessible-role: button;
         accessible-label: "Sound and vibration";
         accessible-action-default => { NotificationSound.open-system-settings(); }
+        KeyFocus { border-radius: parent.border-radius; activate => { NotificationSound.open-system-settings(); } }
 
         HorizontalLayout {
             padding: Spacing.md;

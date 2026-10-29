@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -59,6 +60,13 @@ export component AppearanceSettings inherits VerticalLayout {
                 accessible-action-default => {
                     Appearance.theme = opt.key;
                     Appearance.theme-changed(opt.key);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.theme = opt.key;
+                        Appearance.theme-changed(opt.key);
+                    }
                 }
 
                 HorizontalLayout {
@@ -156,6 +164,13 @@ export component AppearanceSettings inherits VerticalLayout {
                 accessible-action-default => {
                     Appearance.text-size = opt.key;
                     Appearance.text-size-changed(opt.key);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.text-size = opt.key;
+                        Appearance.text-size-changed(opt.key);
+                    }
                 }
 
                 HorizontalLayout {
@@ -314,6 +329,13 @@ export component AppearanceSettings inherits VerticalLayout {
                         Appearance.animation-speed = opt.value;
                         Appearance.animation-speed-changed(opt.value);
                     }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            Appearance.animation-speed = opt.value;
+                            Appearance.animation-speed-changed(opt.value);
+                        }
+                    }
                     Text {
                         text: opt.label;
                         horizontal-alignment: center;
@@ -371,6 +393,13 @@ export component AppearanceSettings inherits VerticalLayout {
                 accessible-action-default => {
                     Appearance.density = opt.key;
                     Appearance.density-changed(opt.key);
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        Appearance.density = opt.key;
+                        Appearance.density-changed(opt.key);
+                    }
                 }
 
                 HorizontalLayout {
@@ -481,6 +510,13 @@ export component AppearanceSettings inherits VerticalLayout {
                     accessible-action-default => {
                         root.search-shortcut = opt.key;
                         root.search-shortcut-changed(opt.key);
+                    }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            root.search-shortcut = opt.key;
+                            root.search-shortcut-changed(opt.key);
+                        }
                     }
                     height: Spacing.button-height;
                     min-width: 56px;

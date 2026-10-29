@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -90,6 +91,7 @@ export component PrivacySettings inherits VerticalLayout {
                 accessible-action-default => {
                     if !root.profile-visibility-busy { root.profile-visibility-selected(opt.key); }
                 }
+                KeyFocus { border-radius: parent.border-radius; activate => { if !root.profile-visibility-busy { root.profile-visibility-selected(opt.key); } } }
 
                 HorizontalLayout {
                     padding-left: Spacing.sm;
@@ -276,6 +278,15 @@ export component PrivacySettings inherits VerticalLayout {
                     if !selected {
                         root.username-discoverable = opt.discoverable;
                         root.username-discoverable-changed(opt.discoverable);
+                    }
+                }
+                KeyFocus {
+                    border-radius: parent.border-radius;
+                    activate => {
+                        if !selected {
+                            root.username-discoverable = opt.discoverable;
+                            root.username-discoverable-changed(opt.discoverable);
+                        }
                     }
                 }
 
