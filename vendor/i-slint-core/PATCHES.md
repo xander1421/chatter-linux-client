@@ -70,3 +70,10 @@ isolates (UAX #9 P2/P3). The regression test now follows `draw_text` through
 `create_text_paragraphs` and `layout()` with the row's no-wrap, left-aligned
 elided settings, and checks the leftmost visible cluster. The existing visual
 glyph elision still handles styled, wrapped and multiline text.
+
+Hidden focus item (2026-10-29): `window.rs` `process_key_input` drops focus when
+the focused item is no longer visible (clipped out of a scrolled menu, or its
+tab removed). Upstream then delivers the key to nothing, so Escape did nothing
+until a click (desktop row menu after a wheel scroll; New channel after
+switching to Join). The key is now delivered from the nearest visible ancestor,
+so window-level handlers (the app's back scope) still receive it.

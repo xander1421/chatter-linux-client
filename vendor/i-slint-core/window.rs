@@ -1081,7 +1081,17 @@ impl WindowInner {
         if item.as_ref().is_some_and(|i| !i.is_visible()) {
             // Reset the focus... not great, but better than keeping it.
             self.take_focus_item(&FocusEvent::FocusOut(FocusReason::TabNavigation));
-            item = None;
+            // Chatter patch: deliver this key from the nearest visible ancestor
+            // instead of dropping it, so window-level handlers still see it. A
+            // focused item that scrolled out of a menu or was removed by a tab
+            // switch left Escape doing nothing until the next click.
+            item = item.and_then(|mut i| loop {
+                match i.parent_item(ParentItemTraversalMode::StopAtPopups) {
+                    Some(parent) if parent.is_visible() => break Some(parent),
+                    Some(parent) => i = parent,
+                    None => break None,
+                }
+            });
         }
 
         let item_list = {
