@@ -15,6 +15,9 @@ export component AppShortcuts inherits FocusScope {
     width: 0;
     height: 0;
     enabled: root.current-view == "main";
+    // Keys reach it from the back scope; as a Tab stop it was an unnamed,
+    // invisible stop between the composer and the sidebar.
+    focus-on-tab-navigation: false;
 
     // The Ctrl commands. Called from the window's back scope, which is an
     // ancestor of every focused field: this zero-size scope is a sibling of

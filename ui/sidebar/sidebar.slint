@@ -54,6 +54,22 @@ export component Sidebar inherits Rectangle {
     in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SidebarRowData]> flat-rows: [];
+    // What a screen reader says for the keyboard-focused row: the internal
+    // kind ("saved", "friends") was read out for the quick links.
+    pure function row-label(row: SidebarRowData) -> string {
+        if row.kind == "chat" || row.kind == "section-chat" || row.kind == "archived-chat" {
+            return row.chat.display-name;
+        }
+        if row.kind == "section-header" { return row.section.name; }
+        if row.kind == "saved" { return "Saved messages"; }
+        if row.kind == "friends" { return AnonMode.enabled ? "Add contact" : "Friends"; }
+        if row.kind == "calls" { return "Calls"; }
+        if row.kind == "requests" { return "Requests"; }
+        if row.kind == "search" { return "Search"; }
+        if row.kind == "archive-entry" { return "Archived chats"; }
+        if row.kind == "archive-back" { return "Back to chats"; }
+        return row.kind;
+    }
     in-out property <int> focus-index: 0;
 
     // ── Properties: User profile ──
@@ -890,8 +906,7 @@ export component Sidebar inherits Rectangle {
             changed has-focus => { if (self.has-focus) { root.focus-step(-2); } }
             accessible-role: list;
             accessible-label: root.flat-rows.length > root.focus-index && root.focus-index >= 0
-                ? (root.flat-rows[root.focus-index].kind == "chat" || root.flat-rows[root.focus-index].kind == "section-chat" || root.flat-rows[root.focus-index].kind == "archived-chat"
-                    ? root.flat-rows[root.focus-index].chat.display-name : root.flat-rows[root.focus-index].kind)
+                ? root.row-label(root.flat-rows[root.focus-index])
                 : "Conversations";
             key-pressed(event) => {
                 if (event.text == Key.UpArrow) { root.focus-step(-1); return accept; }
