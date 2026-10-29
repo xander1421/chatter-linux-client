@@ -69,6 +69,8 @@ impl AccessKitAdapter {
                 next_component_id: 1,
                 free_component_ids: Default::default(),
                 root_node_id: NodeId(0),
+                window_root: None,
+                modal_root: None,
                 components_by_id: Default::default(),
                 component_ids: Default::default(),
                 all_nodes: Default::default(),
@@ -217,6 +219,16 @@ impl AccessKitAdapter {
             return;
         }
 
+        // Chatter patch: an overlay opened or closed changes which subtree the
+        // root exposes; only a full rebuild recomputes the root's children.
+        if let Some(root) = self.nodes.window_root.as_ref().and_then(|root| root.upgrade()) {
+            let modal = topmost_modal(&root).map(|modal| modal.downgrade());
+            if modal != self.nodes.modal_root {
+                self.reload_tree();
+                return;
+            }
+        }
+
         let Some(window_adapter) = self.window_adapter_weak.upgrade() else { return };
         let window = window_adapter.window();
 
@@ -263,6 +275,27 @@ impl AccessKitAdapter {
     }
 }
 
+/// Chatter patch: the last visible `accessible-id: "modal-overlay"` item in
+/// accessible tree order, i.e. the frontmost open overlay.
+fn topmost_modal(root: &ItemRc) -> Option<ItemRc> {
+    fn visit(item: &ItemRc, found: &mut Option<ItemRc>) {
+        if !item.is_visible() {
+            return;
+        }
+        if item.accessible_string_property(AccessibleStringProperty::Id).as_deref()
+            == Some("modal-overlay")
+        {
+            *found = Some(item.clone());
+        }
+        for child in i_slint_core::accessibility::accessible_descendents(item) {
+            visit(&child, found);
+        }
+    }
+    let mut found = None;
+    visit(root, &mut found);
+    found
+}
+
 fn accessible_parent_for_item_rc(mut item: ItemRc) -> ItemRc {
     while !item.is_accessible() {
         if let Some(parent) = item.parent_item(ParentItemTraversalMode::StopAtPopups) {
@@ -287,6 +320,12 @@ struct NodeCollection {
     all_nodes: Vec<CachedNode>,
     root_node_id: NodeId,
     focused_node_tracker: Pin<Box<PropertyTracker<false, DelegateFocusPropertyTracker>>>,
+    /// Chatter patch: the window's root item and the frontmost open overlay
+    /// (`accessible-id: "modal-overlay"`, as the Android bridge reads it).
+    /// While one is open the root's only child is that overlay, so a screen
+    /// reader cannot wander into the screen behind a dialog or menu.
+    window_root: Option<i_slint_core::item_tree::ItemWeak>,
+    modal_root: Option<i_slint_core::item_tree::ItemWeak>,
 }
 
 impl NodeCollection {
@@ -320,6 +359,9 @@ impl NodeCollection {
                     .or_else(|| window_inner.try_component().map(ItemRc::new_root))
                     .map(|focus_item| self.find_node_id_by_item_rc(focus_item))
             })
+            // Chatter patch: focus behind an open overlay is not in the tree
+            // (see `modal_root`); AccessKit needs the focus node to exist.
+            .filter(|id| self.all_nodes.iter().any(|node| node.id == *id))
             .unwrap_or(self.root_node_id)
     }
 
@@ -395,7 +437,17 @@ impl NodeCollection {
             })
             .collect::<Vec<_>>();
 
-        let children = i_slint_core::accessibility::accessible_descendents(&item)
+        let modal = self
+            .window_root
+            .as_ref()
+            .is_some_and(|root| *root == item.downgrade())
+            .then(|| self.modal_root.as_ref().and_then(|m| m.upgrade()))
+            .flatten();
+        let children: Box<dyn Iterator<Item = ItemRc> + '_> = match modal {
+            Some(modal) => Box::new(std::iter::once(modal)),
+            None => Box::new(i_slint_core::accessibility::accessible_descendents(&item)),
+        };
+        let children = children
             .map(|child| {
                 self.build_node_for_item_recursively(
                     child,
@@ -442,6 +494,8 @@ impl NodeCollection {
         window_inner.ensure_tree_instantiated();
 
         let root_item = ItemRc::new_root(window_inner.component());
+        self.window_root = Some(root_item.downgrade());
+        self.modal_root = topmost_modal(&root_item).map(|m| m.downgrade());
 
         let popups = window_inner
             .active_popups()
