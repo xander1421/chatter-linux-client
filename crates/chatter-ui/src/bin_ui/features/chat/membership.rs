@@ -209,7 +209,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             async move {
                 c.revoke_channel_invite_link(&channel_id, &link_id)
                     .await
-                    .map(|()| None)
+                    // Clear the just-created link's copy box so a revoked link
+                    // can't still be copied (empty string hides it in the UI).
+                    .map(|()| Some(String::new()))
             },
         );
     });

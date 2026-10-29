@@ -292,7 +292,7 @@ export component FindTab inherits VerticalLayout {
     }
 
     // Privacy info section
-    Rectangle {
+    info-section := Rectangle {
         vertical-stretch: 1;
 
         VerticalLayout {
@@ -332,6 +332,10 @@ export component FindTab inherits VerticalLayout {
             }
 
             Text {
+                // The parent centres (non-stretch), so Slint sizes to preferred
+                // width and this long hint ran off-screen instead of wrapping.
+                // Bind to the stretched section width so word-wrap engages.
+                width: info-section.width - Spacing.lg * 2;
                 text: root.effective-private-mode
                     ? "\u{1F510} Private codes start a secret chat through anonymous mailboxes over Tor"
                     : "\u{1F517} Server codes send a friend request; private codes start a secret chat over Tor";

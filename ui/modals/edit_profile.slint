@@ -69,7 +69,9 @@ export component EditProfileModal inherits Rectangle {
                                 accessible-role: button;
                                 accessible-label: "Edit profile photo";
                                 accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
-                                KeyFocus { border-radius: parent.border-radius; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
+                                // The preview is a 96px circle; without this the ring inherits the
+                                // transparent parent's 0 radius and boxes the round avatar.
+                                KeyFocus { border-radius: parent.width / 2; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
                                 Avatar {
                                     size: 96px;
                                     name: root.display-name;
