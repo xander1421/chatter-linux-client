@@ -182,7 +182,7 @@ export component FriendsModal inherits Rectangle {
                         animate background { duration: Materials.motion-standard; easing: Materials.glide; }
                         animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-                        accessible-role: tab;
+                        accessible-role: AccessibleRole.tab;
                         accessible-label: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
                             " (" + root.received-requests.length + ")" : "");
                         accessible-item-selected: root.active-tab == tab.id;

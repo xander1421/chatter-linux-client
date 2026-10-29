@@ -204,7 +204,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                         // A screen reader saw these as plain text it could not switch.
-                        accessible-role: tab;
+                        accessible-role: AccessibleRole.tab;
                         accessible-label: tab;
                         accessible-item-selected: root.section-tab == index;
                         accessible-action-default => {
