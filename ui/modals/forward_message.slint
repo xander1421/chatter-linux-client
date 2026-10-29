@@ -1,5 +1,6 @@
 // ForwardMessageModal - Modal for forwarding messages to channels or DMs
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Icons } from "../theme/icons.slint";
@@ -144,6 +145,7 @@ export component ForwardMessageModal inherits Rectangle {
                             accessible-label: target.name;
                             accessible-item-selected: is-selected;
                             accessible-action-default => { root.selected-target-id = target.id; }
+                            KeyFocus { border-radius: parent.border-radius; activate => { root.selected-target-id = target.id; } }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;

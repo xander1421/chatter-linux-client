@@ -1,5 +1,6 @@
 // InviteMemberModal - Modal for inviting users to a channel
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Icons } from "../theme/icons.slint";
@@ -126,6 +127,7 @@ export component InviteMemberModal inherits Rectangle {
                             accessible-checked: user.selected;
                             accessible-enabled: !unavailable;
                             accessible-action-default => { if !unavailable { root.toggle-user(index); } }
+                            KeyFocus { enabled: !parent.unavailable; border-radius: parent.border-radius; activate => { root.toggle-user(index); } }
                             background: unavailable ? transparent :
                                 (user-touch.pressed ? Materials.pressed : user-touch.has-hover ? Colors.surface-hover : transparent);
                             border-radius: Spacing.radius-md;
