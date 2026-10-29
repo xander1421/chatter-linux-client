@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -34,6 +35,7 @@ export component ChannelIdentityFields inherits HorizontalLayout {
             accessible-role: button;
             accessible-label: root.has-icon-preview ? "Change channel icon" : "Upload channel icon";
             accessible-action-default => { root.pick-channel-icon(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.pick-channel-icon(); } }
 
             if root.has-icon-preview: Image {
                 source: root.icon-preview;

@@ -4,6 +4,7 @@
 // inline reveal for password/TTL/AI, collapsible "More options". Private-group
 // path swaps the main form area in place for the friend picker.
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Materials } from "../theme/materials.slint";
@@ -199,6 +200,7 @@ export component CreateChannelModal inherits Rectangle {
                     accessible-label: tab;
                     accessible-item-selected: root.active-tab == index;
                     accessible-action-default => { root.active-tab = index; }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.active-tab = index; } }
 
                     Text {
                         accessible-role: none;
@@ -353,6 +355,7 @@ export component CreateChannelModal inherits Rectangle {
                                 accessible-checkable: true;
                                 accessible-checked: friend.selected;
                                 accessible-action-default => { root.toggle-friend-selection(idx); }
+                                KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-friend-selection(idx); } }
 
                                 friend-touch := TouchArea {
                                     mouse-cursor: pointer;
@@ -440,6 +443,7 @@ export component CreateChannelModal inherits Rectangle {
                                             accessible-label: "Role for " + friend.display-name + ": " + role-text.text;
                                             accessible-enabled: friend.selected;
                                             accessible-action-default => { if friend.selected { root.toggle-friend-role(idx); } }
+                                            KeyFocus { border-radius: parent.border-radius; activate => { if friend.selected { root.toggle-friend-role(idx); } } }
 
                                             role-text := Text {
                                                 accessible-role: none;
@@ -478,6 +482,7 @@ export component CreateChannelModal inherits Rectangle {
                     accessible-role: button;
                     accessible-label: root.more-options-expanded ? "Hide more options" : "Show more options";
                     accessible-action-default => { root.more-options-expanded = !root.more-options-expanded; }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.more-options-expanded = !root.more-options-expanded; } }
 
                     HorizontalLayout {
                         width: 100%;
@@ -641,6 +646,14 @@ export component CreateChannelModal inherits Rectangle {
                                         root.ai-model = "";
                                         root.provider-selected(provider.id);
                                     }
+                                    KeyFocus {
+                                        border-radius: parent.border-radius;
+                                        activate => {
+                                            root.ai-provider = provider.id;
+                                            root.ai-model = "";
+                                            root.provider-selected(provider.id);
+                                        }
+                                    }
 
                                     Text {
                                         accessible-role: none;
@@ -708,6 +721,7 @@ export component CreateChannelModal inherits Rectangle {
                                             accessible-checkable: true;
                                             accessible-checked: root.ai-model == model.id;
                                             accessible-action-default => { root.ai-model = model.id; }
+                                            KeyFocus { border-radius: parent.border-radius; activate => { root.ai-model = model.id; } }
 
                                             HorizontalLayout {
                                                 padding-left: Spacing.sm;

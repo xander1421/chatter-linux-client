@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
@@ -200,6 +201,7 @@ export component NewChatPicker inherits Rectangle {
                         accessible-role: button;
                         accessible-label: friend.display-name;
                         accessible-action-default => { if root.show { modal.release-focus(); root.pick(friend.user-id); } }
+                        KeyFocus { border-radius: parent.border-radius; activate => { if root.show { modal.release-focus(); root.pick(friend.user-id); } } }
                         HorizontalLayout {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;
