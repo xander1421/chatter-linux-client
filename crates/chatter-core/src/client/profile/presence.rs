@@ -46,8 +46,12 @@ impl ChatterClient {
         reported
     }
 
-    /// Anonymous chats have no live peer presence feed. Show their active
-    /// indicator only while this device can reach the server.
+    /// Active indicator for an anonymous/secret chat. This deliberately reflects
+    /// THIS device's own server reachability, not the peer. A peer presence feed
+    /// does now exist (`AnonDmPresence` -> `DomainEvent::UserPresenceChanged`,
+    /// `services/anon_dm/processing.rs`), so whether a secret chat should surface
+    /// the peer's real presence instead is an open product decision (§913); until
+    /// then the dot stays a local "this device can reach the server" signal.
     pub fn anon_peer_presence(&self) -> crate::domain::user::PresenceStatus {
         if self.offline_snapshot().is_online {
             crate::domain::user::PresenceStatus::Online
