@@ -17,6 +17,20 @@ import { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } fro
 export { FriendData, FriendRequestData, ChannelInviteData, BlockedUserData } from "friends_data.slint";
 
 export component FriendsModal inherits Rectangle {
+    // A tab chosen by click or by a screen reader. Requests opens on the
+    // first sub-tab that has anything in it.
+    function open-tab(id: string) {
+        if id == "requests" {
+            root.requests-sub-tab = root.received-requests.length > 0 ? "received"
+                : root.sent-requests.length > 0 ? "sent"
+                : root.private-requests.length > 0 ? "private"
+                : root.group-invites.length > 0 ? "groups"
+                : root.channel-invites.length > 0 ? "channels"
+                : "received";
+        }
+        root.active-tab = id;
+        root.switch-tab(id);
+    }
     in property <bool> show-modal: false;
     // "Touch input", same meaning as the sidebar's. On a phone this modal is
     // effectively a full-screen contacts page, so its rows get the same
@@ -168,8 +182,14 @@ export component FriendsModal inherits Rectangle {
                         animate background { duration: Materials.motion-standard; easing: Materials.glide; }
                         animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                         animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        accessible-role: tab;
+                        accessible-label: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+                            " (" + root.received-requests.length + ")" : "");
+                        accessible-item-selected: root.active-tab == tab.id;
+                        accessible-action-default => { root.open-tab(tab.id); }
 
                         Text {
+                            accessible-role: none;
                             width: 100%;
                             height: 100%;
                             text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
@@ -187,18 +207,7 @@ export component FriendsModal inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             mouse-cursor: pointer;
-                            clicked => {
-                                if tab.id == "requests" {
-                                    root.requests-sub-tab = root.received-requests.length > 0 ? "received"
-                                        : root.sent-requests.length > 0 ? "sent"
-                                        : root.private-requests.length > 0 ? "private"
-                                        : root.group-invites.length > 0 ? "groups"
-                                        : root.channel-invites.length > 0 ? "channels"
-                                        : "received";
-                                }
-                                root.active-tab = tab.id;
-                                root.switch-tab(tab.id);
-                            }
+                            clicked => { root.open-tab(tab.id); }
                         }
                     }
                 }
