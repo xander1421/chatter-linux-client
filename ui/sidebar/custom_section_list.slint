@@ -53,6 +53,11 @@ export component CustomSectionHeader inherits Rectangle {
     accessible-label: root.name;
     accessible-description: root.is-expanded ? "Expanded section. Press Shift+F10 or Menu for section options." : "Collapsed section. Press Shift+F10 or Menu for section options.";
     accessible-action-default => { root.toggle-expanded(); }
+    // TalkBack's double tap and hold: the section menu, as a long press.
+    accessible-action-expand => {
+        root.context-menu-requested(root.absolute-position.x + root.width / 2,
+            root.absolute-position.y + root.height);
+    }
     border-width: header-keys.has-focus || root.keyboard-highlight ? 2px : 0px;
     border-color: Colors.focus-ring;
 
