@@ -207,6 +207,13 @@ export component ChatHeader inherits GlassSurface {
                 y: (parent.height - self.height) / 2;
                 show-presence: root.is-dm;
                 presence-color: root.presence-dot;
+                // The picture opens the same screen as the name (Telegram);
+                // the name stays the accessible and keyboard target.
+                TouchArea {
+                    enabled: root.show-settings;
+                    mouse-cursor: self.enabled ? pointer : default;
+                    clicked => { root.settings-clicked(); }
+                }
             }
 
             // Mesh rooms are their own kind, not a channel, and their names
@@ -243,6 +250,13 @@ export component ChatHeader inherits GlassSurface {
                 y: (parent.height - self.height) / 2;
                 show-presence: true;
                 presence-color: root.presence-dot;
+                // The picture opens the same screen as the name (Telegram);
+                // the name stays the accessible and keyboard target.
+                TouchArea {
+                    enabled: root.show-settings;
+                    mouse-cursor: self.enabled ? pointer : default;
+                    clicked => { root.settings-clicked(); }
+                }
             }
 
             if has-channel && !root.has-avatar && (is-anon-dm || is-private-group): Avatar {

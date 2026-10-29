@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { SharedContentItem, SharedTab } from "profile_shared_types.slint";
 import { ProfileSharedList } from "profile_shared_list.slint";
 import { ProfileSharedGrid } from "profile_shared_grid.slint";
@@ -50,6 +51,7 @@ component ProfileActionRow inherits Rectangle {
     accessible-role: button;
     accessible-label: root.text;
     accessible-action-default => { root.clicked(); }
+    KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
     HorizontalLayout {
         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
         VerticalLayout { alignment: center;
@@ -366,6 +368,13 @@ export component UserProfileModal inherits Rectangle {
                                 if root.safety-number == "" { root.view-safety-number(); }
                                 root.show-safety-number = true;
                             }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    if root.safety-number == "" { root.view-safety-number(); }
+                                    root.show-safety-number = true;
+                                }
+                            }
 
                             Text {
                                 text: "\u{2713}";
@@ -493,6 +502,7 @@ export component UserProfileModal inherits Rectangle {
                                     accessible-role: button;
                                     accessible-label: "Disappearing messages: " + DisappearingGlobal.dm-label;
                                     accessible-action-default => { root.timer-picker-open = !root.timer-picker-open; }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.timer-picker-open = !root.timer-picker-open; } }
 
                                     timer-row-layout := HorizontalLayout {
                                         spacing: Spacing.sm;
@@ -644,6 +654,7 @@ export component UserProfileModal inherits Rectangle {
                                     accessible-role: button;
                                     accessible-label: category.label;
                                     accessible-action-default => { root.shared-tab = category.id; root.shared-title = category.label; root.shared-page-open = true; root.shared-tab-selected(category.id); }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.shared-tab = category.id; root.shared-title = category.label; root.shared-page-open = true; root.shared-tab-selected(category.id); } }
                                     HorizontalLayout {
                                         padding-left: Spacing.md; padding-right: Spacing.md; spacing: Spacing.md;
                                         VerticalLayout { alignment: center;

@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -95,6 +96,13 @@ export component ProfileInfoCard inherits HorizontalLayout {
                     accessible-action-default => {
                         root.show-share-qr = !root.show-share-qr;
                         if root.share-link == "" { root.generate-share-link(); }
+                    }
+                    KeyFocus {
+                        border-radius: parent.border-radius;
+                        activate => {
+                            root.show-share-qr = !root.show-share-qr;
+                            if root.share-link == "" { root.generate-share-link(); }
+                        }
                     }
 
                     // Drawn rather than an SVG asset: three

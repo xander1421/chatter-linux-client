@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -73,6 +74,20 @@ export component ProfileActionTiles inherits HorizontalLayout {
                 root.start-call(false);
             } else {
                 root.open-more();
+            }
+        }
+        KeyFocus {
+            border-radius: parent.border-radius;
+            activate => {
+                if (act.id == "message") {
+                    root.send-message();
+                } else if (act.id == "mute") {
+                    root.toggle-mute();
+                } else if (act.id == "call") {
+                    root.start-call(false);
+                } else {
+                    root.open-more();
+                }
             }
         }
 

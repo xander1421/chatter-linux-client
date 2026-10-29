@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -25,6 +26,15 @@ export component ProfileSafetyNumber inherits VerticalLayout {
                 root.view-safety-number();
             } else {
                 root.show-safety-number = !root.show-safety-number;
+            }
+        }
+        KeyFocus {
+            activate => {
+                if root.safety-number == "" {
+                    root.view-safety-number();
+                } else {
+                    root.show-safety-number = !root.show-safety-number;
+                }
             }
         }
 
