@@ -281,6 +281,8 @@ livekit = { path = "vendor/livekit" }
 # Explicit private-PKI signaling connector; see vendor/livekit-api/PATCHES.md.
 livekit-api = { path = "vendor/livekit-api" }
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
+# AccessKit focus change during an accessibility action; see vendor/i-slint-backend-winit/PATCHES.md.
+i-slint-backend-winit = { path = "vendor/i-slint-backend-winit" }
 
 # Slint 1.17.1 Backdrop builtin and Skia backdrop image filters.
 i-slint-compiler = { path = "vendor/i-slint-compiler" }
