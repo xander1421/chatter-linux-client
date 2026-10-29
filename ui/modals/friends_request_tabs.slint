@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
@@ -41,6 +42,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "received";
 
             accessible-action-default => { root.requests-sub-tab = "received"; }
+            KeyFocus { activate => { root.requests-sub-tab = "received"; } }
             width: 104px * Appearance.text-grow;
             background: recv-tab-touch.has-hover ? Materials.hover : transparent;
 
@@ -82,6 +84,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "sent";
 
             accessible-action-default => { root.requests-sub-tab = "sent"; }
+            KeyFocus { activate => { root.requests-sub-tab = "sent"; } }
             width: 88px * Appearance.text-grow;
             background: sent-tab-touch.has-hover ? Materials.hover : transparent;
 
@@ -123,6 +126,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "private";
 
             accessible-action-default => { root.requests-sub-tab = "private"; }
+            KeyFocus { activate => { root.requests-sub-tab = "private"; } }
             width: 96px * Appearance.text-grow;
             background: priv-tab-touch.has-hover ? Materials.hover : transparent;
 
@@ -164,6 +168,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "groups";
 
             accessible-action-default => { root.requests-sub-tab = "groups"; }
+            KeyFocus { activate => { root.requests-sub-tab = "groups"; } }
             width: 96px * Appearance.text-grow;
             background: groups-tab-touch.has-hover ? Materials.hover : transparent;
 
@@ -205,6 +210,7 @@ export component RequestTabs inherits Flickable {
             accessible-item-selected: root.requests-sub-tab == "channels";
 
             accessible-action-default => { root.requests-sub-tab = "channels"; }
+            KeyFocus { activate => { root.requests-sub-tab = "channels"; } }
             width: 112px * Appearance.text-grow;
             background: channels-tab-touch.has-hover ? Materials.hover : transparent;
 
