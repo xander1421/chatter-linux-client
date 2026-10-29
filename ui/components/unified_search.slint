@@ -304,6 +304,10 @@ component PersonRow inherits Rectangle {
 
 // Full-window overlay palette (rendered at the window root via `if open`).
 export component UnifiedSearch inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
     in property <[QuickSwitcherItem]> conversations: [];
     in property <[SearchResult]> messages: [];

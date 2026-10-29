@@ -14,6 +14,10 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 
 export component SealedSenderIntroModal inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show-modal ? "modal-overlay" : "";
     in property <bool> show-modal: false;
     property <bool> entered: false;
     changed show-modal => { if !root.show-modal { root.entered = false; } }

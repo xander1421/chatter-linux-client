@@ -13,6 +13,10 @@ import { Icons } from "../theme/icons.slint";
 import { MenuRow } from "../settings/account_menu.slint";
 
 export component ChatHeaderMenu inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <length> card-x;
     in property <length> card-y;
     in property <bool> show-video-call;

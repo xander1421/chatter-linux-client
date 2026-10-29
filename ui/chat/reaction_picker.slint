@@ -12,6 +12,10 @@ import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { QuickReactions } from "types.slint";
 
 export component ReactionPicker inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     // Visibility
     in property <bool> show: false;
     // Opened from the message menu, whose focused item then closes: without

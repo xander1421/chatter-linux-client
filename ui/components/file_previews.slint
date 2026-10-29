@@ -3,6 +3,10 @@ import { CodePreviewPanel } from "code_preview_panel.slint";
 import { PdfPreviewPanel } from "pdf_preview_panel.slint";
 
 export component CodePreviewOverlay inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: "modal-overlay";
     in property <string> file-name;
     in property <string> language;
     in property <int> line-count;
@@ -37,6 +41,10 @@ export component CodePreviewOverlay inherits Rectangle {
 }
 
 export component PdfPreviewOverlay inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: "modal-overlay";
     in property <string> file-name;
     in property <int> page-count;
     in property <int> current-page;

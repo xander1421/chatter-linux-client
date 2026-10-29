@@ -12,6 +12,10 @@ import { Avatar } from "../components/avatar.slint";
 import { IncomingCallData } from "types.slint";
 
 export component IncomingCallModal inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
     in property <IncomingCallData> call-data;
     /// True when there is already an active call — accepting this one will

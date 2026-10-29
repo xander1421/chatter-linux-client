@@ -9,6 +9,10 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 
 export component RecoveryCodesModal inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show-modal ? "modal-overlay" : "";
     in property <bool> show-modal: false;
     in property <[string]> codes: [];
     in property <bool> loading: false;

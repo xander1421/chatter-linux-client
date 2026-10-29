@@ -1348,11 +1348,21 @@ impl WindowInner {
     ) -> Option<ItemRc> {
         let mut current_item = start_item;
         let mut visited = Vec::new();
+        // Chatter patch: Tab stays inside the frontmost open overlay.
+        let modal = match reason {
+            FocusReason::TabNavigation if self.active_popups.borrow().is_empty() => {
+                topmost_modal(&ItemRc::new_root(self.component()))
+            }
+            _ => None,
+        };
 
         loop {
             let can_receive_focus = match reason {
                 FocusReason::Programmatic => true,
-                FocusReason::TabNavigation => current_item.is_visible_or_clipped_by_flickable(),
+                FocusReason::TabNavigation => {
+                    current_item.is_visible_or_clipped_by_flickable()
+                        && modal.as_ref().is_none_or(|modal| is_within(&current_item, modal))
+                }
                 _ => current_item.is_visible(),
             };
             if can_receive_focus
@@ -3023,4 +3033,41 @@ pub mod ffi_window {
             null_mut()
         }
     }
+}
+
+/// Chatter patch: the last visible `accessible-id: "modal-overlay"` item in
+/// tree order, i.e. the frontmost open dialog or menu. Same rule as the winit
+/// AccessKit adapter and the Android bridge, so Tab cannot walk out of an
+/// overlay into the screen behind it.
+fn topmost_modal(root: &ItemRc) -> Option<ItemRc> {
+    fn visit(item: &ItemRc, found: &mut Option<ItemRc>) {
+        if !item.is_visible() {
+            return;
+        }
+        if item
+            .accessible_string_property(crate::accessibility::AccessibleStringProperty::Id)
+            .as_deref()
+            == Some("modal-overlay")
+        {
+            *found = Some(item.clone());
+        }
+        for child in crate::accessibility::accessible_descendents(item) {
+            visit(&child, found);
+        }
+    }
+    let mut found = None;
+    visit(root, &mut found);
+    found
+}
+
+/// Chatter patch: `item` is `ancestor` or inside it.
+fn is_within(item: &ItemRc, ancestor: &ItemRc) -> bool {
+    let mut item = Some(item.clone());
+    while let Some(current) = item {
+        if current == *ancestor {
+            return true;
+        }
+        item = current.parent_item(ParentItemTraversalMode::FindAllParents);
+    }
+    false
 }

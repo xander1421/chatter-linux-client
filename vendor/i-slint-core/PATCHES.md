@@ -85,3 +85,9 @@ called itself for each clipping ancestor and discarded that ancestor's clip,
 so the work doubled with every nested clip (2^n). It now computes only the
 ancestor's window geometry; the result is identical. Every `is_visible()` pays
 this, including each node of an Android accessibility snapshot.
+
+- `window.rs` `move_focus` modal Tab trap (2026-10-29): Tab and Shift+Tab walked
+  out of every open dialog and menu into the sidebar and composer behind it
+  (headless desktop, Ctrl+/ dialog and the chat ⋯ menu). While a visible
+  `accessible-id: "modal-overlay"` item is open (the frontmost one, same rule as
+  the winit AccessKit adapter), Tab navigation only accepts items inside it.

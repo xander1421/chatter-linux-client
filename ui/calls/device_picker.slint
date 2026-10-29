@@ -80,6 +80,10 @@ component DeviceItem inherits Rectangle {
 }
 
 export component DevicePicker inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
     in property <string> title: "Select device";
     in property <string> picker-type: "audio"; // "audio", "audio_output", "screen"

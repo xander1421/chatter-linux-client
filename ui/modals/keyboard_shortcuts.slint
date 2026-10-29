@@ -37,6 +37,10 @@ component ShortcutRow inherits HorizontalLayout {
 }
 
 export component KeyboardShortcutsDialog inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.shown ? "modal-overlay" : "";
     in property <bool> shown;
     // Appearance › Search shortcut: "k", "f" or "both".
     in property <string> search-shortcut-pref: "both";

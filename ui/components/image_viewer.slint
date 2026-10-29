@@ -47,6 +47,10 @@ export component MediaActions inherits HorizontalLayout {
 }
 
 export component ImageViewer inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     private property <bool> compact-layout: root.width < 600px;
     // Touch platform: the media actions take the 48px Android minimum.
     in property <bool> touch: false;

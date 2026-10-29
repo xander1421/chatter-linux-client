@@ -16,6 +16,10 @@ import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component VideoPlayer inherits Rectangle {
+    // Screen readers and Tab stay inside while open (vendored winit
+    // AccessKit adapter, Android bridge, i-slint-core window.rs).
+    accessible-role: groupbox;
+    accessible-id: root.show ? "modal-overlay" : "";
     private property <bool> compact-layout: root.width < 600px;
     // Touch platform: the media actions take the 48px Android minimum, as in the image viewer.
     in property <bool> touch: false;
