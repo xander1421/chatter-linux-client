@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -16,6 +17,7 @@ export component ProfileSharedList inherits VerticalLayout {
         accessible-role: button;
         accessible-label: item.title;
         accessible-action-default => { root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle); } }
 
         HorizontalLayout {
             padding-left: Spacing.md;

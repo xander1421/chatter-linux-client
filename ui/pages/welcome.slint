@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 // Welcome page — shown after first registration to guide new users
 
@@ -129,6 +130,7 @@ export component WelcomePage inherits Rectangle {
                     accessible-label: "Add friends";
                     accessible-description: "Find people you know on Chatter";
                     accessible-action-default => { root.add-friends(); }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.add-friends(); } }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;
@@ -200,6 +202,7 @@ export component WelcomePage inherits Rectangle {
                     accessible-label: "Browse channels";
                     accessible-description: "Join public conversations";
                     accessible-action-default => { root.browse-channels(); }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.browse-channels(); } }
 
                     HorizontalLayout {
                         padding-left: Spacing.md;

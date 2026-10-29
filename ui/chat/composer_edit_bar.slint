@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -47,6 +48,7 @@ export component ComposerEditBar inherits Rectangle {
             accessible-role: button;
             accessible-label: "Cancel edit";
             accessible-action-default => { root.cancel-edit(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.cancel-edit(); } }
 
             Image {
                 source: Icons.x;

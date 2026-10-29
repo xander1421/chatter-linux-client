@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { ActivityUi } from "../activity/activity_bell.slint";
 import { ActivityGlobal } from "../activity/activity_global.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
@@ -322,6 +323,7 @@ export component SidebarFooter inherits GlassSurface {
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "Expand sidebar";
                         accessible-action-default => { root.toggle-collapsed(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-collapsed(); } }
                         border-width: rail-expand-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-expand-keys := FocusScope { width: 0px; height: 0px;
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.toggle-collapsed(); return accept; } return reject; }
@@ -337,6 +339,7 @@ export component SidebarFooter inherits GlassSurface {
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size;
                         accessible-role: button; accessible-label: "Settings";
                         accessible-action-default => { root.settings-clicked(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.settings-clicked(); } }
                         border-width: rail-settings-keys.has-focus ? 2px : 0px; border-color: Colors.focus-ring;
                         rail-settings-keys := FocusScope { width: 0px; height: 0px;
                             key-pressed(event) => { if event.text == Key.Space || event.text == Key.Return { root.settings-clicked(); return accept; } return reject; }

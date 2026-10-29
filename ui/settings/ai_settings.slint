@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -309,6 +310,7 @@ export component AISettings inherits VerticalLayout {
                 accessible-checkable: true;
                 accessible-checked: provider.is-active;
                 accessible-action-default => { root.local-ai-select-provider(provider.kind); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.local-ai-select-provider(provider.kind); } }
                 provider-touch := TouchArea {
                     clicked => { root.local-ai-select-provider(provider.kind); }
                 }
@@ -376,6 +378,7 @@ export component AISettings inherits VerticalLayout {
                 accessible-checkable: true;
                 accessible-checked: model == root.local-ai-active-model;
                 accessible-action-default => { root.local-ai-select-model(model); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.local-ai-select-model(model); } }
                 model-touch := TouchArea {
                     clicked => { root.local-ai-select-model(model); }
                 }

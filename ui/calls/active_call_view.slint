@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Materials } from "../theme/materials.slint";
@@ -31,6 +32,7 @@ component ParticipantTile inherits Rectangle {
     accessible-label: root.participant.display-name;
     accessible-enabled: root.interactive;
     accessible-action-default => { if root.interactive { root.clicked(); } }
+    KeyFocus { border-radius: parent.border-radius; activate => { if root.interactive { root.clicked(); } } }
 
     TouchArea {
         enabled: root.interactive;
@@ -500,6 +502,7 @@ export component ActiveCallView inherits Rectangle {
                         accessible-role: button;
                         accessible-label: "Stop screen sharing";
                         accessible-action-default => { root.toggle-screen-share(); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-screen-share(); } }
 
                         stop-text := Text {
                             accessible-role: none;
@@ -529,6 +532,7 @@ export component ActiveCallView inherits Rectangle {
                 accessible-role: button;
                 accessible-label: "Show all call participants";
                 accessible-action-default => { root.roster-open = !root.roster-open; }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.roster-open = !root.roster-open; } }
                 Text {
                     text: "+" + (root.call-data.participants.length - root.tile-indices.length);
                     color: Colors.text-primary;
@@ -565,6 +569,14 @@ export component ActiveCallView inherits Rectangle {
                                 root.pinned-id = participant.user-id;
                                 root.user-focus = -1;
                                 root.roster-open = false;
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.pinned-id = participant.user-id;
+                                    root.user-focus = -1;
+                                    root.roster-open = false;
+                                }
                             }
                             Text {
                                 x: Spacing.sm;

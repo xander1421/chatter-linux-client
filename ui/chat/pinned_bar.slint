@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 // Pinned messages bar component
@@ -73,6 +74,7 @@ export component PinnedBar inherits GlassSurface {
                     accessible-role: button;
                     accessible-label: "Previous pinned message";
                     accessible-action-default => { root.prev-clicked(); }
+                    KeyFocus { activate => { root.prev-clicked(); } }
                     mouse-cursor: pointer;
                     clicked => {
                         root.prev-clicked();
@@ -105,6 +107,7 @@ export component PinnedBar inherits GlassSurface {
                     accessible-role: button;
                     accessible-label: "Next pinned message";
                     accessible-action-default => { root.next-clicked(); }
+                    KeyFocus { activate => { root.next-clicked(); } }
                     mouse-cursor: pointer;
                     clicked => {
                         root.next-clicked();
@@ -145,6 +148,7 @@ export component PinnedBar inherits GlassSurface {
                 accessible-role: button;
                 accessible-label: "Go to pinned message: " + root.message-preview;
                 accessible-action-default => { root.go-to-message(); }
+                KeyFocus { activate => { root.go-to-message(); } }
                 mouse-cursor: pointer;
                 clicked => {
                     root.go-to-message();
@@ -188,6 +192,7 @@ export component PinnedBar inherits GlassSurface {
             accessible-role: button;
             accessible-label: "Hide pinned messages";
             accessible-action-default => { root.dismiss-clicked(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.dismiss-clicked(); } }
 
             Image {
                 source: Icons.x;

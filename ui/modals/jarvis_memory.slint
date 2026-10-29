@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 // Jarvis memory browser — what the local AI knows and how it connects.
@@ -238,6 +239,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                                     accessible-label: row.name;
                                     accessible-item-selected: row.is-selected;
                                     accessible-action-default => { root.select-entity(row.entity-id); }
+                                    KeyFocus { border-radius: parent.border-radius; activate => { root.select-entity(row.entity-id); } }
                                     chip-touch := TouchArea { enabled: root.show; clicked => { root.select-entity(row.entity-id); } }
                                     HorizontalLayout {
                                         padding-left: Spacing.sm;

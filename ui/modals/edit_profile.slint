@@ -1,5 +1,6 @@
 // EditProfileModal - Modal for editing user profile
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -68,6 +69,7 @@ export component EditProfileModal inherits Rectangle {
                                 accessible-role: button;
                                 accessible-label: "Edit profile photo";
                                 accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                KeyFocus { border-radius: parent.border-radius; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
                                 Avatar {
                                     size: 96px;
                                     name: root.display-name;

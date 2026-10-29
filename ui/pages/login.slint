@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 // Login page component
 
@@ -252,6 +253,7 @@ export component LoginPage inherits Rectangle {
                             vertical-alignment: center;
                             accessible-role: button;
                             accessible-action-default => { root.go-to-recovery(); }
+                            KeyFocus { activate => { root.go-to-recovery(); } }
                             TouchArea {
                                 clicked => { root.go-to-recovery(); }
                             }
@@ -298,6 +300,7 @@ export component LoginPage inherits Rectangle {
                             vertical-alignment: center;
                             accessible-role: button;
                             accessible-action-default => { root.register(); }
+                            KeyFocus { activate => { root.register(); } }
 
                             TouchArea {
                                 clicked => { root.register(); }
@@ -316,6 +319,7 @@ export component LoginPage inherits Rectangle {
                             vertical-alignment: center;
                             accessible-role: button;
                             accessible-action-default => { root.go-to-link-device(); }
+                            KeyFocus { activate => { root.go-to-link-device(); } }
                             wrap: word-wrap;
                             TouchArea {
                                 clicked => { root.go-to-link-device(); }

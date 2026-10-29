@@ -4,6 +4,7 @@
 //   - Create: empty name + default emoji, "Create" button
 //   - Rename: pre-filled name + emoji, "Save" button
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -95,6 +96,7 @@ export component CreateSectionModal inherits Rectangle {
                     accessible-role: button;
                     accessible-label: "Section icon " + root.selected-emoji;
                     accessible-action-default => { root.picker-open = !root.picker-open; }
+                    KeyFocus { border-radius: parent.border-radius; activate => { root.picker-open = !root.picker-open; } }
 
                     Text {
                         accessible-role: none;
@@ -169,6 +171,13 @@ export component CreateSectionModal inherits Rectangle {
                             accessible-action-default => {
                                 root.selected-emoji = icon;
                                 root.picker-open = false;
+                            }
+                            KeyFocus {
+                                border-radius: parent.border-radius;
+                                activate => {
+                                    root.selected-emoji = icon;
+                                    root.picker-open = false;
+                                }
                             }
                             transform-scale-y: icon-touch.pressed ? 0.82 : 1;
                             animate background { duration: Materials.motion-quick; easing: Materials.settle; }

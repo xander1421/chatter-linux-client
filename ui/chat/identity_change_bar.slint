@@ -17,6 +17,7 @@
 // conversation, and a dismissed prompt would leave the user with a DM that
 // silently refuses to send.
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -140,6 +141,7 @@ export component IdentityChangeBar inherits Rectangle {
                     accessible-role: button;
                     accessible-label: "Accept new safety number";
                     accessible-action-default => { root.accept-clicked(); }
+                    KeyFocus { activate => { root.accept-clicked(); } }
                     clicked => {
                         root.accept-clicked();
                     }

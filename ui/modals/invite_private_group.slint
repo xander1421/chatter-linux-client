@@ -1,5 +1,6 @@
 // InvitePrivateGroupModal - Modal for inviting members to an existing private group
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Icons } from "../theme/icons.slint";
 import { Colors } from "../theme/colors.slint";
@@ -80,6 +81,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
                             accessible-checkable: true;
                             accessible-checked: friend.selected;
                             accessible-action-default => { root.toggle-selection(index); }
+                            KeyFocus { border-radius: parent.border-radius; activate => { root.toggle-selection(index); } }
 
                             // Keep the row target behind the role chip so
                             // pressing Admin/Member changes the role instead
@@ -146,6 +148,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                         accessible-label: "Role for " + friend.display-name + ": " + invite-role-text.text;
                                         accessible-enabled: friend.selected;
                                         accessible-action-default => { if friend.selected { root.toggle-role(index); } }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { if friend.selected { root.toggle-role(index); } } }
 
                                         invite-role-text := Text {
                                             accessible-role: none;

@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 // Link Device page — shown on the new (secondary) device.
 //
@@ -201,6 +202,7 @@ export component LinkDevicePage inherits Rectangle {
                             vertical-alignment: center;
                             accessible-role: button;
                             accessible-action-default => { root.cancel(); }
+                            KeyFocus { activate => { root.cancel(); } }
                             TouchArea { clicked => { root.cancel(); } }
                         }
                     }

@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -17,6 +18,7 @@ component TimerOption inherits Rectangle {
     accessible-label: root.label;
     accessible-description: root.selected ? "Selected" : "";
     accessible-action-default => { root.clicked(); }
+    KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
     HorizontalLayout {
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;

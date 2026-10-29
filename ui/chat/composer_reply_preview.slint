@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -93,6 +94,7 @@ export component ComposerReplyPreview inherits GlassSurface {
                 accessible-role: button;
                 accessible-label: "Cancel reply";
                 accessible-action-default => { root.cancel-reply(); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.cancel-reply(); } }
 
                 Image {
                     source: Icons.x;

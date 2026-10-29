@@ -107,6 +107,7 @@ export component MessageHistoryError inherits Rectangle {
             accessible-role: button;
             accessible-label: "Retry loading older messages";
             accessible-action-default => { root.retry(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.retry(); } }
             retry-label := Text {
                 text: "Retry";
                 color: Colors.primary;

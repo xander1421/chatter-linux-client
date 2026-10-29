@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -75,6 +76,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         accessible-label: "All messages";
         accessible-description: root.notification-preference == "all" ? "Selected" : "";
         accessible-action-default => { root.change-notification("all"); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("all"); } }
         border-radius: Spacing.radius-sm;
 
         HorizontalLayout {
@@ -133,6 +135,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         accessible-label: "Mentions only";
         accessible-description: root.notification-preference == "mentions" ? "Selected" : "";
         accessible-action-default => { root.change-notification("mentions"); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("mentions"); } }
         border-radius: Spacing.radius-sm;
 
         HorizontalLayout {
@@ -191,6 +194,7 @@ export component ChannelNotificationsSection inherits VerticalLayout {
         accessible-label: "Nothing";
         accessible-description: root.notification-preference == "none" ? "Selected" : "";
         accessible-action-default => { root.change-notification("none"); }
+        KeyFocus { border-radius: parent.border-radius; activate => { root.change-notification("none"); } }
         border-radius: Spacing.radius-sm;
 
         HorizontalLayout {

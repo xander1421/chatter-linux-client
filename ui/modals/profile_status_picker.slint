@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -37,6 +38,7 @@ export component ProfileStatusPicker inherits VerticalLayout {
             accessible-checkable: true;
             accessible-checked: root.status-mode == opt.mode;
             accessible-action-default => { root.change-status(opt.mode); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.change-status(opt.mode); } }
             status-touch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.change-status(opt.mode); }

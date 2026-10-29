@@ -13,6 +13,7 @@
 // one is about the server and disappears when the server returns; this one is
 // about the absence of an account and disappears only when there is one.
 
+import { KeyFocus } from "./key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -86,6 +87,7 @@ export component MeshOnlyBar inherits Rectangle {
                 accessible-role: button;
                 accessible-label: "Sign in";
                 accessible-action-default => { root.sign-in(); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.sign-in(); } }
             }
         }
     }

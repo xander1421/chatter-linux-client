@@ -25,6 +25,7 @@
 // (`MeshIdentityStore`) that is deliberately unrelated to the account, and
 // signing in stays available and stays the only thing that produces one.
 
+import { KeyFocus } from "./key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -157,6 +158,7 @@ export component OfflineMeshNotice inherits Rectangle {
             accessible-role: button;
             accessible-label: "Use the mesh without an account";
             accessible-action-default => { root.continue-without-account(); }
+            KeyFocus { border-radius: parent.border-radius; activate => { root.continue-without-account(); } }
         }
 
         // Signing in stays on the table. The mesh is not a replacement for an

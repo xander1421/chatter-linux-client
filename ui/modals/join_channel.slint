@@ -1,6 +1,7 @@
 // Channel search result row, used by the Join tab of create_channel.slint.
 // (The standalone JoinChannelModal that lived here was never instantiated.)
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -35,6 +36,7 @@ export component SearchResultItem inherits Rectangle {
     accessible-label: root.name;
     accessible-item-selected: root.selected;
     accessible-action-default => { root.clicked(); }
+    KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
 
     property <bool> hovered: touch.has-hover;
 

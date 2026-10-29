@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { PendingAttachmentData } from "composer_types.slint";
 import { Colors } from "../theme/colors.slint";
@@ -157,6 +158,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                         accessible-role: button;
                         accessible-label: "Remove attachment";
                         accessible-action-default => { root.remove-attachment(attachment.id); }
+                        KeyFocus { border-radius: parent.border-radius; activate => { root.remove-attachment(attachment.id); } }
 
                         Image {
                             source: Icons.x;
@@ -191,6 +193,7 @@ export component ComposerAttachmentStrip inherits GlassSurface {
                     accessible-role: button;
                     accessible-label: "Add attachment";
                     accessible-action-default => { if !root.disabled { root.attachment-clicked(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if !root.disabled { root.attachment-clicked(); } } }
 
                     Image {
                         source: Icons.plus;

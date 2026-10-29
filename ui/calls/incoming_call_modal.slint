@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
@@ -192,6 +193,7 @@ export component IncomingCallModal inherits Rectangle {
                     accessible-role: button;
                     accessible-label: "Decline call";
                     accessible-action-default => { if root.show { root.decline-call(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if root.show { root.decline-call(); } } }
 
                     decline-hover := TouchArea {
                         enabled: root.show;
@@ -230,6 +232,7 @@ export component IncomingCallModal inherits Rectangle {
                     accessible-role: button;
                     accessible-label: "Accept call";
                     accessible-action-default => { if root.show { root.accept-call(); } }
+                    KeyFocus { border-radius: parent.border-radius; activate => { if root.show { root.accept-call(); } } }
 
                     accept-hover := TouchArea {
                         enabled: root.show;

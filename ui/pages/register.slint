@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 // Register page component with multi-step onboarding flow
 
@@ -228,6 +229,7 @@ export component RegisterPage inherits Rectangle {
                                         accessible-role: button;
                                         accessible-label: "Edit profile photo";
                                         accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
                                         width: 96px;
                                         height: 96px;
                                         background: transparent;
@@ -566,6 +568,7 @@ export component RegisterPage inherits Rectangle {
                                 accessible-role: button;
                                 accessible-label: "Sign in";
                                 accessible-action-default => { root.go-to-login(); }
+                                KeyFocus { activate => { root.go-to-login(); } }
                                 TouchArea { clicked => { root.go-to-login(); } }
                             }
                         }

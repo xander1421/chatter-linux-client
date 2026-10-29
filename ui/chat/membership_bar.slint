@@ -7,6 +7,7 @@
 // reveals the core-supplied explanation and state code; for a fork, which
 // nothing else clears, it also offers "Resume sending" (core decides when).
 
+import { KeyFocus } from "../components/key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -125,6 +126,7 @@ export component MembershipBar inherits Rectangle {
                         accessible-role: button;
                         accessible-label: "Resume sending in this channel";
                         accessible-action-default => { MembershipGlobal.acknowledge-fork(root.channel-id); }
+                        KeyFocus { activate => { MembershipGlobal.acknowledge-fork(root.channel-id); } }
                         clicked => { MembershipGlobal.acknowledge-fork(root.channel-id); }
                     }
                 }
@@ -159,6 +161,7 @@ export component MembershipBar inherits Rectangle {
                     accessible-role: button;
                     accessible-label: root.expanded ? "Hide membership details" : "Show membership details";
                     accessible-action-default => { root.expanded = !root.expanded; }
+                    KeyFocus { activate => { root.expanded = !root.expanded; } }
                     clicked => { root.expanded = !root.expanded; }
                 }
             }

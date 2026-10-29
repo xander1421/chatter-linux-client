@@ -1,3 +1,4 @@
+import { KeyFocus } from "../components/key_focus.slint";
 import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Device picker modal for audio/video/screen selection
@@ -24,6 +25,7 @@ component DeviceItem inherits Rectangle {
     accessible-role: button;
     accessible-label: name + (is-selected ? ", selected" : "");
     accessible-action-default => { root.clicked(); }
+    KeyFocus { border-radius: parent.border-radius; activate => { root.clicked(); } }
     transform-scale-x: touch.pressed ? 98% : 100%;
     transform-scale-y: touch.pressed ? 96% : 100%;
     animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }

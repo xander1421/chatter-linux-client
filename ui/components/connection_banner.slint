@@ -18,6 +18,7 @@
 // "the mesh is running" is never allowed to read as "your message will arrive"
 // — delivery is the context bar's subject, not this one's.
 
+import { KeyFocus } from "./key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Materials } from "../theme/materials.slint";
@@ -260,6 +261,7 @@ export component ConnectionBanner inherits Rectangle {
                 accessible-role: button;
                 accessible-label: "Dismiss the connection banner";
                 accessible-action-default => { root.dismissed(); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.dismissed(); } }
             }
         }
 

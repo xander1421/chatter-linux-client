@@ -2,6 +2,7 @@
 //
 // Shows an icon, message, and optional CTA button when a list has no items.
 
+import { KeyFocus } from "./key_focus.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -92,6 +93,7 @@ export component EmptyState inherits Rectangle {
                 accessible-role: button;
                 accessible-label: root.cta-text;
                 accessible-action-default => { root.cta-clicked(); }
+                KeyFocus { border-radius: parent.border-radius; activate => { root.cta-clicked(); } }
             }
         }
     }
