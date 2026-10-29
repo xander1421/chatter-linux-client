@@ -471,7 +471,7 @@ export component ThreadPanel inherits Rectangle {
                 running: false;
                 triggered => {
                     self.running = false;
-                    if (replies-view.following-tail) {
+                    if (replies-view.following-tail && !replies-view.focus-hold) {
                         replies-view.viewport-y = Math.min(0px, replies-view.height - replies-view.viewport-height);
                     }
                 }
@@ -499,6 +499,10 @@ export component ThreadPanel inherits Rectangle {
                 width: 100%;
                 height: parent.height - self.y;
                 property <bool> following-tail: true;
+                // A jump to a reply holds the list on it: the open sequence's
+                // visible/thread-id handlers may run after the focus request
+                // and would otherwise send the list back to the tail.
+                property <bool> focus-hold: false;
                 property <bool> user-scrolling: false;
                 property <bool> preserving-anchor: false;
                 property <bool> restoring-anchor: false;
@@ -530,6 +534,7 @@ export component ThreadPanel inherits Rectangle {
                 changed focus-request => {
                     self.user-scrolling = false;
                     self.preserving-anchor = false;
+                    self.focus-hold = true;
                     self.following-tail = false;
                     focus-settle.start(); focus-settle.restart();
                 }
@@ -538,19 +543,21 @@ export component ThreadPanel inherits Rectangle {
                 changed thread-id => {
                     self.user-scrolling = false;
                     self.preserving-anchor = false;
-                    self.following-tail = true;
+                    self.following-tail = !self.focus-hold;
                     settle.start(); settle.restart();
                 }
                 changed tail-request => {
                     self.user-scrolling = false;
                     self.preserving-anchor = false;
+                    self.focus-hold = false;
                     self.following-tail = true;
                     settle.start(); settle.restart();
                 }
                 changed visible => {
-                    if (self.visible) { self.following-tail = true; settle.start(); settle.restart(); }
+                    if (self.visible) { self.following-tail = !self.focus-hold; settle.start(); settle.restart(); }
                 }
                 flicked => {
+                    self.focus-hold = false;
                     self.following-tail = self.viewport-height + self.viewport-y <= self.height + 40px;
                     self.preserving-anchor = false;
                     self.user-scrolling = true;
@@ -563,6 +570,7 @@ export component ThreadPanel inherits Rectangle {
                 changed viewport-height => {
                     self.restore-anchor();
                     if (self.following-tail) { settle.start(); settle.restart(); }
+                    if (self.focus-hold) { focus-settle.start(); focus-settle.restart(); }
                 }
                 changed height => { if (self.following-tail) { settle.start(); settle.restart(); } }
 
