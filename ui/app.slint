@@ -627,6 +627,9 @@ export component MainWindow inherits Window {
             // into the open chat's composer instead of nowhere.
             if (!root.is-mobile-platform && root.current-view == "main" && root.active-modal == "none"
                 && ChatPane.channel-name != "" && !ChatPane.thread-panel-visible
+                // The composer is collapsed under a notice (blocked, former
+                // channel, …) or in selection mode: nothing to type into.
+                && ChatPane.composer-notice == "" && !ChatPane.selection-mode
                 && !SearchPane.unified-search-open && !ChatPane.context-menu-visible
                 && !ChatPane.reaction-picker-visible && !ChatPane.composer-emoji-picker-visible
                 && !ChatPane.composer-gif-picker-visible
