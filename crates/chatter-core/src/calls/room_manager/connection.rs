@@ -140,6 +140,8 @@ impl RoomManager {
             .connection_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1;
+        // A replacement connection must not retain the previous recording device.
+        self.audio_capture.write().suspend();
         self.set_state(RoomState::Connecting);
 
         // Store key provider for later ratcheting
@@ -320,6 +322,7 @@ impl RoomManager {
         let event_tx = self.event_tx.clone();
         let state = self.state.clone();
         let room_arc = self.room.clone();
+        let audio_capture = self.audio_capture.clone();
         let audio_playback = self.audio_playback.clone();
         let video_playback = self.video_playback.clone();
 
@@ -361,6 +364,13 @@ impl RoomManager {
                 // A detached handler (disconnect join timed out) must not
                 // mirror its dead connection's lifecycle onto a newer one.
                 let live = generation_slot.load(std::sync::atomic::Ordering::SeqCst) == generation;
+                if live && matches!(&event, livekit::RoomEvent::Disconnected { .. }) {
+                    Self::release_connection_microphone(
+                        &audio_capture,
+                        &generation_slot,
+                        generation,
+                    );
+                }
                 Self::handle_room_event(
                     event,
                     (generation, live),
@@ -383,6 +393,7 @@ impl RoomManager {
             if generation_slot.load(std::sync::atomic::Ordering::SeqCst) != generation {
                 return;
             }
+            Self::release_connection_microphone(&audio_capture, &generation_slot, generation);
             // Room disconnected - stop audio/video playback
             tracing::info!("Room event stream ended - marking disconnected");
             if let Some(playback) = audio_playback.read().as_ref() {
@@ -406,11 +417,20 @@ impl RoomManager {
         Ok(())
     }
 
+    pub(super) fn release_connection_microphone(
+        capture: &Arc<RwLock<AudioCapture>>,
+        owner: &std::sync::atomic::AtomicU64,
+        generation: u64,
+    ) {
+        let mut capture = capture.write();
+        if owner.load(std::sync::atomic::Ordering::SeqCst) == generation {
+            capture.suspend();
+        }
+    }
+
     /// Disconnect from the current room.
     ///
-    /// This method is safe to call from the UI thread. Capture threads are
-    /// signaled to stop (non-blocking) and will clean themselves up.
-    /// Thread joins happen in Drop to ensure proper cleanup.
+    /// Release the microphone before awaiting transport shutdown.
     pub async fn disconnect(&self) {
         self.disconnect_inner(false).await;
     }
@@ -438,11 +458,15 @@ impl RoomManager {
         self.video_playback.read().stop();
         tracing::info!("Video playback stopped");
 
-        // Signal all capture threads to stop (non-blocking, just sets atomic flags)
-        // The threads will exit on their own, joins happen in Drop
+        // Release the recording device; disabling frame forwarding does not stop it.
         {
-            let audio = self.audio_capture.read();
-            audio.signal_stop();
+            self.audio_capture.write().suspend();
+            if !preserve_camera {
+                // Final hangup retires publication intent; a new call must
+                // enter ordinary microphone publication again.
+                self.microphone_requested
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+            }
             self.microphone_track_sid.write().take();
         }
         {
@@ -498,7 +522,7 @@ impl RoomManager {
             }
         }
 
-        tracing::info!("Disconnect completed (capture cleanup deferred)");
+        tracing::info!("Disconnect completed (microphone released)");
     }
 
     /// Get current state.

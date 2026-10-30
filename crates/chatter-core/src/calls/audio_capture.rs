@@ -96,8 +96,8 @@ pub struct AudioCapture {
     sample_rate: u32,
     /// Number of channels.
     num_channels: u32,
-    /// Sender for the capture worker (dropped on stop to shut it down).
-    frame_tx: Option<mpsc::Sender<CapturedFrame>>,
+    /// Owns the capture worker; dropping it cancels pending frame delivery.
+    frame_tx: Option<FrameWorker>,
     stream_failed: Arc<AtomicBool>,
     recovery_muted: Option<bool>,
 }
@@ -374,7 +374,7 @@ impl AudioCapture {
 
             let stream = match supported_config.sample_format() {
                 SampleFormat::F32 => {
-                    let tx = frame_tx.clone();
+                    let tx = frame_tx.tx.clone();
                     device.build_input_stream(
                         stream_config,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -395,7 +395,7 @@ impl AudioCapture {
                     )
                 }
                 SampleFormat::I16 => {
-                    let tx = frame_tx.clone();
+                    let tx = frame_tx.tx.clone();
                     device.build_input_stream(
                         stream_config,
                         move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -474,7 +474,7 @@ impl AudioCapture {
             .set_callback(VoiceInput {
                 running: self.running.clone(),
                 failed: self.stream_failed.clone(),
-                tx: frame_tx.clone(),
+                tx: frame_tx.tx.clone(),
             })
             .open_stream()
             .map_err(|e| {
@@ -559,17 +559,22 @@ impl AudioCapture {
         }
     }
 
-    /// Signal audio capture to stop (non-blocking).
-    ///
-    /// This only sets the running flag. Use `stop()` for full cleanup.
-    pub fn signal_stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
+    /// Release capture resources while retaining the user's reconnect intent.
+    pub(crate) fn suspend(&mut self) {
+        let muted = self.is_muted();
+        self.stop();
+        self.recovery_muted = Some(muted);
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_source(&self) -> bool {
+        self.audio_source.is_some()
     }
 
     /// Stop audio capture.
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        // Drop frame_tx to shut down the consumer task
+        // Cancel the consumer even if native frame delivery is pending.
         self.frame_tx = None;
         if let Some(stream) = self.stream.take() {
             drop(stream);
@@ -628,11 +633,24 @@ impl Default for AudioCapture {
 }
 
 /// One bounded consumer serves both platform capture callbacks.
-fn spawn_frame_worker(source: NativeAudioSource) -> mpsc::Sender<CapturedFrame> {
+struct FrameWorker {
+    tx: mpsc::Sender<CapturedFrame>,
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for FrameWorker {
+    fn drop(&mut self) {
+        // Channel closure alone can leave a worker awaiting capture_frame and
+        // retaining the native source. Cancel even when delivery is blocked.
+        self.task.abort();
+    }
+}
+
+fn spawn_frame_worker(source: NativeAudioSource) -> FrameWorker {
     // Set up bounded channel + single consumer task instead of spawning per frame
     let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
     let source_for_worker = source;
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut resampler = livekit::webrtc::native::audio_resampler::AudioResampler::default();
         let mut chunks = CaptureChunks::default();
         let mut first_frame = true;
@@ -684,12 +702,27 @@ fn spawn_frame_worker(source: NativeAudioSource) -> mpsc::Sender<CapturedFrame> 
             }
         }
     });
-    frame_tx
+    FrameWorker {
+        tx: frame_tx,
+        task: task.abort_handle(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dropping_worker_cancels_even_with_a_retained_callback_sender() {
+        assert!(crate::system::null_audio(), "run with CHATTER_NULL_AUDIO=1");
+        let source = NativeAudioSource::new(AudioSourceOptions::default(), 48_000, 1, 50);
+        let worker = spawn_frame_worker(source);
+        let callback_sender = worker.tx.clone();
+        drop(worker);
+        tokio::time::timeout(std::time::Duration::from_secs(1), callback_sender.closed())
+            .await
+            .expect("worker must release its receiver/source without waiting for senders");
+    }
 
     #[tokio::test]
     async fn recovery_preserves_requested_selection_independently_of_display_name() {
