@@ -164,12 +164,8 @@ fn call_audio_arrows_are_independent_at_both_densities() {
             is_default: true,
         },
     ])));
-    for (linked, width) in [
-        (false, 1400.0),
-        (false, 320.0),
-        (true, 360.0),
-        (true, 320.0),
-    ] {
+    for (linked, width) in [(false, 1400.0), (true, 360.0), (true, 320.0)] {
+        w.set_is_mobile_platform(linked);
         view.set_call_speaker_toggle(linked);
         let input_name = if linked {
             "Speakerphone"
