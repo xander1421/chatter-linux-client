@@ -131,10 +131,14 @@ export component LoginPage inherits Rectangle {
                         placeholder: "Username";
                         text <=> root.username;
                         disabled: root.loading;
+                        // Enter / Android IME action key advances to the next
+                        // field (desktop Tab does this too, via built-in
+                        // traversal). See components/input.slint.
+                        accepted => { password-field.focus(); }
                     }
 
                     // Password
-                    Input {
+                    password-field := Input {
                         placeholder: "Password";
                         password: true;
                         text <=> root.password;

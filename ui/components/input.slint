@@ -114,6 +114,25 @@ export component Input inherits Rectangle {
                 clicked => { input.focus(); }
             }
 
+            // Focus traversal (verified against i-slint-core 1.17.1):
+            //   Tab / Shift+Tab move focus between fields via Slint's built-in
+            //   window traversal (i-slint-core window.rs handles Tab/Backtab as
+            //   focus-next/previous whenever the focused item IGNORES the key).
+            //   TextInput already ignores Tab because it is a control char
+            //   (text.rs: the insert path rejects `is-control` chars except
+            //   '\n'), so we must NOT add a key handler here that consumes Tab.
+            //   This is the same mechanism KeyFocus relies on, so it works for
+            //   every field with no per-call-site wiring.
+            //
+            // Android soft-keyboard "Next": NOT available in this Slint version.
+            //   The android-activity backend hardcodes
+            //   `outAttrs.imeOptions = IME_FLAG_NO_EXTRACT_UI`
+            //   (SlintAndroidJavaHelper.java) and never sets IME_ACTION_NEXT, and
+            //   `InputType` exposes no IME-action control, so the field cannot
+            //   request a "Next" action button. The action key emits Enter, which
+            //   fires `accepted` below. To advance on that key (and on desktop
+            //   Enter), a form wires `field.accepted => { next-field.focus(); }`
+            //   at the call site — see pages/login.slint and pages/register.slint.
             // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;

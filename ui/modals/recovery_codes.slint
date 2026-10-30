@@ -101,57 +101,65 @@ export component RecoveryCodesModal inherits Rectangle {
 
                 Rectangle { height: Spacing.sm; }
 
-                // Recovery codes list (single column).
+                // Recovery codes — one unified table (not eight separate chips).
                 //
                 // Asks for the WHOLE list, not a 120px window into it. These are
                 // write-them-down-now codes: a box three rows tall that hides the
-                // rest behind a scroll is how someone copies six of ten and loses
-                // the account. The Flickable below stays as the last-resort escape
-                // hatch for a genuinely short screen, but on a normal phone
-                // nothing scrolls and every code is on screen at once.
+                // rest behind a scroll is how someone copies six of eight and
+                // loses the account. The Flickable stays as the last-resort
+                // escape hatch for a genuinely short screen, but on a normal
+                // phone nothing scrolls and every code is on screen at once.
+                //
+                // Each code is a fixed 26 chars (RECOVERY_CODE_LEN). The old row
+                // centered 14px text with 1px letter-spacing, which overflowed
+                // the inset's right edge on a narrow phone and clipped the code.
+                // Now: compact monospace (xs, no letter-spacing), left-aligned
+                // and full-width, so the whole code always fits.
                 Rectangle {
                     vertical-stretch: 1;
                     // Wants to grow to codes-list.preferred-height (every code
                     // visible at once, the normal case) but must be able to
                     // shrink below that — pinning min-height to the full list
-                    // height made this Flickable's "last-resort scroll" comment
-                    // a lie: the modal could never actually get shorter than
-                    // all-codes-at-once, so on a short window the Continue
-                    // button below just got clipped off-screen, unreachable.
-                    // ~3 rows (32px item + xs spacing) is the real floor.
+                    // height made the "last-resort scroll" a lie: the modal
+                    // could never get shorter than all-codes-at-once, so on a
+                    // short window the Continue button got clipped off-screen.
                     min-height: 120px;
                     background: Colors.inset;
                     border-radius: Spacing.radius-md;
+                    clip: true;
 
                     Flickable {
                         viewport-height: codes-list.preferred-height;
                         viewport-width: parent.width;
 
                         codes-list := VerticalLayout {
-                            padding: Spacing.md;
-                            spacing: Spacing.xs;
+                            padding: Spacing.sm;
 
                             for code[i] in root.codes: Rectangle {
-                                height: 32px;
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-sm;
+                                height: 30px;
 
                                 HorizontalLayout {
-                                    padding-left: Spacing.md;
-                                    padding-right: Spacing.md;
-                                    alignment: center;
+                                    padding-left: Spacing.sm;
+                                    padding-right: Spacing.sm;
+                                    spacing: Spacing.sm;
+                                    alignment: start;
 
                                     Text {
-                                        text: (i + 1) + ". ";
+                                        text: (i + 1) + ".";
                                         color: Colors.text-muted;
-                                        font-size: Typography.sm;
+                                        font-size: Typography.xs;
+                                        width: 20px;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
                                     }
                                     Text {
                                         text: code;
                                         color: Colors.text-primary;
-                                        font-size: Typography.sm;
+                                        font-size: Typography.xs;
+                                        font-family: Typography.font-family-mono;
                                         font-weight: Typography.medium;
-                                        letter-spacing: 1px;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
                                     }
                                 }
                             }
