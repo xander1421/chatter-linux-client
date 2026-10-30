@@ -244,22 +244,41 @@ pub(super) fn handle_message_received(
             let new_ts = new_msg.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
             let new_sender = new_msg.sender_id.to_string();
 
-            let keys: Vec<(u64, String)> = current_model
-                .iter()
-                .map(|m| {
-                    (
-                        m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0),
-                        m.sender_id.to_string(),
+            // Fast path: a message strictly newer than the last row appends at
+            // the end and cannot be a duplicate (core's dedup needs an *equal*
+            // timestamp+sender, ordering is ascending timestamp). The common
+            // in-order receive then reads one row instead of re-parsing every
+            // row's timestamp — otherwise loading N messages one-by-one is
+            // O(N^2). Any tie or out-of-order arrival falls through to the full
+            // core policy below.
+            let row_count = current_model.row_count();
+            let last_ts = row_count
+                .checked_sub(1)
+                .and_then(|i| current_model.row_data(i))
+                .map(|m| m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0));
+            let position = match last_ts {
+                Some(last) if new_ts > last => {
+                    chatter_core::domain::message::InsertPosition::At(row_count)
+                }
+                _ => {
+                    let keys: Vec<(u64, String)> = current_model
+                        .iter()
+                        .map(|m| {
+                            (
+                                m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0),
+                                m.sender_id.to_string(),
+                            )
+                        })
+                        .collect();
+                    let key_refs: Vec<(u64, &str)> =
+                        keys.iter().map(|(t, s)| (*t, s.as_str())).collect();
+                    chatter_core::domain::message::ordered_insert_position(
+                        &key_refs, new_ts, &new_sender,
                     )
-                })
-                .collect();
-            let key_refs: Vec<(u64, &str)> = keys.iter().map(|(t, s)| (*t, s.as_str())).collect();
+                }
+            };
 
-            match chatter_core::domain::message::ordered_insert_position(
-                &key_refs,
-                new_ts,
-                &new_sender,
-            ) {
+            match position {
                 chatter_core::domain::message::InsertPosition::Duplicate => {
                     // Saved snapshots and ended calls replace their existing row.
                     // Keep the model, viewport anchor and selection.

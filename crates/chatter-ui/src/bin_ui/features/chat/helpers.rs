@@ -215,17 +215,21 @@ pub(crate) fn recompute_continuation_at(
         return;
     };
     let prev = index.checked_sub(1).and_then(|i| model.row_data(i));
-    let grouping = |r: &crate::MessageItemData| ChannelGroupingRow {
-        sender_id: r.sender_id.as_str(),
-        timestamp_ns: r.timestamp_ns.as_str().parse::<u64>().unwrap_or(0),
-        day_label: r.date_separator_text.as_str(),
-        is_system: r.is_system,
-        is_call: r.is_call,
-        is_deleted: r.is_deleted,
-    };
+    // `fn` item, not a closure: each call gets its own borrow lifetime, so the
+    // `row` and `prev` groupings don't have to share one.
+    fn grouping(r: &crate::MessageItemData) -> ChannelGroupingRow<'_> {
+        ChannelGroupingRow {
+            sender_id: r.sender_id.as_str(),
+            timestamp_ns: r.timestamp_ns.as_str().parse::<u64>().unwrap_or(0),
+            day_label: r.date_separator_text.as_str(),
+            is_system: r.is_system,
+            is_call: r.is_call,
+            is_deleted: r.is_deleted,
+        }
+    }
     let is_continuation = {
         let current = grouping(&row);
-        let previous = prev.as_ref().map(&grouping);
+        let previous = prev.as_ref().map(grouping);
         channel_message_is_continuation(previous.as_ref(), &current)
     };
     if row.is_continuation != is_continuation {
