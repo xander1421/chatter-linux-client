@@ -89,6 +89,15 @@ impl AuthState {
         self.store.get()
     }
 
+    /// Read just the session revision without cloning the whole state.
+    ///
+    /// Hot paths that only guard against a session change (e.g. per-attachment
+    /// history resolution) use this instead of `get().session_revision`.
+    #[must_use]
+    pub fn session_revision(&self) -> u64 {
+        self.store.with(|s| s.session_revision)
+    }
+
     /// Subscribe to authentication state changes.
     ///
     /// The receiver will receive Arc-wrapped state snapshots (zero-copy sharing).

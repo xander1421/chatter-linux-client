@@ -317,6 +317,11 @@ impl ChatterClient {
         self.services.auth_state.get()
     }
 
+    /// Current session revision without cloning the whole auth state.
+    pub fn session_revision(&self) -> u64 {
+        self.services.auth_state.session_revision()
+    }
+
     pub fn has_auth_identity(&self) -> bool {
         self.services.auth_state.is_logged_in()
     }

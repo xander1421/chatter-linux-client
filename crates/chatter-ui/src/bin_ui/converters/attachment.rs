@@ -441,9 +441,9 @@ pub fn attachment_display_resolver(
 ) -> impl Fn(&chatter_core::domain::ids::AttachmentId) -> Option<Attachment> + '_ {
     #[cfg(target_os = "android")]
     let remaining = std::cell::Cell::new(4usize);
-    let revision = client.auth_snapshot().session_revision;
+    let revision = client.session_revision();
     move |id| {
-        if client.auth_snapshot().session_revision != revision {
+        if client.session_revision() != revision {
             return None;
         }
         let attachment = client.get_attachment_metadata(id)?;
@@ -465,6 +465,6 @@ pub fn attachment_display_resolver(
                 Err(e) => tracing::warn!(error = %e, "History video preview extraction failed"),
             }
         }
-        (client.auth_snapshot().session_revision == revision).then_some(attachment)
+        (client.session_revision() == revision).then_some(attachment)
     }
 }
