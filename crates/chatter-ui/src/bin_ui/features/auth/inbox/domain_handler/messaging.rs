@@ -292,8 +292,16 @@ pub(super) fn handle_message_received(
                     {
                         vec_model.insert(insert_pos, new_msg);
                         if conv_type == chatter_core::domain::message::ConversationType::Channel {
-                            crate::bin_ui::features::chat::recompute_channel_continuations(
+                            // Continuation depends only on the previous row, so a
+                            // single insert can change only the inserted row and the
+                            // one after it — O(1) instead of re-scanning the whole
+                            // model on every received channel message.
+                            crate::bin_ui::features::chat::recompute_continuation_at(
+                                vec_model, insert_pos,
+                            );
+                            crate::bin_ui::features::chat::recompute_continuation_at(
                                 vec_model,
+                                insert_pos + 1,
                             );
                         }
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");

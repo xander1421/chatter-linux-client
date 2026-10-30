@@ -33,7 +33,10 @@ use crate::MainWindow;
 pub use edit::apply_message_edit_in_conversation;
 #[doc(hidden)]
 pub use helpers::remove_messages_in_conversation;
-pub(crate) use helpers::{edit_messages, recompute_channel_continuations, remove_messages_where};
+pub(crate) use helpers::{
+    edit_messages, recompute_channel_continuations, recompute_continuation_at,
+    remove_messages_where,
+};
 #[doc(hidden)]
 pub use helpers::{refresh_reaction_in_ui, refresh_scoped_reaction_in_ui};
 // Re-exported so the ui_wiring harness can wire ONLY the forward-picker search

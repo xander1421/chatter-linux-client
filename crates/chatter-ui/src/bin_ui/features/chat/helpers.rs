@@ -182,6 +182,42 @@ pub(crate) fn recompute_channel_continuations(model: &slint::VecModel<crate::Mes
     }
 }
 
+/// Recompute one row's `is_continuation` from its immediate predecessor. O(1).
+///
+/// A channel row's continuation flag depends only on the row directly before it
+/// (see `channel_continuation_flags`), so after a single insert only the inserted
+/// row and the one after it can change. Use this on the hot receive path instead
+/// of the O(n) [`recompute_channel_continuations`], which clones and re-scans the
+/// whole model for every message.
+pub(crate) fn recompute_continuation_at(
+    model: &slint::VecModel<crate::MessageItemData>,
+    index: usize,
+) {
+    use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_message_is_continuation};
+
+    let Some(mut row) = model.row_data(index) else {
+        return;
+    };
+    let prev = index.checked_sub(1).and_then(|i| model.row_data(i));
+    let grouping = |r: &crate::MessageItemData| ChannelGroupingRow {
+        sender_id: r.sender_id.as_str(),
+        timestamp_ns: r.timestamp_ns.as_str().parse::<u64>().unwrap_or(0),
+        day_label: r.date_separator_text.as_str(),
+        is_system: r.is_system,
+        is_call: r.is_call,
+        is_deleted: r.is_deleted,
+    };
+    let is_continuation = {
+        let current = grouping(&row);
+        let previous = prev.as_ref().map(&grouping);
+        channel_message_is_continuation(previous.as_ref(), &current)
+    };
+    if row.is_continuation != is_continuation {
+        row.is_continuation = is_continuation;
+        model.set_row_data(index, row);
+    }
+}
+
 // ============================================================================
 // Shared UI update helpers
 // ============================================================================
