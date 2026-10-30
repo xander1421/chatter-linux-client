@@ -517,6 +517,7 @@ class MainActivity : GameActivity() {
     override fun onResume() {
         super.onResume()
         activityResumed = true
+        callAudio.retryMediaService()
         applySecureScreen()
         // A prelaunched Activity can be resumed without ever gaining focus.
         messagingBackground = !window.decorView.hasWindowFocus()
@@ -931,6 +932,7 @@ class MainActivity : GameActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             val granted = result.filterValues { it }.keys.toTypedArray()
             val denied = result.filterValues { !it }.keys.toTypedArray()
+            callAudio.retryMediaService()
             nativeOnPermissionsResult(granted, denied)
         }
 
@@ -1051,8 +1053,10 @@ class MainActivity : GameActivity() {
                 }
                 try {
                     CallMediaService.withCamera(this) { owner ->
-                        if (isDestroyed || requestGeneration != cameraRequestGeneration) {
+                        if (owner == null || isDestroyed || requestGeneration != cameraRequestGeneration) {
                             analysis.clearAnalyzer()
+                            if (cameraAnalysis === analysis) cameraAnalysis = null
+                            if (owner == null) Log.w(TAG, "Call camera service unavailable")
                             return@withCamera
                         }
                         try {
