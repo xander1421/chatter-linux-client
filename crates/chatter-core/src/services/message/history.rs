@@ -129,12 +129,57 @@ impl MessageService {
 
     /// Re-resolve quote references at load time, including parents received after
     /// the reply. Persist only the resolved reference; retain the quoted snapshot.
+    ///
+    /// One batched existence check for the whole page, not a query per reply:
+    /// `resolve_reply_parent` only repoints a quote when its stored parent is
+    /// *missing* (a parent that arrived later, found by timestamp). A reply
+    /// whose parent is present keeps its reference unchanged, and anon quotes
+    /// never look up at all. So a single `get_many` tells us which replies can
+    /// be left alone; only the rare missing-parent ones fall through to the
+    /// per-message resolve + persist.
     fn resolve_stored_quotes(&self, mut messages: Vec<Message>) -> Vec<Message> {
+        use std::collections::HashSet;
+
+        // Parents that need an existence check: a reply with a stored
+        // (parent, author) in a non-anon conversation (anon resolves to the
+        // stored parent without a lookup — see resolve_reply_parent).
+        let parent_ids: Vec<_> = messages
+            .iter()
+            .filter(|m| !m.conversation_type.is_anon())
+            .filter_map(|m| match (m.reply_to, m.reply_to_author_id) {
+                (Some(parent), Some(_)) => Some(parent),
+                _ => None,
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let present: HashSet<_> = match self.message_repo.get_many(&parent_ids) {
+            Ok(found) => found.into_iter().map(|m| m.id).collect(),
+            Err(error) => {
+                // Fail open: an empty set sends every reply down the
+                // per-message path below — slower, same result.
+                tracing::warn!(%error, "batch quote resolution failed; resolving per message");
+                HashSet::new()
+            }
+        };
+
         for message in &mut messages {
-            if let Ok(Some(parent)) = self.message_repo.resolve_reply_parent(message) {
-                if message.reply_to != Some(parent) {
-                    message.reply_to = Some(parent);
-                    if let Err(error) = self.message_repo.update_reply_parent(&message.id, &parent)
+            let (Some(parent), Some(_)) = (message.reply_to, message.reply_to_author_id) else {
+                continue;
+            };
+            // Parent present (or anon): the stored reference already points at
+            // it, so there is nothing to repoint. Only a parent missing from
+            // this page's batch needs the fallback that can find a later-arrived
+            // parent by timestamp and persist the corrected reference.
+            if message.conversation_type.is_anon() || present.contains(&parent) {
+                continue;
+            }
+            if let Ok(Some(resolved)) = self.message_repo.resolve_reply_parent(message) {
+                if message.reply_to != Some(resolved) {
+                    message.reply_to = Some(resolved);
+                    if let Err(error) =
+                        self.message_repo.update_reply_parent(&message.id, &resolved)
                     {
                         tracing::warn!(%error, "Could not persist resolved quote");
                     }
