@@ -255,7 +255,6 @@ export component MainChatShell inherits Rectangle {
                     channel-has-avatar: ChatPane.channel-has-avatar;
                     channel-id: ChatPane.channel-id;
                     channel-name: ChatPane.channel-name;
-                    chat-can-forward: ChatPane.chat-can-forward;
                     chat-list-scrolling <=> ChatPane.chat-list-scrolling;
                     chat-menu-secret-chat <=> ChatPane.chat-menu-secret-chat;
                     chat-menu-settings <=> ChatPane.chat-menu-settings;
@@ -380,7 +379,6 @@ export component MainChatShell inherits Rectangle {
                     composer-gif-search-changed(arg0) => { ChatPane.composer-gif-search-changed(arg0); }
                     composer-gif-selected(arg0, arg1) => { ChatPane.composer-gif-selected(arg0, arg1); }
                     emoji-clicked() => { ChatPane.emoji-clicked(); }
-                    forward-message-action(arg0, arg1) => { ChatPane.forward-message-action(arg0, arg1); }
                     gif-clicked() => { ChatPane.gif-clicked(); }
                     identity-change-accept-clicked() => { ChatPane.identity-change-accept-clicked(); }
                     invite-member() => { ChatPane.invite-member(); }

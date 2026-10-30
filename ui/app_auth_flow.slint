@@ -34,6 +34,10 @@ export global AuthFlow {
     in property <string> register-error: "";
     in property <image> register-avatar-source;
     in property <[AvatarOption]> avatar-options: [];
+    // Count of photo-backed presets the register carousel cycles over. These
+    // occupy indices [0, count) of DEFAULT_AVATARS (Rust-computed); the
+    // initials presets after them are not offered at registration.
+    in property <int> register-preset-count: 0;
     in property <bool> register-has-avatar: false;
     in-out property <int> register-selected-default-idx: 0;
     in-out property <color> register-avatar-color: Colors.avatar-teal;

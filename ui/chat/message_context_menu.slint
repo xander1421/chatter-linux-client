@@ -136,6 +136,60 @@ component QuickReaction inherits Rectangle {
     }
 }
 
+// Trailing button on the quick-reaction row: opens the full emoji + sticker
+// picker. Lives in the row, so it navigates like a QuickReaction (Left back to
+// the emojis, Down into the actions) rather than like a vertical MenuItem.
+component ReactionPickerButton inherits Rectangle {
+    in property <int> nav-index: 0;
+    in property <int> focused-index: 0;
+    in property <bool> keyboard-active: false;
+    callback clicked();
+    callback navigate(int, int);
+    callback focused(int, length, length);
+
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
+    border-radius: Spacing.touch-target-min / 2;
+    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : Colors.inset;
+    border-width: keys.has-focus ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
+    accessible-role: button;
+    accessible-label: "More reactions and stickers";
+    accessible-action-default => { root.clicked(); }
+
+    changed focused-index => {
+        if root.keyboard-active && root.focused-index == root.nav-index { keys.focus(); }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        changed has-focus => { if self.has-focus { root.focused(root.nav-index, root.y, root.height); } }
+        key-pressed(event) => {
+            if event.text == Key.LeftArrow { root.navigate(root.nav-index, -1); return accept; }
+            if event.text == Key.RightArrow { return accept; }
+            if event.text == Key.DownArrow { root.navigate(root.nav-index, 3); return accept; }
+            if event.text == Key.UpArrow { return accept; }
+            if event.text == Key.Space || event.text == Key.Return { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+
+    Image {
+        source: Icons.smile;
+        colorize: Colors.text-secondary;
+        width: 22px;
+        height: 22px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 // Menu item with icon and label
 component MenuItem inherits Rectangle {
     in property <image> icon;
@@ -220,10 +274,9 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> content-bottom: root.height;
     // Visibility and position - menu appears where clicked
     in property <bool> show: false;
-    // Keep the common actions on one short page, even with the IME open.
-    // Secondary actions retain the capped scrollable page below.
-    private property <bool> more-actions: false;
-    changed show => { root.more-actions = false; root.focus-index = 0; }
+    // One flat page: every action is visible, no "More" drill-down. The whole
+    // list scrolls vertically (menu-scroll) when it is taller than its band.
+    changed show => { root.focus-index = 0; }
     in property <length> position-x: 0;
     in property <length> position-y: 0;
     // Window-local vertical bounds of the pressed bubble. Zero/zero keeps
@@ -270,36 +323,34 @@ export component MessageContextMenu inherits Rectangle {
     in property <string> timestamp-ns: "";
     in property <string> message-id: "";        // Thread + selection are keyed by message id
     in property <bool> can-thread: false;  // Threads are a channel feature (none in 1:1, as in Signal)
-    // Something on the second page is offered. Core decides each flag.
-    private property <bool> more-page: MessageMenuActions.react || MessageMenuActions.info
-        || (MessageMenuActions.reply && root.can-thread) || root.can-select
-        || MessageMenuActions.pin || MessageMenuActions.download
-        || MessageMenuActions.delete-for-everyone || MessageMenuActions.delete-for-me;
+    // Flat focus order, assigned once from top to bottom. The quick-reaction
+    // row holds the emojis (0..react-count-1) and the trailing picker button
+    // (picker-index); the vertical actions follow from actions-start.
     private property <int> focus-index: 0;
-    private property <int> primary-start: MessageMenuActions.react ? QuickReactions.emojis.length : 0;
-    private property <int> resend-index: root.primary-start;
-    private property <int> reply-index: root.resend-index + (MessageMenuActions.resend ? 1 : 0);
-    private property <int> edit-index: root.reply-index + (MessageMenuActions.reply ? 1 : 0);
-    private property <int> copy-index: root.edit-index + (MessageMenuActions.edit ? 1 : 0);
-    private property <int> forward-index: root.copy-index + (MessageMenuActions.copy ? 1 : 0);
-    private property <int> more-index: root.forward-index + (MessageMenuActions.forward ? 1 : 0);
-    private property <int> reactions-index: 1;
-    private property <int> info-index: root.reactions-index + (MessageMenuActions.react ? 1 : 0);
-    private property <int> thread-index: root.info-index + (MessageMenuActions.info ? 1 : 0);
-    private property <int> select-index: root.thread-index + (MessageMenuActions.reply && root.can-thread ? 1 : 0);
+    private property <int> react-count: MessageMenuActions.react ? QuickReactions.emojis.length : 0;
+    private property <int> picker-index: root.react-count;
+    private property <int> actions-start: MessageMenuActions.react ? root.react-count + 1 : 0;
+    private property <bool> can-thread-reply: MessageMenuActions.reply && root.can-thread;
     // Multi-select works on the main list only; the thread panel has none.
     private property <bool> can-select: MessageMenuActions.select && !root.preview-from-thread;
+    private property <bool> has-delete: MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone;
+    private property <int> resend-index: root.actions-start;
+    private property <int> reply-index: root.resend-index + (MessageMenuActions.resend ? 1 : 0);
+    private property <int> edit-index: root.reply-index + (MessageMenuActions.reply ? 1 : 0);
+    private property <int> thread-index: root.edit-index + (MessageMenuActions.edit ? 1 : 0);
+    private property <int> copy-index: root.thread-index + (root.can-thread-reply ? 1 : 0);
+    private property <int> forward-index: root.copy-index + (MessageMenuActions.copy ? 1 : 0);
+    private property <int> select-index: root.forward-index + (MessageMenuActions.forward ? 1 : 0);
     private property <int> pin-index: root.select-index + (root.can-select ? 1 : 0);
     private property <int> download-index: root.pin-index + (MessageMenuActions.pin ? 1 : 0);
-    private property <int> delete-index: root.download-index + (MessageMenuActions.download ? 1 : 0);
-    private property <int> focus-count: root.more-actions
-        ? root.delete-index + (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone ? 1 : 0)
-        : root.more-index + (root.more-page ? 1 : 0);
+    private property <int> info-index: root.download-index + (MessageMenuActions.download ? 1 : 0);
+    private property <int> delete-index: root.info-index + (MessageMenuActions.info ? 1 : 0);
+    private property <int> focus-count: root.delete-index + (root.has-delete ? 1 : 0);
     function move-focus(from: int, direction: int) {
         // 3 = down out of the reaction row; Up from the first action goes back to it.
         root.focus-index = direction == -2 ? 0 : direction == 2 ? root.focus-count - 1
-            : direction == 3 ? min(root.focus-count - 1, root.primary-start)
-            : direction == -1 && from == root.primary-start && root.primary-start > 0 && !root.more-actions ? 0
+            : direction == 3 ? min(root.focus-count - 1, root.actions-start)
+            : direction == -1 && from == root.actions-start && root.actions-start > 0 ? 0
             : max(0, min(root.focus-count - 1, from + direction));
     }
     function keep-visible(top: length, item-height: length) {
@@ -523,49 +574,61 @@ export component MessageContextMenu inherits Rectangle {
                 padding: Spacing.sm;
                 spacing: Spacing.xxs;
 
-                if root.more-actions: MenuItem {
-                    nav-index: 0;
-                    focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile;
-                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
-                    navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.chevron-left;
-                    label: "Back";
-                    clicked => { root.more-actions = false; root.focus-index = 0; menu-scroll.viewport-y = 0px; }
-                }
-
                 // Quick-reaction row. This is the whole point of opening on hold:
                 // reacting used to be reachable only from the hover action bar,
                 // which on a touch screen exists only while a finger is down — you
                 // had to guess where it would appear and hit it blind. The
                 // reactions pill below a bubble is `if has-reactions`, so it could
-                // not bootstrap the first reaction either.
-                if MessageMenuActions.react && !root.more-actions: HorizontalLayout {
-                    spacing: Spacing.none;
-                    alignment: space-between;
+                // not bootstrap the first reaction either. The emojis scroll
+                // horizontally; the trailing button opens the full picker.
+                if MessageMenuActions.react: HorizontalLayout {
+                    spacing: Spacing.xs;
                     padding-bottom: Spacing.xs;
 
-                    for emoji[index] in QuickReactions.emojis: QuickReaction {
-                        nav-index: index;
+                    Flickable {
+                        horizontal-stretch: 1;
+                        height: Spacing.touch-target-min;
+                        viewport-width: emoji-row.preferred-width;
+                        viewport-height: self.height;
+                        interactive: emoji-row.preferred-width > self.width;
+
+                        emoji-row := HorizontalLayout {
+                            spacing: Spacing.xs;
+                            for emoji[index] in QuickReactions.emojis: QuickReaction {
+                                nav-index: index;
+                                focused-index: root.focus-index;
+                                keyboard-active: root.show && !root.preview-mobile;
+                                initial-focus: root.show && !root.preview-mobile && index == 0;
+                                focused(item-index, top, item-height) => { root.focus-index = item-index; }
+                                navigate(from, direction) => { root.move-focus(from, direction); }
+                                emoji: emoji;
+                                short-name: ["Like", "Love", "Haha", "Wow", "Sad", "Thanks"][index];
+                                shown: root.show;
+                                stagger-index: index;
+                                name: QuickReactions.names[index];
+                                clicked => {
+                                    root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                                    root.close();
+                                }
+                            }
+                        }
+                    }
+
+                    // Pinned at the end: opens the full emoji + sticker picker.
+                    ReactionPickerButton {
+                        nav-index: root.picker-index;
                         focused-index: root.focus-index;
                         keyboard-active: root.show && !root.preview-mobile;
-                        initial-focus: root.show && !root.preview-mobile && index == 0;
                         focused(item-index, top, item-height) => { root.focus-index = item-index; }
                         navigate(from, direction) => { root.move-focus(from, direction); }
-                        emoji: emoji;
-                        short-name: ["Like", "Love", "Haha", "Wow", "Sad", "Thanks"][index];
-                        shown: root.show;
-                        stagger-index: index;
-                        name: QuickReactions.names[index];
                         clicked => {
-                            root.quick-react(root.sender-id, root.timestamp-ns, emoji);
+                            root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
                             root.close();
                         }
                     }
                 }
 
-                if MessageMenuActions.resend && !root.more-actions: MenuItem {
+                if MessageMenuActions.resend: MenuItem {
                     nav-index: root.resend-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
@@ -580,37 +643,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.react && root.more-actions: MenuItem {
-                    nav-index: root.reactions-index;
-                    focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.reactions-index == 0;
-                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
-                    navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.smile;
-                    label: "More reactions";
-                    clicked => {
-                        root.more-reactions-clicked(root.sender-id, root.timestamp-ns);
-                        root.close();
-                    }
-                }
-
-                if MessageMenuActions.info && root.more-actions: MenuItem {
-                    nav-index: root.info-index;
-                    focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.info-index == 0;
-                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
-                    navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.clock;
-                    label: "Info";
-                    clicked => {
-                        root.info-clicked(root.message-id);
-                        root.close();
-                    }
-                }
-
-                if MessageMenuActions.reply && !root.more-actions: MenuItem {
+                if MessageMenuActions.reply: MenuItem {
                     nav-index: root.reply-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
@@ -625,39 +658,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.reply && root.can-thread && root.more-actions: MenuItem {
-                    nav-index: root.thread-index;
-                    focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.thread-index == 0;
-                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
-                    navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.message-circle;
-                    label: "Reply in thread";
-                    clicked => {
-                        root.thread-clicked(root.message-id);
-                        root.close();
-                    }
-                }
-
-                // The discoverable route into multi-select, for anyone who never
-                // finds the longer hold.
-                if root.can-select && root.more-actions: MenuItem {
-                    nav-index: root.select-index;
-                    focused-index: root.focus-index;
-                    keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.select-index == 0;
-                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
-                    navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.check;
-                    label: "Select";
-                    clicked => {
-                        root.select-clicked(root.message-id);
-                        root.close();
-                    }
-                }
-
-                if MessageMenuActions.edit && !root.more-actions: MenuItem {
+                if MessageMenuActions.edit: MenuItem {
                     nav-index: root.edit-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
@@ -672,22 +673,22 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.pin && root.more-actions: MenuItem {
-                    nav-index: root.pin-index;
+                if root.can-thread-reply: MenuItem {
+                    nav-index: root.thread-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.pin-index == 0;
+                    initial-focus: root.show && !root.preview-mobile && root.thread-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.pin;
-                    label: MessageMenuActions.pinned ? "Unpin" : "Pin";
+                    icon: Icons.message-circle;
+                    label: "Reply in thread";
                     clicked => {
-                        root.pin-clicked(root.sender-id, root.timestamp-ns);
+                        root.thread-clicked(root.message-id);
                         root.close();
                     }
                 }
 
-                if MessageMenuActions.copy && !root.more-actions: MenuItem {
+                if MessageMenuActions.copy: MenuItem {
                     nav-index: root.copy-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
@@ -702,7 +703,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.forward && !root.more-actions: MenuItem {
+                if MessageMenuActions.forward: MenuItem {
                     nav-index: root.forward-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
@@ -717,7 +718,39 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.download && root.more-actions: MenuItem {
+                // The discoverable route into multi-select, for anyone who never
+                // finds the longer hold.
+                if root.can-select: MenuItem {
+                    nav-index: root.select-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.select-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.check;
+                    label: "Select";
+                    clicked => {
+                        root.select-clicked(root.message-id);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.pin: MenuItem {
+                    nav-index: root.pin-index;
+                    focused-index: root.focus-index;
+                    keyboard-active: root.show && !root.preview-mobile;
+                    initial-focus: root.show && !root.preview-mobile && root.pin-index == 0;
+                    focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
+                    navigate(from, direction) => { root.move-focus(from, direction); }
+                    icon: Icons.pin;
+                    label: MessageMenuActions.pinned ? "Unpin" : "Pin";
+                    clicked => {
+                        root.pin-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.download: MenuItem {
                     nav-index: root.download-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
@@ -732,19 +765,22 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if root.more-page && !root.more-actions: MenuItem {
-                    nav-index: root.more-index;
+                if MessageMenuActions.info: MenuItem {
+                    nav-index: root.info-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;
-                    initial-focus: root.show && !root.preview-mobile && root.more-index == 0;
+                    initial-focus: root.show && !root.preview-mobile && root.info-index == 0;
                     focused(index, top, item-height) => { root.focus-index = index; root.keep-visible(top, item-height); }
                     navigate(from, direction) => { root.move-focus(from, direction); }
-                    icon: Icons.more-horizontal;
-                    label: "More";
-                    clicked => { root.more-actions = true; root.focus-index = 0; menu-scroll.viewport-y = 0px; }
+                    icon: Icons.clock;
+                    label: "Info";
+                    clicked => {
+                        root.info-clicked(root.message-id);
+                        root.close();
+                    }
                 }
 
-                if (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone) && root.more-actions: MenuItem {
+                if root.has-delete: MenuItem {
                     nav-index: root.delete-index;
                     focused-index: root.focus-index;
                     keyboard-active: root.show && !root.preview-mobile;

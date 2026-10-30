@@ -9,7 +9,6 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
-import { AvatarPicker, AvatarOption } from "../components/avatar_picker.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
@@ -29,9 +28,9 @@ export component RegisterPage inherits Rectangle {
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <int> selected-default-idx: 0;
-    in property <[AvatarOption]> avatar-options: [];
+    // Number of photo presets the carousel cycles over (indices [0, count)).
+    in property <int> preset-count: 0;
     in-out property <color> avatar-color: Colors.avatar-teal;
-    property <bool> avatar-menu-open: false;
     // Touch density for the Shield header control.
     in property <bool> touch: false;
     
@@ -223,13 +222,47 @@ export component RegisterPage inherits Rectangle {
                                 alignment: center;
                                 spacing: Spacing.sm;
 
+                                // Carousel: ‹ preset › with the live preview in
+                                // the middle. The arrows cycle the photo presets
+                                // (indices [0, preset-count), wrap-around);
+                                // tapping the avatar or "Upload own" uploads a
+                                // custom photo.
                                 HorizontalLayout {
                                     alignment: center;
+                                    spacing: Spacing.sm;
+
+                                    Rectangle {
+                                        width: 44px;
+                                        height: 44px;
+                                        border-radius: self.width / 2;
+                                        background: prev-touch.pressed ? Colors.inset : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Previous avatar";
+                                        accessible-enabled: !root.loading && root.preset-count > 1;
+                                        accessible-action-default => {
+                                            root.select-default-avatar(Math.mod(root.selected-default-idx - 1 + root.preset-count, root.preset-count));
+                                        }
+                                        Image {
+                                            source: Icons.chevron-left;
+                                            width: 24px;
+                                            height: 24px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.text-secondary;
+                                        }
+                                        prev-touch := TouchArea {
+                                            enabled: !root.loading && root.preset-count > 1;
+                                            clicked => {
+                                                root.select-default-avatar(Math.mod(root.selected-default-idx - 1 + root.preset-count, root.preset-count));
+                                            }
+                                        }
+                                    }
+
                                     Rectangle {
                                         accessible-role: button;
-                                        accessible-label: "Edit profile photo";
-                                        accessible-action-default => { root.avatar-menu-open = !root.avatar-menu-open; }
-                                        KeyFocus { border-radius: parent.border-radius; activate => { root.avatar-menu-open = !root.avatar-menu-open; } }
+                                        accessible-label: "Upload your own photo";
+                                        accessible-action-default => { root.select-avatar(); }
+                                        KeyFocus { border-radius: parent.border-radius; activate => { root.select-avatar(); } }
                                         width: 96px;
                                         height: 96px;
                                         background: transparent;
@@ -266,33 +299,54 @@ export component RegisterPage inherits Rectangle {
 
                                         avatar-touch := TouchArea {
                                             enabled: !root.loading;
-                                            clicked => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                            clicked => { root.select-avatar(); }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 44px;
+                                        height: 44px;
+                                        border-radius: self.width / 2;
+                                        background: next-touch.pressed ? Colors.inset : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Next avatar";
+                                        accessible-enabled: !root.loading && root.preset-count > 1;
+                                        accessible-action-default => {
+                                            root.select-default-avatar(Math.mod(root.selected-default-idx + 1, root.preset-count));
+                                        }
+                                        Image {
+                                            source: Icons.chevron-right;
+                                            width: 24px;
+                                            height: 24px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.text-secondary;
+                                        }
+                                        next-touch := TouchArea {
+                                            enabled: !root.loading && root.preset-count > 1;
+                                            clicked => {
+                                                root.select-default-avatar(Math.mod(root.selected-default-idx + 1, root.preset-count));
+                                            }
                                         }
                                     }
                                 }
 
-                                if root.avatar-menu-open: HorizontalLayout {
+                                HorizontalLayout {
                                     alignment: center;
                                     spacing: Spacing.md;
                                     Button {
-                                        text: "Choose photo";
+                                        text: "Upload own";
                                         variant: "secondary";
-                                        clicked => { root.avatar-menu-open = false; root.select-avatar(); }
+                                        disabled: root.loading;
+                                        clicked => { root.select-avatar(); }
                                     }
                                     if root.has-avatar: Button {
                                         text: "Remove photo";
                                         variant: "secondary";
-                                        clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
+                                        disabled: root.loading;
+                                        clicked => { root.remove-avatar(); }
                                     }
                                 }
-                            }
-
-                            AvatarPicker {
-                                choices: root.avatar-options;
-                                selected-index: root.selected-default-idx;
-                                name: root.display-name;
-                                disabled: root.loading;
-                                selected(i) => { root.select-default-avatar(i); }
                             }
 
                             // Display name
@@ -301,13 +355,16 @@ export component RegisterPage inherits Rectangle {
                                 text <=> root.display-name;
                                 disabled: root.loading;
                                 edited(text) => { root.clear-error(); }
+                                // Enter / Android IME action key advances to the
+                                // next field. See components/input.slint.
+                                accepted => { username-field.focus(); }
                             }
 
                             // No availability check: the server exposes no
                             // username-lookup RPC, so the field is a plain
                             // input and registration reports a clash
                             // (OPEN-ITEMS §82).
-                            Input {
+                            username-field := Input {
                                 placeholder: "Username";
                                 text <=> root.username;
                                 disabled: root.loading;
@@ -347,6 +404,9 @@ export component RegisterPage inherits Rectangle {
                                 text <=> root.password;
                                 disabled: root.loading;
                                 edited(text) => { root.clear-error(); root.password-changed(text); }
+                                // Enter / Android IME action key advances to the
+                                // next field. See components/input.slint.
+                                accepted => { confirm-field.focus(); }
                             }
 
                             // Password strength meter (4 segments)
@@ -383,7 +443,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             // Confirm password
-                            Input {
+                            confirm-field := Input {
                                 placeholder: "Confirm password";
                                 password: true;
                                 text <=> root.confirm-password;

@@ -24,7 +24,6 @@ export component AppConversationLayout inherits Rectangle {
     in property <bool> channel-has-avatar;
     in property <string> channel-id;
     in property <string> channel-name;
-    in property <bool> chat-can-forward;
     in-out property <bool> chat-list-scrolling;
     in-out property <bool> chat-menu-secret-chat;
     in-out property <bool> chat-menu-settings;
@@ -156,7 +155,6 @@ export component AppConversationLayout inherits Rectangle {
     callback composer-gif-search-changed(string);
     callback composer-gif-selected(string, string);
     callback emoji-clicked();
-    callback forward-message-action(string, string);
     callback gif-clicked();
     callback identity-change-accept-clicked();
     callback invite-member();
@@ -233,7 +231,6 @@ export component AppConversationLayout inherits Rectangle {
     privacy-line-override: root.privacy-line-override;
     privacy-line-exposed: root.privacy-line-exposed;
     is-dm: root.is-dm;
-    can-forward: root.chat-can-forward;
     is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
     member-count: root.member-count;
     invited-count: root.invited-count;
@@ -371,7 +368,6 @@ export component AppConversationLayout inherits Rectangle {
         root.reply-clicked(sender-id, timestamp-ns);
         root.reply-focus-serial += 1;
     }
-    forward-clicked(sender-id, timestamp-ns) => { root.forward-message-action(sender-id, timestamp-ns); }
     react-clicked(sender-id, timestamp-ns, x, y) => {
         root.reaction-picker-sender-id = sender-id;
         root.reaction-picker-timestamp-ns = timestamp-ns;

@@ -587,6 +587,12 @@ impl RoomManager {
         }
     }
 
+    pub fn recover_microphone_stream(&self) {
+        if let Err(error) = self.audio_capture.write().recover_stream() {
+            tracing::error!(%error, "Could not recover microphone capture stream");
+        }
+    }
+
     /// Check if microphone is muted.
     pub fn is_microphone_muted(&self) -> bool {
         self.audio_capture.read().is_muted()

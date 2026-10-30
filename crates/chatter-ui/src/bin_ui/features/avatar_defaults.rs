@@ -25,6 +25,18 @@ pub(crate) fn install(window: &MainWindow) {
     window
         .global::<crate::AuthFlow>()
         .set_avatar_options(ModelRc::from(Rc::new(VecModel::from(options))));
+
+    // The register carousel cycles only the photo-backed presets, which occupy
+    // indices [0, count) of DEFAULT_AVATARS. The initials presets after them
+    // would render a bare "?" before a display name is typed, so they are not
+    // offered at registration (the profile editor still shows the full list).
+    let preset_count = crate::bin_ui::converters::DEFAULT_AVATARS
+        .iter()
+        .filter(|choice| choice.image.is_some())
+        .count() as i32;
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_preset_count(preset_count);
 }
 
 pub(crate) fn show_register_default(window: &MainWindow, index: usize) {

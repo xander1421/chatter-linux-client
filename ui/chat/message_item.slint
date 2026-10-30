@@ -191,15 +191,12 @@ export component MessageItem inherits Rectangle {
     // Touch platform. Gates the hold gesture so a desktop left-button hold
     // does not open the menu (desktop keeps right-click).
     in property <bool> mobile: false;
-    // Core's permission for forwarding from the open conversation.
-    in property <bool> can-forward: false;
 
     // Callbacks
     callback reply-clicked(string, string);
     // A horizontal bubble swipe owns the gesture: the host list stops
     // scrolling so a few pixels of vertical drift cannot steal it.
     callback swipe-engaged(bool);
-    callback forward-clicked(string, string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     // Tapping an existing reaction toggles YOUR reaction of that emoji. Before
     // this the whole pill only opened the picker, so there was no way to take a
@@ -280,7 +277,6 @@ export component MessageItem inherits Rectangle {
     property <bool> swipe-haptic-fired: false;
     property <length> swipe-offset: 0px;
     property <length> swipe-threshold: 36px;
-    property <bool> swipe-forward: false;
 
     function begin-swipe(x: length, y: length) {
         root.swipe-tracking = root.mobile && !root.selection-mode
@@ -289,7 +285,6 @@ export component MessageItem inherits Rectangle {
         root.swipe-active = false;
         root.swipe-armed = false;
         root.swipe-haptic-fired = false;
-        root.swipe-forward = false;
         root.swipe-offset = 0px;
         root.press-x = x;
         root.press-y = y;
@@ -300,8 +295,7 @@ export component MessageItem inherits Rectangle {
         let dx = x - root.press-x;
         let dy = y - root.press-y;
         let toward-center = root.is-own ? -dx : dx;
-        let forward = toward-center < 0px;
-        if (forward && !root.can-forward) {
+        if (toward-center <= 0px) {
             root.swipe-offset = 0px;
             root.swipe-armed = false;
             return;
@@ -316,12 +310,10 @@ export component MessageItem inherits Rectangle {
             root.swipe-engaged(true);
             root.cancel-hold();
         }
-        if (root.swipe-forward != forward) { root.swipe-haptic-fired = false; }
-        root.swipe-forward = forward;
         // Resistance beyond the action threshold keeps a long drag attached
         // to the bubble without letting it run away from the finger.
         let travel = abs(toward-center);
-        let direction = (root.is-own ? -1 : 1) * (forward ? -1 : 1);
+        let direction = root.is-own ? -1 : 1;
         root.swipe-offset = direction
             * (min(travel, root.swipe-threshold)
                 + min(max(travel - root.swipe-threshold, 0px) * 0.33, 24px));
@@ -341,11 +333,7 @@ export component MessageItem inherits Rectangle {
         root.swipe-armed = false;
         root.swipe-offset = 0px;
         if (trigger) {
-            if (root.swipe-forward) {
-                root.forward-clicked(root.sender-id, root.timestamp-ns);
-            } else {
-                root.reply-clicked(root.sender-id, root.timestamp-ns);
-            }
+            root.reply-clicked(root.sender-id, root.timestamp-ns);
         }
     }
 
@@ -555,10 +543,10 @@ export component MessageItem inherits Rectangle {
                     height: bubble.height;
 
                 Image {
-                    source: root.swipe-forward ? Icons.send : Icons.reply;
+                    source: Icons.reply;
                     width: 24px;
                     height: 24px;
-                    x: (root.is-own == root.swipe-forward ? bubble.width : 0px)
+                    x: (root.is-own ? bubble.width : 0px)
                         + root.swipe-offset / 2 - self.width / 2;
                     y: (bubble.height - self.height) / 2;
                     colorize: root.swipe-armed ? Colors.primary : Colors.text-muted;
