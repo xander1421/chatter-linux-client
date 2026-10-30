@@ -121,7 +121,23 @@ pub fn build_own_message_item(
 /// would make it re-measure and re-seek), clear composer, and auto-scroll.
 pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::MessageItemData) {
     window.global::<crate::ChatPane>().set_is_at_bottom(true);
-    edit_messages(window, |model| model.push(msg_item));
+    let model = window.global::<crate::ChatPane>().get_messages();
+    match model
+        .as_any()
+        .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
+    {
+        Some(vec) => {
+            vec.push(msg_item);
+            if window.global::<crate::ChatPane>().get_conversation_kind()
+                == crate::ConversationKind::Channel
+            {
+                // Pushed at the end: only the new last row's continuation can
+                // change, so recompute just it rather than the whole model.
+                recompute_continuation_at(vec, vec.row_count().saturating_sub(1));
+            }
+        }
+        None => tracing::warn!("message list model is not a VecModel; append dropped"),
+    }
     window
         .global::<crate::ChatPane>()
         .set_composer_text("".into());
