@@ -208,7 +208,7 @@ impl AuthState {
     /// Quick check if user is currently logged in.
     #[must_use]
     pub fn is_logged_in(&self) -> bool {
-        self.store.get().current_user_id.is_some()
+        self.store.with(|s| s.current_user_id.is_some())
     }
 }
 

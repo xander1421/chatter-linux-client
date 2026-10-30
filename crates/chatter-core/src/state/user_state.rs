@@ -78,13 +78,13 @@ impl UserState {
     /// Get a user from the cache by ID.
     #[must_use]
     pub fn get_user(&self, user_id: &UserId) -> Option<User> {
-        self.store.get().users.get(user_id).cloned()
+        self.store.with(|s| s.users.get(user_id).cloned())
     }
 
     /// Get a profile from the cache by ID.
     #[must_use]
     pub fn get_profile(&self, user_id: &UserId) -> Option<Profile> {
-        self.store.get().profiles.get(user_id).cloned()
+        self.store.with(|s| s.profiles.get(user_id).cloned())
     }
 }
 

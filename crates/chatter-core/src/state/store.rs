@@ -89,6 +89,17 @@ impl<T: Clone + Send + Sync + 'static> Store<T> {
         self.state.read().clone()
     }
 
+    /// Read the current state under the lock without cloning all of `T`.
+    ///
+    /// `get()` deep-clones the entire state (every `HashMap`/`Vec` inside it) and
+    /// is wasteful when the caller only needs one small field. `with` holds the
+    /// read lock for the closure and lets the caller extract just what it needs,
+    /// so a hot single-field read copies that field, not the whole snapshot.
+    /// Keep the closure cheap and non-blocking — it runs under the read lock.
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&self.state.read())
+    }
+
     /// Update the state in place using a closure.
     ///
     /// The closure receives a mutable reference to the state.

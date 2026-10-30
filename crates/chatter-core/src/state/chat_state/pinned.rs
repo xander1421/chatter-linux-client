@@ -121,7 +121,7 @@ impl ChatState {
     /// Get the total count of pinned messages.
     #[must_use]
     pub fn pinned_total_count(&self) -> usize {
-        self.store.get().pinned.pinned_message_ids.len()
+        self.store.with(|s| s.pinned.pinned_message_ids.len())
     }
 
     /// Add a newly pinned message (deduped) and show it: newest first, as the

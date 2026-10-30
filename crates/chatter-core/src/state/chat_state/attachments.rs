@@ -66,7 +66,7 @@ impl PendingAttachment {
 
 impl ChatState {
     pub fn thread_pending_attachments(&self, root: &MessageId) -> Vec<PendingAttachment> {
-        self.store.get().thread_attachment_trays.get(root).cloned().unwrap_or_default()
+        self.store.with(|s| s.thread_attachment_trays.get(root).cloned().unwrap_or_default())
     }
 
     pub fn add_thread_attachment_for(
@@ -193,7 +193,7 @@ impl ChatState {
     /// Get all pending attachments.
     #[must_use]
     pub fn get_pending_attachments(&self) -> Vec<PendingAttachment> {
-        self.store.get().pending_attachments.clone()
+        self.store.with(|s| s.pending_attachments.clone())
     }
 
     /// Take the staged attachments for a send to `conversation`, in one

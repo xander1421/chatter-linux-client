@@ -167,7 +167,7 @@ impl ChatState {
 
     /// Get the current active conversation.
     pub fn active_conversation(&self) -> ActiveConversation {
-        self.store.get().active_conversation
+        self.store.with(|s| s.active_conversation.clone())
     }
 }
 

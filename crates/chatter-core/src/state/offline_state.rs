@@ -102,13 +102,13 @@ impl OfflineState {
     /// Get the current connection state.
     #[must_use]
     pub fn connection_state(&self) -> ConnectionState {
-        self.store.get().connection_state
+        self.store.with(|s| s.connection_state.clone())
     }
 
     /// Get the current reconnection attempt number if reconnecting.
     #[must_use]
     pub fn reconnect_attempt(&self) -> Option<u32> {
-        self.store.get().reconnect_attempt
+        self.store.with(|s| s.reconnect_attempt)
     }
 
     /// Subscribe to state changes (Arc-wrapped for efficiency).
