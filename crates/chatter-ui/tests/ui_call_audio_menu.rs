@@ -191,6 +191,14 @@ fn call_audio_arrows_are_independent_at_both_densities() {
             for video in [false, true] {
                 view.set_call_is_video_enabled(video);
                 pump_at(&w, width, 800.0);
+                if !linked && width < 368.0 {
+                    assert!(
+                        testing::ElementHandle::find_by_element_type_name(&w, "AppSidebarHost")
+                            .next()
+                            .is_none(),
+                        "Covered sidebar must be unmounted"
+                    );
+                }
                 let input_label = if linked {
                     "Select microphone, linked audio route"
                 } else {
@@ -365,6 +373,14 @@ fn call_audio_arrows_are_independent_at_both_densities() {
                 view.set_active_call_visible(false);
                 pump_at(&w, width, 800.0);
                 assert!(!view.get_audio_controls_visible());
+                if !linked && !fullscreen && width < 368.0 {
+                    assert!(
+                        testing::ElementHandle::find_by_element_type_name(&w, "AppSidebarHost")
+                            .next()
+                            .is_some(),
+                        "Sidebar must return when call hides"
+                    );
+                }
                 view.set_active_call_visible(true);
                 pump_at(&w, width, 800.0);
             }
