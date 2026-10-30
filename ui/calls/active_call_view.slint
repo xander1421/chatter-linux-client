@@ -224,7 +224,6 @@ export component ActiveCallView inherits Rectangle {
     callback toggle-screen-share();
     callback end-call();
     callback show-audio-settings();
-    callback show-audio-output-settings();
     callback toggle-speaker();
     // Per-peer local controls — only the local viewer is affected.
     callback peer-audio-mute-toggle(string);
@@ -244,7 +243,7 @@ export component ActiveCallView inherits Rectangle {
     // compact strip — a tall grid of empty avatar tiles wastes the chat area.
     // Phones (`speaker-toggle`) get 48dp touch targets on the control row.
     property <length> button-size: speaker-toggle ? Spacing.touch-target-min : Spacing.button-height;
-    property <length> controls-height: button-size + 6px;
+    property <length> controls-height: button-size * 2 + Spacing.sm;
     property <length> dock-height: any-video
         ? clamp(viewport-height * 0.45, 240px, 560px)
         : 100px + controls-height + Spacing.sm;
@@ -606,9 +605,9 @@ export component ActiveCallView inherits Rectangle {
             padding-bottom: Spacing.sm;
 
             CallControls {
-                // Six desktop actions need more than 296px; otherwise the
-                // rightmost end-call target is clipped by the control pill.
-                width: min(root.speaker-toggle ? 288px : 376px, root.width - 2 * Spacing.md);
+                // Audio devices has its own labeled row; the four call actions
+                // retain full touch targets even in the compact phone dock.
+                width: min(root.speaker-toggle ? 240px : 280px, root.width - 2 * Spacing.md);
                 height: controls-height;
                 button-size: root.button-size;
                 is-connected: root.call-data.is-connected;
@@ -625,7 +624,6 @@ export component ActiveCallView inherits Rectangle {
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
                 show-audio-settings => { root.show-audio-settings(); }
-                show-audio-output-settings => { root.show-audio-output-settings(); }
             }
         }
     }

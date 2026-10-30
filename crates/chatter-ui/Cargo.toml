@@ -37,6 +37,10 @@ name = "ui_render"
 required-features = ["ui-test-debug"]
 
 [[test]]
+name = "ui_call_audio_menu"
+required-features = ["ui-test-debug"]
+
+[[test]]
 name = "ui_call_bubble"
 required-features = ["ui-test-debug"]
 
