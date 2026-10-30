@@ -21,6 +21,22 @@ const MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
 /// allocates a multi-GB Vec.
 const MAX_MULTIPART_PARTS: u64 = 10_000;
 
+// Server currently selects 16 MiB (attachment.go). Allow headroom while
+// bounding four concurrent buffered PUTs, including anonymous HTTP transport.
+const MAX_MULTIPART_PART_SIZE: u64 = 32 * 1024 * 1024;
+
+fn checked_part_len(len: u64) -> Result<usize, AttachmentError> {
+    if len == 0 || len > MAX_MULTIPART_PART_SIZE {
+        return Err(AttachmentError::NetworkError(format!(
+            "server multipart part size {len} is outside client budget (1..={} bytes); retry with a compatible server",
+            MAX_MULTIPART_PART_SIZE
+        )));
+    }
+    usize::try_from(len).map_err(|_| {
+        AttachmentError::NetworkError("multipart part size overflows this device".into())
+    })
+}
+
 /// Split `total` bytes into (offset, len) ranges of `part_size` (last may be smaller).
 fn part_ranges(total: u64, part_size: u64) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
@@ -46,6 +62,7 @@ impl AttachmentService {
     ) -> Result<String, AttachmentError> {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
+        let part_len = checked_part_len(len)?;
         let mut last_err = String::new();
         for attempt in 0..3 {
             // Read the exact byte range fresh each attempt.
@@ -55,7 +72,7 @@ impl AttachmentService {
             f.seek(std::io::SeekFrom::Start(offset))
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("seek: {}", e)))?;
-            let mut buf = vec![0u8; len as usize];
+            let mut buf = vec![0u8; part_len];
             f.read_exact(&mut buf)
                 .await
                 .map_err(|e| AttachmentError::FileError(format!("read part: {}", e)))?;
@@ -523,16 +540,11 @@ impl AttachmentService {
         let cdn_key = create.cdn_key.clone();
         let upload_id = create.upload_id.clone();
         let part_size = create.part_size as u64;
-        // Guard against a malformed server response: part_size 0 would make
-        // part_ranges loop forever (offset never advances), growing an
-        // unbounded Vec until OOM. Fail loudly instead.
-        if part_size == 0 {
+        if let Err(error) = checked_part_len(part_size) {
             let _ = file_client
                 .abort_attachment_multipart_upload(&cdn_key, &upload_id)
                 .await;
-            return Err(AttachmentError::NetworkError(
-                "server returned part_size 0 for multipart upload".to_string(),
-            ));
+            return Err(error);
         }
         // Reject an absurd implied part count (e.g. hostile part_size=1) BEFORE
         // part_ranges builds the Vec — otherwise it allocates ~ciphertext/part_size
@@ -1257,6 +1269,26 @@ mod size_cap_tests {
 #[cfg(test)]
 mod part_range_tests {
     use super::*;
+
+    #[test]
+    fn multipart_part_bytes_are_bounded_before_allocation() {
+        assert_eq!(
+            checked_part_len(16 * 1024 * 1024).unwrap(),
+            16 * 1024 * 1024
+        );
+        assert_eq!(
+            checked_part_len(MAX_MULTIPART_PART_SIZE).unwrap() as u64,
+            MAX_MULTIPART_PART_SIZE
+        );
+        for invalid in [
+            0,
+            MAX_MULTIPART_PART_SIZE + 1,
+            2 * 1024 * 1024 * 1024,
+            u64::MAX,
+        ] {
+            assert!(checked_part_len(invalid).is_err());
+        }
+    }
 
     #[test]
     fn part_ranges_covers_exactly() {
