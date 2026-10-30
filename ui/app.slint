@@ -566,6 +566,13 @@ export component MainWindow inherits Window {
         if root.other-menu-open {
             SidebarPane.row-context-menu-open = false;
             SidebarPane.section-context-menu-open = false;
+            // Taking focus off the composer hides the soft keyboard (a TextInput
+            // FocusOut sends InputMethodRequest::Disable), the same move `changed
+            // active-modal` makes. Without it the raised IME shrank the hold-menu's
+            // band to below its primary rows, so "More"/"Delete" fell under the
+            // keyboard and needed a scroll to reach. Mobile only: on desktop the
+            // menu takes keyboard focus itself for arrow-key navigation.
+            if root.is-mobile-platform { back-scope.focus(); }
         }
     }
     // Modals scroll their card clear of the keyboard only while it is up
