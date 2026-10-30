@@ -226,6 +226,24 @@ pub fn thumbnail(
     Some(pixels)
 }
 
+/// Capture before asynchronous core preparation; lock/logout revokes the token.
+pub fn thumbnail_generation() -> u64 {
+    caches().generation
+}
+
+/// Cache already prepared pixels only if the initiating cache lifetime remains.
+pub fn prepared_thumbnail(id: &str, generation: u64, image: image::DynamicImage) -> Option<Pixels> {
+    let pixels = to_pixels(image);
+    let mut cache = caches();
+    if cache.generation != generation {
+        return None;
+    }
+    cache
+        .thumbnails
+        .insert((id.to_string(), 0), pixels.clone(), pixel_bytes(&pixels));
+    Some(pixels)
+}
+
 /// Read already prepared tray pixels without any file IO or decoding.
 pub fn cached_thumbnail(id: &str, source_len: usize) -> Option<Pixels> {
     caches().thumbnails.get(&(id.to_string(), source_len))
@@ -327,6 +345,22 @@ mod tests {
             .is_none()
         );
         assert!(cached_thumbnail("stale", 0).is_none());
+    }
+
+    #[test]
+    fn asynchronous_preparation_cannot_cache_after_its_generation_was_wiped() {
+        let _g = guard();
+        let generation = thumbnail_generation();
+        on_lock();
+        assert!(
+            prepared_thumbnail(
+                "stale-async",
+                generation,
+                image::DynamicImage::new_rgba8(8, 8)
+            )
+            .is_none()
+        );
+        assert!(cached_thumbnail("stale-async", 0).is_none());
     }
 
     #[test]

@@ -250,7 +250,6 @@ impl AttachmentService {
             }
         }
         if !attachment.metadata.is_image()
-            || attachment.metadata.is_gif()
             || attachment.metadata.size
                 > crate::domain::attachment::Attachment::AUTO_DOWNLOAD_IMAGE_LIMIT
             || std::fs::metadata(super::attachment_file_path(id))

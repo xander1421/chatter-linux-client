@@ -98,6 +98,34 @@ impl ChatterClient {
         })?
     }
 
+    /// Viewport hydration uses exactly the same bounded preparation as inbox
+    /// delivery. A durable thumbnail prevents repeat original decryption.
+    pub async fn prepare_visible_attachment_preview(
+        self: &std::sync::Arc<Self>,
+        id: crate::domain::ids::AttachmentId,
+        session: crate::client::SessionGuard,
+    ) -> Option<crate::services::attachment::ImagePreview> {
+        let client = self.clone();
+        let lookup_session = session.clone();
+        let derive_local = crate::services::attachment::run_attachment_work(move || {
+            if !lookup_session.is_current() {
+                return None;
+            }
+            let attachment = client.get_attachment_metadata(&id)?;
+            Some(attachment.metadata.is_image() && attachment.has_local_content())
+        })
+        .await
+        .ok()
+        .flatten()?;
+        if derive_local {
+            self.prepare_downloaded_image_preview(id, session)
+                .await
+                .ok()
+        } else {
+            self.ensure_attachment_preview(id, session).await
+        }
+    }
+
     /// Fetch/authenticate the sidecar, then decode only small model pixels.
     pub async fn ensure_attachment_preview(
         self: &std::sync::Arc<Self>,
