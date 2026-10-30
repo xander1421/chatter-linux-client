@@ -530,7 +530,7 @@ pub(super) async fn restore_reconnected_media(
     // authenticated gate and catch-up installation. Preserve its device.
     if let Some(device) = media.microphone {
         if let Err(error) = room_manager
-            .publish_microphone_restored(Some(&device), media.muted)
+            .publish_microphone_restored(device.as_deref(), media.muted)
             .await
         {
             tracing::warn!(%error, "reconnect microphone restoration failed");

@@ -575,10 +575,10 @@ impl RoomManager {
         capture.set_muted(muted);
     }
 
-    pub(crate) fn reconnect_microphone_device(&self) -> Option<String> {
+    pub(crate) fn reconnect_microphone_device(&self) -> Option<Option<String>> {
         self.microphone_requested
             .load(std::sync::atomic::Ordering::SeqCst)
-            .then(|| self.audio_capture.read().device_name().to_string())
+            .then(|| self.audio_capture.read().selected_device().map(str::to_owned))
     }
 
     pub fn recover_microphone_stream(&self) {

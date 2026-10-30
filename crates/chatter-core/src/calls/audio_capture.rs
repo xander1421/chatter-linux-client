@@ -41,6 +41,8 @@ pub struct AudioCapture {
     running: Arc<AtomicBool>,
     /// Current device name.
     device_name: String,
+    /// Requested selection: None follows the system default, independently of its name.
+    selected_device: Option<String>,
     /// LiveKit audio source for publishing.
     audio_source: Option<NativeAudioSource>,
     /// Sample rate being used.
@@ -60,6 +62,7 @@ impl AudioCapture {
             stream: None,
             running: Arc::new(AtomicBool::new(false)),
             device_name: String::new(),
+            selected_device: None,
             audio_source: None,
             sample_rate: 48000,
             num_channels: 1,
@@ -185,6 +188,7 @@ impl AudioCapture {
         // A disconnected room may have signalled stop without dropping CPAL.
         // Release that device before opening another Android recording stream.
         self.stop();
+        self.selected_device = device_id.map(str::to_owned);
 
         if crate::system::null_audio() {
             // A source LiveKit can publish, never fed by a microphone.
@@ -398,9 +402,9 @@ impl AudioCapture {
         }
         let muted = self.recovery_muted.unwrap_or_else(|| self.is_muted());
         let source = self.audio_source.clone();
-        let device = self.device_name.clone();
+        let device = self.selected_device.clone();
         self.stop();
-        match self.start_with_source(Some(&device), source.clone(), muted) {
+        match self.start_with_source(device.as_deref(), source.clone(), muted) {
             Ok(_) => {
                 self.recovery_muted = None;
                 self.set_muted(muted);
@@ -441,6 +445,11 @@ impl AudioCapture {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// Requested device for recovery and reconnect; None follows the system default.
+    pub fn selected_device(&self) -> Option<&str> {
+        self.selected_device.as_deref()
+    }
+
     /// Get current device name.
     pub fn device_name(&self) -> &str {
         &self.device_name
@@ -477,6 +486,27 @@ impl Default for AudioCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn recovery_preserves_requested_selection_independently_of_display_name() {
+        assert!(crate::system::null_audio(), "run with CHATTER_NULL_AUDIO=1");
+        for selection in [None, Some("chosen microphone"), Some("Default Device")] {
+            let mut capture = AudioCapture::new();
+            capture.start(selection).unwrap();
+            // The backend's display name is not a device selection.
+            capture.device_name = "backend display label".into();
+            capture.set_muted(true);
+            for _ in 0..2 {
+                capture.stream_failed.store(true, Ordering::SeqCst);
+                capture.recover_stream().unwrap();
+                assert_eq!(capture.selected_device(), selection);
+                assert!(capture.audio_source.is_some());
+                assert!(capture.is_muted());
+            }
+            capture.stop();
+            assert_eq!(capture.selected_device(), selection);
+        }
+    }
 
     #[test]
     fn test_audio_device_creation() {
