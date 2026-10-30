@@ -41,6 +41,8 @@ pub fn update_attachment_transfer_status(
                         {
                             att_model.set_row_data(att_idx, updated_att);
                         }
+                        // attachment_id is unique across both models; stop scanning.
+                        return;
                     }
                 }
             }

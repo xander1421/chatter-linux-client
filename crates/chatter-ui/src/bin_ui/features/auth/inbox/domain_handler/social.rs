@@ -240,7 +240,12 @@ pub(super) fn handle_presence_changed(
             return;
         }
 
-        // 1. Update sidebar DM presence dots
+        // 1. Update sidebar DM presence dots, and (2) the active-DM chat header
+        // in the same pass — both target the one row whose conversation id is
+        // this peer (unique, so a single scan with an early break covers both).
+        // The header additionally needs that row to be the selected DM. Read
+        // is_selected (Rust-maintained) — avoids a stringly-typed id compare.
+        let is_dm_view = w.global::<crate::ChatPane>().get_is_dm();
         let dms = w.global::<crate::SidebarPane>().get_chat_rows();
         for i in 0..dms.row_count() {
             if let Some(mut dm) = dms.row_data(i) {
@@ -248,27 +253,17 @@ pub(super) fn handle_presence_changed(
                 // A secret chat's row also carries the peer's user id, and
                 // mirroring live presence there tied it to the identity.
                 if dm.conversation_id == user_id_str {
+                    let selected = dm.is_selected;
                     dm.presence_status = presence_slint.clone();
                     dms.set_row_data(i, dm);
                     crate::bin_ui::features::sidebar::refresh_flat_rows(&w);
-                    break;
-                }
-            }
-        }
-
-        // 2. Update chat header presence indicator for active DM.
-        // Read is_selected (Rust-maintained) from the DM model — avoids a
-        // stringly-typed selected-id comparison.
-        if w.global::<crate::ChatPane>().get_is_dm() {
-            for i in 0..dms.row_count() {
-                if let Some(dm) = dms.row_data(i) {
-                    if dm.is_selected && dm.conversation_id == user_id_str {
+                    if is_dm_view && selected {
                         w.global::<crate::ChatPane>()
                             .set_header_presence_status(presence_slint.clone());
                         w.global::<crate::ChatPane>()
                             .set_header_last_seen(last_seen_label.clone());
-                        break;
                     }
+                    break;
                 }
             }
         }

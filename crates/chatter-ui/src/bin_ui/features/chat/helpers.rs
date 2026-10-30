@@ -301,14 +301,17 @@ fn refresh_reaction_snapshot(
             return;
         }
     };
-    let apply = |model: &dyn Model<Data = crate::MessageItemData>| {
+    // The (author, timestamp_ns) pair is a unique message identity, so at most
+    // one row matches: stop at the hit and skip the thread pass if the main
+    // model already held it. Hoist the key strings out of the per-row loop.
+    let author_key = author.to_string();
+    let sent_at_key = snapshot.sent_at.to_string();
+    let apply = |model: &dyn Model<Data = crate::MessageItemData>| -> bool {
         for i in 0..model.row_count() {
             let Some(mut m) = model.row_data(i) else {
                 continue;
             };
-            if m.sender_id.as_str() != author.to_string()
-                || m.timestamp_ns.as_str() != snapshot.sent_at.to_string()
-            {
+            if m.sender_id.as_str() != author_key || m.timestamp_ns.as_str() != sent_at_key {
                 continue;
             }
             m.has_reactions = !snapshot.counts.is_empty();
@@ -320,11 +323,16 @@ fn refresh_reaction_snapshot(
                 ),
             ));
             model.set_row_data(i, m);
+            return true;
         }
+        false
     };
-    edit_messages(window, |model| apply(model));
+    let mut found = false;
+    edit_messages(window, |model| found = apply(model));
     // The open thread panel keeps its own model; its replies react too.
-    apply(&window.global::<crate::ChatPane>().get_thread_replies());
+    if !found {
+        apply(&window.global::<crate::ChatPane>().get_thread_replies());
+    }
 }
 
 /// Remove a message from the UI model by sender_id + timestamp_ns.

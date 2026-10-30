@@ -432,6 +432,13 @@ fn end_bootstrap_placeholder(w: &MainWindow) {
 /// Set the status of our own bubbles sent at `timestamps` (`timestamp_ns`) in
 /// the open message list. Core has already stored the same status.
 pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str) {
+    if timestamps.is_empty() {
+        return;
+    }
+    // O(1) membership, and stop once every target row has been found: each
+    // timestamp_ns is a unique message identity, so it matches at most one row.
+    let targets: std::collections::HashSet<u64> = timestamps.iter().copied().collect();
+    let mut remaining = targets.len();
     let pane = w.global::<crate::ChatPane>();
     // The open thread panel keeps its own model; its replies have a status too.
     for messages in [pane.get_messages(), pane.get_thread_replies()] {
@@ -442,6 +449,9 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
             continue;
         };
         for i in 0..model.row_count() {
+            if remaining == 0 {
+                return;
+            }
             let Some(mut msg) = model.row_data(i) else {
                 continue;
             };
@@ -449,7 +459,7 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
                 && msg
                     .timestamp_ns
                     .parse::<u64>()
-                    .is_ok_and(|ts| timestamps.contains(&ts))
+                    .is_ok_and(|ts| targets.contains(&ts))
             {
                 msg.delivery_status = chatter_core::services::message::advance_delivery_status(
                     msg.delivery_status.as_str(),
@@ -457,6 +467,7 @@ pub(crate) fn set_own_status_at(w: &MainWindow, timestamps: &[u64], status: &str
                 )
                 .into();
                 model.set_row_data(i, msg);
+                remaining -= 1;
             }
         }
     }
@@ -474,19 +485,24 @@ pub(super) fn handle_delivery_status_update(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
+        if message_timestamps.is_empty() {
+            return;
+        }
         let pane = w.global::<crate::ChatPane>();
-        let timestamp_strs: Vec<String> =
+        // O(1) membership; stop once every target bubble is found — each
+        // timestamp_ns is a unique message identity (one row at most).
+        let targets: std::collections::HashSet<String> =
             message_timestamps.iter().map(|ts| ts.to_string()).collect();
+        let mut remaining = targets.len();
 
         // The open thread panel keeps its own model; ticks there must move too.
         for messages in [pane.get_messages(), pane.get_thread_replies()] {
             for i in 0..messages.row_count() {
+                if remaining == 0 {
+                    return;
+                }
                 if let Some(msg) = messages.row_data(i) {
-                    if msg.is_own
-                        && timestamp_strs
-                            .iter()
-                            .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
-                    {
+                    if msg.is_own && targets.contains(msg.timestamp_ns.as_str()) {
                         let mut updated = msg.clone();
                         updated.delivery_status =
                             chatter_core::services::message::advance_delivery_status(
@@ -500,6 +516,7 @@ pub(super) fn handle_delivery_status_update(
                         {
                             model.set_row_data(i, updated);
                         }
+                        remaining -= 1;
                     }
                 }
             }
@@ -798,6 +815,8 @@ pub(super) fn handle_persisted_delivery_status(
                     .into();
                     message.failure_reason = failure_reason.clone().into();
                     model.set_row_data(i, message);
+                    // message_id is unique across both models; done.
+                    return;
                 }
             }
         }
