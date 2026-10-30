@@ -88,7 +88,7 @@ export component DevicePicker inherits Rectangle {
     accessible-id: root.show ? "modal-overlay" : "";
     in property <bool> show: false;
     in property <string> title: "Select device";
-    in property <string> picker-type: "audio"; // "audio_menu", "audio", "audio_output", "screen"
+    in property <string> picker-type: "audio"; // "audio", "audio_output", "screen"
 
     // Audio input devices (microphones)
     in property <[AudioDeviceData]> audio-devices: [];
@@ -104,8 +104,6 @@ export component DevicePicker inherits Rectangle {
     in property <string> selected-screen-id: "";
 
     in property <bool> linked-audio: false;
-    callback audio-input-requested();
-    callback audio-output-requested();
     callback audio-selected(string);
     callback audio-output-selected(string);
     callback screen-selected(string);
@@ -182,20 +180,6 @@ export component DevicePicker inherits Rectangle {
 
                     device-list := VerticalLayout {
                         spacing: Spacing.xs;
-
-                        if picker-type == "audio_menu": VerticalLayout {
-                            spacing: Spacing.xs;
-                            DeviceItem {
-                                name: "Microphone (input)";
-                                icon: Icons.mic;
-                                clicked => { root.audio-input-requested(); }
-                            }
-                            DeviceItem {
-                                name: "Speaker or headphones (output)";
-                                icon: Icons.volume-2;
-                                clicked => { root.audio-output-requested(); }
-                            }
-                        }
 
                         if root.linked-audio && picker-type != "screen": Text {
                             text: "Microphone and output change together. The check mark shows the active device.";

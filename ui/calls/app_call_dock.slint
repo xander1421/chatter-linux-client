@@ -22,8 +22,8 @@ export component AppCallDock inherits ActiveCallView {
     callback call-toggle-screen-share();
     callback call-toggle-speaker();
     callback call-toggle-video();
-    callback show-audio-device-picker();
     callback show-screen-source-picker();
+    callback show-audio-output-picker();
 
         // Take the chat column's full vertical slot when
         // fullscreen, otherwise stay as a fixed dock (the
@@ -55,14 +55,19 @@ export component AppCallDock inherits ActiveCallView {
             }
         }
         end-call => { root.call-end(); root.active-call-fullscreen = false; }
-        show-audio-settings => {
-            if root.call-speaker-toggle {
-                root.show-audio-device-picker();
-            } else {
-                CallView.device-picker-type = "audio_menu";
-                CallView.device-picker-visible = true;
+        audio-controls-visible <=> CallView.audio-controls-visible;
+        audio-input-name: CallView.audio-input-name;
+        audio-output-name: CallView.audio-output-name;
+        show-audio-popover => {
+            CallView.audio-controls-visible = !CallView.audio-controls-visible;
+            if CallView.audio-controls-visible {
+                CallView.audio-input-name = "Loading microphone…";
+                CallView.audio-output-name = "Loading output…";
+                CallView.refresh-audio-controls();
             }
         }
+        show-audio-input => { CallView.show-audio-device-picker(); }
+        show-audio-output => { root.show-audio-output-picker(); }
         peer-audio-mute-toggle(uid) => { root.call-peer-audio-mute-toggle(uid); }
         peer-video-pause-toggle(uid) => { root.call-peer-video-pause-toggle(uid); }
         fullscreen-toggle => {

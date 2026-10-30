@@ -186,6 +186,11 @@ pub fn reset_to_chats(w: &MainWindow) {
 ///
 /// Split out from the callback so tests can drive it directly.
 pub fn handle_back(window: &MainWindow) -> bool {
+    if window.global::<crate::CallView>().get_audio_controls_visible() {
+        window.global::<crate::CallView>().set_audio_controls_visible(false);
+        return true;
+    }
+
     if window.global::<crate::ChatPane>().get_link_confirm_url() != "" {
         window.global::<crate::ChatPane>().set_link_confirm_url("".into());
         return true;

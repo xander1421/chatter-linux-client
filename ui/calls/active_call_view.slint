@@ -1,3 +1,4 @@
+import { AudioControlsPopover } from "audio_controls_popover.slint";
 import { KeyFocus } from "../components/key_focus.slint";
 import { IconAction } from "../components/icon_action.slint";
 import { Elevation } from "../theme/elevation.slint";
@@ -223,7 +224,15 @@ export component ActiveCallView inherits Rectangle {
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
-    callback show-audio-settings();
+    in-out property <bool> audio-controls-visible;
+    in property <string> audio-input-name;
+    in property <string> audio-output-name;
+    callback show-audio-popover();
+    callback show-audio-input();
+    callback show-audio-output();
+    changed show => { if !root.show { root.audio-controls-visible = false; } }
+    property <string> audio-call-id: root.call-data.call-id;
+    changed audio-call-id => { root.audio-controls-visible = false; }
     callback toggle-speaker();
     // Per-peer local controls — only the local viewer is affected.
     callback peer-audio-mute-toggle(string);
@@ -241,9 +250,9 @@ export component ActiveCallView inherits Rectangle {
     // ignored the viewport).
     // Voice-only calls (no camera, no screen share anywhere) collapse to a
     // compact strip — a tall grid of empty avatar tiles wastes the chat area.
-    // Phones (`speaker-toggle`) get 48dp touch targets on the control row.
+    // All seven control targets are 44px wide and 48px high.
     property <length> button-size: speaker-toggle ? Spacing.touch-target-min : Spacing.button-height;
-    property <length> controls-height: button-size * 2 + Spacing.sm;
+    property <length> controls-height: 48px;
     property <length> dock-height: any-video
         ? clamp(viewport-height * 0.45, 240px, 560px)
         : 100px + controls-height + Spacing.sm;
@@ -605,9 +614,8 @@ export component ActiveCallView inherits Rectangle {
             padding-bottom: Spacing.sm;
 
             CallControls {
-                // Audio devices has its own labeled row; the four call actions
-                // retain full touch targets even in the compact phone dock.
-                width: min(root.speaker-toggle ? 240px : 280px, root.width - 2 * Spacing.md);
+                // Seven separate targets fit a 320px phone in one row.
+                width: 308px;
                 height: controls-height;
                 button-size: root.button-size;
                 is-connected: root.call-data.is-connected;
@@ -623,9 +631,24 @@ export component ActiveCallView inherits Rectangle {
                 toggle-video => { root.toggle-video(); }
                 toggle-screen-share => { root.toggle-screen-share(); }
                 end-call => { root.end-call(); }
-                show-audio-settings => { root.show-audio-settings(); }
+                show-audio-popover => { root.show-audio-popover(); }
+                show-audio-output => { root.show-audio-output(); }
             }
         }
+    }
+
+    if root.audio-controls-visible && root.show: TouchArea {
+        clicked => { root.audio-controls-visible = false; }
+    }
+    if root.audio-controls-visible && root.show: AudioControlsPopover {
+        linked: root.speaker-toggle;
+        input-name: root.audio-input-name;
+        output-name: root.audio-output-name;
+        input-requested => { root.audio-controls-visible = false; root.show-audio-input(); }
+        output-requested => { root.audio-controls-visible = false; root.show-audio-output(); }
+        width: min(308px, root.width);
+        x: (root.width - self.width) / 2;
+        y: root.height - root.controls-height - Spacing.sm - self.height - 4px;
     }
 
     pure function format-duration(seconds: int) -> string {

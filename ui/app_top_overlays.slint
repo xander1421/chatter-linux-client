@@ -92,14 +92,11 @@ export component AppTopOverlays inherits Rectangle {
     // Device picker modal (for audio devices and screen sources)
     if root.device-picker-presented: DevicePicker {
         show: CallView.device-picker-visible;
-        title: CallView.device-picker-type == "audio_menu" ? "Audio devices" :
-               CallView.call-speaker-toggle && CallView.device-picker-type != "screen" ? "Microphone + output (linked)" :
+        title: CallView.call-speaker-toggle && CallView.device-picker-type != "screen" ? "Microphone + output (linked)" :
                CallView.device-picker-type == "audio" ? "Select microphone" :
                CallView.device-picker-type == "audio_output" ? "Select speaker" : "Select screen to share";
         picker-type: CallView.device-picker-type;
         linked-audio: CallView.call-speaker-toggle;
-        audio-input-requested => { CallView.show-audio-device-picker(); }
-        audio-output-requested => { CallView.show-audio-output-picker(); }
         audio-devices: CallView.audio-devices;
         selected-audio-id: CallView.selected-audio-device-id;
         audio-output-devices: CallView.audio-output-devices;
