@@ -58,7 +58,71 @@ pub struct AudioPlayback {
 /// Android opens a voice-communication stream through oboe (see
 /// `ensure_stream_initialized`).
 #[cfg(not(target_os = "android"))]
-type OutputStream = cpal::Stream;
+struct OutputStream {
+    _stream: cpal::Stream,
+    enabled: Arc<AtomicBool>,
+}
+
+/// The receive queues keep their session format across device replacements.
+/// Convert in 10 ms blocks (the WebRTC resampler contract), retaining partial
+/// device callbacks rather than dropping or duplicating samples at boundaries.
+#[cfg(not(target_os = "android"))]
+struct DesktopOutput {
+    resampler: livekit::webrtc::native::audio_resampler::AudioResampler,
+    mix: Vec<f32>,
+    pcm: Vec<i16>,
+    pending: Vec<i16>,
+    offset: usize,
+    input_rate: u32,
+    input_channels: u16,
+    output_rate: u32,
+    output_channels: u16,
+}
+
+#[cfg(not(target_os = "android"))]
+impl DesktopOutput {
+    fn new(input_rate: u32, input_channels: u16, output_rate: u32, output_channels: u16) -> Self {
+        Self {
+            resampler: Default::default(),
+            mix: vec![0.0; (input_rate / 100) as usize * input_channels as usize],
+            pcm: vec![0; (input_rate / 100) as usize * input_channels as usize],
+            pending: Vec::with_capacity((output_rate / 100) as usize * output_channels as usize),
+            offset: 0,
+            input_rate, input_channels, output_rate, output_channels,
+        }
+    }
+
+    fn render<T: cpal::Sample + cpal::FromSample<f32>>(
+        &mut self, data: &mut [T], mixer: &RwLock<TrackMixer>, active: &AtomicBool,
+        volume: &AtomicU32, evidence: &AtomicU8,
+    ) {
+        if !active.load(Ordering::Relaxed) {
+            data.fill(T::from_sample(0.0));
+            self.pending.clear();
+            self.offset = 0;
+            return;
+        }
+        for sample in data {
+            if self.offset == self.pending.len() {
+                drain_mix(&mut self.mix, mixer, active, volume);
+                for (pcm, mixed) in self.pcm.iter_mut().zip(&self.mix) {
+                    *pcm = (mixed * 32768.0).clamp(-32768.0, 32767.0) as i16;
+                }
+                self.pending.clear();
+                self.pending.extend_from_slice(self.resampler.remix_and_resample(
+                    &self.pcm, self.input_rate / 100, self.input_channels as u32,
+                    self.input_rate, self.output_channels as u32, self.output_rate,
+                ));
+                self.offset = 0;
+            }
+            let value = self.pending[self.offset] as f32 / 32768.0;
+            self.offset += 1;
+            record_rendered_samples(&[value], evidence);
+            *sample = T::from_sample(value);
+        }
+    }
+}
+
 #[cfg(target_os = "android")]
 type OutputStream = oboe::AudioStreamAsync<oboe::Output, VoiceOutput>;
 
@@ -307,17 +371,15 @@ impl AudioPlayback {
     /// [`Self::list_devices`]).
     ///
     /// Before the first track this only records the choice. Mid-call the
-    /// stream is rebuilt on the new device at the CURRENT rate and channel
-    /// count, because every running track was opened resampling to those; if
-    /// the device refuses that format, the old stream is left playing and the
-    /// error is returned.
+    /// stream uses the new device's supported format, converting the retained
+    /// mixer format at the output boundary. A failed open leaves the active
+    /// stream and requested selection intact.
     #[cfg(not(target_os = "android"))]
     pub fn set_output_device(&self, name: &str) -> Result<(), CallError> {
         let device = Self::find_output_device((name != SYSTEM_DEFAULT).then_some(name))?;
         if self.output_stream.read().is_some() {
-            let stream =
-                self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
-            *self.output_stream.write() = Some(stream);
+            let stream = self.build_stream(&device)?;
+            self.install_stream(stream);
         }
         *self.applied_device.write() = device.id().map(|id| id.to_string()).unwrap_or_default();
         *self.output_device.write() = (name != SYSTEM_DEFAULT).then(|| name.to_string());
@@ -340,10 +402,22 @@ impl AudioPlayback {
             .or_else(|_| Self::find_output_device(None))?;
         let name = device.id().map(|id| id.to_string()).unwrap_or_default();
         if name != *self.applied_device.read() || self.stream_failed.load(Ordering::SeqCst) {
-            let stream = self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
-            *self.output_stream.write() = Some(stream);
-            *self.applied_device.write() = name;
-            self.stream_failed.store(false, Ordering::SeqCst);
+            let (device, stream) = match self.build_stream(&device) {
+                Ok(stream) => (device, stream),
+                Err(_) if requested.is_some() => {
+                    let fallback = Self::find_output_device(None)?;
+                    if fallback.id().map(|id| id.to_string()).unwrap_or_default()
+                        == *self.applied_device.read()
+                        && !self.stream_failed.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    let stream = self.build_stream(&fallback)?;
+                    (fallback, stream)
+                }
+                Err(error) => return Err(error),
+            };
+            self.install_stream(stream);
+            *self.applied_device.write() = device.id().map(|id| id.to_string()).unwrap_or_default();
         }
         Ok(())
     }
@@ -453,77 +527,106 @@ impl AudioPlayback {
             Err(e) => return Err(e),
         };
 
+        let output_stream = self.build_stream(&output_device)?;
+        self.install_stream(output_stream);
         *self.applied_device.write() = output_device.id().map(|id| id.to_string()).unwrap_or_default();
-        let supported_config = output_device
-            .default_output_config()
-            .map_err(|e| CallError::DeviceError(format!("Failed to get output config: {}", e)))?;
-
-        let sample_rate = supported_config.sample_rate();
-        let channels = supported_config.channels();
-
-        // Store actual sample rate and channels
-        *self.sample_rate.write() = sample_rate;
-        *self.channels.write() = channels;
-
-        let output_stream = self.build_stream(&output_device, sample_rate, channels)?;
-        *self.output_stream.write() = Some(output_stream);
         Ok(())
     }
 
-    /// Build and start a CPAL output stream on `device` that drains the mix
-    /// buffer.
     #[cfg(not(target_os = "android"))]
-    fn build_stream(
-        &self,
-        device: &Device,
-        sample_rate: u32,
-        channels: u16,
-    ) -> Result<OutputStream, CallError> {
-        tracing::info!(
-            "Audio playback: using device '{}' at {}Hz, {} channels",
-            device
-                .description()
-                .map(|description| description.name().to_owned())
-                .unwrap_or_else(|_| "unknown".to_string()),
-            sample_rate,
-            channels
-        );
+    fn install_stream(&self, stream: OutputStream) {
+        let mut current = self.output_stream.write();
+        if let Some(old) = current.as_ref() {
+            old.enabled.store(false, Ordering::SeqCst);
+        }
+        stream.enabled.store(true, Ordering::SeqCst);
+        *current = Some(stream);
+        self.stream_failed.store(false, Ordering::SeqCst);
+    }
 
+    /// Open exactly the device's advertised default format, including its PCM
+    /// sample type. Receive tasks always retain the session mixer format.
+    #[cfg(not(target_os = "android"))]
+    fn build_stream(&self, device: &Device) -> Result<OutputStream, CallError> {
+        let mut candidates = Vec::new();
+        if let Ok(default) = device.default_output_config() {
+            candidates.push(default);
+        }
+        if let Ok(configs) = device.supported_output_configs() {
+            for range in configs {
+                let rate = 48000u32.clamp(range.min_sample_rate(), range.max_sample_rate());
+                candidates.push(range.with_sample_rate(rate));
+            }
+        }
+        let mut last_error = CallError::DeviceError("No compatible mono/stereo output format".into());
+        for supported in candidates {
+            // The existing WebRTC remix supports mono/stereo and 10 ms blocks.
+            if !matches!(supported.channels(), 1 | 2) || supported.sample_rate() < 8000
+                || supported.sample_rate() > 96000 || supported.sample_rate() % 100 != 0 {
+                continue;
+            }
+            match self.build_supported_stream(device, supported) {
+                Ok(stream) => return Ok(stream),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn build_supported_stream(&self, device: &Device, supported: cpal::SupportedStreamConfig)
+        -> Result<OutputStream, CallError> {
+        let config = supported.config();
+        match supported.sample_format() {
+            cpal::SampleFormat::F32 => self.build_typed_stream::<f32>(device, config),
+            cpal::SampleFormat::F64 => self.build_typed_stream::<f64>(device, config),
+            cpal::SampleFormat::I8 => self.build_typed_stream::<i8>(device, config),
+            cpal::SampleFormat::I16 => self.build_typed_stream::<i16>(device, config),
+            cpal::SampleFormat::I24 => self.build_typed_stream::<cpal::I24>(device, config),
+            cpal::SampleFormat::I32 => self.build_typed_stream::<i32>(device, config),
+            cpal::SampleFormat::I64 => self.build_typed_stream::<i64>(device, config),
+            cpal::SampleFormat::U8 => self.build_typed_stream::<u8>(device, config),
+            cpal::SampleFormat::U16 => self.build_typed_stream::<u16>(device, config),
+            cpal::SampleFormat::U24 => self.build_typed_stream::<cpal::U24>(device, config),
+            cpal::SampleFormat::U32 => self.build_typed_stream::<u32>(device, config),
+            cpal::SampleFormat::U64 => self.build_typed_stream::<u64>(device, config),
+            format => Err(CallError::DeviceError(format!("Unsupported output PCM: {format}"))),
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn build_typed_stream<T>(&self, device: &Device, config: StreamConfig) -> Result<OutputStream, CallError>
+    where T: cpal::SizedSample + cpal::FromSample<f32> {
+        let mut output = DesktopOutput::new(*self.sample_rate.read(), *self.channels.read(),
+            config.sample_rate, config.channels);
         let mixer = self.streams.clone();
-        let is_active_clone = self.is_active.clone();
-        let volume_clone = self.volume.clone();
-        let rendered_evidence = self.rendered_evidence.clone();
-
-        let stream_failed = self.stream_failed.clone();
-        // Build output stream
-        let config = StreamConfig {
-            channels,
-            sample_rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
-
-        let output_stream = device
-            .build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    drain_mix(data, &mixer, &is_active_clone, &volume_clone);
-                    record_rendered_samples(data, &rendered_evidence);
-                },
-                move |err| {
-                    stream_failed.store(true, Ordering::SeqCst);
+        let active = self.is_active.clone();
+        let volume = self.volume.clone();
+        let evidence = self.rendered_evidence.clone();
+        let failed = self.stream_failed.clone();
+        // A candidate may start before installation, but must not consume the
+        // old stream's queues until build AND play have succeeded.
+        let enabled = Arc::new(AtomicBool::new(false));
+        let callback_enabled = enabled.clone();
+        let error_enabled = enabled.clone();
+        let stream = device.build_output_stream(config,
+            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                if callback_enabled.load(Ordering::SeqCst) {
+                    output.render(data, &mixer, &active, &volume, &evidence);
+                } else {
+                    data.fill(T::from_sample(0.0));
+                }
+            },
+            move |err| {
+                if error_enabled.load(Ordering::SeqCst) {
+                    failed.store(true, Ordering::SeqCst);
                     tracing::error!("Audio output error: {}", err);
-                },
-                None,
-            )
-            .map_err(|e| CallError::DeviceError(format!("Failed to build output stream: {}", e)))?;
-
-        output_stream.play().map_err(|e| {
-            CallError::DeviceError(format!("Failed to start audio playback: {}", e))
-        })?;
-
-        tracing::info!("Audio playback stream started");
-
-        Ok(output_stream)
+                }
+            }, None,
+        ).map_err(|e| CallError::DeviceError(format!("Failed to build output stream: {e}")))?;
+        stream.play().map_err(|e|
+            CallError::DeviceError(format!("Failed to start audio playback: {e}")))?;
+        Ok(OutputStream { _stream: stream, enabled })
     }
 
     /// Add a remote audio track for playback.
@@ -685,6 +788,65 @@ impl Drop for AudioPlayback {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_failed_explicit_selection_preserves_requested_and_applied_snapshot() {
+        assert!(crate::system::null_audio());
+        let playback = AudioPlayback::new().unwrap();
+        *playback.output_device.write() = Some("previous-request".into());
+        *playback.applied_device.write() = "previous-actual".into();
+        playback.set_volume(0.4);
+        playback.set_peer_muted("alice", true);
+        assert!(playback.set_output_device("unavailable-device").is_err());
+        assert_eq!(playback.selected_output(), ("previous-actual".into(), Some("previous-request".into())));
+        assert_eq!(playback.volume(), 0.4);
+        assert!(playback.is_peer_muted("alice"));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_replacement_formats_keep_receive_queues_mute_and_volume() {
+        assert!(crate::system::null_audio());
+        let mixer = RwLock::new(TrackMixer::default());
+        let (audible, _receive) = mixer.write().replace("alice".into(), "a".into(), 48000, 2);
+        let (muted, _muted_receive) = mixer.write().replace("bob".into(), "b".into(), 48000, 2);
+        mixer.write().set_muted("bob", true);
+        let active = AtomicBool::new(true);
+        let volume = AtomicU32::new(0.5f32.to_bits());
+        let evidence = AtomicU8::new(0);
+        // 100 ms per device, without replacing receivers or mixer queues.
+        for (rate, channels) in [(16000, 1), (44100, 2), (48000, 2)] {
+            audible.lock().push_pcm(&vec![16384; 4800 * 2]);
+            muted.lock().push_pcm(&vec![32767; 4800 * 2]);
+            let mut output = DesktopOutput::new(48000, 2, rate, channels);
+            let mut rendered = vec![0.0f32; rate as usize / 10 * channels as usize];
+            // Deliberately split in the middle of an interleaved frame/block.
+            for chunk in rendered.chunks_mut(137) {
+                output.render(chunk, &mixer, &active, &volume, &evidence);
+            }
+            assert!(rendered[rendered.len() / 2..].iter().all(|s| (*s - 0.25).abs() < 0.005));
+            assert!(audible.lock().samples.is_empty());
+            assert!(muted.lock().samples.is_empty());
+            assert!(Arc::ptr_eq(&mixer.read().tracks["a"].queue, &audible));
+            assert!(mixer.read().muted_peers.contains("bob"));
+        }
+        assert_eq!(evidence.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_stereo_to_mono_remixes_and_integer_silence_is_centered() {
+        let mixer = RwLock::new(TrackMixer::default());
+        let (queue, _receive) = mixer.write().replace("alice".into(), "a".into(), 48000, 2);
+        queue.lock().push_pcm(&[16384, -16384].repeat(480));
+        let mut output = DesktopOutput::new(48000, 2, 16000, 1);
+        let mut rendered = [0u16; 160];
+        output.render(&mut rendered, &mixer, &AtomicBool::new(true),
+            &AtomicU32::new(1.0f32.to_bits()), &AtomicU8::new(0));
+        assert!(rendered.iter().all(|s| *s == 32768));
+        assert!(queue.lock().samples.is_empty());
+    }
 
     #[test]
     fn output_evidence_requires_nonzero_finite_rendered_samples_and_reports_once() {
