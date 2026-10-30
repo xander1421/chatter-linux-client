@@ -185,7 +185,11 @@ impl SettingsRepository {
     /// Returns `None` if the key doesn't exist.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        // Cached per pooled connection: this one statement is read very often
+        // (every get/get_string/get_bool routes here — e.g. the current user id
+        // is read a few times per message row while a conversation loads), so
+        // reusing the prepared statement avoids re-parsing the SQL each call.
+        let mut stmt = conn.prepare_cached("SELECT value FROM settings WHERE key = ?1")?;
 
         let result: Result<String, _> = stmt.query_row(params![key], |row| row.get(0));
 
