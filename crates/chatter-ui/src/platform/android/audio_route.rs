@@ -16,6 +16,17 @@ static WINDOW: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
 
 /// Wire the call screen's audio callbacks. Call once on the UI thread.
 pub fn install(window: &MainWindow) {
+    let sdk = with_jni_env(|env| {
+        env.get_static_field(
+            jni::jni_str!("android/os/Build$VERSION"),
+            jni::jni_str!("SDK_INT"),
+            jni::jni_sig!("I"),
+        )
+        .and_then(|v| v.i())
+        .map_err(|e| e.to_string())
+    })
+    .unwrap_or(26);
+    chatter_core::calls::audio_format::set_android_sdk(sdk);
     let _ = WINDOW.set(window.as_weak());
     window
         .global::<crate::CallView>()
@@ -34,7 +45,7 @@ pub fn install(window: &MainWindow) {
         .global::<crate::CallView>()
         .on_call_toggle_speaker(|| {
             update(|r| {
-                r.select("");
+                r.select(chatter_core::calls::audio_format::SYSTEM_DEFAULT);
                 r.policy.toggle_speaker();
             })
         });
@@ -224,6 +235,32 @@ pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnCommunica
 ) {
     env.with_env(|_| -> jni::errors::Result<_> {
         update(|_| {});
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// Bounded AudioManager request failure: retain intent but choose a usable fallback.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnCommunicationDeviceFailed(
+    mut env: jni::EnvUnowned<'_>,
+    _this: JObject,
+    id: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<_> {
+        let id = id.try_to_string(env)?;
+        update(|r| r.fail(&id));
+        if let Some(weak) = WINDOW.get().cloned() {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_toast_message(
+                        "Could not switch audio route. Using an available device.".into(),
+                    );
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+        }
         Ok(())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()

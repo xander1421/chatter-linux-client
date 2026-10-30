@@ -17,16 +17,17 @@ impl RoomManager {
             self.audio_playback.read().as_ref().map(|p| p.selected_output()).unwrap_or_default()
         } else {
             let capture = self.audio_capture.read();
-            (capture.device_name().to_owned(), capture.selected_device().map(str::to_owned))
+            (capture.applied_device().to_owned(), capture.selected_device().map(str::to_owned))
         };
         let missing = requested.as_ref().is_some_and(|id| !devices.iter().any(|d| &d.id == id));
-        let effective = if actual.is_empty() {
-            devices.iter().find(|d| d.is_default && !d.id.is_empty()).map(|d| d.name.as_str()).unwrap_or("system route")
-        } else { actual.as_str() };
+        let effective = devices.iter().find(|d| d.id == actual).or_else(|| if actual.is_empty() { devices.iter().find(|d| d.is_default) } else { None })
+            .map(|d| d.name.as_str()).unwrap_or("system route");
         let label = if missing { format!("System default — {} (preferred device disconnected)", effective) }
             else { format!("System default — {}", effective) };
-        if let Some(default) = devices.iter_mut().find(|d| d.id.is_empty()) { default.name = label; }
-        let selected = if requested.is_none() || missing { String::new() }
+        for device in &mut devices { device.is_default = false; }
+        let default_id = super::super::audio_format::SYSTEM_DEFAULT.to_owned();
+        devices.insert(0, AudioDevice { id: default_id.clone(), name: label, is_default: true });
+        let selected = if requested.is_none() || missing { default_id }
             else { devices.iter().find(|d| d.id == actual).map(|d| d.id.clone()).unwrap_or_default() };
         Ok((devices, selected))
     }
@@ -53,7 +54,7 @@ impl RoomManager {
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
         if self.microphone_requested.load(std::sync::atomic::Ordering::SeqCst) {
             return if device_id.is_some() {
-                self.switch_microphone(device_id.filter(|id| !id.is_empty())).await
+                self.switch_microphone(device_id.filter(|id| *id != super::super::audio_format::SYSTEM_DEFAULT)).await
             } else {
                 Ok(())
             };
@@ -611,9 +612,10 @@ impl RoomManager {
         }
     }
 
-    pub fn recover_microphone_stream(&self) {
-        if let Err(error) = self.audio_capture.write().recover_stream() {
-            tracing::error!(%error, "Could not recover microphone capture stream");
+    #[cfg(target_os = "android")]
+    pub fn recover_audio_output_stream(&self) {
+        if let Some(playback) = self.audio_playback.read().as_ref() {
+            if let Err(error) = playback.recover_stream() { tracing::warn!(%error, "Could not reopen call output"); }
         }
     }
 

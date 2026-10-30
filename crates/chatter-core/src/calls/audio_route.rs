@@ -17,6 +17,8 @@
 //! `CommunicationRouting` adds explicit per-device intent above these defaults;
 //! an explicit choice survives inventory changes and temporarily falls back if absent.
 
+use super::audio_format::SYSTEM_DEFAULT;
+
 /// Where call audio plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioRoute {
@@ -152,6 +154,7 @@ pub struct CommunicationRouting {
     devices: Vec<CommunicationDevice>,
     requested: Option<String>,
     applied: Option<String>,
+    failed: Vec<String>,
 }
 
 impl CommunicationRouting {
@@ -161,6 +164,7 @@ impl CommunicationRouting {
             devices: vec![],
             requested: None,
             applied: None,
+            failed: vec![],
         }
     }
 
@@ -175,6 +179,9 @@ impl CommunicationRouting {
     }
 
     pub fn refresh(&mut self, devices: Vec<CommunicationDevice>, applied: Option<String>) {
+        if self.devices != devices {
+            self.failed.clear();
+        }
         self.policy.set_outputs(AudioOutputs {
             earpiece: devices.iter().any(|d| d.route == AudioRoute::Earpiece),
             wired_headset: devices.iter().any(|d| d.route == AudioRoute::WiredHeadset),
@@ -185,7 +192,8 @@ impl CommunicationRouting {
     }
 
     pub fn select(&mut self, id: &str) -> bool {
-        if id.is_empty() {
+        self.failed.clear();
+        if id == SYSTEM_DEFAULT {
             self.requested = None;
             return true;
         }
@@ -196,18 +204,32 @@ impl CommunicationRouting {
         true
     }
 
+    pub fn fail(&mut self, id: &str) {
+        if !self.failed.iter().any(|failed| failed == id) {
+            self.failed.push(id.to_owned());
+        }
+    }
+
     pub fn target(&self) -> Option<&CommunicationDevice> {
+        let usable = |d: &&CommunicationDevice| !self.failed.contains(&d.id);
         self.requested
             .as_ref()
-            .and_then(|id| self.devices.iter().find(|d| &d.id == id))
-            .or_else(|| self.devices.iter().find(|d| d.route == self.policy.route()))
-            .or_else(|| self.devices.first())
+            .and_then(|id| self.devices.iter().filter(usable).find(|d| &d.id == id))
+            .or_else(|| {
+                self.devices
+                    .iter()
+                    .filter(usable)
+                    .find(|d| d.route == self.policy.route())
+            })
+            .or_else(|| self.devices.iter().filter(usable).next())
     }
 
     /// Labels expose only combinations Android actually offers.
     pub fn picker_devices(&self) -> Vec<(String, String, bool)> {
-        let default = self.devices.iter().find(|d| d.route == self.policy.route());
-        let status = if self.requested.is_none() {
+        let default = self.target();
+        let status = if !self.failed.is_empty() {
+            "Fallback (route unavailable)"
+        } else if self.requested.is_none() {
             "Automatic (selected)"
         } else if !self
             .devices
@@ -219,7 +241,7 @@ impl CommunicationRouting {
             "Automatic"
         };
         let mut rows = vec![(
-            String::new(),
+            SYSTEM_DEFAULT.to_owned(),
             format!(
                 "{} — {}",
                 status,
@@ -232,12 +254,14 @@ impl CommunicationRouting {
                 AudioRoute::Earpiece => "built-in mic",
                 _ => "system-routed mic",
             };
-            let pending =
-                if Some(d.id.as_str()) == self.requested() && self.applied() != self.requested() {
-                    " · requested"
-                } else {
-                    ""
-                };
+            let pending = if self.failed.contains(&d.id) {
+                " · unavailable"
+            } else if Some(d.id.as_str()) == self.requested() && self.applied() != self.requested()
+            {
+                " · requested"
+            } else {
+                ""
+            };
             (
                 d.id.clone(),
                 format!("{} + {} (linked){}", d.name, input, pending),
@@ -366,7 +390,7 @@ mod tests {
         );
         r.policy.set_video(true);
         assert_eq!(r.target().unwrap().id, "phone");
-        r.select("");
+        r.select(SYSTEM_DEFAULT);
         assert_eq!(r.target().unwrap().id, "bt");
     }
 
@@ -380,5 +404,44 @@ mod tests {
         assert!(r.picker_devices()[1].1.contains("linked"));
         r.refresh(vec![], None);
         assert_eq!(r.target(), None);
+    }
+    #[test]
+    fn failed_route_falls_back_without_forging_ack_and_can_be_retried() {
+        let mut r = CommunicationRouting::new(false);
+        let devices = vec![
+            device("phone", AudioRoute::Earpiece),
+            device("bt", AudioRoute::Bluetooth),
+        ];
+        r.refresh(devices.clone(), Some("phone".into()));
+        r.select("bt");
+        r.fail("bt");
+        assert_eq!(r.target().unwrap().id, "phone");
+        assert_eq!(r.applied(), Some("phone"));
+        assert_eq!(r.requested(), Some("bt"));
+        r.refresh(devices, Some("phone".into()));
+        assert_eq!(r.target().unwrap().id, "phone");
+        r.select("bt");
+        assert_eq!(r.target().unwrap().id, "bt");
+    }
+    #[test]
+    fn picker_rows_have_unique_nonempty_ids_and_one_default() {
+        let mut r = CommunicationRouting::new(false);
+        r.refresh(
+            vec![
+                device("phone", AudioRoute::Earpiece),
+                device("bt", AudioRoute::Bluetooth),
+            ],
+            Some("phone".into()),
+        );
+        let rows = r.picker_devices();
+        assert!(rows.iter().all(|(id, _, _)| !id.is_empty()));
+        assert_eq!(
+            rows.iter()
+                .map(|(id, _, _)| id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            rows.len()
+        );
+        assert_eq!(rows.iter().filter(|(_, _, default)| *default).count(), 1);
     }
 }

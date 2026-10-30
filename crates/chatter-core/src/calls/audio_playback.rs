@@ -23,6 +23,7 @@ use tokio::sync::watch;
 
 use super::timing::CallTiming;
 use crate::error::CallError;
+use super::audio_format::{SYSTEM_DEFAULT, android_stream_rate};
 
 /// Manages audio playback for remote participants.
 ///
@@ -44,13 +45,12 @@ pub struct AudioPlayback {
     volume: Arc<AtomicU32>,
     /// 0 = no nonzero callback output, 1 = observed, 2 = reported off-thread.
     rendered_evidence: Arc<AtomicU8>,
-    /// Output device chosen by the user (CPAL device name); `None` = default.
+    /// Output device chosen by the user (host-qualified CPAL device ID); `None` = default.
     /// Unused on Android, where AudioManager owns the route.
     #[cfg_attr(target_os = "android", allow(dead_code))]
     output_device: RwLock<Option<String>>,
     #[cfg(not(target_os = "android"))]
     applied_device: RwLock<String>,
-    #[cfg(not(target_os = "android"))]
     stream_failed: Arc<AtomicBool>,
 }
 
@@ -224,6 +224,7 @@ struct VoiceOutput {
     is_active: Arc<AtomicBool>,
     volume: Arc<AtomicU32>,
     rendered_evidence: Arc<AtomicU8>,
+    failed: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "android")]
@@ -245,6 +246,7 @@ impl oboe::AudioOutputCallback for VoiceOutput {
         _stream: &mut dyn oboe::AudioOutputStreamSafe,
         error: oboe::Error,
     ) {
+        self.failed.store(true, Ordering::SeqCst);
         tracing::error!("Audio output stream closed: {:?}", error);
     }
 }
@@ -269,12 +271,11 @@ impl AudioPlayback {
             output_device: RwLock::new(None),
             #[cfg(not(target_os = "android"))]
             applied_device: RwLock::new(String::new()),
-            #[cfg(not(target_os = "android"))]
             stream_failed: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// The output device called `name`, or the host default for `None`.
+    /// Resolve a host-qualified device ID, or the host default for `None`.
     #[cfg(not(target_os = "android"))]
     fn find_output_device(name: Option<&str>) -> Result<Device, CallError> {
         if crate::system::null_audio() {
@@ -293,8 +294,7 @@ impl AudioPlayback {
                     CallError::DeviceError(format!("Failed to list output devices: {}", e))
                 })?
                 .find(|d| {
-                    d.description()
-                        .map(|description| description.name().to_owned())
+                    d.id().map(|id| id.to_string())
                         .is_ok_and(|n| n == name)
                 })
                 .ok_or_else(|| {
@@ -313,14 +313,14 @@ impl AudioPlayback {
     /// error is returned.
     #[cfg(not(target_os = "android"))]
     pub fn set_output_device(&self, name: &str) -> Result<(), CallError> {
-        let device = Self::find_output_device((!name.is_empty()).then_some(name))?;
+        let device = Self::find_output_device((name != SYSTEM_DEFAULT).then_some(name))?;
         if self.output_stream.read().is_some() {
             let stream =
                 self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
             *self.output_stream.write() = Some(stream);
         }
-        *self.applied_device.write() = device.description().map(|d| d.name().to_owned()).unwrap_or_default();
-        *self.output_device.write() = (!name.is_empty()).then(|| name.to_string());
+        *self.applied_device.write() = device.id().map(|id| id.to_string()).unwrap_or_default();
+        *self.output_device.write() = (name != SYSTEM_DEFAULT).then(|| name.to_string());
         tracing::info!("Audio playback: output device set to '{}'", name);
         Ok(())
     }
@@ -338,7 +338,7 @@ impl AudioPlayback {
         let requested = self.output_device.read().clone();
         let device = Self::find_output_device(requested.as_deref())
             .or_else(|_| Self::find_output_device(None))?;
-        let name = device.description().map(|d| d.name().to_owned()).unwrap_or_default();
+        let name = device.id().map(|id| id.to_string()).unwrap_or_default();
         if name != *self.applied_device.read() || self.stream_failed.load(Ordering::SeqCst) {
             let stream = self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
             *self.output_stream.write() = Some(stream);
@@ -357,6 +357,21 @@ impl AudioPlayback {
         )))
     }
 
+    #[cfg(target_os = "android")]
+    pub fn recover_stream(&self) -> Result<(), CallError> {
+        if crate::system::null_audio() { return Ok(()); }
+        if !self.stream_failed.load(Ordering::SeqCst) { return Ok(()); }
+        if self.streams.read().tracks.is_empty() {
+            self.stream_failed.store(false, Ordering::SeqCst);
+            return Ok(());
+        }
+        // Retain mixer, track receivers, per-peer mutes and fixed output format.
+        self.output_stream.write().take();
+        self.ensure_stream_initialized()?;
+        self.stream_failed.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Open the Android call stream (called lazily on first track).
     ///
     /// `USAGE_VOICE_COMMUNICATION` is what makes the stream follow the call
@@ -373,6 +388,7 @@ impl AudioPlayback {
         if self.output_stream.read().is_some() {
             return Ok(());
         }
+        let requested_rate = android_stream_rate();
         let mut stream = oboe::AudioStreamBuilder::default()
             .set_output()
             .set_f32()
@@ -380,18 +396,24 @@ impl AudioPlayback {
             .set_audio_api(oboe::AudioApi::OpenSLES)
             .set_usage(oboe::Usage::VoiceCommunication)
             .set_content_type(oboe::ContentType::Speech)
-            .set_sample_rate(48_000)
+            .set_sample_rate(requested_rate as i32)
+            .set_sample_rate_conversion_quality(oboe::SampleRateConversionQuality::None)
             .set_callback(VoiceOutput {
                 mixer: self.streams.clone(),
                 is_active: self.is_active.clone(),
                 volume: self.volume.clone(),
                 rendered_evidence: self.rendered_evidence.clone(),
+                failed: self.stream_failed.clone(),
             })
             .open_stream()
             .map_err(|e| {
                 CallError::DeviceError(format!("Failed to open voice output stream: {:?}", e))
             })?;
-        *self.sample_rate.write() = stream.get_sample_rate() as u32;
+        tracing::info!(requested_rate, actual_rate = stream.get_sample_rate(), channels = ?stream.get_channel_count(), "Communication output negotiated (not audibility proof)");
+        if stream.get_sample_rate() as u32 != requested_rate || stream.get_channel_count() != oboe::ChannelCount::Mono {
+            return Err(CallError::DeviceError("Communication output refused fixed mono format".into()));
+        }
+        *self.sample_rate.write() = requested_rate;
         *self.channels.write() = 1;
         stream.start().map_err(|e| {
             CallError::DeviceError(format!("Failed to start audio playback: {:?}", e))
@@ -431,7 +453,7 @@ impl AudioPlayback {
             Err(e) => return Err(e),
         };
 
-        *self.applied_device.write() = output_device.description().map(|d| d.name().to_owned()).unwrap_or_default();
+        *self.applied_device.write() = output_device.id().map(|id| id.to_string()).unwrap_or_default();
         let supported_config = output_device
             .default_output_config()
             .map_err(|e| CallError::DeviceError(format!("Failed to get output config: {}", e)))?;
@@ -648,6 +670,7 @@ impl AudioPlayback {
         self.streams.write().tracks.clear();
         *self.output_stream.write() = None;
         self.rendered_evidence.store(0, Ordering::Relaxed);
+        self.stream_failed.store(false, Ordering::SeqCst);
 
         tracing::info!("Audio playback stopped");
     }

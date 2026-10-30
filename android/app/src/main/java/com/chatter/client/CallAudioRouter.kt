@@ -43,12 +43,22 @@ class CallAudioRouter(private val activity: Activity) {
     private var proximityLock: PowerManager.WakeLock? = null
 
     private var legacyApplied: String? = null
+    private var pendingKey: String? = null
+    private var requestGeneration = 0
     private var scoConnected = false
     private val scoReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED) {
-                scoConnected = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1) == AudioManager.SCO_AUDIO_STATE_CONNECTED
-                reportDevices(false)
+                val state = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
+                val previous = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_PREVIOUS_STATE, -1)
+                scoConnected = state == AudioManager.SCO_AUDIO_STATE_CONNECTED
+                val failed = legacyApplied?.takeIf { key -> communicationDevices().any {
+                    deviceKey(it) == key && routeFor(it) == ROUTE_BLUETOOTH
+                } }
+                if (state == AudioManager.SCO_AUDIO_STATE_DISCONNECTED && failed != null &&
+                    (previous == AudioManager.SCO_AUDIO_STATE_CONNECTING || previous == AudioManager.SCO_AUDIO_STATE_CONNECTED)) {
+                    failRequest(failed)
+                } else reportDevices(false)
             }
         }
     }
@@ -115,6 +125,8 @@ class CallAudioRouter(private val activity: Activity) {
             communicationListener?.let { audioManager.removeOnCommunicationDeviceChangedListener(it) }
         }
         if (Build.VERSION.SDK_INT < 31) activity.unregisterReceiver(scoReceiver)
+        pendingKey = null
+        requestGeneration += 1
         legacyApplied = null
         scoConnected = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -139,9 +151,13 @@ class CallAudioRouter(private val activity: Activity) {
                 return@post
             }
             val route = routeFor(device)
+            pendingKey = key
+            val generation = ++requestGeneration
+            var accepted = true
             try {
                 if (Build.VERSION.SDK_INT >= 31) {
                     if (!audioManager.setCommunicationDevice(device)) {
+                        accepted = false
                         Log.w(TAG, "Communication route refused by Android")
                     }
                 } else {
@@ -149,10 +165,33 @@ class CallAudioRouter(private val activity: Activity) {
                     legacyApplied = key
                 }
             } catch (error: SecurityException) {
+                accepted = false
                 Log.w(TAG, "Communication routing permission unavailable")
             }
             reportDevices(false)
+            if (!accepted) {
+                failRequest(key)
+            } else if (pendingKey == key) {
+                handler.postDelayed({
+                    if (active && generation == requestGeneration && pendingKey == key) failRequest(key)
+                }, 30_000)
+            }
         }
+    }
+
+    private fun failRequest(key: String) {
+        pendingKey = null
+        try {
+            if (Build.VERSION.SDK_INT >= 31) audioManager.clearCommunicationDevice()
+            else {
+                legacyRoute(null)
+                legacyApplied = null
+            }
+        } catch (_: SecurityException) {
+            Log.w(TAG, "Cannot clear communication route")
+        }
+        reportDevices(false)
+        nativeOnCommunicationDeviceFailed(key)
     }
 
     /** Android 8–11: speakerphone + SCO flags. `null` clears both. */
@@ -211,6 +250,7 @@ class CallAudioRouter(private val activity: Activity) {
                 deviceKey(it) == key && (routeFor(it) != ROUTE_BLUETOOTH || scoConnected)
             } }
         }
+        if (applied != null && applied == pendingKey) pendingKey = null
         val rows = JSONArray()
         devices.forEach { device ->
             val name = when (routeFor(device)) {
@@ -245,6 +285,7 @@ class CallAudioRouter(private val activity: Activity) {
     /** Implemented in Rust (platform/android/audio_route.rs). */
     private external fun nativeOnCommunicationDevices(snapshot: String, applied: String)
     private external fun nativeOnCommunicationDevicesChanged()
+    private external fun nativeOnCommunicationDeviceFailed(key: String)
 
     private companion object {
         const val TAG = "ChatterCallAudio"

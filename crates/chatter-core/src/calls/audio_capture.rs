@@ -16,6 +16,7 @@ use livekit::webrtc::audio_source::AudioSourceOptions;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
 use tokio::sync::mpsc;
 
+use super::audio_format::{CaptureChunks, SYSTEM_DEFAULT, android_stream_rate};
 use crate::error::CallError;
 
 /// Information about an available audio device (input or output).
@@ -86,6 +87,7 @@ pub struct AudioCapture {
     running: Arc<AtomicBool>,
     /// Current device name.
     device_name: String,
+    applied_device: String,
     /// Requested selection: None follows the system default, independently of its name.
     selected_device: Option<String>,
     /// LiveKit audio source for publishing.
@@ -107,6 +109,7 @@ impl AudioCapture {
             stream: None,
             running: Arc::new(AtomicBool::new(false)),
             device_name: String::new(),
+            applied_device: String::new(),
             selected_device: None,
             audio_source: None,
             sample_rate: 48000,
@@ -124,11 +127,9 @@ impl AudioCapture {
         }
         let host = cpal::default_host();
         let default_device = host.default_input_device();
-        let default_name = default_device.as_ref().and_then(|d| {
-            d.description()
-                .map(|description| description.name().to_owned())
-                .ok()
-        });
+        let default_name = default_device
+            .as_ref()
+            .and_then(|d| d.id().map(|id| id.to_string()).ok());
 
         let mut devices = Vec::new();
 
@@ -139,23 +140,24 @@ impl AudioCapture {
                 .description()
                 .map(|description| description.name().to_owned())
             {
-                let is_default = default_name.as_ref() == Some(&name);
+                let Ok(id) = device.id().map(|id| id.to_string()) else {
+                    continue;
+                };
+                let is_default = default_name.as_ref() == Some(&id);
+                if devices.iter().any(|d: &AudioDevice| d.id == id) {
+                    continue;
+                }
                 devices.push(AudioDevice {
-                    id: name.clone(),
+                    id,
                     name: name.clone(),
                     is_default,
                 });
             }
         }
 
-        devices.insert(
-            0,
-            AudioDevice {
-                id: String::new(),
-                name: "System default".into(),
-                is_default: true,
-            },
-        );
+        if !devices.is_empty() && !devices.iter().any(|d| d.is_default) {
+            devices[0].is_default = true;
+        }
         Ok(devices)
     }
 
@@ -166,11 +168,9 @@ impl AudioCapture {
         }
         let host = cpal::default_host();
         let default_device = host.default_output_device();
-        let default_name = default_device.as_ref().and_then(|d| {
-            d.description()
-                .map(|description| description.name().to_owned())
-                .ok()
-        });
+        let default_name = default_device
+            .as_ref()
+            .and_then(|d| d.id().map(|id| id.to_string()).ok());
 
         let mut devices = Vec::new();
 
@@ -181,23 +181,24 @@ impl AudioCapture {
                 .description()
                 .map(|description| description.name().to_owned())
             {
-                let is_default = default_name.as_ref() == Some(&name);
+                let Ok(id) = device.id().map(|id| id.to_string()) else {
+                    continue;
+                };
+                let is_default = default_name.as_ref() == Some(&id);
+                if devices.iter().any(|d: &AudioDevice| d.id == id) {
+                    continue;
+                }
                 devices.push(AudioDevice {
-                    id: name.clone(),
+                    id,
                     name: name.clone(),
                     is_default,
                 });
             }
         }
 
-        devices.insert(
-            0,
-            AudioDevice {
-                id: String::new(),
-                name: "System default".into(),
-                is_default: true,
-            },
-        );
+        if !devices.is_empty() && !devices.iter().any(|d| d.is_default) {
+            devices[0].is_default = true;
+        }
         Ok(devices)
     }
 
@@ -221,7 +222,10 @@ impl AudioCapture {
             })?;
 
         Ok(AudioDevice {
-            id: name.clone(),
+            id: device
+                .id()
+                .map(|id| id.to_string())
+                .map_err(|e| CallError::DeviceError(e.to_string()))?,
             name,
             is_default: true,
         })
@@ -258,7 +262,7 @@ impl AudioCapture {
         // A disconnected room may have signalled stop without dropping CPAL.
         // Release that device before opening another Android recording stream.
         self.stop();
-        let device_id = device_id.filter(|id| !id.is_empty());
+        let device_id = device_id.filter(|id| *id != SYSTEM_DEFAULT);
         self.selected_device = device_id.map(str::to_owned);
 
         if crate::system::null_audio() {
@@ -297,13 +301,7 @@ impl AudioCapture {
                     .map_err(|e| {
                         CallError::TrackPublishFailed(format!("Failed to enumerate devices: {}", e))
                     })?
-                    .find(|d| {
-                        d.description()
-                            .map(|description| description.name().to_owned())
-                            .ok()
-                            .as_deref()
-                            == Some(id)
-                    })
+                    .find(|d| d.id().map(|id| id.to_string()).ok().as_deref() == Some(id))
                     .or_else(|| host.default_input_device())
                     .ok_or_else(|| {
                         CallError::TrackPublishFailed("No usable audio input device".into())
@@ -314,6 +312,7 @@ impl AudioCapture {
                 })?
             };
 
+            self.applied_device = device.id().map(|id| id.to_string()).unwrap_or_default();
             self.device_name = device
                 .description()
                 .map(|description| description.name().to_owned())
@@ -327,6 +326,11 @@ impl AudioCapture {
 
             self.sample_rate = supported_config.sample_rate();
             self.num_channels = supported_config.channels() as u32;
+            if self.sample_rate % 100 != 0 || !matches!(self.num_channels, 1 | 2) {
+                return Err(CallError::DeviceError(
+                    "Microphone format cannot be converted to call audio".into(),
+                ));
+            }
 
             tracing::info!(
                 "Audio config: {}Hz, {} channels, format: {:?}",
@@ -441,7 +445,7 @@ impl AudioCapture {
         muted: bool,
     ) -> Result<NativeAudioSource, CallError> {
         use oboe::{AudioStream as _, AudioStreamBase as _};
-        self.sample_rate = 48_000;
+        self.sample_rate = android_stream_rate();
         self.num_channels = 1;
         self.device_name = "Communication microphone".into();
         let source = existing_source.unwrap_or_else(|| {
@@ -465,7 +469,8 @@ impl AudioCapture {
             .set_mono()
             .set_audio_api(oboe::AudioApi::OpenSLES)
             .set_input_preset(oboe::InputPreset::VoiceCommunication)
-            .set_sample_rate(48_000)
+            .set_sample_rate(self.sample_rate as i32)
+            .set_sample_rate_conversion_quality(oboe::SampleRateConversionQuality::None)
             .set_callback(VoiceInput {
                 running: self.running.clone(),
                 failed: self.stream_failed.clone(),
@@ -475,7 +480,20 @@ impl AudioCapture {
             .map_err(|e| {
                 CallError::DeviceError(format!("Could not open communication microphone: {e:?}"))
             })?;
-        self.sample_rate = stream.get_sample_rate() as u32;
+        let actual_rate = stream.get_sample_rate() as u32;
+        tracing::info!(requested_rate = self.sample_rate, actual_rate, channels = ?stream.get_channel_count(), "Communication input negotiated (not audibility proof)");
+        if actual_rate != self.sample_rate || stream.get_channel_count() != oboe::ChannelCount::Mono
+        {
+            return Err(CallError::DeviceError(
+                "Communication input refused fixed mono format".into(),
+            ));
+        }
+        self.sample_rate = actual_rate;
+        tracing::info!(
+            rate = self.sample_rate,
+            channels = ?stream.get_channel_count(),
+            "Communication input opened (not audibility proof)"
+        );
         self.running.store(!muted, Ordering::SeqCst);
         if let Err(error) = stream.start() {
             self.running.store(false, Ordering::SeqCst);
@@ -502,8 +520,13 @@ impl AudioCapture {
             .selected_device
             .as_ref()
             .and_then(|id| devices.iter().find(|d| &d.id == id))
-            .or_else(|| devices.iter().find(|d| d.is_default && !d.id.is_empty()));
-        if desired.is_some_and(|d| d.id != self.device_name) {
+            .map(|d| d.id.clone())
+            .or_else(|| {
+                cpal::default_host()
+                    .default_input_device()
+                    .and_then(|d| d.id().ok().map(|id| id.to_string()))
+            });
+        if desired.is_some_and(|id| id != self.applied_device) {
             self.stream_failed.store(true, Ordering::SeqCst);
         }
     }
@@ -568,6 +591,10 @@ impl AudioCapture {
     }
 
     /// Get current device name.
+    pub fn applied_device(&self) -> &str {
+        &self.applied_device
+    }
+
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
@@ -606,37 +633,54 @@ fn spawn_frame_worker(source: NativeAudioSource) -> mpsc::Sender<CapturedFrame> 
     let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
     let source_for_worker = source;
     tokio::spawn(async move {
+        let mut resampler = livekit::webrtc::native::audio_resampler::AudioResampler::default();
+        let mut chunks = CaptureChunks::default();
         let mut first_frame = true;
         let mut first_non_silent = true;
         let mut first_error = true;
         while let Some(captured) = frame_rx.recv().await {
-            let frame = AudioFrame {
-                data: Cow::Owned(captured.samples),
-                sample_rate: captured.sample_rate,
-                num_channels: captured.num_channels,
-                samples_per_channel: 0, // recalculated below
-            };
-            let frame = AudioFrame {
-                samples_per_channel: frame.data.len() as u32 / frame.num_channels,
-                ..frame
-            };
-            let non_silent = first_non_silent && frame.data.iter().any(|&s| s != 0);
-            match source_for_worker.capture_frame(&frame).await {
-                Ok(()) => {
-                    if first_frame {
-                        tracing::info!("First microphone frame delivered to LiveKit");
-                        first_frame = false;
+            for samples in chunks.push(
+                captured.samples,
+                captured.sample_rate,
+                captured.num_channels,
+            ) {
+                let samples_per_channel = samples.len() as u32 / captured.num_channels;
+                let converted = resampler
+                    .remix_and_resample(
+                        &samples,
+                        samples_per_channel,
+                        captured.num_channels,
+                        captured.sample_rate,
+                        source_for_worker.num_channels(),
+                        source_for_worker.sample_rate(),
+                    )
+                    .to_vec();
+                let frame = AudioFrame {
+                    data: Cow::Owned(converted),
+                    sample_rate: source_for_worker.sample_rate(),
+                    num_channels: source_for_worker.num_channels(),
+                    samples_per_channel: source_for_worker.sample_rate() / 100,
+                };
+                let non_silent = first_non_silent && frame.data.iter().any(|&s| s != 0);
+                match source_for_worker.capture_frame(&frame).await {
+                    Ok(()) => {
+                        if first_frame {
+                            tracing::info!("First microphone frame delivered to LiveKit");
+                            first_frame = false;
+                        }
+                        if non_silent {
+                            tracing::info!(
+                                "First non-silent microphone frame delivered to LiveKit"
+                            );
+                            first_non_silent = false;
+                        }
                     }
-                    if non_silent {
-                        tracing::info!("First non-silent microphone frame delivered to LiveKit");
-                        first_non_silent = false;
+                    Err(error) if first_error => {
+                        tracing::warn!(%error, "Microphone frame delivery failed");
+                        first_error = false;
                     }
+                    Err(_) => {}
                 }
-                Err(error) if first_error => {
-                    tracing::warn!(%error, "Microphone frame delivery failed");
-                    first_error = false;
-                }
-                Err(_) => {}
             }
         }
     });
@@ -665,6 +709,35 @@ mod tests {
             }
             capture.stop();
             assert_eq!(capture.selected_device(), selection);
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_source_accepts_44k1_stereo_after_48k_mono() {
+        let source = NativeAudioSource::new(AudioSourceOptions::default(), 48_000, 1, 0);
+        let mut resampler = livekit::webrtc::native::audio_resampler::AudioResampler::default();
+        for (rate, channels) in [(48_000, 1), (44_100, 2), (8_000, 1)] {
+            let samples = vec![17i16; (rate / 100 * channels) as usize];
+            let data = resampler
+                .remix_and_resample(
+                    &samples,
+                    rate / 100,
+                    channels,
+                    rate,
+                    source.num_channels(),
+                    source.sample_rate(),
+                )
+                .to_vec();
+            assert_eq!(data.len(), 480);
+            source
+                .capture_frame(&AudioFrame {
+                    data: Cow::Owned(data),
+                    sample_rate: source.sample_rate(),
+                    num_channels: source.num_channels(),
+                    samples_per_channel: 480,
+                })
+                .await
+                .unwrap();
         }
     }
 
@@ -727,7 +800,13 @@ mod tests {
 
                 // Check that at most one device is marked as default
                 let default_count = devices.iter().filter(|d| d.is_default).count();
-                assert!(default_count <= 1, "Should have at most one default device");
+                assert_eq!(
+                    default_count,
+                    usize::from(!devices.is_empty()),
+                    "Nonempty inventory has one default"
+                );
+                let ids: std::collections::HashSet<_> = devices.iter().map(|d| &d.id).collect();
+                assert_eq!(ids.len(), devices.len(), "Native device IDs must be unique");
             }
             Err(e) => {
                 // May fail in CI/headless environments
@@ -753,7 +832,13 @@ mod tests {
 
                 // Check that at most one device is marked as default
                 let default_count = devices.iter().filter(|d| d.is_default).count();
-                assert!(default_count <= 1, "Should have at most one default device");
+                assert_eq!(
+                    default_count,
+                    usize::from(!devices.is_empty()),
+                    "Nonempty inventory has one default"
+                );
+                let ids: std::collections::HashSet<_> = devices.iter().map(|d| &d.id).collect();
+                assert_eq!(ids.len(), devices.len(), "Native device IDs must be unique");
             }
             Err(e) => {
                 // May fail in CI/headless environments

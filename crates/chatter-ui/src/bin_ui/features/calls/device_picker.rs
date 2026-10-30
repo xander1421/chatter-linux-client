@@ -90,8 +90,10 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             move || {
                 #[cfg(target_os = "android")]
                 {
-                    let _ = (&weak, &ui_ctx);
-                    tracing::warn!("Screen source picker not available on Android");
+                    let _ = &ui_ctx;
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::CallView>().invoke_call_toggle_screen_share();
+                    }
                     return;
                 }
                 #[cfg(not(target_os = "android"))]
@@ -171,16 +173,17 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let ui_ctx = ui_ctx.clone();
                 let weak = weak.clone();
                 slint::spawn_local(async move {
-                    if let Err(e) = ui_ctx.call_publish_microphone(Some(&device_id_str)).await {
-                        tracing::error!("Failed to switch microphone to {}: {}", device_id_str, e);
-                        if let Some(w) = weak.upgrade() {
-                            picker_error(&w, "Could not switch microphones. Try again.");
+                    let result = ui_ctx.call_publish_microphone(Some(&device_id_str)).await;
+                    #[cfg(not(target_os = "android"))]
+                    let snapshot = ui_ctx.call_audio_device_snapshot(false).await;
+                    if let Some(w) = weak.upgrade() {
+                        #[cfg(not(target_os = "android"))]
+                        if let Ok((_, selected)) = snapshot {
+                            w.global::<crate::CallView>().set_selected_audio_device_id(selected.into());
                         }
-                    } else {
-                        tracing::info!("Switched to microphone: {}", device_id_str);
-                        if let Some(w) = weak.upgrade() {
-                            w.global::<crate::CallView>()
-                                .set_selected_audio_device_id(device_id_str.into());
+                        if let Err(error) = result {
+                            tracing::warn!(%error, "Microphone switch failed");
+                            picker_error(&w, "Could not switch microphones. Try again.");
                         }
                     }
                 })
@@ -202,23 +205,17 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let weak = weak.clone();
                 slint::spawn_local(async move {
                     let result = ui_ctx.call_set_audio_output(&device_id_str).await;
+                    #[cfg(not(target_os = "android"))]
+                    let snapshot = ui_ctx.call_audio_device_snapshot(true).await;
                     let Some(w) = weak.upgrade() else { return };
-                    match result {
-                        Ok(()) => w
-                            .global::<crate::CallView>()
-                            .set_selected_audio_output_id(device_id_str.into()),
-                        Err(e) => {
-                            // Slint set the id optimistically; don't leave a tick
-                            // on a device the audio isn't actually going to.
-                            tracing::error!(
-                                "Failed to switch audio output to {}: {}",
-                                device_id_str,
-                                e
-                            );
-                            w.global::<crate::CallView>()
-                                .set_selected_audio_output_id("".into());
-                            picker_error(&w, "Could not switch speakers. Try again.");
-                        }
+                    #[cfg(not(target_os = "android"))]
+                    if let Ok((_, selected)) = snapshot {
+                        w.global::<crate::CallView>().set_selected_audio_output_id(selected.into());
+                    }
+                    // Failed lookup/build leaves the prior stream and tick intact.
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "Output switch failed");
+                        picker_error(&w, "Could not switch speakers. Try again.");
                     }
                 })
                 .unwrap();

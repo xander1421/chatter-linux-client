@@ -121,6 +121,8 @@ pub(super) fn run_call_worker(
                     }
                     _ = camera_health.tick() => {
                         room_manager.recover_microphone_stream();
+                        #[cfg(target_os = "android")]
+                        room_manager.recover_audio_output_stream();
                         if room_manager.camera_capture_failed() {
                             room_manager.stop_camera().await;
                             if let Some(state) = active_call.borrow().as_ref() {
