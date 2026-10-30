@@ -195,6 +195,14 @@ impl ChatterClient {
         }
     }
 
+    #[cfg(all(feature = "media", not(target_os = "android")))]
+    pub async fn call_audio_device_snapshot(&self, output: bool) -> Result<(Vec<crate::calls::AudioDevice>, String), String> {
+        match self.call_service().get().cloned() {
+            Some(worker) => worker.audio_device_snapshot(output).await,
+            None => Err("calls are not available".to_owned()),
+        }
+    }
+
     /// Route call audio to the output device `device` (an id from
     /// `AudioCapture::list_output_devices`). Applies mid-call, and to the
     /// next call if none is running.

@@ -105,6 +105,7 @@ pub(super) fn run_call_worker(
         // priority so it can use the normal teardown/response arm immediately.
         let mut deferred_commands = VecDeque::new();
         let mut camera_health = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut audio_device_health = tokio::time::interval(std::time::Duration::from_secs(2));
         // Process commands
         loop {
             let deadline = orchestrator.incoming.values().map(|p| p.deadline).min();
@@ -113,6 +114,11 @@ pub(super) fn run_call_worker(
             } else {
                 tokio::select! {
                     biased;
+                    _ = audio_device_health.tick() => {
+                        #[cfg(not(target_os = "android"))]
+                        room_manager.refresh_audio_devices();
+                        continue;
+                    }
                     _ = camera_health.tick() => {
                         room_manager.recover_microphone_stream();
                         if room_manager.camera_capture_failed() {
@@ -572,6 +578,10 @@ pub(super) fn run_call_worker(
                     room_manager.set_peer_audio_muted(&participant_id, muted);
                 }
 
+                #[cfg(not(target_os = "android"))]
+                CallCommand::AudioDeviceSnapshot { output, response } => {
+                    let _ = response.send(room_manager.audio_device_snapshot(output).map_err(|e| e.to_string()));
+                }
                 CallCommand::SetAudioOutput { device, response } => {
                     let _ = response.send(room_manager.set_audio_output(&device).map_err(|e| e.to_string()));
                 }

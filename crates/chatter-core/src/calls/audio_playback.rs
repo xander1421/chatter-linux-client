@@ -48,6 +48,10 @@ pub struct AudioPlayback {
     /// Unused on Android, where AudioManager owns the route.
     #[cfg_attr(target_os = "android", allow(dead_code))]
     output_device: RwLock<Option<String>>,
+    #[cfg(not(target_os = "android"))]
+    applied_device: RwLock<String>,
+    #[cfg(not(target_os = "android"))]
+    stream_failed: Arc<AtomicBool>,
 }
 
 /// The live output stream. Desktop plays through CPAL on the chosen device;
@@ -263,6 +267,10 @@ impl AudioPlayback {
             volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             rendered_evidence: Arc::new(AtomicU8::new(0)),
             output_device: RwLock::new(None),
+            #[cfg(not(target_os = "android"))]
+            applied_device: RwLock::new(String::new()),
+            #[cfg(not(target_os = "android"))]
+            stream_failed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -305,14 +313,38 @@ impl AudioPlayback {
     /// error is returned.
     #[cfg(not(target_os = "android"))]
     pub fn set_output_device(&self, name: &str) -> Result<(), CallError> {
-        let device = Self::find_output_device(Some(name))?;
+        let device = Self::find_output_device((!name.is_empty()).then_some(name))?;
         if self.output_stream.read().is_some() {
             let stream =
                 self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
             *self.output_stream.write() = Some(stream);
         }
-        *self.output_device.write() = Some(name.to_string());
+        *self.applied_device.write() = device.description().map(|d| d.name().to_owned()).unwrap_or_default();
+        *self.output_device.write() = (!name.is_empty()).then(|| name.to_string());
         tracing::info!("Audio playback: output device set to '{}'", name);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub fn selected_output(&self) -> (String, Option<String>) {
+        (self.applied_device.read().clone(), self.output_device.read().clone())
+    }
+
+    /// Keep the requested choice through a temporary unplug; rebuild only
+    /// playback, preserving the mixer, participant mutes and volume.
+    #[cfg(not(target_os = "android"))]
+    pub fn refresh_device(&self) -> Result<(), CallError> {
+        if crate::system::null_audio() || self.output_stream.read().is_none() { return Ok(()); }
+        let requested = self.output_device.read().clone();
+        let device = Self::find_output_device(requested.as_deref())
+            .or_else(|_| Self::find_output_device(None))?;
+        let name = device.description().map(|d| d.name().to_owned()).unwrap_or_default();
+        if name != *self.applied_device.read() || self.stream_failed.load(Ordering::SeqCst) {
+            let stream = self.build_stream(&device, *self.sample_rate.read(), *self.channels.read())?;
+            *self.output_stream.write() = Some(stream);
+            *self.applied_device.write() = name;
+            self.stream_failed.store(false, Ordering::SeqCst);
+        }
         Ok(())
     }
 
@@ -399,6 +431,7 @@ impl AudioPlayback {
             Err(e) => return Err(e),
         };
 
+        *self.applied_device.write() = output_device.description().map(|d| d.name().to_owned()).unwrap_or_default();
         let supported_config = output_device
             .default_output_config()
             .map_err(|e| CallError::DeviceError(format!("Failed to get output config: {}", e)))?;
@@ -439,6 +472,7 @@ impl AudioPlayback {
         let volume_clone = self.volume.clone();
         let rendered_evidence = self.rendered_evidence.clone();
 
+        let stream_failed = self.stream_failed.clone();
         // Build output stream
         let config = StreamConfig {
             channels,
@@ -453,7 +487,8 @@ impl AudioPlayback {
                     drain_mix(data, &mixer, &is_active_clone, &volume_clone);
                     record_rendered_samples(data, &rendered_evidence);
                 },
-                |err| {
+                move |err| {
+                    stream_failed.store(true, Ordering::SeqCst);
                     tracing::error!("Audio output error: {}", err);
                 },
                 None,

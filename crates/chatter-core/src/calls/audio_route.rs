@@ -13,6 +13,9 @@
 //! - turning the camera on moves the call off the earpiece; turning it off
 //!   leaves the audio where it is;
 //! - a device with no earpiece (a tablet) uses the speaker instead.
+//!
+//! `CommunicationRouting` adds explicit per-device intent above these defaults;
+//! an explicit choice survives inventory changes and temporarily falls back if absent.
 
 /// Where call audio plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +135,119 @@ impl CallAudioRouting {
     }
 }
 
+/// One OS-supported communication route. Input and output are a pair on Android.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommunicationDevice {
+    /// Stable platform key, retained across reconnects and hotplug.
+    pub id: String,
+    pub name: String,
+    pub route: AudioRoute,
+}
+
+/// Individual device selection layered over the voice/video default policy.
+/// Missing requested devices fall back temporarily without forgetting intent.
+#[derive(Debug, Clone)]
+pub struct CommunicationRouting {
+    pub policy: CallAudioRouting,
+    devices: Vec<CommunicationDevice>,
+    requested: Option<String>,
+    applied: Option<String>,
+}
+
+impl CommunicationRouting {
+    pub fn new(video: bool) -> Self {
+        Self {
+            policy: CallAudioRouting::new(video),
+            devices: vec![],
+            requested: None,
+            applied: None,
+        }
+    }
+
+    pub fn devices(&self) -> &[CommunicationDevice] {
+        &self.devices
+    }
+    pub fn requested(&self) -> Option<&str> {
+        self.requested.as_deref()
+    }
+    pub fn applied(&self) -> Option<&str> {
+        self.applied.as_deref()
+    }
+
+    pub fn refresh(&mut self, devices: Vec<CommunicationDevice>, applied: Option<String>) {
+        self.policy.set_outputs(AudioOutputs {
+            earpiece: devices.iter().any(|d| d.route == AudioRoute::Earpiece),
+            wired_headset: devices.iter().any(|d| d.route == AudioRoute::WiredHeadset),
+            bluetooth: devices.iter().any(|d| d.route == AudioRoute::Bluetooth),
+        });
+        self.devices = devices;
+        self.applied = applied.filter(|id| self.devices.iter().any(|d| &d.id == id));
+    }
+
+    pub fn select(&mut self, id: &str) -> bool {
+        if id.is_empty() {
+            self.requested = None;
+            return true;
+        }
+        if !self.devices.iter().any(|d| d.id == id) {
+            return false;
+        }
+        self.requested = Some(id.to_owned());
+        true
+    }
+
+    pub fn target(&self) -> Option<&CommunicationDevice> {
+        self.requested
+            .as_ref()
+            .and_then(|id| self.devices.iter().find(|d| &d.id == id))
+            .or_else(|| self.devices.iter().find(|d| d.route == self.policy.route()))
+            .or_else(|| self.devices.first())
+    }
+
+    /// Labels expose only combinations Android actually offers.
+    pub fn picker_devices(&self) -> Vec<(String, String, bool)> {
+        let default = self.devices.iter().find(|d| d.route == self.policy.route());
+        let status = if self.requested.is_none() {
+            "Automatic (selected)"
+        } else if !self
+            .devices
+            .iter()
+            .any(|d| Some(d.id.as_str()) == self.requested())
+        {
+            "Fallback (preferred device disconnected)"
+        } else {
+            "Automatic"
+        };
+        let mut rows = vec![(
+            String::new(),
+            format!(
+                "{} — {}",
+                status,
+                default.map_or("system route", |d| d.name.as_str())
+            ),
+            true,
+        )];
+        rows.extend(self.devices.iter().map(|d| {
+            let input = match d.route {
+                AudioRoute::Earpiece => "built-in mic",
+                _ => "system-routed mic",
+            };
+            let pending =
+                if Some(d.id.as_str()) == self.requested() && self.applied() != self.requested() {
+                    " · requested"
+                } else {
+                    ""
+                };
+            (
+                d.id.clone(),
+                format!("{} + {} (linked){}", d.name, input, pending),
+                false,
+            )
+        }));
+        rows
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +311,74 @@ mod tests {
         assert_eq!(r.set_video(false), AudioRoute::Speaker);
         let mut v = CallAudioRouting::new(true);
         assert_eq!(v.set_video(false), AudioRoute::Speaker);
+    }
+    fn device(id: &str, route: AudioRoute) -> CommunicationDevice {
+        CommunicationDevice {
+            id: id.into(),
+            name: id.into(),
+            route,
+        }
+    }
+
+    #[test]
+    fn individual_headsets_are_selectable_and_ack_is_independent() {
+        let mut r = CommunicationRouting::new(false);
+        let devices = vec![
+            device("phone", AudioRoute::Earpiece),
+            device("bt-one", AudioRoute::Bluetooth),
+            device("bt-two", AudioRoute::Bluetooth),
+        ];
+        r.refresh(devices.clone(), Some("bt-one".into()));
+        assert!(r.select("bt-two"));
+        assert_eq!(r.target().unwrap().id, "bt-two");
+        assert_eq!(r.applied(), Some("bt-one")); // Request is not acknowledgement.
+        r.refresh(devices, Some("bt-two".into()));
+        assert_eq!(r.applied(), Some("bt-two"));
+        assert!(!r.select("missing"));
+        assert_eq!(r.requested(), Some("bt-two"));
+    }
+
+    #[test]
+    fn unplug_falls_back_and_replug_restores_intent() {
+        let mut r = CommunicationRouting::new(false);
+        let phone = device("phone", AudioRoute::Earpiece);
+        let bt = device("headset", AudioRoute::Bluetooth);
+        r.refresh(vec![phone.clone(), bt.clone()], Some("headset".into()));
+        r.select("headset");
+        r.refresh(vec![phone.clone()], Some("headset".into()));
+        assert_eq!(r.applied(), None);
+        assert_eq!(r.target().unwrap().id, "phone");
+        assert_eq!(r.requested(), Some("headset"));
+        assert!(r.picker_devices()[0].1.contains("disconnected"));
+        r.refresh(vec![phone, bt], Some("phone".into()));
+        assert_eq!(r.target().unwrap().id, "headset");
+    }
+
+    #[test]
+    fn explicit_builtin_route_survives_headset_and_video_changes() {
+        let mut r = CommunicationRouting::new(false);
+        let phone = device("phone", AudioRoute::Earpiece);
+        r.refresh(vec![phone.clone()], Some("phone".into()));
+        r.select("phone");
+        r.refresh(
+            vec![phone, device("bt", AudioRoute::Bluetooth)],
+            Some("phone".into()),
+        );
+        r.policy.set_video(true);
+        assert_eq!(r.target().unwrap().id, "phone");
+        r.select("");
+        assert_eq!(r.target().unwrap().id, "bt");
+    }
+
+    #[test]
+    fn tablet_and_empty_inventory_never_offer_nonexistent_routes() {
+        let mut r = CommunicationRouting::new(false);
+        r.refresh(vec![device("speaker", AudioRoute::Speaker)], None);
+        assert_eq!(r.target().unwrap().id, "speaker");
+        assert!(!r.select("earpiece"));
+        assert_eq!(r.picker_devices().len(), 2);
+        assert!(r.picker_devices()[1].1.contains("linked"));
+        r.refresh(vec![], None);
+        assert_eq!(r.target(), None);
     }
 }

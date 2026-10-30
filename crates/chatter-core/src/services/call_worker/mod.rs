@@ -662,6 +662,12 @@ enum CallCommand {
     IsCameraEnabled { response: oneshot::Sender<bool> },
     /// Locally mute/unmute a specific remote participant's audio.
     SetPeerAudioMuted { participant_id: String, muted: bool },
+    /// Available devices and acknowledged/default selection for the picker.
+    #[cfg(not(target_os = "android"))]
+    AudioDeviceSnapshot {
+        output: bool,
+        response: oneshot::Sender<Result<(Vec<crate::calls::AudioDevice>, String), String>>,
+    },
     /// Route remote audio to an output device (CPAL device name).
     SetAudioOutput {
         device: String,

@@ -417,7 +417,7 @@ class MainActivity : GameActivity() {
     fun stopCallAudio() = callAudio.stop()
 
     @Suppress("unused")
-    fun applyAudioRoute(route: Int) = callAudio.apply(route)
+    fun applyCommunicationDevice(key: String) = callAudio.applyDevice(key)
 
     /** Implemented in Rust. Initializes libwebrtc with the app's JavaVM. */
     private external fun nativeInitWebrtc()

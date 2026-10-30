@@ -1,4 +1,4 @@
-//! Audio capture from microphone using cpal.
+//! Call microphone capture: CPAL on desktop, voice-communication Oboe on Android.
 //!
 //! Provides device enumeration and audio frame capture for LiveKit publishing.
 
@@ -6,7 +6,10 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(not(target_os = "android"))]
+use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, HostTrait};
+#[cfg(not(target_os = "android"))]
 use cpal::{SampleFormat, StreamConfig};
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::AudioSourceOptions;
@@ -34,9 +37,51 @@ struct CapturedFrame {
     num_channels: u32,
 }
 
+#[cfg(not(target_os = "android"))]
+type CaptureStream = cpal::Stream;
+#[cfg(target_os = "android")]
+type CaptureStream = oboe::AudioStreamAsync<oboe::Input, VoiceInput>;
+
+/// The Android call input must use VOICE_COMMUNICATION so AudioManager's
+/// selected communication device controls both ends of the conversation.
+#[cfg(target_os = "android")]
+struct VoiceInput {
+    running: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    tx: mpsc::Sender<CapturedFrame>,
+}
+
+#[cfg(target_os = "android")]
+impl oboe::AudioInputCallback for VoiceInput {
+    type FrameType = (i16, oboe::Mono);
+
+    fn on_audio_ready(
+        &mut self,
+        stream: &mut dyn oboe::AudioInputStreamSafe,
+        data: &[i16],
+    ) -> oboe::DataCallbackResult {
+        if self.running.load(Ordering::SeqCst) {
+            let _ = self.tx.try_send(CapturedFrame {
+                samples: data.to_vec(),
+                sample_rate: stream.get_sample_rate() as u32,
+                num_channels: 1,
+            });
+        }
+        oboe::DataCallbackResult::Continue
+    }
+
+    fn on_error_after_close(
+        &mut self,
+        _stream: &mut dyn oboe::AudioInputStreamSafe,
+        _error: oboe::Error,
+    ) {
+        self.failed.store(true, Ordering::SeqCst);
+    }
+}
+
 pub struct AudioCapture {
-    /// The cpal audio stream (must be kept alive).
-    stream: Option<cpal::Stream>,
+    /// The platform audio stream (must be kept alive).
+    stream: Option<CaptureStream>,
     /// Flag to control capture.
     running: Arc<AtomicBool>,
     /// Current device name.
@@ -103,6 +148,14 @@ impl AudioCapture {
             }
         }
 
+        devices.insert(
+            0,
+            AudioDevice {
+                id: String::new(),
+                name: "System default".into(),
+                is_default: true,
+            },
+        );
         Ok(devices)
     }
 
@@ -137,6 +190,14 @@ impl AudioCapture {
             }
         }
 
+        devices.insert(
+            0,
+            AudioDevice {
+                id: String::new(),
+                name: "System default".into(),
+                is_default: true,
+            },
+        );
         Ok(devices)
     }
 
@@ -173,6 +234,15 @@ impl AudioCapture {
         self.start_with_source(device_id, None, false)
     }
 
+    /// Start muted before the capture callback can enqueue its first frame.
+    pub(crate) fn start_muted(
+        &mut self,
+        device_id: Option<&str>,
+        muted: bool,
+    ) -> Result<NativeAudioSource, CallError> {
+        self.start_with_source(device_id, None, muted)
+    }
+
     fn start_with_source(
         &mut self,
         device_id: Option<&str>,
@@ -188,6 +258,7 @@ impl AudioCapture {
         // A disconnected room may have signalled stop without dropping CPAL.
         // Release that device before opening another Android recording stream.
         self.stop();
+        let device_id = device_id.filter(|id| !id.is_empty());
         self.selected_device = device_id.map(str::to_owned);
 
         if crate::system::null_audio() {
@@ -212,53 +283,168 @@ impl AudioCapture {
             return Ok(source);
         }
 
-        let host = cpal::default_host();
+        #[cfg(target_os = "android")]
+        {
+            return self.start_android(existing_source, muted);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let host = cpal::default_host();
 
-        // Find the requested device or use default
-        let device = if let Some(id) = device_id {
-            host.input_devices()
-                .map_err(|e| {
-                    CallError::TrackPublishFailed(format!("Failed to enumerate devices: {}", e))
+            // Find the requested device or use default
+            let device = if let Some(id) = device_id {
+                host.input_devices()
+                    .map_err(|e| {
+                        CallError::TrackPublishFailed(format!("Failed to enumerate devices: {}", e))
+                    })?
+                    .find(|d| {
+                        d.description()
+                            .map(|description| description.name().to_owned())
+                            .ok()
+                            .as_deref()
+                            == Some(id)
+                    })
+                    .or_else(|| host.default_input_device())
+                    .ok_or_else(|| {
+                        CallError::TrackPublishFailed("No usable audio input device".into())
+                    })?
+            } else {
+                host.default_input_device().ok_or_else(|| {
+                    CallError::TrackPublishFailed("No default audio input device".to_string())
                 })?
-                .find(|d| {
-                    d.description()
-                        .map(|description| description.name().to_owned())
-                        .ok()
-                        .as_deref()
-                        == Some(id)
-                })
-                .ok_or_else(|| {
-                    CallError::TrackPublishFailed(format!("Audio device not found: {}", id))
-                })?
-        } else {
-            host.default_input_device().ok_or_else(|| {
-                CallError::TrackPublishFailed("No default audio input device".to_string())
-            })?
-        };
+            };
 
-        self.device_name = device
-            .description()
-            .map(|description| description.name().to_owned())
-            .unwrap_or_default();
-        tracing::info!("Starting audio capture from device: {}", self.device_name);
+            self.device_name = device
+                .description()
+                .map(|description| description.name().to_owned())
+                .unwrap_or_default();
+            tracing::info!("Starting audio capture from device: {}", self.device_name);
 
-        // Get supported config
-        let supported_config = device.default_input_config().map_err(|e| {
-            CallError::TrackPublishFailed(format!("No supported audio config: {}", e))
-        })?;
+            // Get supported config
+            let supported_config = device.default_input_config().map_err(|e| {
+                CallError::TrackPublishFailed(format!("No supported audio config: {}", e))
+            })?;
 
-        self.sample_rate = supported_config.sample_rate();
-        self.num_channels = supported_config.channels() as u32;
+            self.sample_rate = supported_config.sample_rate();
+            self.num_channels = supported_config.channels() as u32;
 
-        tracing::info!(
-            "Audio config: {}Hz, {} channels, format: {:?}",
-            self.sample_rate,
-            self.num_channels,
-            supported_config.sample_format()
-        );
+            tracing::info!(
+                "Audio config: {}Hz, {} channels, format: {:?}",
+                self.sample_rate,
+                self.num_channels,
+                supported_config.sample_format()
+            );
 
-        // Create LiveKit audio source
-        let audio_source = existing_source.unwrap_or_else(|| {
+            // Create LiveKit audio source
+            let audio_source = existing_source.unwrap_or_else(|| {
+                NativeAudioSource::new(
+                    AudioSourceOptions {
+                        echo_cancellation: true,
+                        noise_suppression: true,
+                        auto_gain_control: true,
+                    },
+                    self.sample_rate,
+                    self.num_channels,
+                    50, // 50ms buffer
+                )
+            });
+
+            let frame_tx = spawn_frame_worker(audio_source.clone());
+
+            let running = self.running.clone();
+            let sample_rate = self.sample_rate;
+            let num_channels = self.num_channels;
+
+            // Build the stream based on sample format
+            let stream_config: StreamConfig = supported_config.clone().into();
+            let stream_failed = self.stream_failed.clone();
+            let err_fn = move |err: cpal::Error| {
+                tracing::error!("Audio capture error: {}", err);
+                if matches!(
+                    err.kind(),
+                    cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated
+                ) {
+                    stream_failed.store(true, Ordering::SeqCst);
+                }
+            };
+
+            let stream = match supported_config.sample_format() {
+                SampleFormat::F32 => {
+                    let tx = frame_tx.clone();
+                    device.build_input_stream(
+                        stream_config,
+                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                            if running.load(Ordering::SeqCst) {
+                                let samples: Vec<i16> = data
+                                    .iter()
+                                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                                    .collect();
+                                let _ = tx.try_send(CapturedFrame {
+                                    samples,
+                                    sample_rate,
+                                    num_channels,
+                                });
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                SampleFormat::I16 => {
+                    let tx = frame_tx.clone();
+                    device.build_input_stream(
+                        stream_config,
+                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                            if running.load(Ordering::SeqCst) {
+                                let samples = data.to_vec();
+                                let _ = tx.try_send(CapturedFrame {
+                                    samples,
+                                    sample_rate,
+                                    num_channels,
+                                });
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
+                }
+                format => {
+                    return Err(CallError::TrackPublishFailed(format!(
+                        "Unsupported audio format: {:?}",
+                        format
+                    )));
+                }
+            }
+            .map_err(|e| {
+                CallError::TrackPublishFailed(format!("Failed to build audio stream: {}", e))
+            })?;
+
+            // Start the stream
+            stream.play().map_err(|e| {
+                CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e))
+            })?;
+
+            self.running.store(!muted, Ordering::SeqCst);
+            self.stream = Some(stream);
+            self.audio_source = Some(audio_source.clone());
+            self.frame_tx = Some(frame_tx);
+
+            tracing::info!("Audio capture started successfully");
+            Ok(audio_source)
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn start_android(
+        &mut self,
+        existing_source: Option<NativeAudioSource>,
+        muted: bool,
+    ) -> Result<NativeAudioSource, CallError> {
+        use oboe::{AudioStream as _, AudioStreamBase as _};
+        self.sample_rate = 48_000;
+        self.num_channels = 1;
+        self.device_name = "Communication microphone".into();
+        let source = existing_source.unwrap_or_else(|| {
             NativeAudioSource::new(
                 AudioSourceOptions {
                     echo_cancellation: true,
@@ -267,131 +453,59 @@ impl AudioCapture {
                 },
                 self.sample_rate,
                 self.num_channels,
-                50, // 50ms buffer
+                50,
             )
         });
-
-        // Set up bounded channel + single consumer task instead of spawning per frame
-        let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
-        let source_for_worker = audio_source.clone();
-        tokio::spawn(async move {
-            let mut first_frame = true;
-            let mut first_non_silent = true;
-            let mut first_error = true;
-            while let Some(captured) = frame_rx.recv().await {
-                let frame = AudioFrame {
-                    data: Cow::Owned(captured.samples),
-                    sample_rate: captured.sample_rate,
-                    num_channels: captured.num_channels,
-                    samples_per_channel: 0, // recalculated below
-                };
-                let frame = AudioFrame {
-                    samples_per_channel: frame.data.len() as u32 / frame.num_channels,
-                    ..frame
-                };
-                let non_silent = first_non_silent && frame.data.iter().any(|&s| s != 0);
-                match source_for_worker.capture_frame(&frame).await {
-                    Ok(()) => {
-                        if first_frame {
-                            tracing::info!("First microphone frame delivered to LiveKit");
-                            first_frame = false;
-                        }
-                        if non_silent {
-                            tracing::info!(
-                                "First non-silent microphone frame delivered to LiveKit"
-                            );
-                            first_non_silent = false;
-                        }
-                    }
-                    Err(error) if first_error => {
-                        tracing::warn!(%error, "Microphone frame delivery failed");
-                        first_error = false;
-                    }
-                    Err(_) => {}
-                }
-            }
-        });
-
-        let running = self.running.clone();
-        let sample_rate = self.sample_rate;
-        let num_channels = self.num_channels;
-
-        // Build the stream based on sample format
-        let stream_config: StreamConfig = supported_config.clone().into();
-        let stream_failed = self.stream_failed.clone();
-        let err_fn = move |err: cpal::Error| {
-            tracing::error!("Audio capture error: {}", err);
-            if matches!(
-                err.kind(),
-                cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated
-            ) {
-                stream_failed.store(true, Ordering::SeqCst);
-            }
-        };
-
-        let stream = match supported_config.sample_format() {
-            SampleFormat::F32 => {
-                let tx = frame_tx.clone();
-                device.build_input_stream(
-                    stream_config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if running.load(Ordering::SeqCst) {
-                            let samples: Vec<i16> = data
-                                .iter()
-                                .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                                .collect();
-                            let _ = tx.try_send(CapturedFrame {
-                                samples,
-                                sample_rate,
-                                num_channels,
-                            });
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-            }
-            SampleFormat::I16 => {
-                let tx = frame_tx.clone();
-                device.build_input_stream(
-                    stream_config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if running.load(Ordering::SeqCst) {
-                            let samples = data.to_vec();
-                            let _ = tx.try_send(CapturedFrame {
-                                samples,
-                                sample_rate,
-                                num_channels,
-                            });
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-            }
-            format => {
-                return Err(CallError::TrackPublishFailed(format!(
-                    "Unsupported audio format: {:?}",
-                    format
-                )));
-            }
-        }
-        .map_err(|e| {
-            CallError::TrackPublishFailed(format!("Failed to build audio stream: {}", e))
-        })?;
-
-        // Start the stream
-        stream.play().map_err(|e| {
-            CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e))
-        })?;
-
+        let frame_tx = spawn_frame_worker(source.clone());
+        // OpenSL ES follows AudioManager routing without AAudio's route-change
+        // disconnects. If the platform does close it, core recovery reuses source.
+        let mut stream = oboe::AudioStreamBuilder::default()
+            .set_input()
+            .set_i16()
+            .set_mono()
+            .set_audio_api(oboe::AudioApi::OpenSLES)
+            .set_input_preset(oboe::InputPreset::VoiceCommunication)
+            .set_sample_rate(48_000)
+            .set_callback(VoiceInput {
+                running: self.running.clone(),
+                failed: self.stream_failed.clone(),
+                tx: frame_tx.clone(),
+            })
+            .open_stream()
+            .map_err(|e| {
+                CallError::DeviceError(format!("Could not open communication microphone: {e:?}"))
+            })?;
+        self.sample_rate = stream.get_sample_rate() as u32;
         self.running.store(!muted, Ordering::SeqCst);
+        if let Err(error) = stream.start() {
+            self.running.store(false, Ordering::SeqCst);
+            return Err(CallError::DeviceError(format!(
+                "Could not start communication microphone: {error:?}"
+            )));
+        }
         self.stream = Some(stream);
-        self.audio_source = Some(audio_source.clone());
+        self.audio_source = Some(source.clone());
         self.frame_tx = Some(frame_tx);
+        Ok(source)
+    }
 
-        tracing::info!("Audio capture started successfully");
-        Ok(audio_source)
+    /// Polling is driven by the core call worker, never by picker visibility.
+    #[cfg(not(target_os = "android"))]
+    pub fn refresh_device(&mut self) {
+        if crate::system::null_audio() || self.audio_source.is_none() {
+            return;
+        }
+        let Ok(devices) = Self::list_devices() else {
+            return;
+        };
+        let desired = self
+            .selected_device
+            .as_ref()
+            .and_then(|id| devices.iter().find(|d| &d.id == id))
+            .or_else(|| devices.iter().find(|d| d.is_default && !d.id.is_empty()));
+        if desired.is_some_and(|d| d.id != self.device_name) {
+            self.stream_failed.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Android can invalidate an input stream when the communication route
@@ -402,9 +516,12 @@ impl AudioCapture {
         }
         let muted = self.recovery_muted.unwrap_or_else(|| self.is_muted());
         let source = self.audio_source.clone();
-        let device = self.selected_device.clone();
+        let requested = self.selected_device.clone();
+        let device = requested.clone();
         self.stop();
-        match self.start_with_source(device.as_deref(), source.clone(), muted) {
+        let result = self.start_with_source(device.as_deref(), source.clone(), muted);
+        self.selected_device = requested;
+        match result {
             Ok(_) => {
                 self.recovery_muted = None;
                 self.set_muted(muted);
@@ -481,6 +598,49 @@ impl Default for AudioCapture {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One bounded consumer serves both platform capture callbacks.
+fn spawn_frame_worker(source: NativeAudioSource) -> mpsc::Sender<CapturedFrame> {
+    // Set up bounded channel + single consumer task instead of spawning per frame
+    let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
+    let source_for_worker = source;
+    tokio::spawn(async move {
+        let mut first_frame = true;
+        let mut first_non_silent = true;
+        let mut first_error = true;
+        while let Some(captured) = frame_rx.recv().await {
+            let frame = AudioFrame {
+                data: Cow::Owned(captured.samples),
+                sample_rate: captured.sample_rate,
+                num_channels: captured.num_channels,
+                samples_per_channel: 0, // recalculated below
+            };
+            let frame = AudioFrame {
+                samples_per_channel: frame.data.len() as u32 / frame.num_channels,
+                ..frame
+            };
+            let non_silent = first_non_silent && frame.data.iter().any(|&s| s != 0);
+            match source_for_worker.capture_frame(&frame).await {
+                Ok(()) => {
+                    if first_frame {
+                        tracing::info!("First microphone frame delivered to LiveKit");
+                        first_frame = false;
+                    }
+                    if non_silent {
+                        tracing::info!("First non-silent microphone frame delivered to LiveKit");
+                        first_non_silent = false;
+                    }
+                }
+                Err(error) if first_error => {
+                    tracing::warn!(%error, "Microphone frame delivery failed");
+                    first_error = false;
+                }
+                Err(_) => {}
+            }
+        }
+    });
+    frame_tx
 }
 
 #[cfg(test)]

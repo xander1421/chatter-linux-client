@@ -23,9 +23,8 @@ export component CallControls inherits GlassSurface {
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
     in property <bool> is-video-call: true;
-    // Phones: the speaker button toggles the call route (earpiece/headset vs
-    // loudspeaker) and `speaker-on` is the route actually applied. Desktop
-    // leaves it false and the button opens the output device picker.
+    // Phones show linked microphone/output routes; desktop shows independent devices.
+    // `speaker-on` reflects the communication route acknowledged by Android.
     in property <bool> speaker-toggle: false;
     in property <bool> speaker-on: false;
     // Shared minimum target at both densities.
@@ -49,28 +48,23 @@ export component CallControls inherits GlassSurface {
         padding-top: (root.height - button-size) / 2;
         padding-bottom: (root.height - button-size) / 2;
 
-        // Audio settings button (device picker). Not on phones
-        // (`speaker-toggle`): one mic, and the route is the speaker button.
-        if !root.speaker-toggle: IconAction {
+        // Android exposes the OS-supported microphone/output pairs.
+        IconAction {
             size: button-size;
             icon: Icons.settings;
-            label: "Audio input settings";
+            label: root.speaker-toggle ? "Microphone and output (linked)" : "Audio input settings";
             active: false;
             clicked => { show-audio-settings(); }
         }
 
-        // Speaker: route toggle on phones, output device picker on desktop
+        // Output picker; Android selects the microphone together with output.
         IconAction {
             size: button-size;
             icon: Icons.volume-2;
-            label: root.speaker-toggle ? "Toggle speaker" : "Audio output settings";
+            label: root.speaker-toggle ? "Output and microphone (linked)" : "Audio output settings";
             active: root.speaker-toggle && root.speaker-on;
             clicked => {
-                if root.speaker-toggle {
-                    root.toggle-speaker();
-                } else {
-                    root.show-audio-output-settings();
-                }
+                root.show-audio-output-settings();
             }
         }
 

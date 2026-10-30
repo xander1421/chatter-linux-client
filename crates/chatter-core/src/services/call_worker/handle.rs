@@ -832,6 +832,14 @@ impl CallWorkerHandle {
         });
     }
 
+    #[cfg(not(target_os = "android"))]
+    pub async fn audio_device_snapshot(&self, output: bool) -> Result<(Vec<crate::calls::AudioDevice>, String), String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.try_send(CallCommand::AudioDeviceSnapshot { output, response: tx })
+            .map_err(|_| "call worker is not running".to_owned())?;
+        rx.await.map_err(|_| "call worker dropped request".to_owned())?
+    }
+
     /// Route remote audio to the named output device.
     pub async fn set_audio_output(&self, device: String) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
