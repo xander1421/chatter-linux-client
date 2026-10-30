@@ -250,10 +250,10 @@ mod reconnect_initialization_tests {
             .microphone_requested
             .store(true, std::sync::atomic::Ordering::SeqCst);
         manager.set_microphone_muted(true);
-        assert!(manager.reconnect_microphone_device().is_some());
+        assert_eq!(manager.reconnect_microphone_device(), Some(None));
         assert!(manager.is_microphone_muted());
         manager.disconnect().await;
-        assert!(manager.reconnect_microphone_device().is_some());
+        assert_eq!(manager.reconnect_microphone_device(), Some(None));
         manager.stop_microphone().await;
         assert!(manager.reconnect_microphone_device().is_none());
     }
