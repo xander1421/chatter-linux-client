@@ -164,7 +164,14 @@ fn call_audio_arrows_are_independent_at_both_densities() {
             is_default: true,
         },
     ])));
-    for (linked, width) in [(false, 1400.0), (true, 360.0), (true, 320.0)] {
+    for (linked, width) in [
+        (false, 1400.0),
+        (false, 400.0),
+        (false, 368.0),
+        (false, 320.0),
+        (true, 360.0),
+        (true, 320.0),
+    ] {
         w.set_is_mobile_platform(linked);
         view.set_call_speaker_toggle(linked);
         let input_name = if linked {
@@ -227,7 +234,7 @@ fn call_audio_arrows_are_independent_at_both_densities() {
                             && pos.y >= 0.0
                             && pos.x + size.width <= width + 0.5
                             && pos.y + size.height <= 800.5,
-                        "Offscreen {label}: {pos:?} {size:?}"
+                        "Offscreen {label}: {pos:?} {size:?}; linked={linked} width={width} fullscreen={fullscreen} video={video}"
                     );
                     for (other, x, y, right, bottom) in &boxes {
                         assert!(

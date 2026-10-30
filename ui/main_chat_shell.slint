@@ -133,10 +133,15 @@ export component MainChatShell inherits Rectangle {
             // The dock and floating header are translucent. Paint the chat
             // canvas across their whole page so list rows cannot show through.
             background: Materials.ambient;
-            x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
-                : SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
+            property <length> normal-sidebar-offset:
+                SidebarPane.sidebar-hidden || CallView.active-call-fullscreen ? 0px
                 : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
                 : Spacing.sidebar-width;
+            // A narrow desktop call needs all seven separate control targets.
+            // Temporarily cover the rail when it would leave less than 308px.
+            x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
+                : CallView.active-call-visible && parent.width - normal-sidebar-offset < 308px
+                ? 0px : normal-sidebar-offset;
             y: 0px;
             width: root.compact-layout ? parent.width : parent.width - self.x;
             height: parent.height;
