@@ -45,19 +45,28 @@ class CallAudioRouter(private val activity: Activity) {
     private var legacyApplied: String? = null
     private var pendingKey: String? = null
     private var requestGeneration = 0
-    private var scoConnected = false
+    private val sco = LegacyScoSession()
     private val scoReceiver = object : BroadcastReceiver() {
+        @Suppress("DEPRECATION")
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED) {
                 val state = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
                 val previous = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_PREVIOUS_STATE, -1)
-                scoConnected = state == AudioManager.SCO_AUDIO_STATE_CONNECTED
+                Log.i(TAG, "SCO state=$state previous=$previous sticky=$isInitialStickyBroadcast requested=${sco.requested} generation=$requestGeneration")
+                val disconnected = sco.update(scoState(state), scoState(previous), isInitialStickyBroadcast)
+                if (sco.requested && sco.connected && !audioManager.isBluetoothScoOn) {
+                    try {
+                        audioManager.isBluetoothScoOn = true
+                    } catch (_: SecurityException) {
+                        legacyApplied?.let { failRequest(it, "SCO routing permission unavailable") }
+                        return
+                    }
+                }
                 val failed = legacyApplied?.takeIf { key -> communicationDevices().any {
                     deviceKey(it) == key && routeFor(it) == ROUTE_BLUETOOTH
                 } }
-                if (state == AudioManager.SCO_AUDIO_STATE_DISCONNECTED && failed != null &&
-                    (previous == AudioManager.SCO_AUDIO_STATE_CONNECTING || previous == AudioManager.SCO_AUDIO_STATE_CONNECTED)) {
-                    failRequest(failed)
+                if (disconnected && failed != null) {
+                    failRequest(failed, "SCO disconnected")
                 } else reportDevices(false)
             }
         }
@@ -128,7 +137,6 @@ class CallAudioRouter(private val activity: Activity) {
         pendingKey = null
         requestGeneration += 1
         legacyApplied = null
-        scoConnected = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.clearCommunicationDevice()
         } else {
@@ -151,8 +159,20 @@ class CallAudioRouter(private val activity: Activity) {
                 return@post
             }
             val route = routeFor(device)
+            // Initial inventory and registerAudioDeviceCallback can both ask
+            // for the same route. Do not add SCO client references or postpone
+            // the original acknowledgement deadline on duplicate requests.
+            val alreadyApplied = if (Build.VERSION.SDK_INT >= 31) {
+                audioManager.communicationDevice?.let { deviceKey(it) } == key
+            } else legacyApplied == key && (route != ROUTE_BLUETOOTH || sco.connected)
+            if (pendingKey == key || alreadyApplied) {
+                Log.i(TAG, "route request coalesced kind=$route generation=$requestGeneration")
+                reportDevices(false)
+                return@post
+            }
             pendingKey = key
             val generation = ++requestGeneration
+            Log.i(TAG, "route request kind=$route generation=$generation mode=${audioManager.mode}")
             var accepted = true
             try {
                 if (Build.VERSION.SDK_INT >= 31) {
@@ -170,17 +190,20 @@ class CallAudioRouter(private val activity: Activity) {
             }
             reportDevices(false)
             if (!accepted) {
-                failRequest(key)
+                failRequest(key, "request refused")
             } else if (pendingKey == key) {
                 handler.postDelayed({
-                    if (active && generation == requestGeneration && pendingKey == key) failRequest(key)
+                    if (active && generation == requestGeneration && pendingKey == key) failRequest(key, "acknowledgement timeout")
                 }, 30_000)
             }
         }
     }
 
-    private fun failRequest(key: String) {
+    private fun failRequest(key: String, reason: String) {
+        if (!active) return
+        Log.w(TAG, "route failed reason=$reason generation=$requestGeneration sco.requested=${sco.requested} sco.connected=${sco.connected}")
         pendingKey = null
+        requestGeneration += 1
         try {
             if (Build.VERSION.SDK_INT >= 31) audioManager.clearCommunicationDevice()
             else {
@@ -197,14 +220,32 @@ class CallAudioRouter(private val activity: Activity) {
     /** Android 8–11: speakerphone + SCO flags. `null` clears both. */
     @Suppress("DEPRECATION")
     private fun legacyRoute(route: Int?) {
+        // Disable the speaker BEFORE starting SCO. Repeatedly writing false
+        // after SCO has connected can clear FOR_COMMUNICATION on legacy hosts.
         if (route == ROUTE_BLUETOOTH) {
-            audioManager.startBluetoothSco()
-            audioManager.isBluetoothScoOn = true
-        } else if (audioManager.isBluetoothScoOn) {
-            audioManager.isBluetoothScoOn = false
-            audioManager.stopBluetoothSco()
+            if (audioManager.isSpeakerphoneOn) audioManager.isSpeakerphoneOn = false
+            if (sco.begin()) {
+                audioManager.startBluetoothSco()
+                Log.i(TAG, "SCO start generation=$requestGeneration")
+            }
+            // Enable the routing flag on CONNECTED, never treat this setter as
+            // an acknowledgement of a successful asynchronous SCO connection.
+        } else {
+            if (audioManager.isBluetoothScoOn) audioManager.isBluetoothScoOn = false
+            if (sco.end()) {
+                audioManager.stopBluetoothSco()
+                Log.i(TAG, "SCO stop generation=$requestGeneration")
+            }
+            val speaker = route == ROUTE_SPEAKER
+            if (audioManager.isSpeakerphoneOn != speaker) audioManager.isSpeakerphoneOn = speaker
         }
-        audioManager.isSpeakerphoneOn = route == ROUTE_SPEAKER
+    }
+
+    private fun scoState(state: Int): LegacyScoSession.State = when (state) {
+        AudioManager.SCO_AUDIO_STATE_CONNECTED -> LegacyScoSession.State.CONNECTED
+        AudioManager.SCO_AUDIO_STATE_CONNECTING -> LegacyScoSession.State.CONNECTING
+        AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> LegacyScoSession.State.DISCONNECTED
+        else -> LegacyScoSession.State.UNKNOWN
     }
 
     private fun routeFor(device: AudioDeviceInfo): Int? = when {
@@ -247,10 +288,13 @@ class CallAudioRouter(private val activity: Activity) {
             // Legacy SCO connection is asynchronous: don't claim Bluetooth
             // until AudioManager reports that SCO is on.
             legacyApplied?.takeIf { key -> devices.any {
-                deviceKey(it) == key && (routeFor(it) != ROUTE_BLUETOOTH || scoConnected)
+                deviceKey(it) == key && (routeFor(it) != ROUTE_BLUETOOTH || sco.connected)
             } }
         }
-        if (applied != null && applied == pendingKey) pendingKey = null
+        if (applied != null && applied == pendingKey) {
+            Log.i(TAG, "route acknowledged generation=$requestGeneration sco.connected=${sco.connected}")
+            pendingKey = null
+        }
         val rows = JSONArray()
         devices.forEach { device ->
             val name = when (routeFor(device)) {
