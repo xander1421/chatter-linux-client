@@ -392,40 +392,59 @@ pub fn auto_register_gifs_from_messages(
 
     let messages = w.global::<crate::ChatPane>().get_messages();
     let mut gif_ids = Vec::new();
-
     for msg_idx in 0..messages.row_count() {
         if let Some(msg) = messages.row_data(msg_idx) {
-            for att_idx in 0..msg.attachments.row_count() {
-                if let Some(att) = msg.attachments.row_data(att_idx) {
-                    let id_str = att.id.as_str();
+            collect_unregistered_gif_ids(&msg, &mut gif_ids);
+        }
+    }
+    register_gif_ids(gif_ids, ui_ctx, window_weak);
+}
 
-                    // QUICK CHECK: Already registered? Skip expensive string conversions/checks
-                    if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(id_str)) {
-                        continue;
-                    }
-
-                    let id = id_str.to_string();
-                    let mime = att.mime_type.to_string();
-                    let filename = att.filename.to_string();
-
-                    // GIFs are now real attachments (uploaded to our CDN)
-                    if mime == "image/gif" || filename.to_lowercase().ends_with(".gif") {
-                        gif_ids.push(id);
-                    }
-                }
+/// Append the not-yet-registered GIF attachment ids in one message.
+fn collect_unregistered_gif_ids(msg: &crate::MessageItemData, out: &mut Vec<String>) {
+    use slint::Model;
+    for att_idx in 0..msg.attachments.row_count() {
+        if let Some(att) = msg.attachments.row_data(att_idx) {
+            let id_str = att.id.as_str();
+            // QUICK CHECK: already registered? skip the string conversions.
+            if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(id_str)) {
+                continue;
+            }
+            let mime = att.mime_type.to_string();
+            let filename = att.filename.to_string();
+            // GIFs are real attachments (uploaded to our CDN).
+            if mime == "image/gif" || filename.to_lowercase().ends_with(".gif") {
+                out.push(id_str.to_string());
             }
         }
     }
+}
+
+fn register_gif_ids(
+    gif_ids: Vec<String>,
+    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
+    window_weak: Weak<MainWindow>,
+) {
     if gif_ids.is_empty() {
         return;
     }
-
     tracing::debug!("Auto-registering {} GIF attachments", gif_ids.len());
-
-    // Register each GIF (spawns background threads)
     for att_id in gif_ids {
         register_gif_attachment(att_id, ui_ctx.clone(), window_weak.clone());
     }
+}
+
+/// Register GIFs from a single message — the hot receive/send path. Avoids
+/// rescanning the whole model on every added message (older messages' GIFs are
+/// already registered from their own receive/open).
+pub fn auto_register_gifs_in_message(
+    window_weak: Weak<MainWindow>,
+    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
+    msg: &crate::MessageItemData,
+) {
+    let mut gif_ids = Vec::new();
+    collect_unregistered_gif_ids(msg, &mut gif_ids);
+    register_gif_ids(gif_ids, ui_ctx, window_weak);
 }
 
 /// Register a single GIF attachment for inline animation.
