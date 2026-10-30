@@ -48,9 +48,12 @@ class CallAudioRouter(private val activity: Activity) {
     }
 
     private fun startOnMain() {
-        if (active) return
-        CallMediaService.start(activity)
+        if (active) {
+            CallMediaService.start(activity)
+            return
+        }
         active = true
+        CallMediaService.start(activity)
         savedMode = audioManager.mode
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -63,6 +66,13 @@ class CallAudioRouter(private val activity: Activity) {
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager.registerAudioDeviceCallback(deviceCallback, handler)
         Log.i(TAG, "call audio started")
+    }
+
+    /** The dialling UI may have activated routing before permission admission. */
+    fun retryMediaService() {
+        handler.post {
+            if (active && !activity.isDestroyed) CallMediaService.start(activity)
+        }
     }
 
     /** The call ended: hand the audio system back as it was. */
