@@ -1050,8 +1050,19 @@ class MainActivity : GameActivity() {
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
                 try {
-                    provider.unbindAll()
-                    provider.bindToLifecycle(this, selector, analysis)
+                    CallMediaService.withCamera(this) { owner ->
+                        if (isDestroyed || requestGeneration != cameraRequestGeneration) {
+                            analysis.clearAnalyzer()
+                            return@withCamera
+                        }
+                        try {
+                            provider.unbindAll()
+                            provider.bindToLifecycle(owner, selector, analysis)
+                        } catch (error: Exception) {
+                            Log.e(TAG, "Call camera binding failed", error)
+                            analysis.clearAnalyzer()
+                        }
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "bindToLifecycle failed", e)
                 }

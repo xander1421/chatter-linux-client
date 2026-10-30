@@ -1119,6 +1119,11 @@ impl VideoCapture {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// Reuse the live capture when replacing only the room transport.
+    pub(crate) fn active_source(&self) -> Option<NativeVideoSource> {
+        self.is_running().then(|| self.video_source.clone()).flatten()
+    }
+
     /// Get current device path.
     pub fn device_path(&self) -> &str {
         &self.device_path

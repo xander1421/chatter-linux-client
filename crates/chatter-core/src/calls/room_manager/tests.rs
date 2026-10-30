@@ -231,6 +231,19 @@ mod reconnect_initialization_tests {
     }
 
     #[tokio::test]
+    async fn repeated_default_microphone_publish_preserves_muted_capture() {
+        let (manager, _) = RoomManager::new();
+        manager.microphone_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+        manager.set_microphone_muted(true);
+        // No room is installed: success proves a repeated default request did
+        // not enter the replacement/unpublication path (which needs a room).
+        manager.publish_microphone(None).await.unwrap();
+        assert!(manager.is_microphone_muted());
+        assert!(matches!(manager.publish_microphone(Some("other")).await,
+            Err(CallError::NotInCall)));
+    }
+
+    #[tokio::test]
     async fn muted_microphone_request_survives_teardown_until_explicit_stop() {
         let (manager, _) = RoomManager::new();
         manager

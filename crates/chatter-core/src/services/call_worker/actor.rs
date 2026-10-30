@@ -114,6 +114,7 @@ pub(super) fn run_call_worker(
                 tokio::select! {
                     biased;
                     _ = camera_health.tick() => {
+                        room_manager.recover_microphone_stream();
                         if room_manager.camera_capture_failed() {
                             room_manager.stop_camera().await;
                             if let Some(state) = active_call.borrow().as_ref() {

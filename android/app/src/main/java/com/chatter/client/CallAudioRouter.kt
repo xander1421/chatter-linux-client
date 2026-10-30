@@ -27,7 +27,7 @@ import android.util.Log
  * Everything runs on the main looper, so calls arriving from Rust's threads are
  * serialized with the device callbacks.
  */
-class CallAudioRouter(activity: Activity) {
+class CallAudioRouter(private val activity: Activity) {
     private val audioManager = activity.getSystemService(AudioManager::class.java)
     private val powerManager = activity.getSystemService(PowerManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
@@ -49,6 +49,7 @@ class CallAudioRouter(activity: Activity) {
 
     private fun startOnMain() {
         if (active) return
+        CallMediaService.start(activity)
         active = true
         savedMode = audioManager.mode
         val attrs = AudioAttributes.Builder()
@@ -72,6 +73,7 @@ class CallAudioRouter(activity: Activity) {
     private fun stopOnMain() {
         if (!active) return
         active = false
+        CallMediaService.stop(activity)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.clearCommunicationDevice()

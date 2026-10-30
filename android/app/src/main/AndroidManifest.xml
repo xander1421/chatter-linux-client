@@ -129,6 +129,8 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Continuous end-to-end encrypted message reception using self-hosted push and anonymous Tor mailboxes without third-party push infrastructure" />
         </service>
+        <service android:name=".CallMediaService" android:exported="false"
+            android:foregroundServiceType="camera|microphone" />
         <service android:name=".ScreenShareService" android:exported="false"
             android:foregroundServiceType="mediaProjection" />
     </application>

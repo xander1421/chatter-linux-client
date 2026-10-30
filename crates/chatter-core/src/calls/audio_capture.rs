@@ -49,6 +49,8 @@ pub struct AudioCapture {
     num_channels: u32,
     /// Sender for the capture worker (dropped on stop to shut it down).
     frame_tx: Option<mpsc::Sender<CapturedFrame>>,
+    stream_failed: Arc<AtomicBool>,
+    recovery_muted: Option<bool>,
 }
 
 impl AudioCapture {
@@ -62,6 +64,8 @@ impl AudioCapture {
             sample_rate: 48000,
             num_channels: 1,
             frame_tx: None,
+            stream_failed: Arc::new(AtomicBool::new(false)),
+            recovery_muted: None,
         }
     }
 
@@ -163,29 +167,44 @@ impl AudioCapture {
     ///
     /// Returns the NativeAudioSource that can be used to create a LiveKit track.
     pub fn start(&mut self, device_id: Option<&str>) -> Result<NativeAudioSource, CallError> {
+        self.start_with_source(device_id, None, false)
+    }
+
+    fn start_with_source(
+        &mut self,
+        device_id: Option<&str>,
+        existing_source: Option<NativeAudioSource>,
+        muted: bool,
+    ) -> Result<NativeAudioSource, CallError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CallError::TrackPublishFailed(
                 "Audio capture already running".to_string(),
             ));
         }
 
+        // A disconnected room may have signalled stop without dropping CPAL.
+        // Release that device before opening another Android recording stream.
+        self.stop();
+
         if crate::system::null_audio() {
             // A source LiveKit can publish, never fed by a microphone.
             self.sample_rate = 48_000;
             self.num_channels = 1;
             self.device_name = "null".to_string();
-            let source = NativeAudioSource::new(
-                AudioSourceOptions {
-                    echo_cancellation: false,
-                    noise_suppression: false,
-                    auto_gain_control: false,
-                },
-                self.sample_rate,
-                self.num_channels,
-                50,
-            );
+            let source = existing_source.unwrap_or_else(|| {
+                NativeAudioSource::new(
+                    AudioSourceOptions {
+                        echo_cancellation: false,
+                        noise_suppression: false,
+                        auto_gain_control: false,
+                    },
+                    self.sample_rate,
+                    self.num_channels,
+                    50,
+                )
+            });
             self.audio_source = Some(source.clone());
-            self.running.store(true, Ordering::SeqCst);
+            self.running.store(!muted, Ordering::SeqCst);
             return Ok(source);
         }
 
@@ -235,16 +254,18 @@ impl AudioCapture {
         );
 
         // Create LiveKit audio source
-        let audio_source = NativeAudioSource::new(
-            AudioSourceOptions {
-                echo_cancellation: true,
-                noise_suppression: true,
-                auto_gain_control: true,
-            },
-            self.sample_rate,
-            self.num_channels,
-            50, // 50ms buffer
-        );
+        let audio_source = existing_source.unwrap_or_else(|| {
+            NativeAudioSource::new(
+                AudioSourceOptions {
+                    echo_cancellation: true,
+                    noise_suppression: true,
+                    auto_gain_control: true,
+                },
+                self.sample_rate,
+                self.num_channels,
+                50, // 50ms buffer
+            )
+        });
 
         // Set up bounded channel + single consumer task instead of spawning per frame
         let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
@@ -293,7 +314,16 @@ impl AudioCapture {
 
         // Build the stream based on sample format
         let stream_config: StreamConfig = supported_config.clone().into();
-        let err_fn = |err| tracing::error!("Audio capture error: {}", err);
+        let stream_failed = self.stream_failed.clone();
+        let err_fn = move |err: cpal::Error| {
+            tracing::error!("Audio capture error: {}", err);
+            if matches!(
+                err.kind(),
+                cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated
+            ) {
+                stream_failed.store(true, Ordering::SeqCst);
+            }
+        };
 
         let stream = match supported_config.sample_format() {
             SampleFormat::F32 => {
@@ -351,13 +381,38 @@ impl AudioCapture {
             CallError::TrackPublishFailed(format!("Failed to start audio stream: {}", e))
         })?;
 
-        self.running.store(true, Ordering::SeqCst);
+        self.running.store(!muted, Ordering::SeqCst);
         self.stream = Some(stream);
         self.audio_source = Some(audio_source.clone());
         self.frame_tx = Some(frame_tx);
 
         tracing::info!("Audio capture started successfully");
         Ok(audio_source)
+    }
+
+    /// Android can invalidate an input stream when the communication route
+    /// changes. Reopen the device without replacing the source or publication.
+    pub fn recover_stream(&mut self) -> Result<(), CallError> {
+        if !self.stream_failed.swap(false, Ordering::SeqCst) || self.audio_source.is_none() {
+            return Ok(());
+        }
+        let muted = self.recovery_muted.unwrap_or_else(|| self.is_muted());
+        let source = self.audio_source.clone();
+        let device = self.device_name.clone();
+        self.stop();
+        match self.start_with_source(Some(&device), source.clone(), muted) {
+            Ok(_) => {
+                self.recovery_muted = None;
+                self.set_muted(muted);
+                Ok(())
+            }
+            Err(error) => {
+                self.audio_source = source;
+                self.recovery_muted = Some(muted);
+                self.stream_failed.store(true, Ordering::SeqCst);
+                Err(error)
+            }
+        }
     }
 
     /// Signal audio capture to stop (non-blocking).
@@ -376,6 +431,8 @@ impl AudioCapture {
             drop(stream);
         }
         self.audio_source = None;
+        self.recovery_muted = None;
+        self.stream_failed.store(false, Ordering::SeqCst);
         tracing::info!("Audio capture stopped");
     }
 
@@ -391,16 +448,17 @@ impl AudioCapture {
 
     /// Toggle mute (stops/starts the capture stream).
     pub fn set_muted(&mut self, muted: bool) {
-        if muted {
-            self.running.store(false, Ordering::SeqCst);
-        } else {
-            self.running.store(true, Ordering::SeqCst);
+        if self.recovery_muted.is_some() {
+            self.recovery_muted = Some(muted);
+            return;
         }
+        self.running.store(!muted, Ordering::SeqCst);
     }
 
     /// Check if muted.
     pub fn is_muted(&self) -> bool {
-        !self.running.load(Ordering::SeqCst)
+        self.recovery_muted
+            .unwrap_or_else(|| !self.running.load(Ordering::SeqCst))
     }
 }
 
