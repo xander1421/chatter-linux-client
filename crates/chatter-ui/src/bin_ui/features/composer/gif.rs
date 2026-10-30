@@ -389,7 +389,18 @@ async fn fetch_full_gif_frames(
     id: String,
     url: &str,
     ui_ctx: &std::sync::Arc<ChatterClient>,
+    generation: u64,
+    session: chatter_core::client::SessionGuard,
 ) -> Option<RawGifFrames> {
+    // Bound fetched originals waiting for shared decode admission as well.
+    static FETCH: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
+    let current =
+        move || session.is_current() && generation == crate::bin_ui::gif_state::picker_generation();
+    let fetch = FETCH.clone().acquire_owned().await.ok()?;
+    if !current() {
+        return None;
+    }
     let bytes = match ui_ctx.fetch_gif_media(url).await {
         Ok(b) => b,
         Err(_) => {
@@ -398,57 +409,63 @@ async fn fetch_full_gif_frames(
         }
     };
 
-    use image::AnimationDecoder;
-    use image::codecs::gif::GifDecoder;
-    use std::io::Cursor;
-
-    let cursor = Cursor::new(&bytes);
-    let decoder = match GifDecoder::new(cursor) {
-        Ok(d) => d,
-        Err(_) => {
-            tracing::warn!("GIF preview decode failed");
-            return None;
-        }
-    };
-
-    let frames_iter = decoder.into_frames();
-    let mut frames = Vec::new();
-
-    for frame_result in frames_iter {
-        let frame = match frame_result {
-            Ok(f) => f,
-            _ => continue,
-        };
-
-        let delay = frame.delay();
-        let (numer, denom) = delay.numer_denom_ms();
-        let delay_ms = if denom == 0 {
-            100
-        } else {
-            (numer as u64) / (denom as u64)
-        };
-        let delay_ms = delay_ms.max(20);
-
-        let buffer = frame.into_buffer();
-        let (width, height) = buffer.dimensions();
-        let raw_data = buffer.into_raw();
-
-        let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-            &raw_data, width, height,
-        );
-        frames.push((pixels, delay_ms));
-
-        // Limit frames for picker performance
-        if frames.len() >= 30 {
-            break;
-        }
-    }
-
-    if frames.is_empty() {
+    if !current() {
         return None;
     }
-
-    Some(RawGifFrames { id, frames })
+    chatter_core::services::attachment::run_attachment_work(move || {
+        let _fetch = fetch;
+        if !current() {
+            return None;
+        }
+        use image::AnimationDecoder;
+        let decoder =
+            chatter_core::media::gif::bounded_gif_decoder(std::io::Cursor::new(&bytes)).ok()?;
+        let mut selected = chatter_core::media::gif::DecimatedGif::default();
+        for frame in decoder.into_frames() {
+            if !current() {
+                return None;
+            }
+            let frame = frame.ok()?;
+            let (numer, denom) = frame.delay().numer_denom_ms();
+            let delay = if denom == 0 {
+                100
+            } else {
+                (numer as u64 / denom as u64).max(20)
+            };
+            let buffer = frame.into_buffer();
+            let (w, h) = buffer.dimensions();
+            let (raw, w, h) =
+                crate::bin_ui::gif_state::fit_frame(buffer.into_raw(), w, h, 160, 160);
+            if raw.is_empty() {
+                continue;
+            }
+            let size = raw.len();
+            let pixels =
+                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&raw, w, h);
+            selected = chatter_core::media::gif::decimate_gif_frame(
+                selected,
+                pixels,
+                delay,
+                size,
+                30,
+                2 * 1024 * 1024,
+            );
+        }
+        if selected.frames.is_empty() {
+            return None;
+        }
+        Some(RawGifFrames {
+            id,
+            frames: selected
+                .frames
+                .into_iter()
+                .map(|f| (f.frame, f.delay_ms))
+                .collect(),
+        })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Publish the provider's answer as the results section, then fetch its
@@ -516,8 +533,17 @@ fn spawn_previews(
         let preview_url = preview_url.clone();
         let ui_ctx_fetch = ui_ctx.clone();
 
+        let picker_generation = crate::bin_ui::gif_state::picker_generation();
+        let preview_session = ui_ctx.session_guard();
         tokio::spawn(async move {
-            let decoded = fetch_full_gif_frames(gif_id.clone(), &preview_url, &ui_ctx_fetch).await;
+            let decoded = fetch_full_gif_frames(
+                gif_id.clone(),
+                &preview_url,
+                &ui_ctx_fetch,
+                picker_generation,
+                preview_session,
+            )
+            .await;
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 if !request_is_current(&w, &ui_ctx_fetch, generation, session) {

@@ -483,7 +483,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Show our own reply in the panel immediately — the send path
                     // stores it locally but emits no MessageReceived event, so
                     // without this it only appeared after re-opening the thread.
-                    let reply = thread_reply_display(&ui_ctx, &msg);
+                    let Some(reply) = thread_reply_display(&ui_ctx, &msg).await else { return; };
                     let current_user_id = ui_ctx
                         .session_current_user_id()
                         .map(|id| id.to_string())
@@ -583,7 +583,7 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                     |m| ui_ctx.reply_parent_missing_for(m),
                     |m| ui_ctx.reply_parent_media(m),
                     |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-                );
+                ).await;
                 let current_user_id = ui_ctx
                     .session_current_user_id()
                     .map(|id| id.to_string())
@@ -842,11 +842,11 @@ pub(crate) fn remove_thread_replies_where(
 ///
 /// Returns the thread-safe display data — `MessageItemData` holds a
 /// `slint::Image` and can't cross the thread hop.
-pub fn thread_reply_display(
+pub async fn thread_reply_display(
     ui_ctx: &Arc<ChatterClient>,
     message: &Message,
-) -> crate::bin_ui::converters::MessageDisplayData {
-    let mut display = messages_to_display_batch(
+) -> Option<crate::bin_ui::converters::MessageDisplayData> {
+    let display = messages_to_display_batch(
         std::slice::from_ref(message),
         |ms| ui_ctx.message_sender_display_names(ms),
         |m| ui_ctx.message_sender_avatar(m),
@@ -855,8 +855,8 @@ pub fn thread_reply_display(
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),
         |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-    );
-    display.remove(0)
+    ).await;
+    display.into_iter().next()
 }
 
 pub fn load_thread_data(
@@ -908,7 +908,7 @@ pub fn load_thread_data(
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
                 |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-            );
+            ).await;
             let current_user_id = ui_ctx
                 .session_current_user_id()
                 .map(|id| id.to_string())

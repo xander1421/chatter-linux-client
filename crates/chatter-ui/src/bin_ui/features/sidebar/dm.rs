@@ -391,7 +391,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     |m| ui_ctx.reply_parent_missing_for(m),
                     |m| ui_ctx.reply_parent_media(m),
                     |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-                );
+                ).await;
                 crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
 
                 let initial_count = display_messages.len();
@@ -507,7 +507,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
                 |m| ui_ctx.mention_members(&m.conversation_type, &m.conversation_id),
-            );
+            ).await;
             crate::bin_ui::converters::mark_disappearing(&ui_ctx, &mut display_messages);
             tracing::info!(kind = "dm", stage = "display_built", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 

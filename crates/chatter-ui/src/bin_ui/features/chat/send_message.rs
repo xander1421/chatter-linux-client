@@ -1027,37 +1027,35 @@ async fn deliver_inner(
     };
 
     // Decode attachment thumbnails off the UI thread.
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
     let mut attachment_display: Vec<_> = ui_result
         .attachments
         .iter()
         .map(attachment_to_display_data)
         .collect();
-    #[cfg(target_os = "android")]
-    {
-        let client = ui_ctx.clone();
-        attachment_display = tokio::task::spawn_blocking(move || {
-            for (index, att) in attachment_display.iter_mut().enumerate() {
-                if index < 4 {
-                    att.derive_video_thumbnail(&client);
-                }
-            }
-            crate::bin_ui::converters::decode_inline_thumbnails(&mut attachment_display);
-            attachment_display
-        })
-        .await
-        .unwrap_or_default();
-    }
-    #[cfg(not(target_os = "android"))]
-    crate::bin_ui::converters::decode_inline_thumbnails(&mut attachment_display);
+    let client = ui_ctx.clone();
+    let reply_bytes = ui_result.reply_thumbnail_bytes;
+    let (mut attachment_display, mut reply_thumbnail_rgba) = chatter_core::services::attachment::run_attachment_work(move || {
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            return (attachment_display, None);
+        }
+        #[cfg(target_os = "android")]
+        for att in attachment_display.iter_mut().take(4) {
+            att.derive_video_thumbnail(&client);
+        }
+        let _ = client;
+        crate::bin_ui::converters::decode_inline_thumbnails_guarded(&mut attachment_display, generation);
+        let reply = reply_bytes.as_deref().and_then(|bytes| chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes).ok());
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            for att in &mut attachment_display { att.thumbnail_pixels = None; }
+            return (attachment_display, None);
+        }
+        (attachment_display, reply)
+    }).await.unwrap_or_else(|_| (ui_result.attachments.iter().map(attachment_to_display_data).collect(), None));
 
     let ui_ctx_for_gifs = ui_ctx.clone();
     let sent_text = text.clone();
     let timestamp_str = ui_result.timestamp_display.clone();
-    let reply_thumbnail_rgba = ui_result
-        .reply_thumbnail_bytes
-        .as_ref()
-        .and_then(|bytes| image::load_from_memory(bytes).ok())
-        .map(|img| img.to_rgba8());
     let reply_media = ui_result.reply_parent_media.clone();
     let msg_id = ui_result.message_id_effective.clone();
     let delivery_status = ui_result.delivery_status;
@@ -1071,6 +1069,10 @@ async fn deliver_inner(
     let _ = slint::invoke_from_event_loop(move || {
         if !ui_ctx.composer_session_is_current(session_revision) {
             return;
+        }
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            for attachment in &mut attachment_display { attachment.thumbnail_pixels = None; }
+            reply_thumbnail_rgba = None;
         }
         let Some(w) = weak.upgrade() else {
             tracing::error!("[UI_SEND] weak.upgrade() returned None; own bubble dropped");

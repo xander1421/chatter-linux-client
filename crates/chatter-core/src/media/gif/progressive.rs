@@ -9,6 +9,30 @@ use crate::error::MediaError;
 
 use super::animator::GifFrame;
 
+/// Source canvas admission applies before any GIF frame allocation, separately
+/// from retained animation samples. Works with authenticated range readers.
+pub fn bounded_gif_decoder<R: std::io::BufRead + std::io::Seek>(
+    reader: R,
+) -> Result<GifDecoder<R>, MediaError> {
+    use image::ImageDecoder;
+    let mut decoder =
+        GifDecoder::new(reader).map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+    let (w, h) = decoder.dimensions();
+    if u64::from(w) * u64::from(h) > super::super::image_processor::PREVIEW_PIXELS {
+        return Err(MediaError::InvalidFormat(
+            "GIF source pixel budget exceeded".into(),
+        ));
+    }
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(super::super::image_processor::PREVIEW_ALLOC_BYTES);
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    decoder
+        .set_limits(limits)
+        .map_err(|e| MediaError::InvalidFormat(e.to_string()))?;
+    Ok(decoder)
+}
+
 /// Decode first frame only (for quick preview).
 ///
 /// Much faster than full decode - only processes first frame.
@@ -21,8 +45,7 @@ pub fn decode_first_frame_only(bytes: &[u8]) -> Result<Option<GifFrame>, MediaEr
     }
 
     let cursor = Cursor::new(bytes);
-    let decoder = GifDecoder::new(cursor)
-        .map_err(|e| MediaError::InvalidFormat(format!("GIF decode error: {}", e)))?;
+    let decoder = bounded_gif_decoder(cursor)?;
 
     let mut frames_iter = decoder.into_frames();
 
@@ -68,5 +91,53 @@ mod tests {
         let png_bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         let result = decode_first_frame_only(&png_bytes);
         assert!(result.is_err() || result.unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod source_budget_tests {
+    use super::*;
+    #[test]
+    fn tiny_encoded_gif_cannot_allocate_an_unbounded_canvas() {
+        let mut bytes = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut bytes)
+            .encode_frame(image::Frame::new(image::RgbaImage::new(1, 1)))
+            .unwrap();
+        bytes[6..8].copy_from_slice(&65535u16.to_le_bytes());
+        bytes[8..10].copy_from_slice(&65535u16.to_le_bytes());
+        let error = match bounded_gif_decoder(Cursor::new(&bytes)) {
+            Ok(_) => panic!("oversized canvas admitted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("pixel budget"), "{error}");
+    }
+
+    #[test]
+    fn bounded_reader_preserves_frame_order_and_delays() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            for color in [10, 80, 150] {
+                let frame = image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(16, 8, image::Rgba([color, 0, 0, 255])),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(40, 1),
+                );
+                encoder.encode_frame(frame).unwrap();
+            }
+        }
+        let frames: Vec<_> =
+            bounded_gif_decoder(std::io::BufReader::with_capacity(7, Cursor::new(bytes)))
+                .unwrap()
+                .into_frames()
+                .collect::<Result<_, _>>()
+                .unwrap();
+        assert_eq!(frames.len(), 3);
+        for (frame, color) in frames.iter().zip([10, 80, 150]) {
+            assert_eq!(frame.buffer().dimensions(), (16, 8));
+            assert_eq!(frame.buffer().get_pixel(0, 0)[0], color);
+            assert_eq!(frame.delay().numer_denom_ms(), (40, 1));
+        }
     }
 }

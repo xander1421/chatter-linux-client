@@ -9,11 +9,11 @@ use crate::{MessageItemData, RichTextBlock};
 
 use super::attachment::{
     AttachmentDisplayData, assign_album_positions, attachment_to_display_data,
-    decode_inline_thumbnails, standalone_attachment_indices,
+    standalone_attachment_indices,
 };
 use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
-use chatter_core::domain::mention::MentionMember;
 use super::utils::{format_count, reaction_counts_to_entries};
+use chatter_core::domain::mention::MentionMember;
 
 /// A message body as a row renders it: `rich_content` is the blocks the
 /// bubble draws (inline runs as one `StyledText` each, fenced code blocks on
@@ -86,6 +86,9 @@ pub fn apply_edit(
 /// Data needed to create message UI (can be sent across threads).
 #[derive(Clone, Debug)]
 pub struct MessageDisplayData {
+    /// Cache lifetime of prepared pixels; publication after pause/logout keeps
+    /// metadata placeholders instead of restoring revoked images.
+    pub prepared_generation: Option<u64>,
     pub mention_members: Vec<MentionMember>,
     pub mention_broadcast: bool,
     pub message_id: String,
@@ -165,12 +168,13 @@ pub struct MessageDisplayData {
 
 impl MessageDisplayData {
     /// Pre-decode all thumbnails (attachments, avatar, reply bubble) before invoke_from_event_loop.
-    pub fn decode_attachment_thumbnails(&mut self) {
-        decode_inline_thumbnails(&mut self.attachments);
+    pub fn decode_attachment_thumbnails(&mut self, generation: u64) {
+        super::decode_inline_thumbnails_guarded(&mut self.attachments, generation);
 
         if self.sender_avatar_decoded.is_none() {
             if let Some(bytes) = &self.sender_avatar_bytes {
-                self.sender_avatar_decoded = crate::bin_ui::decode_cache::avatar(bytes);
+                self.sender_avatar_decoded =
+                    crate::bin_ui::decode_cache::avatar_guarded(bytes, generation);
             }
         }
 
@@ -181,11 +185,17 @@ impl MessageDisplayData {
         // Quote thumbnails are small and determine the quote's first layout.
         if let Some(bytes) = &self.reply_to_thumbnail_bytes {
             if !bytes.is_empty() {
-                self.reply_to_thumbnail_decoded = image::load_from_memory(bytes).ok().map(|img| {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    crate::bin_ui::decode_cache::Pixels::clone_from_slice(rgba.as_raw(), w, h)
-                });
+                self.reply_to_thumbnail_decoded =
+                    chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes)
+                        .ok()
+                        .map(|rgba| {
+                            let (w, h) = rgba.dimensions();
+                            crate::bin_ui::decode_cache::Pixels::clone_from_slice(
+                                rgba.as_raw(),
+                                w,
+                                h,
+                            )
+                        });
             }
         }
     }
@@ -203,6 +213,9 @@ impl MessageDisplayData {
     }
 
     fn to_slint_with_media(&self, current_user_id: &str, media_ready: bool) -> MessageItemData {
+        let pixels_current =
+            self.prepared_generation == Some(crate::bin_ui::decode_cache::thumbnail_generation());
+        let media_ready = media_ready && pixels_current;
         let mut slint_attachments: Vec<crate::MessageAttachmentData> = self
             .attachments
             .iter()
@@ -246,19 +259,22 @@ impl MessageDisplayData {
             matches
         };
 
-        let (sender_avatar_source, has_avatar) = if let Some(pixels) = &self.sender_avatar_decoded {
+        let (sender_avatar_source, has_avatar) = if let Some(pixels) = self
+            .sender_avatar_decoded
+            .as_ref()
+            .filter(|_| pixels_current)
+        {
             (slint::Image::from_rgba8(pixels.clone()), true)
-        } else if let Some(bytes) = &self.sender_avatar_bytes {
-            match crate::bin_ui::decode_cache::avatar(bytes) {
-                Some(pixels) => (slint::Image::from_rgba8(pixels), true),
-                None => (slint::Image::default(), false),
-            }
         } else {
             (slint::Image::default(), false)
         };
 
         let (reply_to_thumbnail, reply_to_has_thumbnail, reply_to_thumb_w, reply_to_thumb_h) =
-            if let Some(pixels) = &self.reply_to_thumbnail_decoded {
+            if let Some(pixels) = self
+                .reply_to_thumbnail_decoded
+                .as_ref()
+                .filter(|_| pixels_current)
+            {
                 let (w, h) = (pixels.width(), pixels.height());
                 (
                     slint::Image::from_rgba8(pixels.clone()),
@@ -360,7 +376,10 @@ impl MessageDisplayData {
 /// If `resolved_attachments` is provided, attachment details will be included.
 /// If `reply_count` is provided, it will be used; otherwise defaults to 0.
 /// Flag the rows core will make disappear, in one store query per page.
-pub fn mark_disappearing(client: &chatter_core::client::ChatterClient, rows: &mut [MessageDisplayData]) {
+pub fn mark_disappearing(
+    client: &chatter_core::client::ChatterClient,
+    rows: &mut [MessageDisplayData],
+) {
     let ids: Vec<String> = rows.iter().map(|r| r.message_id.clone()).collect();
     let disappearing = client.disappearing_message_ids(&ids);
     for row in rows {
@@ -447,8 +466,13 @@ pub fn message_to_display_data_with_replies(
     };
 
     MessageDisplayData {
+        prepared_generation: None,
         mention_members: Vec::new(),
-        mention_broadcast: matches!(msg.conversation_type, chatter_core::domain::message::ConversationType::Channel | chatter_core::domain::message::ConversationType::AnonGroup),
+        mention_broadcast: matches!(
+            msg.conversation_type,
+            chatter_core::domain::message::ConversationType::Channel
+                | chatter_core::domain::message::ConversationType::AnonGroup
+        ),
         message_id: msg.id.to_string(),
         // Actions and inbound updates address the stored event author; caller
         // identity is used separately for presentation and call direction.
@@ -595,7 +619,7 @@ pub fn call_display_sender(msg: &Message) -> std::borrow::Cow<'_, Message> {
     std::borrow::Cow::Borrowed(msg)
 }
 
-pub fn messages_to_display_batch(
+pub async fn messages_to_display_batch(
     messages: &[Message],
     sender_names: impl FnOnce(&[Message]) -> Vec<String>,
     sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
@@ -605,7 +629,8 @@ pub fn messages_to_display_batch(
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
     mention_members: impl Fn(&Message) -> Vec<MentionMember>,
 ) -> Vec<MessageDisplayData> {
-    messages_to_display_batch_impl(
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let display = messages_to_display_batch_unprepared(
         messages,
         sender_names,
         sender_avatar,
@@ -614,11 +639,11 @@ pub fn messages_to_display_batch(
         reply_not_found,
         reply_parent_media,
         mention_members,
-        true,
-    )
+    );
+    prepare_display_media_guarded(display, true, generation).await
 }
 
-pub fn messages_to_display_batch_deferred(
+pub async fn messages_to_display_batch_deferred(
     messages: &[Message],
     sender_names: impl FnOnce(&[Message]) -> Vec<String>,
     sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
@@ -628,7 +653,8 @@ pub fn messages_to_display_batch_deferred(
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
     mention_members: impl Fn(&Message) -> Vec<MentionMember>,
 ) -> Vec<MessageDisplayData> {
-    messages_to_display_batch_impl(
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let display = messages_to_display_batch_unprepared(
         messages,
         sender_names,
         sender_avatar,
@@ -637,11 +663,11 @@ pub fn messages_to_display_batch_deferred(
         reply_not_found,
         reply_parent_media,
         mention_members,
-        false,
-    )
+    );
+    prepare_display_media_guarded(display, false, generation).await
 }
 
-fn messages_to_display_batch_impl(
+pub fn messages_to_display_batch_unprepared(
     messages: &[Message],
     sender_names: impl FnOnce(&[Message]) -> Vec<String>,
     sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
@@ -650,11 +676,13 @@ fn messages_to_display_batch_impl(
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
     mention_members: impl Fn(&Message) -> Vec<MentionMember>,
-    decode_media: bool,
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
     let mut mention_cache: std::collections::HashMap<
-        (chatter_core::domain::message::ConversationType, chatter_core::domain::ids::ChannelId),
+        (
+            chatter_core::domain::message::ConversationType,
+            chatter_core::domain::ids::ChannelId,
+        ),
         Vec<MentionMember>,
     > = std::collections::HashMap::new();
     // The whole page's names in one call (core batches the lookup).
@@ -673,7 +701,10 @@ fn messages_to_display_batch_impl(
     // avatar again for every row was most of a conversation open.
     let mut avatars: std::collections::HashMap<
         Option<chatter_core::domain::ids::UserId>,
-        (Option<std::sync::Arc<[u8]>>, Option<crate::bin_ui::decode_cache::Pixels>),
+        (
+            Option<std::sync::Arc<[u8]>>,
+            Option<crate::bin_ui::decode_cache::Pixels>,
+        ),
     > = std::collections::HashMap::new();
 
     for (i, msg) in messages.iter().enumerate() {
@@ -686,9 +717,7 @@ fn messages_to_display_batch_impl(
             .entry(identity.sender_id)
             .or_insert_with(|| {
                 let bytes = sender_avatar(identity).map(std::sync::Arc::<[u8]>::from);
-                let pixels = bytes
-                    .as_deref()
-                    .and_then(crate::bin_ui::decode_cache::avatar);
+                let pixels = None;
                 (bytes, pixels)
             })
             .clone();
@@ -716,16 +745,103 @@ fn messages_to_display_batch_impl(
         display_messages.push(display_data);
     }
 
-    // Pre-decode attachment + reply thumbnails before UI thread
-    for msg in &mut display_messages {
-        if decode_media {
-            msg.decode_attachment_thumbnails();
-        } else {
-            msg.decode_reply_thumbnail();
+    display_messages
+}
+
+/// Apply prepared pixels to existing rows without replaying stale transfer,
+/// delivery, deletion or attachment membership snapshots.
+pub fn hydrate_message_media(row: &mut MessageItemData, prepared: &MessageDisplayData) {
+    use slint::Model;
+    if prepared.prepared_generation != Some(crate::bin_ui::decode_cache::thumbnail_generation())
+        || row.is_deleted
+        || row.message_id.as_str() != prepared.message_id
+    {
+        return;
+    }
+    let attachments: Vec<_> = row
+        .attachments
+        .iter()
+        .map(|mut attachment| {
+            if let Some(pixels) = prepared
+                .attachments
+                .iter()
+                .find(|a| a.id == attachment.id.as_str())
+                .and_then(|a| a.thumbnail_pixels.as_ref())
+            {
+                attachment.thumbnail = slint::Image::from_rgba8(pixels.clone());
+                attachment.has_thumbnail = true;
+                if attachment.width <= 0 || attachment.height <= 0 {
+                    attachment.width = pixels.width() as i32;
+                    attachment.height = pixels.height() as i32;
+                }
+            }
+            attachment
+        })
+        .collect();
+    row.attachments = ModelRc::new(VecModel::from(attachments));
+    if let Some(pixels) = &prepared.sender_avatar_decoded {
+        row.sender_avatar_source = slint::Image::from_rgba8(pixels.clone());
+        row.has_avatar = true;
+    }
+    if row.reply_to_message_id.as_str() == prepared.reply_to_message_id {
+        if let Some(pixels) = &prepared.reply_to_thumbnail_decoded {
+            row.reply_to_thumbnail = slint::Image::from_rgba8(pixels.clone());
+            row.reply_to_has_thumbnail = true;
+            row.reply_to_thumbnail_width = pixels.width() as i32;
+            row.reply_to_thumbnail_height = pixels.height() as i32;
         }
     }
+}
 
-    display_messages
+/// All row image work shares admission with attachment preparation. Keep
+/// construction synchronous; only owned display data crosses the worker hop.
+pub fn prepare_display_media(
+    display: Vec<MessageDisplayData>,
+    attachments: bool,
+) -> impl std::future::Future<Output = Vec<MessageDisplayData>> {
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    prepare_display_media_guarded(display, attachments, generation)
+}
+
+pub async fn prepare_display_media_guarded(
+    mut display: Vec<MessageDisplayData>,
+    attachments: bool,
+    generation: u64,
+) -> Vec<MessageDisplayData> {
+    chatter_core::services::attachment::run_attachment_work(move || {
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            return display;
+        }
+        for row in &mut display {
+            if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+                break;
+            }
+            if attachments {
+                row.decode_attachment_thumbnails(generation);
+            } else {
+                if let Some(bytes) = &row.sender_avatar_bytes {
+                    row.sender_avatar_decoded =
+                        crate::bin_ui::decode_cache::avatar_guarded(bytes, generation);
+                }
+                row.decode_reply_thumbnail();
+            }
+        }
+        for row in &mut display {
+            row.prepared_generation = Some(generation);
+        }
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            for row in &mut display {
+                for att in &mut row.attachments {
+                    att.thumbnail_pixels = None;
+                }
+                row.sender_avatar_decoded = None;
+                row.reply_to_thumbnail_decoded = None;
+            }
+        }
+        display
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -733,6 +849,191 @@ mod tests {
     use slint::Model;
 
     use super::*;
+
+    #[test]
+    fn delayed_media_hydration_preserves_current_delivery_transfers_and_deleted_rows() {
+        let _serial = crate::bin_ui::decode_cache::TEST_SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        use chatter_core::domain::{
+            attachment::{Attachment, FileMetadata},
+            ids::{AttachmentId, ChannelId},
+            message::ConversationType,
+        };
+        let message = Message::new_text(
+            ChannelId::new(),
+            ConversationType::Channel,
+            None,
+            "body".into(),
+            123,
+        );
+        let a = Attachment::new(
+            AttachmentId::new(),
+            FileMetadata::new("a.png".into(), "image/png".into(), 10),
+        );
+        let b = Attachment::new(
+            AttachmentId::new(),
+            FileMetadata::new("b.png".into(), "image/png".into(), 10),
+        );
+        let mut prepared = message_to_display_data(&message, "sender", &[a, b], None);
+        prepared.prepared_generation = Some(crate::bin_ui::decode_cache::thumbnail_generation());
+        for attachment in &mut prepared.attachments {
+            attachment.thumbnail_pixels = Some(crate::bin_ui::decode_cache::Pixels::new(8, 4));
+        }
+        let mut row = prepared.to_slint_preview_with_user("");
+        row.delivery_status = "delivered".into();
+        let mut current_attachment = row.attachments.row_data(0).unwrap();
+        current_attachment.progress = 0.75;
+        current_attachment.is_downloading = true;
+        row.attachments = ModelRc::new(VecModel::from(vec![current_attachment]));
+        hydrate_message_media(&mut row, &prepared);
+        assert_eq!(row.delivery_status, "delivered");
+        assert_eq!(row.attachments.row_count(), 1);
+        let attachment = row.attachments.row_data(0).unwrap();
+        assert_eq!(attachment.progress, 0.75);
+        assert!(attachment.is_downloading && attachment.has_thumbnail);
+        row.is_deleted = true;
+        row.attachments = ModelRc::new(VecModel::from(Vec::<crate::MessageAttachmentData>::new()));
+        hydrate_message_media(&mut row, &prepared);
+        assert_eq!(row.attachments.row_count(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn completed_row_pixels_cannot_publish_after_pause_but_metadata_survives() {
+        use chatter_core::domain::{
+            attachment::{Attachment, FileMetadata},
+            ids::{AttachmentId, ChannelId},
+            message::ConversationType,
+        };
+        let _serial = crate::bin_ui::decode_cache::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let message = Message::new_text(
+            ChannelId::new(),
+            ConversationType::Channel,
+            None,
+            "body".into(),
+            123,
+        );
+        let mut attachment = Attachment::new(
+            AttachmentId::new(),
+            FileMetadata::new("a.png".into(), "image/png".into(), 10),
+        );
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(8, 4)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        attachment.metadata.thumbnail = Some(encoded.into_inner());
+        let mut data = message_to_display_data(&message, "sender", &[attachment], None);
+        data.sender_avatar_bytes = data.attachments.first().map(|a| a.thumbnail_bytes.clone());
+        data.reply_to_thumbnail_bytes = data.sender_avatar_bytes.as_deref().map(|b| b.to_vec());
+        let data = prepare_display_media(vec![data], true).await.remove(0);
+        let mut placeholder = data.to_slint_preview_with_user("");
+        placeholder.has_avatar = false;
+        placeholder.reply_to_has_thumbnail = false;
+        let ready = data.to_slint_with_user("");
+        assert!(ready.attachments.row_data(0).unwrap().has_thumbnail);
+        assert!(ready.has_avatar && ready.reply_to_has_thumbnail);
+        crate::bin_ui::decode_cache::on_lock();
+        let revoked = data.to_slint_with_user("");
+        assert_eq!(revoked.attachments.row_count(), 1);
+        assert!(!revoked.attachments.row_data(0).unwrap().has_thumbnail);
+        assert!(!revoked.has_avatar && !revoked.reply_to_has_thumbnail);
+        hydrate_message_media(&mut placeholder, &data);
+        assert!(!placeholder.attachments.row_data(0).unwrap().has_thumbnail);
+        assert!(!placeholder.has_avatar && !placeholder.reply_to_has_thumbnail);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolving_old_rows_cannot_adopt_a_new_cache_lifetime() {
+        use chatter_core::domain::{
+            attachment::{Attachment, FileMetadata},
+            ids::{AttachmentId, ChannelId},
+            message::ConversationType,
+        };
+        let _serial = crate::bin_ui::decode_cache::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        crate::bin_ui::decode_cache::wipe();
+        let mut message = Message::new_text(
+            ChannelId::new(),
+            ConversationType::Channel,
+            None,
+            "body".into(),
+            123,
+        );
+        let mut attachment = Attachment::new(
+            AttachmentId::new(),
+            FileMetadata::new("a.png".into(), "image/png".into(), 10),
+        );
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(8, 4)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        attachment.metadata.thumbnail = Some(encoded.into_inner());
+        message.attachments.push(attachment.id);
+        let rows = messages_to_display_batch(
+            &[message],
+            |_| vec!["sender".into()],
+            |_| None,
+            |_| {
+                crate::bin_ui::decode_cache::on_lock();
+                Some(attachment.clone())
+            },
+            |_| String::new(),
+            |_| false,
+            |_| Default::default(),
+            |_| Vec::new(),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].attachments.len(), 1);
+        assert!(rows[0].attachments[0].thumbnail_pixels.is_none());
+        assert!(crate::bin_ui::decode_cache::is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn queued_row_preparation_yields_and_lock_preserves_rows_without_stale_pixels() {
+        let _serial = crate::bin_ui::decode_cache::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let work = tokio::spawn(chatter_core::services::attachment::run_attachment_work(
+            move || {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+            },
+        ));
+        entered_rx.await.unwrap();
+        let message = Message::new_text(
+            chatter_core::domain::ids::ChannelId::new(),
+            chatter_core::domain::message::ConversationType::Channel,
+            None,
+            "keep row".into(),
+            123,
+        );
+        let mut row = message_to_display_data(&message, "sender", &[], None);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(640, 320)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        row.reply_to_thumbnail_bytes = Some(bytes.into_inner());
+        let preparing = tokio::spawn(prepare_display_media(vec![row], true));
+        tokio::task::yield_now().await;
+        assert!(!preparing.is_finished());
+        crate::bin_ui::decode_cache::on_lock();
+        release_tx.send(()).unwrap();
+        work.await.unwrap().unwrap();
+        let rows = preparing.await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message_id, message.id.to_string());
+        assert!(rows[0].reply_to_thumbnail_decoded.is_none());
+        let rows = prepare_display_media(rows, true).await;
+        let pixels = rows[0].reply_to_thumbnail_decoded.as_ref().unwrap();
+        assert_eq!((pixels.width(), pixels.height()), (320, 160));
+        crate::bin_ui::decode_cache::wipe();
+    }
 
     #[test]
     fn channel_call_phases_preserve_direction_and_action_identity_without_changing_dm_labels() {

@@ -137,12 +137,11 @@ mod tests {
 
     fn pump(w: &MainWindow) {
         w.show().unwrap();
-        for _ in 0..3 {
-            slint::Timer::single_shot(std::time::Duration::from_millis(20), || {
-                slint::quit_event_loop().unwrap()
-            });
-            w.run().unwrap();
-        }
+        // A FIFO sentinel proves every previously queued publication ran. Keep
+        // the window shown: ComponentHandle::run hides it after returning,
+        // which queues extra quit events and can starve later positive controls.
+        slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+        slint::run_event_loop_until_quit().unwrap();
     }
     fn current_model(w: &MainWindow, client: &ChatterClient) {
         client.set_pinned_messages(vec![

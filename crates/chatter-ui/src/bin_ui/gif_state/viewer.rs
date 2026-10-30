@@ -175,13 +175,13 @@ fn decode_gif_with_image_crate(
     first_delay: u64,
 ) -> Result<usize, String> {
     use image::AnimationDecoder;
-    use image::codecs::gif::GifDecoder as ImageGifDecoder;
     use std::io::Cursor;
 
-    let decoder = ImageGifDecoder::new(Cursor::new(data))
+    let decoder = chatter_core::media::gif::bounded_gif_decoder(Cursor::new(data))
         .map_err(|e| format!("Image crate GIF decode failed: {}", e))?;
     let mut selected = chatter_core::media::gif::DecimatedGif::default();
     for (idx, frame_result) in decoder.into_frames().enumerate() {
+        if tx.is_closed() { return Ok(0); }
         let frame = match frame_result {
             Ok(frame) => frame,
             Err(e) => {

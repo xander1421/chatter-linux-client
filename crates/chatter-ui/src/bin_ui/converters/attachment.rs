@@ -36,6 +36,16 @@ pub fn standalone_attachment_indices(attachments: &[MessageAttachmentData]) -> M
 
 /// Decode only media that the inline bubble actually paints.
 pub fn decode_inline_thumbnails(attachments: &mut [AttachmentDisplayData]) {
+    decode_inline_thumbnails_guarded(
+        attachments,
+        crate::bin_ui::decode_cache::thumbnail_generation(),
+    );
+}
+
+pub fn decode_inline_thumbnails_guarded(
+    attachments: &mut [AttachmentDisplayData],
+    generation: u64,
+) {
     let media_count = attachments
         .iter()
         .filter(|a| a.is_image || a.is_video)
@@ -44,7 +54,7 @@ pub fn decode_inline_thumbnails(attachments: &mut [AttachmentDisplayData]) {
     for attachment in attachments {
         if attachment.is_image || attachment.is_video {
             if media_count < 2 || media_index < 10 {
-                attachment.decode_thumbnail();
+                attachment.decode_thumbnail_guarded(generation);
             }
             media_index += 1;
         }
@@ -115,6 +125,13 @@ impl AttachmentDisplayData {
 
     /// Pre-decode thumbnail bytes to RGBA pixels (call this before invoke_from_event_loop).
     pub fn decode_thumbnail(&mut self) {
+        self.decode_thumbnail_guarded(crate::bin_ui::decode_cache::thumbnail_generation());
+    }
+
+    pub fn decode_thumbnail_guarded(&mut self, generation: u64) {
+        if generation != crate::bin_ui::decode_cache::thumbnail_generation() {
+            return;
+        }
         if self.thumbnail_pixels.is_some() {
             return; // Already decoded
         }
@@ -125,45 +142,32 @@ impl AttachmentDisplayData {
         if !self.is_image && !self.is_video {
             return;
         }
-        // The stored thumbnail is not a postage stamp: it is generated at
-        // `INLINE_THUMBNAIL_MAX_SIZE` = 768px (media/image_processor.rs), ~2.7x
-        // the ~280 logical px the bubble draws. Keep decoded pixels at 320px.
-        //
-        // This used to prefer the full-resolution original instead, downscaled
-        // with Lanczos3 "so the bubble is crisp". Measured on a 12 MP photo
-        // (`chatter-core/tests/conversation_open_bench.rs`): 46 ms to decode +
-        // 900 ms to Lanczos3-resize, per image, every time the conversation is
-        // opened — 95% of the entire conversation-open budget, for a difference
-        // invisible at 280px. Cheap first, original only as a fallback.
         if !self.thumbnail_bytes.is_empty() {
             let bytes = &self.thumbnail_bytes;
-            self.thumbnail_pixels =
-                crate::bin_ui::decode_cache::thumbnail(&self.id, bytes.len(), || {
-                    image::load_from_memory(bytes)
+            self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail_guarded(
+                &self.id,
+                bytes.len(),
+                generation,
+                || {
+                    chatter_core::media::ImageProcessor::inline_pixels_from_memory(bytes)
                         .ok()
-                        .map(|img| img.thumbnail(320, 320))
-                });
+                        .map(image::DynamicImage::ImageRgba8)
+                },
+            );
             if self.thumbnail_pixels.is_some() {
                 return;
             }
         }
-        // No stored thumbnail (sidecar not fetched yet, or a pre-thumbnail
-        // local file). Downscale the original with the fast box sampler —
-        // `thumbnail()`, not `resize(Lanczos3)`: 6.6x cheaper and the
-        // difference does not survive being drawn at bubble width.
         if self.is_image {
-            if let Some(path) = self
-                .local_path
-                .as_deref()
-                .filter(|p| std::path::Path::new(p).exists())
-            {
-                // Match the inline bubble's decoded thumbnail size.
-                const DISPLAY_MAX: u32 = 320;
-                self.thumbnail_pixels = crate::bin_ui::decode_cache::thumbnail(&self.id, 0, || {
-                    image::open(path)
+            if let Some(path) = self.local_path.as_deref() {
+                self.thumbnail_pixels =
+                    crate::bin_ui::decode_cache::thumbnail_guarded(&self.id, 0, generation, || {
+                        chatter_core::media::ImageProcessor::inline_pixels_from_path(
+                            std::path::Path::new(path),
+                        )
                         .ok()
-                        .map(|img| img.thumbnail(DISPLAY_MAX, DISPLAY_MAX))
-                });
+                        .map(image::DynamicImage::ImageRgba8)
+                    });
             }
         }
     }

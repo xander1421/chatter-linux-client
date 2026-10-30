@@ -633,7 +633,11 @@ mod video_thumbnail_tests {
         assert_eq!(saved.status, AttachmentStatus::Downloading);
         assert_eq!(saved.metadata.thumbnail.as_deref(), Some(bytes.as_slice()));
         source.encryption_iv = Some(vec![3; 32]);
-        assert!(!repo.cache_authenticated_thumbnail(&source, &[1, 2]).unwrap());
+        assert!(
+            !repo
+                .cache_authenticated_thumbnail(&source, &[1, 2])
+                .unwrap()
+        );
         assert_eq!(
             repo.get(&source.id)
                 .unwrap()
@@ -706,6 +710,66 @@ mod image_preview_tests {
             path,
             ciphertext: encrypted.ciphertext.clone(),
         }
+    }
+
+    #[test]
+    fn range_gif_authentication_order_and_bounded_complete_loop() {
+        use image::AnimationDecoder;
+        let mut f = fixture();
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut encoded);
+            for index in 0..64u8 {
+                encoder
+                    .encode_frame(image::Frame::from_parts(
+                        image::RgbaImage::from_pixel(64, 32, image::Rgba([index * 3, 0, 0, 255])),
+                        0,
+                        0,
+                        image::Delay::from_numer_denom_ms(40, 1),
+                    ))
+                    .unwrap();
+            }
+        }
+        let encrypted = AttachmentCrypto::encrypt(&encoded).unwrap();
+        f.source.metadata =
+            FileMetadata::new("loop.gif".into(), "image/gif".into(), encoded.len() as u64);
+        f.source.encryption_key = Some(encrypted.key.to_vec());
+        f.source.encryption_iv = Some(encrypted.digest.to_vec());
+        f.repo.update(&f.source).unwrap();
+        std::fs::write(&f.path, &encrypted.ciphertext).unwrap();
+        let range = Arc::new(f.service.open_range_decryptor(&f.source.id).unwrap());
+        let reader =
+            std::io::BufReader::with_capacity(31, super::super::CbcRangeReader::new(range));
+        let decoder = crate::media::gif::bounded_gif_decoder(reader).unwrap();
+        let mut selected = crate::media::gif::DecimatedGif::default();
+        let frame_bytes = 64 * 32 * 4;
+        for (index, frame) in decoder.into_frames().enumerate() {
+            let frame = frame.unwrap();
+            assert_eq!(frame.buffer().get_pixel(0, 0)[0], index as u8 * 3);
+            selected = crate::media::gif::decimate_gif_frame(
+                selected,
+                frame,
+                40,
+                frame_bytes,
+                10,
+                8 * frame_bytes,
+            );
+            assert!(selected.frames.len() <= 10);
+            assert!(selected.bytes <= 8 * frame_bytes);
+        }
+        assert_eq!(selected.seen, 64);
+        assert_eq!(
+            selected.frames.iter().map(|f| f.delay_ms).sum::<u64>(),
+            64 * 40
+        );
+        assert_eq!(selected.frames[0].index, 0);
+        assert!(selected.frames.last().unwrap().index >= 48);
+        // No decoder can be constructed from tampered ciphertext: the range
+        // source authenticates the complete file before exposing plaintext.
+        let mut corrupted = encrypted.ciphertext.clone();
+        corrupted[20] ^= 1;
+        std::fs::write(&f.path, corrupted).unwrap();
+        assert!(f.service.open_range_decryptor(&f.source.id).is_err());
     }
 
     #[test]

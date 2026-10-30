@@ -119,7 +119,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),
             |_| Vec::new(),
-        );
+        ).await;
 
         crate::run_history_ui!(weak, owner, |w| {
             let items: Vec<MessageItemData> = display
@@ -281,7 +281,8 @@ pub(super) fn append_incoming(
         .as_ref()
         .and_then(|sender| ui_ctx.mesh_sender_display_name(sender))
         .unwrap_or_else(|| message.nickname.clone());
-    let display = messages_to_display_batch(
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    let display = crate::bin_ui::converters::messages_to_display_batch_unprepared(
         std::slice::from_ref(&message.message),
         // Core supplies collision suffixes; retain the live nickname if the
         // sender has no peer record (for example our own local echo).
@@ -302,6 +303,24 @@ pub(super) fn append_incoming(
         .global::<crate::ChatPane>()
         .set_messages(ModelRc::new(VecModel::from(items)));
     window.global::<crate::ChatPane>().set_is_at_bottom(true);
+    // Insert synchronously to preserve stream order and delivery updates;
+    // hydrate only media fields after shared preparation completes.
+    let weak = window.as_weak();
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, ui_ctx.active_conversation());
+    tokio::spawn(async move {
+        if !owner.is_current() { return; }
+        let display = crate::bin_ui::converters::prepare_display_media_guarded(display, true, generation).await;
+        crate::run_history_ui!(weak, owner, |window| {
+            let model = window.global::<crate::ChatPane>().get_messages();
+            let items: Vec<MessageItemData> = model.iter().map(|mut row| {
+                if let Some(prepared) = display.iter().find(|d| d.message_id == row.message_id.as_str()) {
+                    crate::bin_ui::converters::hydrate_message_media(&mut row, prepared);
+                }
+                row
+            }).collect();
+            window.global::<crate::ChatPane>().set_messages(ModelRc::new(VecModel::from(items)));
+        });
+    });
 }
 
 /// Move a message this device sent to its new delivery state.

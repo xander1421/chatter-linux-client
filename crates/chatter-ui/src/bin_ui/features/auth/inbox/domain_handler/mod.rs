@@ -164,7 +164,7 @@ pub async fn handle_domain_event(
                 message.conversation_type,
                 chatter_core::domain::message::ConversationType::ServerDm
             );
-            messaging::handle_message_received(window, ui_ctx, message.clone());
+            messaging::handle_message_received(window, ui_ctx, message.clone()).await;
             // A DM carries the sender's profile key (Signal-style); the gateway
             // just stored it. Re-sync the sidebar so list_friends_with_profiles
             // decrypts + persists the peer's real display name + avatar and the
@@ -404,7 +404,10 @@ pub async fn handle_domain_event(
                 let weak = window.clone();
                 let conv_id = channel_id.to_string();
                 let download_session = ui_ctx_dl.session_guard();
-                let download_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(&ui_ctx_dl, ui_ctx_dl.active_conversation());
+                let download_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+                    &ui_ctx_dl,
+                    ui_ctx_dl.active_conversation(),
+                );
                 tokio::spawn(async move {
                     super::attachment_download::download_attachments(
                         &downloadable,
@@ -550,7 +553,7 @@ pub async fn handle_domain_event(
             display_name: _,
             message,
         } => {
-            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::handle_message_received(window, ui_ctx, message).await;
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
             // We rejoined a channel that is open as read-only: give the
             // composer back, as a leave took it away.
@@ -569,7 +572,7 @@ pub async fn handle_domain_event(
             // so the composer gives way to the notice and the sidebar row is
             // rebuilt from core (its preview, and no "Leave channel" in its menu).
             let we_left = ui_ctx.session_current_user_id() == Some(user_id);
-            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::handle_message_received(window, ui_ctx, message).await;
             messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
             if we_left {
                 crate::bin_ui::features::chat::refresh_send_notice(window, ui_ctx, channel_id);
@@ -667,7 +670,7 @@ pub async fn handle_domain_event(
         // A note-to-self sent from a sibling device. Core stored it; show it
         // like any received message (inserted only if Saved Messages is open).
         DomainEvent::MessageSnapshotChanged { message } => {
-            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::handle_message_received(window, ui_ctx, message).await;
         }
 
         // Catch-up announces newly inserted messages individually; this cycle

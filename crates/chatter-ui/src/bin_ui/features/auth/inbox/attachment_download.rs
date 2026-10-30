@@ -99,7 +99,14 @@ pub async fn download_attachments(
                 tracing::debug!("Attachment downloaded");
 
                 if is_gif {
-                    handle_gif(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
+                    handle_gif(
+                        &ui_ctx,
+                        &att_id,
+                        &cdn_key,
+                        &weak_window,
+                        &conversation_id,
+                        owner.clone(),
+                    );
                 } else if is_image && !has_thumbnail {
                     handle_image(
                         &ui_ctx,
@@ -121,128 +128,21 @@ pub async fn download_attachments(
     }
 }
 
-/// Handle GIF: decrypt once, decode progressively, register animation.
-///
-/// Uses service layer for decryption (single decrypt), then:
-/// 1. Shows first frame immediately
-/// 2. Decodes remaining frames in background
-/// 3. Registers for inline animation (reuses decoded frames)
+/// Incoming and reopened GIFs use the same authenticated, admitted range path.
 fn handle_gif(
     ui_ctx: &Arc<chatter_core::client::ChatterClient>,
     att_id: &AttachmentId,
-    cdn_key: &str,
+    _cdn_key: &str,
     weak_window: &slint::Weak<MainWindow>,
-    conversation_id: &str,
+    _conversation_id: &str,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
-    // Service layer: decrypt and decode first frame (SINGLE DECRYPT)
-    let decode_result = match ui_ctx.decrypt_and_decode_gif_first_frame(att_id) {
-        Ok(Some(result)) => result,
-        Ok(None) => {
-            tracing::debug!(cdn_key = %cdn_key, "Not a GIF");
-            return;
-        }
-        Err(e) => {
-            tracing::error!(cdn_key = %cdn_key, error = %e, "Failed to decrypt/decode GIF");
-            return;
-        }
-    };
-
-    let att_id_str = att_id.to_string();
-    let weak = weak_window.clone();
-    let conv_id = conversation_id.to_string();
-    let ui_ctx_gif = ui_ctx.clone();
-
-    // Show first frame immediately
-    let first_frame = decode_result.first_frame;
-    let first_rgba = first_frame.data.clone();
-    let first_width = first_frame.width;
-    let first_height = first_frame.height;
-    let att_id_first = att_id_str.clone();
-    let weak_first = weak.clone();
-    let conv_id_first = conv_id.clone();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
-            &first_rgba,
-            first_width,
-            first_height,
-        );
-
-        if let Some(window) = weak_first.upgrade() {
-            update_attachment_thumbnail(
-                &window,
-                &ui_ctx_gif,
-                &att_id_first,
-                first_image,
-                &conv_id_first,
-            );
-            tracing::info!("GIF first frame displayed: {}", att_id_first);
-        }
-    });
-
-    // Background: decode remaining frames (REUSES ALREADY DECRYPTED BYTES)
-    let gif_bytes = decode_result.gif_bytes;
-    let ui_ctx_decode = ui_ctx.clone();
-    tokio::task::spawn_blocking(move || {
-        let start = std::time::Instant::now();
-
-        // Decode all frames from already-decrypted bytes via the client façade.
-        let full_result = match ui_ctx_decode.decode_gif_all_frames(&gif_bytes) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("Failed to decode GIF frames: {}", e);
-                return;
-            }
-        };
-
-        // Thin the loop to the inline budget across its whole duration
-        // (same selector as the other GIF paths), then build Slint buffers.
-        let mut selected = chatter_core::media::gif::DecimatedGif::default();
-        for frame in &full_result.frames {
-            let delay_ms = frame.delay.as_millis() as u64;
-            let (data, width, height) = crate::bin_ui::gif_state::fit_frame(
-                frame.data.clone(), frame.width, frame.height,
-                crate::bin_ui::gif_state::INLINE_FRAME_PX,
-                crate::bin_ui::gif_state::INLINE_FRAME_PX,
-            );
-            if data.is_empty() { continue; }
-            let bytes = data.len();
-            selected = chatter_core::media::gif::decimate_gif_frame(
-                selected, (data, width, height), delay_ms, bytes,
-                crate::bin_ui::gif_state::MAX_VIEWER_FRAMES,
-                crate::bin_ui::gif_state::INLINE_ANIMATION_BYTES,
-            );
-        }
-        let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = Vec::new();
-        let mut all_delays: Vec<u64> = Vec::new();
-        for sample in selected.frames {
-            let (data, width, height) = sample.frame;
-            all_buffers.push(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &data, width, height,
-            ));
-            all_delays.push(sample.delay_ms);
-        }
-
-        tracing::info!(
-            "GIF decoded in {:?}: {} frames, {}",
-            start.elapsed(),
-            all_buffers.len(),
-            att_id_str
-        );
-
-        // Register animation (frames already decoded, no re-decrypt needed)
-        if all_buffers.len() > 1 {
-            let att_id_full = att_id_str.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                crate::bin_ui::gif_state::register_inline_gif_from_buffers(
-                    &att_id_full,
-                    all_buffers,
-                    all_delays,
-                );
-                tracing::info!("GIF animation registered: {}", att_id_full);
-            });
-        }
-    });
+    crate::bin_ui::gif_state::register_gif_attachment_guarded(
+        att_id.to_string(),
+        ui_ctx.clone(),
+        weak_window.clone(),
+        owner,
+    );
 }
 
 /// Handle still images: original bytes/pixels never enter the event loop.

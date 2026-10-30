@@ -218,7 +218,7 @@ fn open(
         .unwrap();
     assert_eq!(page.len(), chatter_core::config::MESSAGE_PAGE_SIZE as usize);
     let started = Instant::now();
-    let display = messages_to_display_batch(
+    let display = f._rt.block_on(messages_to_display_batch(
         &page,
         |ms| client.message_sender_display_names(ms),
         |m| client.message_sender_avatar(m),
@@ -227,7 +227,7 @@ fn open(
         |m| client.reply_parent_missing_for(m),
         |m| client.reply_parent_media(m),
         |m| client.mention_members(&m.conversation_type, &m.conversation_id),
-    );
+    ));
     let me = f.me.to_string();
     let rows: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&me)).collect();
     let model = slint::ModelRc::new(slint::VecModel::from(rows));

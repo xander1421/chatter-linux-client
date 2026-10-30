@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use super::{INLINE_ANIMATION_BYTES, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS, INLINE_FRAME_PX};
+use super::{INLINE_ANIMATION_BYTES, INLINE_FRAME_PX, MAX_INLINE_GIF_BYTES, MAX_INLINE_GIFS};
 use crate::MainWindow;
 
 thread_local! {
@@ -41,10 +41,13 @@ pub(crate) struct InlineGifState {
 
 impl InlineGifState {
     pub(super) fn bytes(&self) -> usize {
-        self.frames.iter().map(|frame| {
-            let size = frame.size();
-            size.width as usize * size.height as usize * 4
-        }).sum()
+        self.frames
+            .iter()
+            .map(|frame| {
+                let size = frame.size();
+                size.width as usize * size.height as usize * 4
+            })
+            .sum()
     }
     pub(crate) fn current_image(&self) -> Image {
         self.frames
@@ -83,11 +86,18 @@ pub(super) fn insert_inline_gif(att_id: String, state: InlineGifState) {
     INLINE_LRU.with(|lru| {
         let mut lru = lru.borrow_mut();
         lru.retain(|id| id != &att_id);
-        INLINE_GIFS.with(|gifs| { gifs.borrow_mut().remove(&att_id); });
-        while lru.len() >= MAX_INLINE_GIFS || INLINE_GIFS.with(|gifs| {
-            gifs.borrow().values().map(InlineGifState::bytes).sum::<usize>()
-                > MAX_INLINE_GIF_BYTES.saturating_sub(new_bytes)
-        }) {
+        INLINE_GIFS.with(|gifs| {
+            gifs.borrow_mut().remove(&att_id);
+        });
+        while lru.len() >= MAX_INLINE_GIFS
+            || INLINE_GIFS.with(|gifs| {
+                gifs.borrow()
+                    .values()
+                    .map(InlineGifState::bytes)
+                    .sum::<usize>()
+                    > MAX_INLINE_GIF_BYTES.saturating_sub(new_bytes)
+            })
+        {
             if let Some(oldest) = lru.pop_front() {
                 INLINE_GIFS.with(|gifs| {
                     gifs.borrow_mut().remove(&oldest);
@@ -450,7 +460,7 @@ pub fn auto_register_gifs_in_message(
 /// Register a single GIF attachment for inline animation.
 ///
 /// This is called after sending a message with GIF attachments.
-/// Spawns an independent background thread to decrypt/decode, then registers on UI thread.
+/// Queues authenticated range decoding on the shared worker, then publishes pixels.
 ///
 /// This function returns immediately - all work happens in background.
 /// Safe to call from any context (including nested runtimes).
@@ -459,177 +469,204 @@ pub fn register_gif_attachment(
     ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
     window_weak: slint::Weak<crate::MainWindow>,
 ) {
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+        &ui_ctx,
+        ui_ctx.active_conversation(),
+    );
+    register_gif_attachment_guarded(attachment_id, ui_ctx, window_weak, owner);
+}
+
+pub(crate) fn register_gif_attachment_guarded(
+    attachment_id: String,
+    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
+    window_weak: slint::Weak<crate::MainWindow>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+) {
     // Optimization: Check if already registered (O(1) in UI thread)
     let already_registered = INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&attachment_id));
     if already_registered {
         return;
     }
 
-    // Spawn independent thread to avoid runtime context issues
-    std::thread::spawn(move || {
-        use chatter_core::domain::attachment::ContentLocation;
+    let generation = crate::bin_ui::decode_cache::thumbnail_generation();
+    crate::rt_handle().spawn(async move {
+        let _ = chatter_core::services::attachment::run_attachment_work(move || {
+            if !owner.is_current()
+                || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+            {
+                return;
+            }
+            use chatter_core::domain::attachment::ContentLocation;
 
-        // Decoded on an earlier open: no decrypt, no decode.
-        if let Some(cached) = crate::bin_ui::decode_cache::gif(&attachment_id) {
-            let _ = slint::invoke_from_event_loop(move || {
-                let first = register_inline_gif_from_buffers(
-                    &attachment_id,
-                    cached.frames.to_vec(),
-                    cached.delays.to_vec(),
-                );
-                if let (Some(first), Some(w)) = (first, window_weak.upgrade()) {
-                    set_attachment_thumbnail(&w, &attachment_id, first);
+            // Decoded on an earlier open: no decrypt, no decode.
+            if let Some(cached) = crate::bin_ui::decode_cache::gif(&attachment_id) {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current()
+                        || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                    {
+                        return;
+                    }
+                    let first = register_inline_gif_from_buffers(
+                        &attachment_id,
+                        cached.frames.to_vec(),
+                        cached.delays.to_vec(),
+                    );
+                    if let (Some(first), Some(w)) = (first, window_weak.upgrade()) {
+                        set_attachment_thumbnail(&w, &attachment_id, first);
+                    }
+                });
+                return;
+            }
+
+            // Parse attachment ID
+            let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::debug!(
+                        "Invalid attachment ID for GIF registration: {}",
+                        attachment_id
+                    );
+                    return;
                 }
-            });
-            return;
-        }
+            };
 
-        // Parse attachment ID
-        let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
-            Ok(id) => id,
-            Err(_) => {
-                tracing::debug!(
-                    "Invalid attachment ID for GIF registration: {}",
-                    attachment_id
-                );
+            // Check if attachment has content on filesystem
+            let attachment = match ui_ctx.get_attachment_metadata(&att_id) {
+                Some(att) if att.content_location == ContentLocation::OnFilesystem => att,
+                _ => {
+                    tracing::debug!("GIF {} not ready on filesystem yet", attachment_id);
+                    return;
+                }
+            };
+
+            // Check if it's a GIF
+            if attachment.metadata.mime_type != "image/gif" {
                 return;
             }
-        };
 
-        // Check if attachment has content on filesystem
-        let attachment = match ui_ctx.get_attachment(&att_id) {
-            Some(att) if att.content_location == ContentLocation::OnFilesystem => att,
-            _ => {
-                tracing::debug!("GIF {} not ready on filesystem yet", attachment_id);
+            // Full HMAC authentication precedes all decoding. Pull bounded plaintext
+            // ranges; never retain or clone the complete decrypted original.
+            let range = match ui_ctx.open_attachment_range(&att_id) {
+                Ok(range) => std::sync::Arc::new(range),
+                Err(_) => return,
+            };
+            if !owner.is_current() {
                 return;
             }
-        };
-
-        // Check if it's a GIF
-        if attachment.metadata.mime_type != "image/gif" {
-            return;
-        }
-
-        // Decrypt to memory (uses streaming for large files)
-        let data = match ui_ctx.decrypt_attachment_auto(&att_id) {
-            Ok(buffer) => buffer.as_slice().to_vec(),
-            Err(e) => {
-                tracing::debug!("Could not decrypt GIF {}: {}", attachment_id, e);
-                return;
-            }
-        };
-
-        // Decode first frame immediately for instant display
-        use chatter_core::media::gif::decode_first_frame_only;
-
-        let first_frame = match decode_first_frame_only(&data) {
-            Ok(Some(f)) => f,
-            Ok(None) => return, // Not a GIF or empty
-            Err(e) => {
-                tracing::debug!("Failed to decode GIF first frame {}: {}", attachment_id, e);
-                return;
-            }
-        };
-
-        tracing::debug!("Decoded first frame of GIF {} immediately", attachment_id);
-
-        // Register first frame on UI thread immediately (for instant display)
-        let att_id_for_ui = attachment_id.clone();
-        let window_weak_clone = window_weak.clone();
-        let (first_rgba, first_width, first_height) = super::fit_frame(
-            first_frame.data, first_frame.width, first_frame.height, INLINE_FRAME_PX, INLINE_FRAME_PX,
-        );
-
-        let _ = slint::invoke_from_event_loop(move || {
-            // Show first frame immediately
-            let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                &first_rgba,
-                first_width,
-                first_height,
+            use image::AnimationDecoder;
+            let reader = std::io::BufReader::new(
+                chatter_core::services::attachment::CbcRangeReader::new(range),
             );
+            let decoder = match chatter_core::media::gif::bounded_gif_decoder(reader) {
+                Ok(decoder) => decoder,
+                Err(_) => return,
+            };
+            let frames_iter = decoder.into_frames();
+            // Keep decoding bounded in memory until the retained set is final.
+            // Uploaded batches cannot be thinned after a later frame raises the stride.
+            let mut selected = chatter_core::media::gif::DecimatedGif::default();
+            const MAX_FRAMES: usize = 100;
 
-            if let Some(w) = window_weak_clone.upgrade() {
-                set_attachment_thumbnail(&w, &att_id_for_ui, first_image);
-            }
-            tracing::info!("Displayed sent GIF first frame: {}", att_id_for_ui);
-        });
+            for (_idx, frame_result) in frames_iter.enumerate() {
+                if !owner.is_current()
+                    || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                {
+                    return;
+                }
+                let frame = match frame_result {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::warn!("GIF frame {} error for {}: {}", _idx, attachment_id, e);
+                        continue;
+                    }
+                };
 
-        // Now decode remaining frames progressively and start animation
-        use image::AnimationDecoder;
-        use image::codecs::gif::GifDecoder;
-        use std::io::Cursor;
+                let delay = frame.delay();
+                let (numer, denom) = delay.numer_denom_ms();
+                let delay_ms = if denom == 0 {
+                    100
+                } else {
+                    (numer as u64) / (denom as u64)
+                };
+                let delay_ms = delay_ms.max(20);
 
-        let cursor = Cursor::new(&data);
-        let decoder = match GifDecoder::new(cursor) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("Failed to create GIF decoder for {}: {}", attachment_id, e);
-                return;
-            }
-        };
+                let buffer = frame.into_buffer();
+                let (width, height) = buffer.dimensions();
+                let (raw_data, width, height) = super::fit_frame(
+                    buffer.into_raw(),
+                    width,
+                    height,
+                    INLINE_FRAME_PX,
+                    INLINE_FRAME_PX,
+                );
 
-        let frames_iter = decoder.into_frames();
-        // Keep decoding bounded in memory until the retained set is final.
-        // Uploaded batches cannot be thinned after a later frame raises the stride.
-        let mut selected = chatter_core::media::gif::DecimatedGif::default();
-        const MAX_FRAMES: usize = 100;
-
-        for (_idx, frame_result) in frames_iter.enumerate() {
-            let frame = match frame_result {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("GIF frame {} error for {}: {}", _idx, attachment_id, e);
+                if raw_data.is_empty() {
                     continue;
                 }
-            };
-
-            let delay = frame.delay();
-            let (numer, denom) = delay.numer_denom_ms();
-            let delay_ms = if denom == 0 {
-                100
-            } else {
-                (numer as u64) / (denom as u64)
-            };
-            let delay_ms = delay_ms.max(20);
-
-            let buffer = frame.into_buffer();
-            let (width, height) = buffer.dimensions();
-            let (raw_data, width, height) = super::fit_frame(
-                buffer.into_raw(), width, height, INLINE_FRAME_PX, INLINE_FRAME_PX,
-            );
-
-            if raw_data.is_empty() {
-                continue;
-            }
-            let bytes = raw_data.len();
-            let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &raw_data, width, height,
-            );
-            selected = chatter_core::media::gif::decimate_gif_frame(
-                selected, pixel_buffer, delay_ms, bytes, MAX_FRAMES, INLINE_ANIMATION_BYTES,
-            );
-        }
-
-        if selected.frames.len() > 1 {
-            let (all_buffers, all_delays): (Vec<_>, Vec<_>) = selected.frames.into_iter()
-                .map(|sample| (sample.frame, sample.delay_ms)).unzip();
-            crate::bin_ui::decode_cache::put_gif(
-                &attachment_id,
-                all_buffers.clone(),
-                all_delays.clone(),
-            );
-            let att_id_full = attachment_id.clone();
-            let weak = window_weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(first_image) = register_inline_gif_from_buffers(
-                    &att_id_full, all_buffers, all_delays,
-                ) {
-                    if let Some(w) = weak.upgrade() {
-                        set_attachment_thumbnail(&w, &att_id_full, first_image);
-                    }
+                let bytes = raw_data.len();
+                let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &raw_data, width, height,
+                );
+                if _idx == 0 {
+                    let first = pixel_buffer.clone();
+                    let weak = window_weak.clone();
+                    let id = attachment_id.clone();
+                    let first_owner = owner.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if !first_owner.is_current()
+                            || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                        {
+                            return;
+                        }
+                        if let Some(w) = weak.upgrade() {
+                            set_attachment_thumbnail(&w, &id, Image::from_rgba8(first));
+                        }
+                    });
                 }
-            });
-        }
+                selected = chatter_core::media::gif::decimate_gif_frame(
+                    selected,
+                    pixel_buffer,
+                    delay_ms,
+                    bytes,
+                    MAX_FRAMES,
+                    INLINE_ANIMATION_BYTES,
+                );
+            }
+
+            if selected.frames.len() > 1 {
+                let (all_buffers, all_delays): (Vec<_>, Vec<_>) = selected
+                    .frames
+                    .into_iter()
+                    .map(|sample| (sample.frame, sample.delay_ms))
+                    .unzip();
+                if !owner.is_current() {
+                    return;
+                }
+                crate::bin_ui::decode_cache::put_gif_guarded(
+                    &attachment_id,
+                    generation,
+                    all_buffers.clone(),
+                    all_delays.clone(),
+                );
+                let att_id_full = attachment_id.clone();
+                let weak = window_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current()
+                        || generation != crate::bin_ui::decode_cache::thumbnail_generation()
+                    {
+                        return;
+                    }
+                    if let Some(first_image) =
+                        register_inline_gif_from_buffers(&att_id_full, all_buffers, all_delays)
+                    {
+                        if let Some(w) = weak.upgrade() {
+                            set_attachment_thumbnail(&w, &att_id_full, first_image);
+                        }
+                    }
+                });
+            }
+        })
+        .await;
     });
 }
 

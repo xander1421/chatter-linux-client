@@ -11,6 +11,11 @@ use slint::{Image, Model, Timer, TimerMode};
 
 use super::inline::InlineGifState;
 
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) fn picker_generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 thread_local! {
     /// Picker GIF animations (gif_id -> frames).
     static PICKER_GIFS: RefCell<HashMap<String, InlineGifState>> = RefCell::new(HashMap::new());
@@ -40,7 +45,20 @@ pub fn register_picker_gif(
     };
 
     PICKER_GIFS.with(|gifs| {
-        gifs.borrow_mut().insert(gif_id, state);
+        let mut gifs = gifs.borrow_mut();
+        const BUDGET: usize = 16 * 1024 * 1024;
+        let bytes = state.bytes();
+        gifs.remove(&gif_id);
+        while gifs.values().map(InlineGifState::bytes).sum::<usize>() > BUDGET.saturating_sub(bytes)
+        {
+            let Some(id) = gifs.keys().next().cloned() else {
+                break;
+            };
+            gifs.remove(&id);
+        }
+        if bytes <= BUDGET {
+            gifs.insert(gif_id, state);
+        }
     });
 
     start_picker_timer_if_needed();
@@ -48,6 +66,7 @@ pub fn register_picker_gif(
 
 /// Clear all picker GIF animations.
 pub fn clear_picker_gifs() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     PICKER_GIFS.with(|gifs| {
         gifs.borrow_mut().clear();
     });
@@ -112,8 +131,12 @@ fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Imag
         .map(|(id, image)| (id.as_str(), image))
         .collect();
     for results in [
-        window.global::<crate::ChatPane>().get_composer_gif_picker_recent(),
-        window.global::<crate::ChatPane>().get_composer_gif_picker_results(),
+        window
+            .global::<crate::ChatPane>()
+            .get_composer_gif_picker_recent(),
+        window
+            .global::<crate::ChatPane>()
+            .get_composer_gif_picker_results(),
     ] {
         let Some(model) = results
             .as_any()
