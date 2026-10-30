@@ -10,6 +10,28 @@ impl RoomManager {
         AudioCapture::list_devices()
     }
 
+    #[cfg(not(target_os = "android"))]
+    pub fn audio_device_snapshot(&self, output: bool) -> Result<(Vec<AudioDevice>, String), CallError> {
+        let mut devices = if output { AudioCapture::list_output_devices()? } else { AudioCapture::list_devices()? };
+        let (actual, requested) = if output {
+            self.audio_playback.read().as_ref().map(|p| p.selected_output()).unwrap_or_default()
+        } else {
+            let capture = self.audio_capture.read();
+            (capture.applied_device().to_owned(), capture.selected_device().map(str::to_owned))
+        };
+        let missing = requested.as_ref().is_some_and(|id| !devices.iter().any(|d| &d.id == id));
+        let effective = devices.iter().find(|d| d.id == actual).or_else(|| if actual.is_empty() { devices.iter().find(|d| d.is_default) } else { None })
+            .map(|d| d.name.as_str()).unwrap_or("system route");
+        let label = if missing { format!("System default — {} (preferred device disconnected)", effective) }
+            else { format!("System default — {}", effective) };
+        for device in &mut devices { device.is_default = false; }
+        let default_id = super::super::audio_format::SYSTEM_DEFAULT.to_owned();
+        devices.insert(0, AudioDevice { id: default_id.clone(), name: label, is_default: true });
+        let selected = if requested.is_none() || missing { default_id }
+            else { devices.iter().find(|d| d.id == actual).map(|d| d.id.clone()).unwrap_or_default() };
+        Ok((devices, selected))
+    }
+
     /// List available video input devices.
     pub fn list_video_devices() -> Result<Vec<VideoDevice>, CallError> {
         VideoCapture::list_devices()
@@ -32,7 +54,7 @@ impl RoomManager {
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
         if self.microphone_requested.load(std::sync::atomic::Ordering::SeqCst) {
             return if device_id.is_some() {
-                self.switch_microphone(device_id).await
+                self.switch_microphone(device_id.filter(|id| *id != super::super::audio_format::SYSTEM_DEFAULT)).await
             } else {
                 Ok(())
             };
@@ -55,12 +77,7 @@ impl RoomManager {
         // Start audio capture
         let audio_source = {
             let mut capture = self.audio_capture.write();
-            let source = capture.start(device_id)?;
-            // Pause a restored muted capture before publishing the new track.
-            if muted {
-                capture.set_muted(true);
-            }
-            source
+            capture.start_muted(device_id, muted)?
         };
 
         // Create and publish track
@@ -94,10 +111,8 @@ impl RoomManager {
             room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
         };
         let mut replacement = AudioCapture::new();
-        let source = replacement.start(device_id)?;
-        if self.audio_capture.read().is_muted() {
-            replacement.set_muted(true);
-        }
+        let muted = self.audio_capture.read().is_muted();
+        let source = replacement.start_muted(device_id, muted)?;
         let track = LocalAudioTrack::create_audio_track("microphone", RtcAudioSource::Native(source));
         let options = TrackPublishOptions {
             source: TrackSource::Microphone,
@@ -581,9 +596,26 @@ impl RoomManager {
             .then(|| self.audio_capture.read().selected_device().map(str::to_owned))
     }
 
+    #[cfg(not(target_os = "android"))]
+    pub fn refresh_audio_devices(&self) {
+        self.audio_capture.write().refresh_device();
+        if let Some(playback) = self.audio_playback.read().as_ref() {
+            if let Err(error) = playback.refresh_device() {
+                tracing::warn!(%error, "Could not refresh call output");
+            }
+        }
+    }
+
     pub fn recover_microphone_stream(&self) {
         if let Err(error) = self.audio_capture.write().recover_stream() {
             tracing::error!(%error, "Could not recover microphone capture stream");
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn recover_audio_output_stream(&self) {
+        if let Some(playback) = self.audio_playback.read().as_ref() {
+            if let Err(error) = playback.recover_stream() { tracing::warn!(%error, "Could not reopen call output"); }
         }
     }
 

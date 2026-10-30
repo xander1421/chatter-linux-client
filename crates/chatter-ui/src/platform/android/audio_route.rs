@@ -1,31 +1,32 @@
-//! Call audio routing on Android: earpiece / speaker / headset.
-//!
-//! The policy is chatter-core's [`CallAudioRouting`]; this file only drives it.
-//! `MainActivity.startCallAudio/stopCallAudio/applyAudioRoute` (Kotlin
-//! `CallAudioRouter`) put the phone in communication mode and apply the route;
-//! `CallAudioRouter.nativeOnAudioOutputsChanged` reports headsets coming and
-//! going. The route that was applied is mirrored into `call-speaker-on`, so the
-//! speaker button shows where the audio actually is.
-//!
-//! Desktop never installs this: there the speaker button opens the output
-//! device picker instead (`call-speaker-toggle` stays false).
+//! Android communication device discovery, selection and acknowledgement.
+//! Core owns default/fallback policy; AudioManager applies paired mic/output routes.
 
 use std::sync::{Mutex, OnceLock};
 
-use chatter_core::calls::audio_route::{AudioOutputs, AudioRoute, CallAudioRouting};
-use jni::objects::{JObject, JValue};
-// JNI input is an unsigned byte; normalize nonzero values before Rust bool.
+use chatter_core::calls::audio_route::{AudioRoute, CommunicationDevice, CommunicationRouting};
+use jni::objects::{JObject, JString, JValue};
 use slint::ComponentHandle;
 
 use super::activity::{activity, clear_exception, with_jni_env};
 use crate::MainWindow;
 
 /// The live call's routing state; `None` between calls.
-static ROUTING: Mutex<Option<CallAudioRouting>> = Mutex::new(None);
+static ROUTING: Mutex<Option<CommunicationRouting>> = Mutex::new(None);
 static WINDOW: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
 
 /// Wire the call screen's audio callbacks. Call once on the UI thread.
 pub fn install(window: &MainWindow) {
+    let sdk = with_jni_env(|env| {
+        env.get_static_field(
+            jni::jni_str!("android/os/Build$VERSION"),
+            jni::jni_str!("SDK_INT"),
+            jni::jni_sig!("I"),
+        )
+        .and_then(|v| v.i())
+        .map_err(|e| e.to_string())
+    })
+    .unwrap_or(26);
+    chatter_core::calls::audio_format::set_android_sdk(sdk);
     let _ = WINDOW.set(window.as_weak());
     window
         .global::<crate::CallView>()
@@ -35,55 +36,127 @@ pub fn install(window: &MainWindow) {
         .on_call_audio_session(|active, video| if active { start(video) } else { stop() });
     window
         .global::<crate::CallView>()
-        .on_call_audio_video(|video| update(|r| r.set_video(video)));
+        .on_call_audio_video(|video| {
+            update(|r| {
+                r.policy.set_video(video);
+            })
+        });
     window
         .global::<crate::CallView>()
-        .on_call_toggle_speaker(|| update(|r| r.toggle_speaker()));
+        .on_call_toggle_speaker(|| {
+            update(|r| {
+                r.select(chatter_core::calls::audio_format::SYSTEM_DEFAULT);
+                r.policy.toggle_speaker();
+            })
+        });
 }
 
 fn start(video: bool) {
-    let route = {
+    {
         let mut guard = ROUTING.lock().unwrap_or_else(|e| e.into_inner());
-        guard.insert(CallAudioRouting::new(video)).route()
-    };
+        // Repeated session activation during reconnect must retain user intent.
+        if guard.is_none() {
+            *guard = Some(CommunicationRouting::new(video));
+        }
+    }
     call_activity("startCallAudio", "()V", &[]);
-    apply(route);
 }
 
 fn stop() {
     ROUTING.lock().unwrap_or_else(|e| e.into_inner()).take();
     call_activity("stopCallAudio", "()V", &[]);
-    publish(false);
+    publish();
 }
 
-/// Run `f` on the live call's routing and apply the result. No call, no-op.
-fn update(f: impl FnOnce(&mut CallAudioRouting) -> AudioRoute) {
-    let route = {
+fn update(f: impl FnOnce(&mut CommunicationRouting)) {
+    let target = {
         let mut guard = ROUTING.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_mut() {
-            Some(r) => f(r),
-            None => return,
-        }
+        let Some(r) = guard.as_mut() else { return };
+        f(r);
+        r.target()
+            .filter(|d| Some(d.id.as_str()) != r.applied())
+            .map(|d| d.id.clone())
     };
-    apply(route);
+    if let Some(id) = target {
+        apply(&id);
+    }
+    publish();
 }
 
-fn apply(route: AudioRoute) {
-    tracing::info!("call audio route: {route:?}");
-    call_activity("applyAudioRoute", "(I)V", &[JValue::Int(route.as_i32())]);
-    publish(route == AudioRoute::Speaker);
+fn apply(id: &str) {
+    let result = (|| -> Result<(), String> {
+        let act = activity()?;
+        with_jni_env(|env| {
+            let id = env.new_string(id).map_err(|e| e.to_string())?;
+            env.call_method(
+                act,
+                jni::jni_str!("applyCommunicationDevice"),
+                jni::signature::RuntimeMethodSignature::from_str("(Ljava/lang/String;)V")
+                    .map_err(|e| e.to_string())?
+                    .method_signature(),
+                &[JValue::Object(&id)],
+            )
+            .map(|_| ())
+            .map_err(|e| {
+                clear_exception(env);
+                e.to_string()
+            })
+        })
+    })();
+    if let Err(error) = result {
+        tracing::error!(%error, "Could not request call route");
+    }
 }
 
-/// Mirror the route into the UI. Callers may be on the JNI (Android main)
-/// thread, so the Weak is upgraded on the Slint event loop.
-fn publish(speaker_on: bool) {
+pub fn select(id: &str) {
+    update(|r| {
+        r.select(id);
+    });
+}
+
+pub fn show_picker() {
+    publish();
+    if let Some(w) = WINDOW.get().and_then(|w| w.upgrade()) {
+        w.global::<crate::CallView>()
+            .set_device_picker_type("audio_output".into());
+        w.global::<crate::CallView>()
+            .set_device_picker_visible(true);
+    }
+}
+
+fn publish() {
     let Some(weak) = WINDOW.get().cloned() else {
         return;
     };
+    let snapshot = ROUTING.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.global::<crate::CallView>()
-                .set_call_speaker_on(speaker_on);
+            let view = w.global::<crate::CallView>();
+            let Some(r) = snapshot else {
+                view.set_call_speaker_on(false);
+                return;
+            };
+            let rows: Vec<crate::AudioDeviceData> = r
+                .picker_devices()
+                .into_iter()
+                .map(|(id, name, is_default)| crate::AudioDeviceData {
+                    id: id.into(),
+                    name: name.into(),
+                    is_default,
+                })
+                .collect();
+            let model = slint::ModelRc::new(slint::VecModel::from(rows));
+            view.set_audio_devices(model.clone());
+            view.set_audio_output_devices(model);
+            // A tick always describes the route acknowledged by AudioManager.
+            let selected = r.applied().unwrap_or("unavailable");
+            view.set_selected_audio_device_id(selected.into());
+            view.set_selected_audio_output_id(selected.into());
+            view.set_call_speaker_on(
+                r.devices()
+                    .iter()
+                    .any(|d| Some(d.id.as_str()) == r.applied() && d.route == AudioRoute::Speaker),
+            );
         }
     });
 }
@@ -111,26 +184,84 @@ fn call_activity(method: &str, sig: &str, args: &[JValue]) {
     }
 }
 
-/// JNI: `CallAudioRouter` reports the outputs usable for a call (on register
-/// and whenever a device is added or removed).
+/// Device discovery and acknowledgement from Android's main looper.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnAudioOutputsChanged(
-    mut _env: jni::EnvUnowned<'_>,
+pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnCommunicationDevices(
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject,
-    earpiece: u8,
-    wired: u8,
-    bluetooth: u8,
+    snapshot: JString,
+    applied: JString,
 ) {
-    _env.with_env(|_env| -> jni::errors::Result<_> {
-        Ok((|| {
-            let outputs = AudioOutputs {
-                earpiece: earpiece != 0,
-                wired_headset: wired != 0,
-                bluetooth: bluetooth != 0,
-            };
-            tracing::info!("call audio outputs: {outputs:?}");
-            update(|r| r.set_outputs(outputs));
-        })())
+    env.with_env(|env| -> jni::errors::Result<_> {
+        let snapshot = snapshot.try_to_string(env)?;
+        let applied = applied.try_to_string(env)?;
+        let Ok(rows) = serde_json::from_str::<Vec<(String, String, i32)>>(&snapshot) else {
+            return Ok(());
+        };
+        let devices = rows
+            .into_iter()
+            .filter_map(|(id, name, kind)| {
+                let route = match kind {
+                    0 => AudioRoute::Earpiece,
+                    1 => AudioRoute::Speaker,
+                    2 => AudioRoute::WiredHeadset,
+                    3 => AudioRoute::Bluetooth,
+                    _ => return None,
+                };
+                Some(CommunicationDevice { id, name, route })
+            })
+            .collect();
+        // Acknowledgements must not retry a refused route in a callback loop.
+        {
+            let mut guard = ROUTING.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(r) = guard.as_mut() {
+                r.refresh(
+                    devices,
+                    (!applied.is_empty()).then_some(applied.to_string()),
+                );
+            }
+        }
+        publish();
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// Device inventory changed; apply fallback or restore a reconnected selection.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnCommunicationDevicesChanged(
+    mut env: jni::EnvUnowned<'_>,
+    _this: JObject,
+) {
+    env.with_env(|_| -> jni::errors::Result<_> {
+        update(|_| {});
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// Bounded AudioManager request failure: retain intent but choose a usable fallback.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnCommunicationDeviceFailed(
+    mut env: jni::EnvUnowned<'_>,
+    _this: JObject,
+    id: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<_> {
+        let id = id.try_to_string(env)?;
+        update(|r| r.fail(&id));
+        if let Some(weak) = WINDOW.get().cloned() {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_toast_message(
+                        "Could not switch audio route. Using an available device.".into(),
+                    );
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+        }
+        Ok(())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
