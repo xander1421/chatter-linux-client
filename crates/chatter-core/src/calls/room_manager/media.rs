@@ -31,7 +31,11 @@ impl RoomManager {
     /// * `device_id` - Optional device ID (uses default if None)
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
         if self.microphone_requested.load(std::sync::atomic::Ordering::SeqCst) {
-            return self.switch_microphone(device_id).await;
+            return if device_id.is_some() {
+                self.switch_microphone(device_id).await
+            } else {
+                Ok(())
+            };
         }
         self.publish_microphone_restored(device_id, false).await
     }
@@ -161,21 +165,23 @@ impl RoomManager {
                     screen_share: false,
                 });
 
-        // Start video capture
-        let (video_source, ready_rx) = {
-            let mut capture = self.video_capture.write();
-            capture.start(device_path, config, local_preview)?
+        // A room reconnect retires publication, not the call-owned capture.
+        let retained = self.camera_capture_retained.swap(false, Ordering::SeqCst)
+            .then(|| self.video_capture.read().active_source()).flatten();
+        let video_source = if let Some(source) = retained {
+            source
+        } else {
+            let (source, ready_rx) = self.video_capture.write()
+                .start(device_path, config, local_preview)?;
+            if !matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(60), ready_rx).await,
+                Ok(Ok(()))
+            ) {
+                self.video_capture.write().stop();
+                return Err(CallError::CameraUnavailable);
+            }
+            source
         };
-
-        // The capture thread reports readiness only after a real camera frame.
-        // Await without blocking the call worker's local executor.
-        if !matches!(
-            tokio::time::timeout(std::time::Duration::from_secs(60), ready_rx).await,
-            Ok(Ok(()))
-        ) {
-            self.video_capture.write().stop();
-            return Err(CallError::CameraUnavailable);
-        }
 
         // Create and publish track
         let video_track =
@@ -452,10 +458,7 @@ impl RoomManager {
             }
         };
         let source = NativeVideoSource::new(VideoResolution { width, height }, true);
-        if !android_screen::install_source(token, source.clone()) {
-            return Err(CallError::TrackPublishFailed("Screen share stopped".into()));
-        }
-        let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source));
+        let track = LocalVideoTrack::create_video_track("screen", RtcVideoSource::Native(source.clone()));
         let options = TrackPublishOptions {
             source: TrackSource::Screenshare,
             ..Default::default()
@@ -468,7 +471,8 @@ impl RoomManager {
                 CallError::TrackPublishFailed(error.to_string())
             })?;
         *self.screen_share_track_sid.write() = Some(publication.sid());
-        if !android_screen::is_running() {
+        // Only release the buffered first frame once the sender is published.
+        if !android_screen::install_source(token, source) {
             self.stop_screen_share().await;
             return Err(CallError::TrackPublishFailed("Screen share stopped".into()));
         }
@@ -500,6 +504,7 @@ impl RoomManager {
     /// capture loop ends, so remote viewers freeze on the last frame instead of
     /// showing the avatar. Mirrors `stop_screen_share`.
     pub async fn stop_camera(&self) {
+        self.camera_capture_retained.store(false, std::sync::atomic::Ordering::SeqCst);
         {
             let mut capture = self.video_capture.write();
             capture.stop();
@@ -574,6 +579,12 @@ impl RoomManager {
         self.microphone_requested
             .load(std::sync::atomic::Ordering::SeqCst)
             .then(|| self.audio_capture.read().device_name().to_string())
+    }
+
+    pub fn recover_microphone_stream(&self) {
+        if let Err(error) = self.audio_capture.write().recover_stream() {
+            tracing::error!(%error, "Could not recover microphone capture stream");
+        }
     }
 
     /// Check if microphone is muted.

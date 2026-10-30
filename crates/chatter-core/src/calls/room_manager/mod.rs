@@ -249,6 +249,8 @@ pub struct RoomManager {
     /// on disconnect. Enables voice→video escalation (start as a voice call,
     /// then turn the camera on with the video button).
     camera_published: Arc<std::sync::atomic::AtomicBool>,
+    /// Capture explicitly retained during a room transport replacement.
+    camera_capture_retained: std::sync::atomic::AtomicBool,
     /// SID of the currently-published camera track. Cleared on stop so we can
     /// `unpublish_track(sid)` — otherwise the track stays published with no
     /// frames and remote viewers freeze on the last frame instead of showing
@@ -323,6 +325,7 @@ impl RoomManager {
             audio_playback: Arc::new(RwLock::new(audio_playback)),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),
             camera_published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            camera_capture_retained: std::sync::atomic::AtomicBool::new(false),
             camera_track_sid: Arc::new(RwLock::new(None)),
             video_playback: Arc::new(RwLock::new(video_playback)),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

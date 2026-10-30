@@ -412,6 +412,15 @@ impl RoomManager {
     /// signaled to stop (non-blocking) and will clean themselves up.
     /// Thread joins happen in Drop to ensure proper cleanup.
     pub async fn disconnect(&self) {
+        self.disconnect_inner(false).await;
+    }
+
+    /// Retire the room transport while the active call still owns its camera.
+    pub(crate) async fn disconnect_for_reconnect(&self) {
+        self.disconnect_inner(true).await;
+    }
+
+    async fn disconnect_inner(&self, preserve_camera: bool) {
         // Retire handler ownership before any await or reuse of shared playback.
         self.connection_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -438,7 +447,13 @@ impl RoomManager {
         }
         {
             let video = self.video_capture.read();
-            video.signal_stop();
+            self.camera_capture_retained.store(
+                preserve_camera && video.is_running(),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            if !preserve_camera {
+                video.signal_stop();
+            }
             // Track auto-unpublishes when the room closes; clear the flag + sid
             // so the next call re-publishes instead of inheriting a dead handle.
             self.camera_published

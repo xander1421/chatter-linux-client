@@ -125,10 +125,11 @@ class ScreenShareService : Service() {
                     try { image.close() } catch (_: IllegalStateException) { }
                 }
             }, handler)
+            // Install dimensions before ImageReader can deliver its first frame.
+            nativeOnScreenStarted(token, width, height)
             display = projection.createVirtualDisplay("Chatter screen", width, height,
                 metrics.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface, null, handler)
-            nativeOnScreenStarted(token, width, height)
         } catch (error: Exception) {
             Log.e("ScreenShare", "Projection start failed", error)
             stopSelf()

@@ -474,8 +474,8 @@ pub(super) async fn reconnect_impl(
 
     tracing::info!(call_id = %call_id, "Attempting reconnection");
 
-    // Disconnect current connection first
-    room_manager.disconnect().await;
+    // Capture belongs to the call, not the replaceable room transport.
+    room_manager.disconnect_for_reconnect().await;
 
     // Get a new token by rejoining the call
     let response = {

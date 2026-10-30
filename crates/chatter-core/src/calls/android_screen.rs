@@ -27,6 +27,7 @@ struct Capture {
     width: u32,
     height: u32,
     last_preview: Option<Instant>,
+    probe: Option<(Vec<u8>, i64)>,
 }
 
 pub fn register_platform_screen(platform: Box<dyn PlatformScreen>) {
@@ -61,6 +62,7 @@ pub fn begin(
         width: 0,
         height: 0,
         last_preview: None,
+        probe: None,
     });
     drop(guard);
     if let Err(error) = platform.start(token) {
@@ -89,9 +91,7 @@ pub fn started(token: u64, width: u32, height: u32) {
     }
     capture.width = width;
     capture.height = height;
-    if let Some(tx) = capture.ready.take() {
-        let _ = tx.send(Ok((width, height)));
-    }
+    // Readiness requires a captured frame, not just display allocation.
 }
 
 pub fn install_source(token: u64, source: NativeVideoSource) -> bool {
@@ -100,6 +100,12 @@ pub fn install_source(token: u64, source: NativeVideoSource) -> bool {
         return false;
     };
     capture.source = Some(source);
+    let probe = capture.probe.take();
+    let (width, height) = (capture.width, capture.height);
+    drop(guard);
+    if let Some((bytes, timestamp)) = probe {
+        push_frame(token, &bytes, width, height, timestamp);
+    }
     true
 }
 
@@ -141,9 +147,6 @@ pub fn push_frame(token: u64, bgra: &[u8], width: u32, height: u32, timestamp_us
     let Some(capture) = guard.as_mut().filter(|capture| capture.token == token) else {
         return;
     };
-    let Some(source) = capture.source.as_ref() else {
-        return;
-    };
     if width != capture.width
         || height != capture.height
         || bgra.len()
@@ -153,6 +156,13 @@ pub fn push_frame(token: u64, bgra: &[u8], width: u32, height: u32, timestamp_us
     {
         return;
     }
+    let Some(source) = capture.source.as_ref() else {
+        capture.probe = Some((bgra.to_vec(), timestamp_us));
+        if let Some(tx) = capture.ready.take() {
+            let _ = tx.send(Ok((width, height)));
+        }
+        return;
+    };
     let mut buffer = I420Buffer::new(width, height);
     let (y, u, v) = buffer.data_mut();
     yuv_helper::argb_to_i420(
