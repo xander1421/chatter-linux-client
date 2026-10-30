@@ -103,19 +103,20 @@ impl ChatState {
     /// Returns true if there are pinned messages and the bar is not dismissed.
     #[must_use]
     pub fn pinned_should_show(&self) -> bool {
-        let state = self.store.get();
-        !state.pinned.pinned_message_ids.is_empty() && !state.pinned.is_dismissed
+        self.store
+            .with(|s| !s.pinned.pinned_message_ids.is_empty() && !s.pinned.is_dismissed)
     }
 
     /// Get the currently focused pinned message ID.
     #[must_use]
     pub fn pinned_current_message_id(&self) -> Option<MessageId> {
-        let state = self.store.get();
-        state
-            .pinned
-            .pinned_message_ids
-            .get(state.pinned.current_index)
-            .copied()
+        self.store.with(|state| {
+            state
+                .pinned
+                .pinned_message_ids
+                .get(state.pinned.current_index)
+                .copied()
+        })
     }
 
     /// Get the total count of pinned messages.

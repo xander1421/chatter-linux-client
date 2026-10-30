@@ -92,10 +92,11 @@ impl ChatState {
     /// Get the currently active thread panel, if any.
     #[must_use]
     pub fn active_thread(&self) -> Option<ThreadPanel> {
-        let state = self.store.get();
-        state
-            .active_thread_index
-            .and_then(|idx| state.open_threads.get(idx).cloned())
+        self.store.with(|state| {
+            state
+                .active_thread_index
+                .and_then(|idx| state.open_threads.get(idx).cloned())
+        })
     }
 
     /// Update the reply count for a thread panel.

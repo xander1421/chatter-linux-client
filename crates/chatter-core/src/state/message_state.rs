@@ -123,11 +123,7 @@ impl MessageState {
     #[must_use]
     pub fn get_messages(&self, channel_id: &ChannelId) -> Vec<Message> {
         self.store
-            .get()
-            .messages
-            .get(channel_id)
-            .cloned()
-            .unwrap_or_default()
+            .with(|s| s.messages.get(channel_id).cloned().unwrap_or_default())
     }
 
     /// Append a new message to a channel.
@@ -172,13 +168,14 @@ impl MessageState {
     /// Returns None if the message is not in any cached channel.
     #[must_use]
     pub fn find_channel_for_message(&self, message_id: &MessageId) -> Option<ChannelId> {
-        let state = self.store.get();
-        for (channel_id, messages) in &state.messages {
-            if messages.iter().any(|m| &m.id == message_id) {
-                return Some(*channel_id);
+        self.store.with(|state| {
+            for (channel_id, messages) in &state.messages {
+                if messages.iter().any(|m| &m.id == message_id) {
+                    return Some(*channel_id);
+                }
             }
-        }
-        None
+            None
+        })
     }
 
     /// Update delivery status for messages matching the given timestamps.
@@ -242,7 +239,7 @@ impl MessageState {
     /// Check if a channel is currently loading messages.
     #[must_use]
     pub fn is_loading(&self, channel_id: &ChannelId) -> bool {
-        self.store.get().loading_channels.contains(channel_id)
+        self.store.with(|s| s.loading_channels.contains(channel_id))
     }
 }
 
